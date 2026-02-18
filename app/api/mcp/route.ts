@@ -50,7 +50,7 @@ const handler = createMcpHandler(
 
     server.tool(
       "getBugs",
-      "Get bugs from the Bugs Queue. Returns bugs with status, priority, description, and linked tasks. Filters: status, priority, productId, search text.",
+      "Get bugs from the Bugs Queue. Returns bugs with status, priority, product, and linked tasks. Use listProducts to find productId. Filters: status, priority, productId, search text.",
       GetBugsSchema.shape,
       async (args) => {
         const result = await getBugs(args);
@@ -128,7 +128,7 @@ const handler = createMcpHandler(
 
     server.tool(
       "updateTask",
-      "Update any task field. Supports: status, priority, type, description, hours (estimated/actual), links (GitHub/PR/Demo), epic, sprint, version, agent metadata, branch name, acceptance criteria, dependencies. Set delete=true to delete. Note: setting status to 'Done' requires all subtasks to be Done first.",
+      "Update any task field. Supports: status, priority, type, description, hours (estimated/actual), links (GitHub/PR/Demo), epic, sprint, version, agent metadata, branch name, acceptance criteria, dependencies. Set delete=true to delete. IMPORTANT: Do NOT set status to 'Done' directly — mark all subtasks as Done instead (Monday automation auto-completes the parent). Use listEpics/getSprint to find epicId/sprintId.",
       UpdateTaskSchema.shape,
       async (args) => {
         const result = await updateTask(args);
@@ -138,7 +138,7 @@ const handler = createMcpHandler(
 
     server.tool(
       "manageSubtasks",
-      "Create, update, and delete subtasks in a single call. Each operation specifies action='create'|'update'|'delete'. Supports typed subtasks (Backend, Test, Documentation, UX-UI, Database, PM-work), status tracking, hours, and name-based lookup for updates/deletes.",
+      "Create, update, and delete subtasks in a single call. Each operation specifies action='create'|'update'|'delete'. Supports typed subtasks (Backend, Test, Documentation, UX-UI, Database, PM-work), status tracking, hours, and name-based lookup for updates/deletes. IMPORTANT: When all subtasks are Done, Monday automation auto-completes the parent task — delete unwanted subtasks before marking the last one Done.",
       ManageSubtasksSchema.shape,
       async (args) => {
         const result = await manageSubtasks(args);
@@ -162,7 +162,7 @@ const handler = createMcpHandler(
 
     server.tool(
       "convertBugToTask",
-      "Convert a bug into a Bugfix task. Copies bug name, description, and priority. Creates task with type=Bugfix, links bug<->task, and sets bug status to 'Fixing'. Optionally link to epic/sprint.",
+      "Convert a bug into a Bugfix task. Use getBugs to find the bugId. Copies bug name, description, and priority. Creates task with type=Bugfix, links bug<->task, and sets bug status to 'Fixing'. Optionally link to epic/sprint.",
       ConvertBugToTaskSchema.shape,
       async (args) => {
         const result = await convertBugToTask(args);
@@ -172,7 +172,7 @@ const handler = createMcpHandler(
 
     server.tool(
       "createBug",
-      "File a new bug discovered during development. Set name (include component + symptom), description (reproduction steps), priority (by user impact). Optionally link to product. Bug starts in 'Awaiting Review' status.",
+      "File a new bug discovered during development. Set name (include component + symptom), description (reproduction steps), priority (by user impact). Use listProducts to find productId. Bug starts in 'Awaiting Review' status.",
       CreateBugSchema.shape,
       async (args) => {
         const result = await createBug(args);

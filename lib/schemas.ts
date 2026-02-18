@@ -54,8 +54,8 @@ export const GetBacklogSchema = z.object({
   type: TaskTypeEnum.optional().describe("Filter by task type"),
   unclaimedOnly: z.boolean().optional().default(false).describe("Only show tasks with no Agent ID set (available for claiming)"),
   agentId: AgentIdEnum.optional().describe("Filter by agent currently working on the task"),
-  epicId: z.number().optional().describe("Filter by epic (Monday.com item ID)"),
-  sprintId: z.number().optional().describe("Filter by sprint (Monday.com item ID)"),
+  epicId: z.number().optional().describe("Filter by epic — use listEpics to find the ID"),
+  sprintId: z.number().optional().describe("Filter by sprint — use getSprint() to find the ID"),
   limit: z.number().optional().default(25).describe("Max tasks to return (default: 25)"),
 });
 
@@ -66,7 +66,7 @@ export const GetBacklogSchema = z.object({
 export const GetBugsSchema = z.object({
   status: BugStatusEnum.optional().describe("Filter by bug status"),
   priority: BugPriorityEnum.optional().describe("Filter by bug priority"),
-  productId: z.number().optional().describe("Filter by product (Monday.com item ID)"),
+  productId: z.number().optional().describe("Filter by product — use listProducts to find the ID"),
   search: z.string().optional().describe("Search text in bug name and description"),
   limit: z.number().optional().default(25).describe("Max bugs to return (default: 25)"),
 });
@@ -92,7 +92,7 @@ export const GetSprintSchema = z.object({
 // =============================================================================
 
 export const GetEpicSchema = z.object({
-  epicId: z.number().describe("Monday.com epic item ID"),
+  epicId: z.number().describe("Epic item ID — use listEpics to discover available epics"),
 });
 
 // =============================================================================
@@ -140,16 +140,15 @@ export const UpdateTaskSchema = z.object({
   actualHours: z.number().optional().describe("Actual hours spent"),
   dueDate: z.string().optional().describe("Due date (YYYY-MM-DD)"),
   startedDate: z.string().optional().describe("Started date (YYYY-MM-DD)"),
-  epicId: z.number().optional().describe("Link to epic (item ID)"),
-  sprintId: z.number().optional().describe("Link to sprint (item ID)"),
-  versionId: z.number().optional().describe("Link to target version (item ID)"),
+  epicId: z.number().optional().describe("Link to epic — use listEpics to find the ID"),
+  sprintId: z.number().optional().describe("Link to sprint — use getSprint() to find the ID"),
+  versionId: z.number().optional().describe("Link to target version"),
   githubLink: z.string().optional().describe("GitHub branch/repo URL"),
   prLink: z.string().optional().describe("Pull request URL"),
   demoUrl: z.string().optional().describe("Demo/preview URL"),
   agentId: AgentIdEnum.optional().describe("Agent working on this task"),
   planId: z.string().optional().describe("Today's date + plan file name (format: YYYY-MM-DD_plan-name, e.g. 2026-02-18_enumerated-scribbling-rose). Found in ~/.claude/plans/"),
   unplanned: z.boolean().optional().describe("Mark as unplanned (added mid-sprint)"),
-  // New columns (to be created)
   branch: z.string().optional().describe("Git branch name"),
   acceptanceCriteria: z.string().optional().describe("Machine-readable acceptance criteria"),
   dependencyIds: z.array(z.number()).optional().describe("Task IDs this task depends on (blocked by)"),
@@ -213,15 +212,15 @@ const SubitemSpec = z.object({
 
 export const CreateTaskSchema = z.object({
   tasks: z.array(z.object({
-    name: z.string().describe("Task name (required)"),
-    type: TaskTypeEnum.describe("Task type (required)"),
-    priority: TaskPriorityEnum.describe("Priority (required)"),
+    name: z.string().describe("Task name"),
+    type: TaskTypeEnum.describe("Task type"),
+    priority: TaskPriorityEnum.describe("Task priority"),
     status: TaskStatusEnum.optional().describe("Initial status (default: Backlog)"),
     description: z.string().optional().describe("Task description"),
     estimatedHours: z.number().optional().describe("Estimated hours"),
     dueDate: z.string().optional().describe("Due date (YYYY-MM-DD)"),
-    epicId: z.number().optional().describe("Link to epic"),
-    sprintId: z.number().optional().describe("Link to sprint"),
+    epicId: z.number().optional().describe("Link to epic — use listEpics to find the ID"),
+    sprintId: z.number().optional().describe("Link to sprint — use getSprint() to find the ID"),
     versionId: z.number().optional().describe("Link to target version"),
     agentId: AgentIdEnum.optional().describe("Agent creating this task"),
     planId: z.string().optional().describe("Today's date + plan file name (format: YYYY-MM-DD_plan-name, e.g. 2026-02-18_enumerated-scribbling-rose). Found in ~/.claude/plans/"),
@@ -239,9 +238,9 @@ export const CreateTaskSchema = z.object({
 // =============================================================================
 
 export const ConvertBugToTaskSchema = z.object({
-  bugId: z.number().describe("Bug item ID to convert"),
-  epicId: z.number().optional().describe("Epic to link the new task to"),
-  sprintId: z.number().optional().describe("Sprint to assign the new task to"),
+  bugId: z.number().describe("Bug item ID — use getBugs to find the ID"),
+  epicId: z.number().optional().describe("Epic to link the new task to — use listEpics to find the ID"),
+  sprintId: z.number().optional().describe("Sprint to assign the new task to — use getSprint() to find the ID"),
   agentId: AgentIdEnum.optional().describe("Agent performing the conversion"),
   planId: z.string().optional().describe("Today's date + plan file name (format: YYYY-MM-DD_plan-name, e.g. 2026-02-18_enumerated-scribbling-rose). Found in ~/.claude/plans/"),
   additionalDescription: z.string().optional().describe("Extra context to append to the bug description"),
@@ -255,7 +254,7 @@ export const CreateBugSchema = z.object({
   name: z.string().describe("Bug title — include component, action, and symptom"),
   description: z.string().describe("Reproduction steps, expected vs actual behavior"),
   priority: BugPriorityEnum.describe("Bug severity"),
-  productId: z.number().optional().describe("Product this bug affects"),
+  productId: z.number().optional().describe("Product this bug affects — use listProducts to find the ID"),
   reporter: z.number().optional().describe("Reporter person ID"),
 });
 
