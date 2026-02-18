@@ -273,6 +273,26 @@ export const UpdateVersionSchema = z.object({
 });
 
 // =============================================================================
+// Tool 15: getUpdates
+// =============================================================================
+
+export const GetUpdatesSchema = z.object({
+  itemId: z.number().describe("Monday.com item ID to get updates for"),
+  limit: z.number().optional().default(25).describe("Max updates to return (default: 25, max: 100)"),
+  page: z.number().optional().default(1).describe("Page number for pagination (starts at 1)"),
+});
+
+// =============================================================================
+// Tool 16: createUpdate
+// =============================================================================
+
+export const CreateUpdateSchema = z.object({
+  itemId: z.number().describe("Monday.com item ID to add the update to"),
+  body: z.string().describe("Update text content (supports HTML formatting)"),
+  parentUpdateId: z.number().optional().describe("ID of an existing update to reply to (creates a threaded reply)"),
+});
+
+// =============================================================================
 // Type Exports
 // =============================================================================
 
@@ -290,3 +310,5 @@ export type CreateTaskInput = z.infer<typeof CreateTaskSchema>;
 export type ConvertBugToTaskInput = z.infer<typeof ConvertBugToTaskSchema>;
 export type CreateBugInput = z.infer<typeof CreateBugSchema>;
 export type UpdateVersionInput = z.infer<typeof UpdateVersionSchema>;
+export type GetUpdatesInput = z.input<typeof GetUpdatesSchema>;
+export type CreateUpdateInput = z.infer<typeof CreateUpdateSchema>;

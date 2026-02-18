@@ -12,3 +12,5 @@ export { createTask } from "./createTask";
 export { convertBugToTask } from "./convertBugToTask";
 export { createBug } from "./createBug";
 export { updateVersion } from "./updateVersion";
+export { getUpdates } from "./getUpdates";
+export { createUpdate } from "./createUpdate";

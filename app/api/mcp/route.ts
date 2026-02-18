@@ -14,6 +14,8 @@ import {
   ConvertBugToTaskSchema,
   CreateBugSchema,
   UpdateVersionSchema,
+  GetUpdatesSchema,
+  CreateUpdateSchema,
 } from "@/lib/schemas";
 import {
   getBacklog,
@@ -30,6 +32,8 @@ import {
   convertBugToTask,
   createBug,
   updateVersion,
+  getUpdates,
+  createUpdate,
 } from "@/lib/tools";
 
 const handler = createMcpHandler(
@@ -190,6 +194,29 @@ const handler = createMcpHandler(
       UpdateVersionSchema.shape,
       async (args) => {
         const result = await updateVersion(args);
+        return { content: [{ type: "text", text: result }] };
+      }
+    );
+    // =========================================================================
+    // Communication Phase
+    // =========================================================================
+
+    server.tool(
+      "getUpdates",
+      "Get updates (comments/discussion) on a Monday.com item. Returns updates with author, timestamp, content, and threaded replies. Newest updates first. Use to read context, progress notes, or discussion before starting work on a task.",
+      GetUpdatesSchema.shape,
+      async (args) => {
+        const result = await getUpdates(args);
+        return { content: [{ type: "text", text: result }] };
+      }
+    );
+
+    server.tool(
+      "createUpdate",
+      "Post an update (comment) on a Monday.com item. Use to share progress, blockers, completion notes, or ask questions. Supports HTML formatting. Set parentUpdateId to reply to an existing update thread.",
+      CreateUpdateSchema.shape,
+      async (args) => {
+        const result = await createUpdate(args);
         return { content: [{ type: "text", text: result }] };
       }
     );
