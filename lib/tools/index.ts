@@ -1,0 +1,12 @@
+export { getBacklog } from "./getBacklog";
+export { getBugs } from "./getBugs";
+export { getTask } from "./getTask";
+export { getSprint } from "./getSprint";
+export { getEpic } from "./getEpic";
+export { claimTask } from "./claimTask";
+export { updateTask } from "./updateTask";
+export { manageSubtasks } from "./manageSubtasks";
+export { createTask } from "./createTask";
+export { convertBugToTask } from "./convertBugToTask";
+export { createBug } from "./createBug";
+export { updateVersion } from "./updateVersion";
