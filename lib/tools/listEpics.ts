@@ -104,7 +104,7 @@ export async function listEpics(args: ListEpicsInput): Promise<string> {
       const owner = getColumnText(colMap, EPIC_COLUMNS.owner) || "—";
       const deadline = getColumnText(colMap, EPIC_COLUMNS.deadline) || "—";
       const productItems = getLinkedItems(colMap, EPIC_COLUMNS.product);
-      const product = productItems.length > 0 ? productItems[0].name : "—";
+      const product = productItems.length > 0 ? `${productItems[0].name} (#${productItems[0].id})` : "—";
 
       // Calculate progress from resolved tasks
       const taskIds = epicTaskMap.get(item.id) || [];

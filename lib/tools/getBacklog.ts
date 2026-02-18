@@ -114,12 +114,14 @@ export async function getBacklog(args: GetBacklogInput): Promise<string> {
       const taskType = getColumnText(colMap, TASK_COLUMNS.type) || "—";
       const hours = getColumnText(colMap, TASK_COLUMNS.estimatedHours) || "—";
       const epicItems = getLinkedItems(colMap, TASK_COLUMNS.epic);
-      const epicName = epicItems.length > 0 ? epicItems[0].name : "—";
+      const epic = epicItems.length > 0 ? `${epicItems[0].name} (#${epicItems[0].id})` : "—";
+      const sprintItems = getLinkedItems(colMap, TASK_COLUMNS.sprint);
+      const sprint = sprintItems.length > 0 ? `${sprintItems[0].name} (#${sprintItems[0].id})` : "—";
       const agent = getColumnText(colMap, TASK_COLUMNS.agentId) || "—";
 
       lines.push(`- **TAIT-${autoNumber}** (#${item.id}) ${item.name}`);
       lines.push(`  Status: ${taskStatus} | Priority: ${priority} | Type: ${taskType} | Hours: ${hours}`);
-      lines.push(`  Epic: ${epicName} | Agent: ${agent}`);
+      lines.push(`  Epic: ${epic} | Sprint: ${sprint} | Agent: ${agent}`);
       lines.push("");
     }
 

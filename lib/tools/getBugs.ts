@@ -104,7 +104,7 @@ export async function getBugs(args: GetBugsInput): Promise<string> {
       const bugStatus = getColumnText(colMap, BUG_COLUMNS.status) || "Unknown";
       const bugPriority = getColumnText(colMap, BUG_COLUMNS.priority) || "—";
       const productItems = getLinkedItems(colMap, BUG_COLUMNS.product);
-      const productName = productItems.length > 0 ? productItems[0].name : "—";
+      const productName = productItems.length > 0 ? `${productItems[0].name} (#${productItems[0].id})` : "—";
       const linkedTasks = getLinkedItems(colMap, BUG_COLUMNS.connectedTasks);
       const linkedTasksStr = linkedTasks.length > 0
         ? linkedTasks.map(t => `${t.name} (#${t.id})`).join(", ")
