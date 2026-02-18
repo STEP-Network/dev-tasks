@@ -121,7 +121,7 @@ export const ClaimTaskSchema = z.object({
   itemId: z.number().describe("Task ID to claim"),
   agentId: AgentIdEnum.describe("Your agent identity"),
   owner: SystemUserEnum.describe("Your system username (e.g. the output of `whoami`)"),
-  planId: z.string().optional().describe("Plan ID (format: YYYY-MM-DD_plan-name). Links task to execution plan"),
+  planId: z.string().optional().describe("Today's date + plan file name (format: YYYY-MM-DD_plan-name, e.g. 2026-02-18_enumerated-scribbling-rose). Found in ~/.claude/plans/"),
 });
 
 // =============================================================================
@@ -147,7 +147,7 @@ export const UpdateTaskSchema = z.object({
   prLink: z.string().optional().describe("Pull request URL"),
   demoUrl: z.string().optional().describe("Demo/preview URL"),
   agentId: AgentIdEnum.optional().describe("Agent working on this task"),
-  planId: z.string().optional().describe("Plan ID for traceability"),
+  planId: z.string().optional().describe("Today's date + plan file name (format: YYYY-MM-DD_plan-name, e.g. 2026-02-18_enumerated-scribbling-rose). Found in ~/.claude/plans/"),
   unplanned: z.boolean().optional().describe("Mark as unplanned (added mid-sprint)"),
   // New columns (to be created)
   branch: z.string().optional().describe("Git branch name"),
@@ -224,7 +224,7 @@ export const CreateTaskSchema = z.object({
     sprintId: z.number().optional().describe("Link to sprint"),
     versionId: z.number().optional().describe("Link to target version"),
     agentId: AgentIdEnum.optional().describe("Agent creating this task"),
-    planId: z.string().optional().describe("Plan ID for traceability"),
+    planId: z.string().optional().describe("Today's date + plan file name (format: YYYY-MM-DD_plan-name, e.g. 2026-02-18_enumerated-scribbling-rose). Found in ~/.claude/plans/"),
     unplanned: z.boolean().optional().describe("Mark as unplanned mid-sprint addition"),
     acceptanceCriteria: z.string().optional().describe("Machine-readable acceptance criteria (definition of done)"),
     dependencyIds: z.array(z.number()).optional().describe("Task IDs this task depends on (blocked by)"),
@@ -243,7 +243,7 @@ export const ConvertBugToTaskSchema = z.object({
   epicId: z.number().optional().describe("Epic to link the new task to"),
   sprintId: z.number().optional().describe("Sprint to assign the new task to"),
   agentId: AgentIdEnum.optional().describe("Agent performing the conversion"),
-  planId: z.string().optional().describe("Plan ID for traceability"),
+  planId: z.string().optional().describe("Today's date + plan file name (format: YYYY-MM-DD_plan-name, e.g. 2026-02-18_enumerated-scribbling-rose). Found in ~/.claude/plans/"),
   additionalDescription: z.string().optional().describe("Extra context to append to the bug description"),
 });
 
