@@ -128,7 +128,7 @@ const handler = createMcpHandler(
 
     server.tool(
       "updateTask",
-      "Update any task field. Supports: status, priority, type, description, hours (estimated/actual), links (GitHub/PR/Demo), epic, sprint, version, agent metadata, branch name, acceptance criteria, dependencies. Set delete=true to delete. IMPORTANT: Do NOT set status to 'Done' directly — mark all subtasks as Done instead (Monday automation auto-completes the parent). Use listEpics/getSprint to find epicId/sprintId.",
+      "Update any task field. Supports: status, priority, type, description, hours (estimated/actual), links (GitHub/PR/Demo), epic, sprint, version, agent metadata, branch name, acceptance criteria, dependencies. Set delete=true to delete. IMPORTANT: Do NOT set status to 'Done' directly — mark all subtasks as Done instead (Monday automation auto-completes the parent). Remember to set actualHours when moving to 'Waiting for Review'. Use listEpics/getSprint to find epicId/sprintId.",
       UpdateTaskSchema.shape,
       async (args) => {
         const result = await updateTask(args);
@@ -138,7 +138,7 @@ const handler = createMcpHandler(
 
     server.tool(
       "manageSubtasks",
-      "Create, update, and delete subtasks in a single call. Each operation specifies action='create'|'update'|'delete'. Supports typed subtasks (Backend, Test, Documentation, UX-UI, Database, PM-work), status tracking, hours, and name-based lookup for updates/deletes. IMPORTANT: When all subtasks are Done, Monday automation auto-completes the parent task — delete unwanted subtasks before marking the last one Done.",
+      "Create, update, and delete subtasks in a single call. Each operation specifies action='create'|'update'|'delete'. Supports typed subtasks (Backend, Test, Documentation, UX-UI, Database, PM-work), status tracking, hours, and name-based lookup for updates/deletes. Remember to set actualHours on subtasks when marking them Done. IMPORTANT: When all subtasks are Done, Monday automation auto-completes the parent task — delete unwanted subtasks before marking the last one Done.",
       ManageSubtasksSchema.shape,
       async (args) => {
         const result = await manageSubtasks(args);
