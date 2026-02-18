@@ -9,7 +9,7 @@ import {
   SUBTASK_STATUS,
   SUBTASK_TYPE,
   AGENT_ID,
-  DEFAULT_OWNER_ID,
+  PEOPLE,
 } from "../constants";
 import type { CreateTaskInput } from "../schemas";
 import { buildColumnValues, formatError } from "./utils";
@@ -70,9 +70,13 @@ export async function createTask(args: CreateTaskInput): Promise<string> {
         columnValues[TASK_COLUMNS.unplanned] = { checked: task.unplanned ? "true" : "false" };
       }
 
-      // Owner — use provided value or auto-assign default
-      const ownerId = task.owner || DEFAULT_OWNER_ID;
-      columnValues[TASK_COLUMNS.owner] = { personsAndTeams: [{ id: ownerId, kind: "person" }] };
+      // Owner — map system username to Monday.com person ID
+      if (task.owner) {
+        const ownerId = PEOPLE[task.owner];
+        if (ownerId) {
+          columnValues[TASK_COLUMNS.owner] = { personsAndTeams: [{ id: ownerId, kind: "person" }] };
+        }
+      }
 
       // Acceptance criteria
       if (task.acceptanceCriteria) {

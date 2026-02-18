@@ -39,6 +39,8 @@ const AgentIdEnum = z.enum([
   "Claude Code CLI", "Claude Desktop Cloud", "Codex Local", "Claude Desktop Local", "Codex Cloud",
 ]);
 
+const SystemUserEnum = z.enum(["naref", "krmoj"]);
+
 const EpicStatusEnum = z.enum([
   "Refining", "Done", "On Hold", "Planned", "Backlog", "In Progress", "Review",
 ]);
@@ -118,6 +120,7 @@ export const ListProductsSchema = z.object({
 export const ClaimTaskSchema = z.object({
   itemId: z.number().describe("Task ID to claim"),
   agentId: AgentIdEnum.describe("Your agent identity"),
+  owner: SystemUserEnum.describe("Your system username (e.g. the output of `whoami`)"),
   planId: z.string().optional().describe("Plan ID (format: YYYY-MM-DD_plan-name). Links task to execution plan"),
 });
 
@@ -226,7 +229,7 @@ export const CreateTaskSchema = z.object({
     acceptanceCriteria: z.string().optional().describe("Machine-readable acceptance criteria (definition of done)"),
     dependencyIds: z.array(z.number()).optional().describe("Task IDs this task depends on (blocked by)"),
     branch: z.string().optional().describe("Git branch name"),
-    owner: z.number().optional().describe("Owner person ID (default: auto-assigned)"),
+    owner: SystemUserEnum.optional().describe("Owner — use your system username (e.g. the output of `whoami`)"),
     subitems: z.array(SubitemSpec).optional().describe("Subtasks to create with the task"),
   })).describe("Array of tasks to create"),
 });

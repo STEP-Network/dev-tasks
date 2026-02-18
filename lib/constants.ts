@@ -286,10 +286,13 @@ export const AGENT_ID: Record<string, number> = {
 };
 
 // =============================================================================
-// Default Owner (naref's person ID on Monday.com)
+// People (system username → Monday.com person ID)
 // =============================================================================
 
-export const DEFAULT_OWNER_ID = 48307552;
+export const PEOPLE: Record<string, number> = {
+  "naref": 48307552,
+  "krmoj": 38667531,
+};
 
 // =============================================================================
 // Board Groups

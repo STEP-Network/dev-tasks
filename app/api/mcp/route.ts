@@ -118,7 +118,7 @@ const handler = createMcpHandler(
 
     server.tool(
       "claimTask",
-      "Atomically claim a task for your agent. Validates: task must be 'Backlog' or 'Ready to Start', must not be claimed by another agent, and all dependencies must be resolved (Done). On success: sets status to 'In Progress', assigns owner, records Agent ID, Plan ID, and started date. Returns error with current owner if already claimed.",
+      "Atomically claim a task for your agent. Pass your system username (output of `whoami`) as owner. Validates: task must be 'Backlog' or 'Ready to Start', must not be claimed by another agent, and all dependencies must be resolved (Done). On success: sets status to 'In Progress', assigns owner, records Agent ID, Plan ID, and started date. Returns error with current owner if already claimed.",
       ClaimTaskSchema.shape,
       async (args) => {
         const result = await claimTask(args);
@@ -152,7 +152,7 @@ const handler = createMcpHandler(
 
     server.tool(
       "createTask",
-      "IMPORTANT: Use getBacklog first to check for existing similar tasks. Create one or more tasks with optional subtasks, epic/sprint linkage, acceptance criteria, dependencies, and agent metadata. Owner is auto-assigned. Use listEpics to find the right epicId. For discovered tech debt, follow-up work, or breaking down larger tasks.",
+      "IMPORTANT: Use getBacklog first to check for existing similar tasks. Create one or more tasks with optional subtasks, epic/sprint linkage, acceptance criteria, dependencies, and agent metadata. Pass your system username (output of `whoami`) as owner. Use listEpics to find the right epicId. For discovered tech debt, follow-up work, or breaking down larger tasks.",
       CreateTaskSchema.shape,
       async (args) => {
         const result = await createTask(args);

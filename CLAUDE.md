@@ -77,11 +77,15 @@ Subtasks board: 5091706366 (linked from Tasks)
 - Success → sets In Progress + Agent ID + Plan ID + Started Date + Owner (auto-assigned)
 - Conflict → returns error with current owner
 
-## Owner Auto-Assignment
+## Owner Assignment
 
-Tasks are automatically assigned to the default owner (person ID 48307552) when:
-- `claimTask` is called (always sets owner)
-- `createTask` is called (owner defaults to 48307552 unless overridden)
+Pass your system username (`whoami`) as the `owner` field. The server maps usernames to Monday.com person IDs:
+- `naref` → 48307552
+- `krmoj` → 38667531
+
+Used in:
+- `claimTask` — required, assigns you as owner when claiming
+- `createTask` — optional, assigns owner at creation time
 
 ## Key Status Mappings
 

@@ -30,6 +30,7 @@ describe("claimTask", () => {
     const result = await claimTask({
       itemId: taskId,
       agentId: "Claude Code CLI",
+      owner: "naref",
       planId: "2026-02-18_test-plan",
     });
     expect(result).toContain("Claimed");
@@ -39,6 +40,7 @@ describe("claimTask", () => {
     const result = await claimTask({
       itemId: taskId,
       agentId: "Codex Local",
+      owner: "krmoj",
       planId: "2026-02-18_other-plan",
     });
     // Should indicate conflict/already claimed
