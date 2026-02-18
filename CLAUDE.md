@@ -29,15 +29,15 @@ Products (5091839409) [read-only]
 Subtasks board: 5091706366 (linked from Tasks)
 
 ### MCP Server Entry Point
-- `app/api/mcp/route.ts` — Registers all 12 tools
+- `app/api/mcp/route.ts` — Registers all 14 tools
 
 ### Core Library
-- `lib/constants.ts` — Board IDs, column IDs, status/type/priority mappings
+- `lib/constants.ts` — Board IDs, column IDs, status/type/priority mappings, default owner ID
 - `lib/monday-client.ts` — GraphQL executor
-- `lib/schemas.ts` — Zod schemas for all 12 tools
+- `lib/schemas.ts` — Zod schemas for all 14 tools
 - `lib/tools/utils.ts` — Shared helpers
 
-### Tools (12 total)
+### Tools (14 total)
 
 | # | Tool | Phase | Purpose |
 |---|------|-------|---------|
@@ -46,23 +46,26 @@ Subtasks board: 5091706366 (linked from Tasks)
 | 3 | `getTask` | Context | Full task details with subtasks/context |
 | 4 | `getSprint` | Context | Sprint overview with progress stats |
 | 5 | `getEpic` | Context | Epic details with task progress |
-| 6 | `claimTask` | Execution | Atomically claim a task (multi-agent safe) |
-| 7 | `updateTask` | Execution | Update any task field |
-| 8 | `manageSubtasks` | Execution | Create/update/delete subtasks |
-| 9 | `createTask` | Creation | Create tasks with optional subtasks |
-| 10 | `convertBugToTask` | Creation | Bug → Bugfix task conversion |
-| 11 | `createBug` | Creation | File new bugs |
-| 12 | `updateVersion` | Shipping | Link tasks/bugs to versions |
+| 6 | `listEpics` | Context | List/search epics to discover epic IDs |
+| 7 | `listProducts` | Context | List products to discover product IDs |
+| 8 | `claimTask` | Execution | Atomically claim a task (auto-assigns owner) |
+| 9 | `updateTask` | Execution | Update any task field |
+| 10 | `manageSubtasks` | Execution | Create/update/delete subtasks |
+| 11 | `createTask` | Creation | Create tasks with acceptance criteria, dependencies, subtasks |
+| 12 | `convertBugToTask` | Creation | Bug → Bugfix task conversion |
+| 13 | `createBug` | Creation | File new bugs |
+| 14 | `updateVersion` | Shipping | Link tasks/bugs to versions |
 
 ## Agent Workflow
 
 ```
 1. getBacklog(unclaimedOnly: true)     → Find available work
 2. getTask(itemId)                      → Read full context
-3. claimTask(itemId, agentId, planId)   → Claim it (validates preconditions)
-4. manageSubtasks(parentItemId, ops)    → Create/update subtasks as you work
-5. updateTask(itemId, prLink, status)   → Set PR link, update status
-6. updateVersion(versionId, linkTaskIds) → Link to release version
+3. listEpics()                          → Find epic to assign (if needed)
+4. claimTask(itemId, agentId, planId)   → Claim it (auto-assigns owner)
+5. manageSubtasks(parentItemId, ops)    → Create/update subtasks as you work
+6. updateTask(itemId, prLink, status)   → Set PR link, update status
+7. updateVersion(versionId, linkTaskIds) → Link to release version
 ```
 
 ## Claiming Protocol
@@ -71,8 +74,14 @@ Subtasks board: 5091706366 (linked from Tasks)
   - Status is "Backlog" or "Ready to Start"
   - Agent ID dropdown is empty
   - Dependencies are all Done
-- Success → sets In Progress + Agent ID + Plan ID + Started Date
+- Success → sets In Progress + Agent ID + Plan ID + Started Date + Owner (auto-assigned)
 - Conflict → returns error with current owner
+
+## Owner Auto-Assignment
+
+Tasks are automatically assigned to the default owner (person ID 48307552) when:
+- `claimTask` is called (always sets owner)
+- `createTask` is called (owner defaults to 48307552 unless overridden)
 
 ## Key Status Mappings
 

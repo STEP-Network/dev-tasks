@@ -3,6 +3,8 @@ export { getBugs } from "./getBugs";
 export { getTask } from "./getTask";
 export { getSprint } from "./getSprint";
 export { getEpic } from "./getEpic";
+export { listEpics } from "./listEpics";
+export { listProducts } from "./listProducts";
 export { claimTask } from "./claimTask";
 export { updateTask } from "./updateTask";
 export { manageSubtasks } from "./manageSubtasks";

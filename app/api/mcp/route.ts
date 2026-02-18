@@ -5,6 +5,8 @@ import {
   GetTaskSchema,
   GetSprintSchema,
   GetEpicSchema,
+  ListEpicsSchema,
+  ListProductsSchema,
   ClaimTaskSchema,
   UpdateTaskSchema,
   ManageSubtasksSchema,
@@ -19,6 +21,8 @@ import {
   getTask,
   getSprint,
   getEpic,
+  listEpics,
+  listProducts,
   claimTask,
   updateTask,
   manageSubtasks,
@@ -80,10 +84,30 @@ const handler = createMcpHandler(
 
     server.tool(
       "getEpic",
-      "Get epic details. Shows: description, PRD reference, linked tasks with progress breakdown, target version, product, timeline, and deadline.",
+      "Get full epic details by ID. Shows: description, PRD reference, linked tasks with progress breakdown, target version, product, timeline, and deadline. Use listEpics first to discover available epic IDs.",
       GetEpicSchema.shape,
       async (args) => {
         const result = await getEpic(args);
+        return { content: [{ type: "text", text: result }] };
+      }
+    );
+
+    server.tool(
+      "listEpics",
+      "List available epics with status, progress, and product. Use this to discover epic IDs before assigning tasks to epics via createTask or updateTask. Filters: status (e.g. 'In Progress', 'Planned'), search text in name.",
+      ListEpicsSchema.shape,
+      async (args) => {
+        const result = await listEpics(args);
+        return { content: [{ type: "text", text: result }] };
+      }
+    );
+
+    server.tool(
+      "listProducts",
+      "List all products with status, owner, and counts of linked epics/bugs/versions. Use this to find the right productId when filing bugs via createBug.",
+      ListProductsSchema.shape,
+      async (args) => {
+        const result = await listProducts(args);
         return { content: [{ type: "text", text: result }] };
       }
     );
@@ -94,7 +118,7 @@ const handler = createMcpHandler(
 
     server.tool(
       "claimTask",
-      "Atomically claim a task for your agent. Validates: task must be 'Backlog' or 'Ready to Start', must not be claimed by another agent, and all dependencies must be resolved (Done). On success: sets status to 'In Progress', records your Agent ID, Plan ID, and started date. Returns error with current owner if already claimed.",
+      "Atomically claim a task for your agent. Validates: task must be 'Backlog' or 'Ready to Start', must not be claimed by another agent, and all dependencies must be resolved (Done). On success: sets status to 'In Progress', assigns owner, records Agent ID, Plan ID, and started date. Returns error with current owner if already claimed.",
       ClaimTaskSchema.shape,
       async (args) => {
         const result = await claimTask(args);
@@ -128,7 +152,7 @@ const handler = createMcpHandler(
 
     server.tool(
       "createTask",
-      "IMPORTANT: Use getBacklog first to check for existing similar tasks. Create one or more tasks with optional subtasks, epic/sprint linkage, and agent metadata. For discovered tech debt, follow-up work, or breaking down larger tasks.",
+      "IMPORTANT: Use getBacklog first to check for existing similar tasks. Create one or more tasks with optional subtasks, epic/sprint linkage, acceptance criteria, dependencies, and agent metadata. Owner is auto-assigned. Use listEpics to find the right epicId. For discovered tech debt, follow-up work, or breaking down larger tasks.",
       CreateTaskSchema.shape,
       async (args) => {
         const result = await createTask(args);

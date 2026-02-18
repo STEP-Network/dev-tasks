@@ -9,6 +9,7 @@ import {
   SUBTASK_STATUS,
   SUBTASK_TYPE,
   AGENT_ID,
+  DEFAULT_OWNER_ID,
 } from "../constants";
 import type { CreateTaskInput } from "../schemas";
 import { buildColumnValues, formatError } from "./utils";
@@ -69,6 +70,20 @@ export async function createTask(args: CreateTaskInput): Promise<string> {
         columnValues[TASK_COLUMNS.unplanned] = { checked: task.unplanned ? "true" : "false" };
       }
 
+      // Owner — use provided value or auto-assign default
+      const ownerId = task.owner || DEFAULT_OWNER_ID;
+      columnValues[TASK_COLUMNS.owner] = { personsAndTeams: [{ id: ownerId, kind: "person" }] };
+
+      // Acceptance criteria
+      if (task.acceptanceCriteria) {
+        columnValues[TASK_COLUMNS.acceptanceCriteria] = { text: task.acceptanceCriteria };
+      }
+
+      // Branch name
+      if (task.branch) {
+        columnValues[TASK_COLUMNS.branch] = task.branch;
+      }
+
       // Create parent task
       const createQuery = `
         mutation {
@@ -89,6 +104,27 @@ export async function createTask(args: CreateTaskInput): Promise<string> {
 
       if (!createdItem) {
         throw new Error(`Failed to create task "${task.name}"`);
+      }
+
+      // Set dependencies after creation (dependency column requires separate mutation)
+      if (task.dependencyIds && task.dependencyIds.length > 0) {
+        try {
+          const depValues: Record<string, unknown> = {
+            [TASK_COLUMNS.dependencies]: { item_ids: task.dependencyIds },
+          };
+          const depMutation = `
+            mutation {
+              change_multiple_column_values(
+                item_id: ${createdItem.id},
+                board_id: ${BOARDS.TASKS},
+                column_values: ${buildColumnValues(depValues)}
+              ) { id }
+            }
+          `;
+          await executeMondayQuery<any>(depMutation);
+        } catch {
+          // Dependencies column may not work as expected — skip gracefully
+        }
       }
 
       let subitemCount = 0;

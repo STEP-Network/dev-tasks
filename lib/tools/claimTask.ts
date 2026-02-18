@@ -1,5 +1,5 @@
 import { executeMondayQuery } from "../monday-client";
-import { BOARDS, TASK_COLUMNS, TASK_STATUS, AGENT_ID } from "../constants";
+import { BOARDS, TASK_COLUMNS, TASK_STATUS, AGENT_ID, DEFAULT_OWNER_ID } from "../constants";
 import type { ClaimTaskInput } from "../schemas";
 import {
   getColumnText,
@@ -94,6 +94,7 @@ export async function claimTask(args: ClaimTaskInput): Promise<string> {
       [TASK_COLUMNS.status]: { index: TASK_STATUS["In Progress"] },
       [TASK_COLUMNS.agentId]: { ids: [String(AGENT_ID[agentId])] },
       [TASK_COLUMNS.startedDate]: { date: todayDate() },
+      [TASK_COLUMNS.owner]: { personsAndTeams: [{ id: DEFAULT_OWNER_ID, kind: "person" }] },
     };
 
     if (planId) {

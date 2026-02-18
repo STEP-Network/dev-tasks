@@ -39,6 +39,10 @@ const AgentIdEnum = z.enum([
   "Claude Code CLI", "Claude Desktop Cloud", "Codex Local", "Claude Desktop Local", "Codex Cloud",
 ]);
 
+const EpicStatusEnum = z.enum([
+  "Refining", "Done", "On Hold", "Planned", "Backlog", "In Progress", "Review",
+]);
+
 // =============================================================================
 // Tool 1: getBacklog
 // =============================================================================
@@ -87,6 +91,24 @@ export const GetSprintSchema = z.object({
 
 export const GetEpicSchema = z.object({
   epicId: z.number().describe("Monday.com epic item ID"),
+});
+
+// =============================================================================
+// Tool 5b: listEpics
+// =============================================================================
+
+export const ListEpicsSchema = z.object({
+  status: EpicStatusEnum.optional().describe("Filter by epic status (e.g. 'In Progress', 'Planned')"),
+  search: z.string().optional().describe("Search text in epic name"),
+  limit: z.number().optional().default(25).describe("Max epics to return (default: 25)"),
+});
+
+// =============================================================================
+// Tool 5c: listProducts
+// =============================================================================
+
+export const ListProductsSchema = z.object({
+  search: z.string().optional().describe("Search text in product name"),
 });
 
 // =============================================================================
@@ -201,6 +223,10 @@ export const CreateTaskSchema = z.object({
     agentId: AgentIdEnum.optional().describe("Agent creating this task"),
     planId: z.string().optional().describe("Plan ID for traceability"),
     unplanned: z.boolean().optional().describe("Mark as unplanned mid-sprint addition"),
+    acceptanceCriteria: z.string().optional().describe("Machine-readable acceptance criteria (definition of done)"),
+    dependencyIds: z.array(z.number()).optional().describe("Task IDs this task depends on (blocked by)"),
+    branch: z.string().optional().describe("Git branch name"),
+    owner: z.number().optional().describe("Owner person ID (default: auto-assigned)"),
     subitems: z.array(SubitemSpec).optional().describe("Subtasks to create with the task"),
   })).describe("Array of tasks to create"),
 });
@@ -253,6 +279,8 @@ export type GetBugsInput = z.input<typeof GetBugsSchema>;
 export type GetTaskInput = z.infer<typeof GetTaskSchema>;
 export type GetSprintInput = z.infer<typeof GetSprintSchema>;
 export type GetEpicInput = z.infer<typeof GetEpicSchema>;
+export type ListEpicsInput = z.input<typeof ListEpicsSchema>;
+export type ListProductsInput = z.infer<typeof ListProductsSchema>;
 export type ClaimTaskInput = z.infer<typeof ClaimTaskSchema>;
 export type UpdateTaskInput = z.infer<typeof UpdateTaskSchema>;
 export type ManageSubtasksInput = z.infer<typeof ManageSubtasksSchema>;
