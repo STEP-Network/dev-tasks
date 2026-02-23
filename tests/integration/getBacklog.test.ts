@@ -71,10 +71,8 @@ describe("getBacklog", () => {
     expect(result).toMatch(/^# Backlog/);
     // If tasks exist, verify markdown structure
     if (!result.includes("No tasks found")) {
-      // Tasks are formatted as bold TAIT- identifiers (number or ? if autonumber not set)
-      expect(result).toMatch(/\*\*TAIT-(\d+|\?)\*\*/);
-      // Item ID pattern in parentheses
-      expect(result).toMatch(/#\d+/);
+      // Tasks are formatted with item ID in parentheses
+      expect(result).toMatch(/\(#\d+\)/);
       // Status/Priority/Type/Hours line
       expect(result).toContain("Status:");
       expect(result).toContain("Priority:");

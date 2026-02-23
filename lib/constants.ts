@@ -37,7 +37,6 @@ export const TASK_COLUMNS = {
   agentId: "dropdown_mm0mrcex",
   planId: "text_mm0mntgc",
   unplanned: "check",
-  autoNumber: "autonumber_mm0pk861",
   taskId: "item_id",
   attachments: "file_mm0m4xde",
   product: "lookup_mm0vsq7f",

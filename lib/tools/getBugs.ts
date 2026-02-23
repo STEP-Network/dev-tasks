@@ -110,7 +110,7 @@ export async function getBugs(args: GetBugsInput): Promise<string> {
         ? linkedTasks.map(t => `${t.name} (#${t.id})`).join(", ")
         : "—";
 
-      lines.push(`- **BAIT-${item.id}** ${item.name}`);
+      lines.push(`- **(#${item.id}) ${item.name}**`);
       lines.push(`  Status: ${bugStatus} | Priority: ${bugPriority} | Product: ${productName}`);
       if (linkedTasks.length > 0) {
         lines.push(`  Linked Tasks: ${linkedTasksStr}`);

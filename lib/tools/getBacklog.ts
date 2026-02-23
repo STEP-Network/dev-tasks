@@ -89,7 +89,6 @@ export async function getBacklog(args: GetBacklogInput): Promise<string> {
       TASK_COLUMNS.sprint,
       TASK_COLUMNS.agentId,
       TASK_COLUMNS.planId,
-      TASK_COLUMNS.autoNumber,
       TASK_COLUMNS.taskId,
       TASK_COLUMNS.product,
     ].map(c => `"${c}"`).join(", ");
@@ -151,7 +150,6 @@ export async function getBacklog(args: GetBacklogInput): Promise<string> {
     for (const item of filteredItems) {
       const colMap = new Map<string, any>(item.column_values?.map((c: any) => [c.id, c]) || []);
 
-      const autoNumber = getColumnText(colMap, TASK_COLUMNS.autoNumber) || "?";
       const taskStatus = getColumnText(colMap, TASK_COLUMNS.status) || "Unknown";
       const priority = getColumnText(colMap, TASK_COLUMNS.priority) || "—";
       const taskType = getColumnText(colMap, TASK_COLUMNS.type) || "—";
@@ -163,7 +161,7 @@ export async function getBacklog(args: GetBacklogInput): Promise<string> {
       const agent = getColumnText(colMap, TASK_COLUMNS.agentId) || "—";
       const product = getMirrorDisplayValue(colMap, TASK_COLUMNS.product) || "—";
 
-      lines.push(`- **TAIT-${autoNumber}** (#${item.id}) ${item.name}`);
+      lines.push(`- **(#${item.id}) ${item.name}**`);
       lines.push(`  Status: ${taskStatus} | Priority: ${priority} | Type: ${taskType} | Hours: ${hours}`);
       lines.push(`  Product: ${product} | Epic: ${epic} | Sprint: ${sprint} | Agent: ${agent}`);
       lines.push("");

@@ -36,7 +36,6 @@ export async function getTask(args: GetTaskInput): Promise<string> {
       TASK_COLUMNS.agentId,
       TASK_COLUMNS.planId,
       TASK_COLUMNS.unplanned,
-      TASK_COLUMNS.autoNumber,
       TASK_COLUMNS.taskId,
       TASK_COLUMNS.attachments,
       TASK_COLUMNS.product,
@@ -92,7 +91,6 @@ export async function getTask(args: GetTaskInput): Promise<string> {
     const colMap = new Map<string, any>(item.column_values?.map((c: any) => [c.id, c]) || []);
 
     // Core fields
-    const autoNumber = getColumnText(colMap, TASK_COLUMNS.autoNumber) || "?";
     const status = getColumnText(colMap, TASK_COLUMNS.status) || "Unknown";
     const priority = getColumnText(colMap, TASK_COLUMNS.priority) || "—";
     const taskType = getColumnText(colMap, TASK_COLUMNS.type) || "—";
@@ -127,8 +125,7 @@ export async function getTask(args: GetTaskInput): Promise<string> {
 
     // Build output
     const lines: string[] = [];
-    lines.push(`# TAIT-${autoNumber}: ${item.name}`);
-    lines.push(`**ID:** #${item.id}`);
+    lines.push(`# ${item.name} (#${item.id})`);
     lines.push("");
 
     // Status section

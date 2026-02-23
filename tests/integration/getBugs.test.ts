@@ -32,8 +32,8 @@ describe("getBugs", () => {
     expect(result).toMatch(/^# Bugs Queue/);
     // If bugs exist, verify markdown structure
     if (!result.includes("No bugs found")) {
-      // Bugs are formatted as bold BAIT- identifiers
-      expect(result).toMatch(/\*\*BAIT-\d+\*\*/);
+      // Bugs are formatted with item ID in parentheses
+      expect(result).toMatch(/\(#\d+\)/);
       // Status and priority lines
       expect(result).toContain("Status:");
       expect(result).toContain("Priority:");
