@@ -5,7 +5,7 @@ import { getColumnText, getLinkedItems, resolveLinkedItems, formatError } from "
 
 export async function listEpics(args: ListEpicsInput): Promise<string> {
   try {
-    const { status, search, limit = 25 } = args;
+    const { status, productId, search, limit = 25 } = args;
 
     const columnIds = [
       EPIC_COLUMNS.status,
@@ -29,8 +29,8 @@ export async function listEpics(args: ListEpicsInput): Promise<string> {
       ? `query_params: { rules: [${rules.join(", ")}], operator: and }`
       : "";
 
-    // Fetch more if searching client-side
-    const fetchLimit = search ? 200 : limit;
+    // Fetch more if filtering client-side
+    const fetchLimit = (search || productId) ? 200 : limit;
 
     const query = `
       query {
@@ -54,6 +54,15 @@ export async function listEpics(args: ListEpicsInput): Promise<string> {
     const response = await executeMondayQuery<any>(query);
     let items = response.boards?.[0]?.items_page?.items || [];
 
+    // Client-side product filter
+    if (productId) {
+      items = items.filter((item: any) => {
+        const colMap = new Map<string, any>(item.column_values?.map((c: any) => [c.id, c]) || []);
+        const productItems = getLinkedItems(colMap, EPIC_COLUMNS.product);
+        return productItems.some((p: any) => Number(p.id) === productId);
+      });
+    }
+
     // Client-side search filter
     if (search) {
       const term = search.toLowerCase();
@@ -64,7 +73,7 @@ export async function listEpics(args: ListEpicsInput): Promise<string> {
     items = items.slice(0, limit);
 
     if (items.length === 0) {
-      const filterDesc = [status && `status="${status}"`, search && `search="${search}"`].filter(Boolean).join(", ");
+      const filterDesc = [status && `status="${status}"`, productId && `productId=${productId}`, search && `search="${search}"`].filter(Boolean).join(", ");
       return formatError(`No epics found${filterDesc ? ` matching ${filterDesc}` : ""}.`);
     }
 

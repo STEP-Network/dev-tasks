@@ -106,6 +106,7 @@ export const GetEpicSchema = z.object({
 
 export const ListEpicsSchema = z.object({
   status: EpicStatusEnum.optional().describe("Filter by epic status (e.g. 'In Progress', 'Planned')"),
+  productId: z.number().optional().describe("Filter by product — use listProducts to find the ID"),
   search: z.string().optional().describe("Search text in epic name"),
   limit: z.number().optional().default(25).describe("Max epics to return (default: 25)"),
 });
