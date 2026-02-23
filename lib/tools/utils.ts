@@ -25,6 +25,11 @@ export function getLinkedItems(colMap: Map<string, any>, columnId: string): Arra
   return col?.linked_items || [];
 }
 
+export function getMirrorDisplayValue(colMap: Map<string, any>, columnId: string): string | undefined {
+  const col = colMap.get(columnId);
+  return col?.display_value?.trim() || undefined;
+}
+
 export function getLinkUrl(colMap: Map<string, any>, columnId: string): string | undefined {
   const col = colMap.get(columnId);
   if (!col?.value) return undefined;

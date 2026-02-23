@@ -5,6 +5,7 @@ import {
   getColumnText,
   getColumnValue,
   getLinkedItems,
+  getMirrorDisplayValue,
   getLinkUrl,
   parseMondayDate,
   formatSubtask,
@@ -38,6 +39,7 @@ export async function getTask(args: GetTaskInput): Promise<string> {
       TASK_COLUMNS.autoNumber,
       TASK_COLUMNS.taskId,
       TASK_COLUMNS.attachments,
+      TASK_COLUMNS.product,
       TASK_COLUMNS.activeSprint,
       TASK_COLUMNS.sprintCompleted,
       TASK_COLUMNS.lastUpdated,
@@ -156,9 +158,13 @@ export async function getTask(args: GetTaskInput): Promise<string> {
       lines.push("");
     }
 
-    // Epic / Sprint / Version Context
-    if (epicItems.length > 0 || sprintItems.length > 0 || versionItems.length > 0) {
-      lines.push("## Epic / Sprint / Version");
+    // Product / Epic / Sprint / Version Context
+    const product = getMirrorDisplayValue(colMap, TASK_COLUMNS.product);
+    if (product || epicItems.length > 0 || sprintItems.length > 0 || versionItems.length > 0) {
+      lines.push("## Product / Epic / Sprint / Version");
+      if (product) {
+        lines.push(`- **Product:** ${product}`);
+      }
       if (epicItems.length > 0) {
         lines.push(`- **Epic:** ${epicItems.map(e => `${e.name} (#${e.id})`).join(", ")}`);
       }

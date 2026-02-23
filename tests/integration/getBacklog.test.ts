@@ -42,6 +42,27 @@ describe("getBacklog", () => {
     }
   });
 
+  it("filters tasks by productId", async () => {
+    // STEPhie product
+    const result = await getBacklog({ productId: 2730518827 });
+
+    expect(result).toBeTruthy();
+    expect(result).toContain("# Backlog");
+    expect(result).toContain("product: #2730518827");
+    // If tasks are found, they should show Product in output
+    if (!result.includes("No tasks found") && !result.includes("No epics found")) {
+      expect(result).toContain("Product:");
+    }
+  });
+
+  it("returns empty when productId has no epics", async () => {
+    // Non-existent product ID
+    const result = await getBacklog({ productId: 9999999999 });
+
+    expect(result).toBeTruthy();
+    expect(result).toContain("No epics found");
+  });
+
   it("contains expected markdown formatting", async () => {
     const result = await getBacklog({ limit: 5 });
 
@@ -59,7 +80,8 @@ describe("getBacklog", () => {
       expect(result).toContain("Priority:");
       expect(result).toContain("Type:");
       expect(result).toContain("Hours:");
-      // Epic/Agent line
+      // Product/Epic/Agent line
+      expect(result).toContain("Product:");
       expect(result).toContain("Epic:");
       expect(result).toContain("Agent:");
     }

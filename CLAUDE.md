@@ -21,10 +21,13 @@ npm run test         # Run integration tests
 Products (5091839409) [read-only]
   └→ Epics (5091706354) [read-only]
        └→ Tasks (5091706356) [read-write] ←→ Sprints (5091706352) [read-only]
+            │  └→ Product (mirror via Epic)
             ↑
        Bugs (5091706353) [read-write]
        Versions (5091847257) [read-write]
 ```
+
+**Mirror columns:** Tasks has a Product mirror column (`lookup_mm0vsq7f`) mirrored through the Epic relation (`task_epic`). Mirror columns are read-only and cannot be filtered server-side — `getBacklog` resolves product → epics → tasks instead.
 
 Subtasks board: 5091706366 (linked from Tasks)
 

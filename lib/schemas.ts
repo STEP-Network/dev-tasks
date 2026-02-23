@@ -56,6 +56,7 @@ export const GetBacklogSchema = z.object({
   agentId: AgentIdEnum.optional().describe("Filter by agent currently working on the task"),
   epicId: z.number().optional().describe("Filter by epic — use listEpics to find the ID"),
   sprintId: z.number().optional().describe("Filter by sprint — use getSprint() to find the ID"),
+  productId: z.number().optional().describe("Filter by product — use listProducts to find the ID. Resolves product → epics → tasks"),
   limit: z.number().optional().default(25).describe("Max tasks to return (default: 25)"),
 });
 

@@ -1,11 +1,42 @@
 import { executeMondayQuery } from "../monday-client";
-import { BOARDS, TASK_COLUMNS, TASK_STATUS, AGENT_ID } from "../constants";
+import { BOARDS, TASK_COLUMNS, TASK_STATUS, AGENT_ID, EPIC_COLUMNS } from "../constants";
 import type { GetBacklogInput } from "../schemas";
-import { getColumnText, getLinkedItems, formatError } from "./utils";
+import { getColumnText, getLinkedItems, getMirrorDisplayValue, formatError } from "./utils";
+
+/**
+ * Resolve a productId to the list of epic IDs linked to that product.
+ * Used to filter tasks by product via the epic board_relation (since the
+ * Product mirror column on Tasks cannot be filtered server-side).
+ */
+async function resolveProductEpicIds(productId: number): Promise<number[]> {
+  const query = `
+    query {
+      boards(ids: [${BOARDS.EPICS}]) {
+        items_page(limit: 500, query_params: {
+          rules: [{ column_id: "${EPIC_COLUMNS.product}", compare_value: [${productId}], operator: any_of }]
+        }) {
+          items { id }
+        }
+      }
+    }
+  `;
+  const response = await executeMondayQuery<any>(query);
+  const items = response.boards?.[0]?.items_page?.items || [];
+  return items.map((item: any) => Number(item.id));
+}
 
 export async function getBacklog(args: GetBacklogInput): Promise<string> {
   try {
-    const { status, type, unclaimedOnly = false, agentId, epicId, sprintId, limit = 25 } = args;
+    const { status, type, unclaimedOnly = false, agentId, epicId, sprintId, productId, limit = 25 } = args;
+
+    // If productId is provided, resolve to epic IDs first (mirror columns can't be filtered server-side)
+    let epicIdsForProduct: number[] | undefined;
+    if (productId) {
+      epicIdsForProduct = await resolveProductEpicIds(productId);
+      if (epicIdsForProduct.length === 0) {
+        return `# Backlog — 0 tasks (product: #${productId})\n\nNo epics found for this product, so no tasks match.`;
+      }
+    }
 
     // Build query_params rules
     const rules: string[] = [];
@@ -27,8 +58,17 @@ export async function getBacklog(args: GetBacklogInput): Promise<string> {
       rules.push(`{ column_id: "${TASK_COLUMNS.agentId}", compare_value: [${agentIndex}], operator: any_of }`);
     }
 
-    if (epicId) {
+    if (epicId && epicIdsForProduct) {
+      // Both epicId and productId: intersect — only include the epicId if it belongs to the product
+      const intersection = epicIdsForProduct.includes(epicId) ? [epicId] : [];
+      if (intersection.length === 0) {
+        return `# Backlog — 0 tasks (epic: #${epicId}, product: #${productId})\n\nThe specified epic does not belong to this product.`;
+      }
+      rules.push(`{ column_id: "${TASK_COLUMNS.epic}", compare_value: [${intersection.join(",")}], operator: any_of }`);
+    } else if (epicId) {
       rules.push(`{ column_id: "${TASK_COLUMNS.epic}", compare_value: [${epicId}], operator: any_of }`);
+    } else if (epicIdsForProduct) {
+      rules.push(`{ column_id: "${TASK_COLUMNS.epic}", compare_value: [${epicIdsForProduct.join(",")}], operator: any_of }`);
     }
 
     if (sprintId) {
@@ -51,6 +91,7 @@ export async function getBacklog(args: GetBacklogInput): Promise<string> {
       TASK_COLUMNS.planId,
       TASK_COLUMNS.autoNumber,
       TASK_COLUMNS.taskId,
+      TASK_COLUMNS.product,
     ].map(c => `"${c}"`).join(", ");
 
     const query = `
@@ -65,6 +106,7 @@ export async function getBacklog(args: GetBacklogInput): Promise<string> {
                 text
                 value
                 ... on BoardRelationValue { linked_items { id name } }
+                ... on MirrorValue { display_value }
               }
             }
           }
@@ -95,6 +137,7 @@ export async function getBacklog(args: GetBacklogInput): Promise<string> {
     if (agentId) filterParts.push(`agent: ${agentId}`);
     if (epicId) filterParts.push(`epic: #${epicId}`);
     if (sprintId) filterParts.push(`sprint: #${sprintId}`);
+    if (productId) filterParts.push(`product: #${productId}`);
     const filterInfo = filterParts.length > 0 ? ` (${filterParts.join(", ")})` : "";
 
     lines.push(`# Backlog — ${filteredItems.length} tasks${filterInfo}`);
@@ -118,10 +161,11 @@ export async function getBacklog(args: GetBacklogInput): Promise<string> {
       const sprintItems = getLinkedItems(colMap, TASK_COLUMNS.sprint);
       const sprint = sprintItems.length > 0 ? `${sprintItems[0].name} (#${sprintItems[0].id})` : "—";
       const agent = getColumnText(colMap, TASK_COLUMNS.agentId) || "—";
+      const product = getMirrorDisplayValue(colMap, TASK_COLUMNS.product) || "—";
 
       lines.push(`- **TAIT-${autoNumber}** (#${item.id}) ${item.name}`);
       lines.push(`  Status: ${taskStatus} | Priority: ${priority} | Type: ${taskType} | Hours: ${hours}`);
-      lines.push(`  Epic: ${epic} | Sprint: ${sprint} | Agent: ${agent}`);
+      lines.push(`  Product: ${product} | Epic: ${epic} | Sprint: ${sprint} | Agent: ${agent}`);
       lines.push("");
     }
 

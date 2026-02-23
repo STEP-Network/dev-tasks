@@ -40,6 +40,7 @@ export const TASK_COLUMNS = {
   autoNumber: "autonumber_mm0pk861",
   taskId: "item_id",
   attachments: "file_mm0m4xde",
+  product: "lookup_mm0vsq7f",
   activeSprint: "mirror",
   sprintCompleted: "mirror__1",
   dependencies: "dependency_mm0pwbxn",
