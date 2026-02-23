@@ -46,7 +46,7 @@ const EpicStatusEnum = z.enum([
 ]);
 
 const EpicPriorityEnum = z.enum([
-  "Critical", "High", "Medium", "Low", "Best Effort", "Missing",
+  "Critical", "High", "Medium", "Low", "Minimal", "Not Prioritized",
 ]);
 
 // =============================================================================

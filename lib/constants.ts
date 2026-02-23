@@ -255,12 +255,12 @@ export const BUG_PRIORITY: Record<string, number> = {
 
 // Epic Priority (color_mm0pjpsf column)
 export const EPIC_PRIORITY: Record<string, number> = {
-  "Critical": 0,
-  "High": 2,
-  "Medium": 7,
-  "Low": 12,
-  "Best Effort": 1,
-  "Missing": 5,
+  "Critical": 3,
+  "High": 4,
+  "Medium": 0,
+  "Low": 2,
+  "Minimal": 1,
+  "Not Prioritized": 5,
 };
 
 // Epic Status (epic_status column)
