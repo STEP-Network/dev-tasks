@@ -16,6 +16,8 @@ import {
   UpdateVersionSchema,
   GetUpdatesSchema,
   CreateUpdateSchema,
+  CreateEpicSchema,
+  UpdateEpicSchema,
 } from "@/lib/schemas";
 import {
   getBacklog,
@@ -34,6 +36,8 @@ import {
   updateVersion,
   getUpdates,
   createUpdate,
+  createEpic,
+  updateEpic,
 } from "@/lib/tools";
 
 const handler = createMcpHandler(
@@ -217,6 +221,30 @@ const handler = createMcpHandler(
       CreateUpdateSchema.shape,
       async (args) => {
         const result = await createUpdate(args);
+        return { content: [{ type: "text", text: result }] };
+      }
+    );
+
+    // =========================================================================
+    // Epic Management
+    // =========================================================================
+
+    server.tool(
+      "createEpic",
+      "Create a new epic on the Epics board. Set name (required), status (default: Backlog), priority, description, owner, deadline, timeline (start+end), and link to product/version. Use listProducts to find productId.",
+      CreateEpicSchema.shape,
+      async (args) => {
+        const result = await createEpic(args);
+        return { content: [{ type: "text", text: result }] };
+      }
+    );
+
+    server.tool(
+      "updateEpic",
+      "Update any epic field. Supports: name, status, priority, description, owner, deadline, timeline (start+end), product, version. Set delete=true to delete. Use listEpics to find the epicId.",
+      UpdateEpicSchema.shape,
+      async (args) => {
+        const result = await updateEpic(args);
         return { content: [{ type: "text", text: result }] };
       }
     );

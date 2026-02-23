@@ -45,6 +45,10 @@ const EpicStatusEnum = z.enum([
   "Refining", "Done", "On Hold", "Planned", "Backlog", "In Progress", "Review",
 ]);
 
+const EpicPriorityEnum = z.enum([
+  "Critical", "High", "Medium", "Low", "Best Effort", "Missing",
+]);
+
 // =============================================================================
 // Tool 1: getBacklog
 // =============================================================================
@@ -294,6 +298,42 @@ export const CreateUpdateSchema = z.object({
 });
 
 // =============================================================================
+// Tool 17: createEpic
+// =============================================================================
+
+export const CreateEpicSchema = z.object({
+  name: z.string().describe("Epic name"),
+  status: EpicStatusEnum.optional().describe("Initial status (default: Backlog)"),
+  priority: EpicPriorityEnum.optional().describe("Epic priority"),
+  description: z.string().optional().describe("Epic description"),
+  owner: SystemUserEnum.optional().describe("Owner — use your system username (e.g. the output of `whoami`)"),
+  deadline: z.string().optional().describe("Deadline date (YYYY-MM-DD)"),
+  timelineStart: z.string().optional().describe("Timeline start date (YYYY-MM-DD) — must provide both start and end"),
+  timelineEnd: z.string().optional().describe("Timeline end date (YYYY-MM-DD) — must provide both start and end"),
+  productId: z.number().optional().describe("Link to product — use listProducts to find the ID"),
+  versionId: z.number().optional().describe("Link to target version"),
+});
+
+// =============================================================================
+// Tool 18: updateEpic
+// =============================================================================
+
+export const UpdateEpicSchema = z.object({
+  epicId: z.number().describe("Epic item ID to update — use listEpics to find the ID"),
+  delete: z.boolean().optional().describe("Set true to delete the epic"),
+  name: z.string().optional().describe("New epic name"),
+  status: EpicStatusEnum.optional().describe("New status"),
+  priority: EpicPriorityEnum.optional().describe("New priority"),
+  description: z.string().optional().describe("Updated description"),
+  owner: SystemUserEnum.optional().describe("Owner — use your system username (e.g. the output of `whoami`)"),
+  deadline: z.string().optional().describe("Deadline date (YYYY-MM-DD)"),
+  timelineStart: z.string().optional().describe("Timeline start date (YYYY-MM-DD) — must provide both start and end"),
+  timelineEnd: z.string().optional().describe("Timeline end date (YYYY-MM-DD) — must provide both start and end"),
+  productId: z.number().optional().describe("Link to product — use listProducts to find the ID"),
+  versionId: z.number().optional().describe("Link to target version"),
+});
+
+// =============================================================================
 // Type Exports
 // =============================================================================
 
@@ -313,3 +353,5 @@ export type CreateBugInput = z.infer<typeof CreateBugSchema>;
 export type UpdateVersionInput = z.infer<typeof UpdateVersionSchema>;
 export type GetUpdatesInput = z.input<typeof GetUpdatesSchema>;
 export type CreateUpdateInput = z.infer<typeof CreateUpdateSchema>;
+export type CreateEpicInput = z.infer<typeof CreateEpicSchema>;
+export type UpdateEpicInput = z.infer<typeof UpdateEpicSchema>;

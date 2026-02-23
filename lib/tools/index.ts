@@ -14,3 +14,5 @@ export { createBug } from "./createBug";
 export { updateVersion } from "./updateVersion";
 export { getUpdates } from "./getUpdates";
 export { createUpdate } from "./createUpdate";
+export { createEpic } from "./createEpic";
+export { updateEpic } from "./updateEpic";

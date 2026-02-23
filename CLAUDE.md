@@ -19,7 +19,7 @@ npm run test         # Run integration tests
 
 ```
 Products (5091839409) [read-only]
-  └→ Epics (5091706354) [read-only]
+  └→ Epics (5091706354) [read-write]
        └→ Tasks (5091706356) [read-write] ←→ Sprints (5091706352) [read-only]
             │  └→ Product (mirror via Epic)
             ↑
@@ -32,15 +32,15 @@ Products (5091839409) [read-only]
 Subtasks board: 5091706366 (linked from Tasks)
 
 ### MCP Server Entry Point
-- `app/api/mcp/route.ts` — Registers all 14 tools
+- `app/api/mcp/route.ts` — Registers all 16 tools
 
 ### Core Library
 - `lib/constants.ts` — Board IDs, column IDs, status/type/priority mappings, default owner ID
 - `lib/monday-client.ts` — GraphQL executor
-- `lib/schemas.ts` — Zod schemas for all 14 tools
+- `lib/schemas.ts` — Zod schemas for all 16 tools
 - `lib/tools/utils.ts` — Shared helpers
 
-### Tools (14 total)
+### Tools (16 total)
 
 | # | Tool | Phase | Purpose |
 |---|------|-------|---------|
@@ -58,6 +58,8 @@ Subtasks board: 5091706366 (linked from Tasks)
 | 12 | `convertBugToTask` | Creation | Bug → Bugfix task conversion |
 | 13 | `createBug` | Creation | File new bugs |
 | 14 | `updateVersion` | Shipping | Link tasks/bugs to versions |
+| 15 | `createEpic` | Creation | Create epics with status, priority, timeline, product link |
+| 16 | `updateEpic` | Execution | Update any epic field or delete an epic |
 
 ## Agent Workflow
 
@@ -89,6 +91,8 @@ Pass your system username (`whoami`) as the `owner` field. The server maps usern
 Used in:
 - `claimTask` — required, assigns you as owner when claiming
 - `createTask` — optional, assigns owner at creation time
+- `createEpic` — optional, assigns owner at creation time
+- `updateEpic` — optional, changes owner
 
 ## Key Status Mappings
 
@@ -97,6 +101,8 @@ Used in:
 **Task Type:** Development, Bugfix, Maintenance, Refine, Documentation, PM-work
 **Subtask Status:** Backlog → Ready to start → Working on it → Waiting for review → Pending Deploy → Done (+ Stuck)
 **Subtask Type:** Test, Documentation, UX-UI, Database, Backend, PM-work
+**Epic Status:** Backlog, Planned, Refining, In Progress, Review, On Hold, Done
+**Epic Priority:** Critical, High, Medium, Low, Best Effort, Missing
 **Agent ID:** Claude Code CLI, Claude Desktop Cloud, Codex Local, Claude Desktop Local, Codex Cloud
 
 ## Task Completion
