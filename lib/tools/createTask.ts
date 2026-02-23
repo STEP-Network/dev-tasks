@@ -38,10 +38,6 @@ export async function createTask(args: CreateTaskInput): Promise<string> {
         columnValues[TASK_COLUMNS.description] = { text: task.description };
       }
 
-      if (task.estimatedHours !== undefined) {
-        columnValues[TASK_COLUMNS.estimatedHours] = String(task.estimatedHours);
-      }
-
       if (task.dueDate) {
         columnValues[TASK_COLUMNS.dueDate] = { date: task.dueDate };
       }

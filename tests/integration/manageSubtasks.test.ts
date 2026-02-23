@@ -49,7 +49,7 @@ describe("manageSubtasks", () => {
     const result = await manageSubtasks({
       parentItemId: parentId,
       operations: [
-        { action: "update", subtaskName: "Backend implementation", status: "Working on it", actualHours: 1.5 },
+        { action: "update", subtaskName: "Backend implementation", status: "In Progress", actualHours: 1.5 },
       ],
     });
     expect(result).toContain("Backend implementation");

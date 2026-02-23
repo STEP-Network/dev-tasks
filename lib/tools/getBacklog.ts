@@ -153,7 +153,7 @@ export async function getBacklog(args: GetBacklogInput): Promise<string> {
       const taskStatus = getColumnText(colMap, TASK_COLUMNS.status) || "Unknown";
       const priority = getColumnText(colMap, TASK_COLUMNS.priority) || "—";
       const taskType = getColumnText(colMap, TASK_COLUMNS.type) || "—";
-      const hours = getColumnText(colMap, TASK_COLUMNS.estimatedHours) || "—";
+      const hours = getMirrorDisplayValue(colMap, TASK_COLUMNS.estimatedHours) || "—";
       const epicItems = getLinkedItems(colMap, TASK_COLUMNS.epic);
       const epic = epicItems.length > 0 ? `${epicItems[0].name} (#${epicItems[0].id})` : "—";
       const sprintItems = getLinkedItems(colMap, TASK_COLUMNS.sprint);

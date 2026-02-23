@@ -99,7 +99,7 @@ Used in:
 **Task Status:** Backlog → Ready to Start → In Progress → Waiting for Review → Pending Deploy → Done (+ Stuck)
 **Task Priority:** Critical, High, Medium, Low, Best Effort, Missing
 **Task Type:** Development, Bugfix, Maintenance, Refine, Documentation, PM-work
-**Subtask Status:** Backlog → Ready to start → Working on it → Waiting for review → Pending Deploy → Done (+ Stuck)
+**Subtask Status:** Backlog → Ready to Start → In Progress → Waiting for Review → Pending Deploy → Done (+ Stuck)
 **Subtask Type:** Test, Documentation, UX-UI, Database, Backend, PM-work
 **Epic Status:** Backlog, Planned, Refining, In Progress, Review, On Hold, Done
 **Epic Priority:** Critical, High, Medium, Low, Minimal, Not Prioritized

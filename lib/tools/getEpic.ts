@@ -1,7 +1,7 @@
 import { executeMondayQuery } from "../monday-client";
 import { EPIC_COLUMNS, TASK_COLUMNS } from "../constants";
 import type { GetEpicInput } from "../schemas";
-import { getColumnText, getLinkedItems, parseMondayDate, resolveLinkedItems, formatError } from "./utils";
+import { getColumnText, getLinkedItems, getMirrorDisplayValue, parseMondayDate, resolveLinkedItems, formatError } from "./utils";
 
 export async function getEpic(args: GetEpicInput): Promise<string> {
   try {
@@ -82,7 +82,7 @@ export async function getEpic(args: GetEpicInput): Promise<string> {
       const taskStatus = getColumnText(taskColMap, TASK_COLUMNS.status) || "Unknown";
       statusCounts[taskStatus] = (statusCounts[taskStatus] || 0) + 1;
 
-      const est = getColumnText(taskColMap, TASK_COLUMNS.estimatedHours);
+      const est = getMirrorDisplayValue(taskColMap, TASK_COLUMNS.estimatedHours);
       if (est) totalEstimated += parseFloat(est);
     }
 
@@ -142,7 +142,7 @@ export async function getEpic(args: GetEpicInput): Promise<string> {
         const taskStatus = getColumnText(taskColMap, TASK_COLUMNS.status) || "Unknown";
         const taskPriority = getColumnText(taskColMap, TASK_COLUMNS.priority) || "—";
         const taskType = getColumnText(taskColMap, TASK_COLUMNS.type) || "—";
-        const est = getColumnText(taskColMap, TASK_COLUMNS.estimatedHours) || "—";
+        const est = getMirrorDisplayValue(taskColMap, TASK_COLUMNS.estimatedHours) || "—";
         const agent = getColumnText(taskColMap, TASK_COLUMNS.agentId) || "—";
 
         const check = taskStatus === "Done" ? "[x]" : "[ ]";

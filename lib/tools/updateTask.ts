@@ -91,16 +91,6 @@ export async function updateTask(args: UpdateTaskInput): Promise<string> {
       changes.push(`Description updated`);
     }
 
-    if (args.estimatedHours !== undefined) {
-      columnValues[TASK_COLUMNS.estimatedHours] = String(args.estimatedHours);
-      changes.push(`Estimated Hours -> ${args.estimatedHours}`);
-    }
-
-    if (args.actualHours !== undefined) {
-      columnValues[TASK_COLUMNS.actualHours] = String(args.actualHours);
-      changes.push(`Actual Hours -> ${args.actualHours}`);
-    }
-
     if (args.dueDate !== undefined) {
       columnValues[TASK_COLUMNS.dueDate] = { date: args.dueDate };
       changes.push(`Due Date -> ${args.dueDate}`);

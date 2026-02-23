@@ -18,8 +18,8 @@ const TaskTypeEnum = z.enum([
 ]);
 
 const SubtaskStatusEnum = z.enum([
-  "Stuck", "Working on it", "Done", "Ready to start",
-  "Waiting for review", "Pending Deploy", "Backlog",
+  "Stuck", "In Progress", "Done", "Ready to Start",
+  "Waiting for Review", "Pending Deploy", "Backlog",
 ]);
 
 const SubtaskTypeEnum = z.enum([
@@ -142,8 +142,6 @@ export const UpdateTaskSchema = z.object({
   type: TaskTypeEnum.optional().describe("New task type"),
   priority: TaskPriorityEnum.optional().describe("New priority"),
   description: z.string().optional().describe("Updated description"),
-  estimatedHours: z.number().optional().describe("Estimated hours"),
-  actualHours: z.number().optional().describe("Actual hours spent"),
   dueDate: z.string().optional().describe("Due date (YYYY-MM-DD)"),
   startedDate: z.string().optional().describe("Started date (YYYY-MM-DD)"),
   epicId: z.number().optional().describe("Link to epic — use listEpics to find the ID"),
@@ -223,7 +221,6 @@ export const CreateTaskSchema = z.object({
     priority: TaskPriorityEnum.describe("Task priority"),
     status: TaskStatusEnum.optional().describe("Initial status (default: Backlog)"),
     description: z.string().optional().describe("Task description"),
-    estimatedHours: z.number().optional().describe("Estimated hours"),
     dueDate: z.string().optional().describe("Due date (YYYY-MM-DD)"),
     epicId: z.number().optional().describe("Link to epic — use listEpics to find the ID"),
     sprintId: z.number().optional().describe("Link to sprint — use getSprint() to find the ID"),

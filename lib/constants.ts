@@ -22,8 +22,8 @@ export const TASK_COLUMNS = {
   priority: "task_priority",
   type: "task_type",
   owner: "task_owner",
-  estimatedHours: "task_estimation",
-  actualHours: "task_actual_effort",
+  estimatedHours: "lookup_mm0vm1wc",
+  actualHours: "lookup_mm0vx6nx",
   description: "long_text_mm0mcp77",
   epic: "task_epic",
   sprint: "task_sprint",
@@ -215,10 +215,10 @@ export const TASK_TYPE: Record<string, number> = {
 // Subtask Status (status column on subtasks board)
 export const SUBTASK_STATUS: Record<string, number> = {
   "Stuck": 2,
-  "Working on it": 0,
+  "In Progress": 0,
   "Done": 1,
-  "Ready to start": 153,
-  "Waiting for review": 158,
+  "Ready to Start": 153,
+  "Waiting for Review": 158,
   "Pending Deploy": 18,
   "Backlog": 104,
 };

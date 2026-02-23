@@ -1,7 +1,7 @@
 import { executeMondayQuery } from "../monday-client";
 import { BOARDS, SPRINT_COLUMNS, TASK_COLUMNS } from "../constants";
 import type { GetSprintInput } from "../schemas";
-import { getColumnText, getLinkedItems, parseMondayDate, resolveLinkedItems, formatError } from "./utils";
+import { getColumnText, getLinkedItems, getMirrorDisplayValue, parseMondayDate, resolveLinkedItems, formatError } from "./utils";
 
 export async function getSprint(args: GetSprintInput): Promise<string> {
   try {
@@ -122,10 +122,10 @@ export async function getSprint(args: GetSprintInput): Promise<string> {
       const taskStatus = getColumnText(taskColMap, TASK_COLUMNS.status) || "Unknown";
       statusCounts[taskStatus] = (statusCounts[taskStatus] || 0) + 1;
 
-      const est = getColumnText(taskColMap, TASK_COLUMNS.estimatedHours);
+      const est = getMirrorDisplayValue(taskColMap, TASK_COLUMNS.estimatedHours);
       if (est) totalEstimated += parseFloat(est);
 
-      const act = getColumnText(taskColMap, TASK_COLUMNS.actualHours);
+      const act = getMirrorDisplayValue(taskColMap, TASK_COLUMNS.actualHours);
       if (act) totalActual += parseFloat(act);
     }
 
@@ -167,7 +167,7 @@ export async function getSprint(args: GetSprintInput): Promise<string> {
         const taskPriority = getColumnText(taskColMap, TASK_COLUMNS.priority) || "—";
         const taskType = getColumnText(taskColMap, TASK_COLUMNS.type) || "—";
         const agent = getColumnText(taskColMap, TASK_COLUMNS.agentId) || "—";
-        const est = getColumnText(taskColMap, TASK_COLUMNS.estimatedHours) || "—";
+        const est = getMirrorDisplayValue(taskColMap, TASK_COLUMNS.estimatedHours) || "—";
 
         const check = taskStatus === "Done" ? "[x]" : "[ ]";
         lines.push(`- ${check} **${task.name}** (#${task.id})`);

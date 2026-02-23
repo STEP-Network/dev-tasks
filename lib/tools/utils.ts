@@ -175,6 +175,7 @@ export async function resolveLinkedItems(
           text
           value
           ... on BoardRelationValue { linked_items { id name } }
+          ... on MirrorValue { display_value }
         }
       }
     }

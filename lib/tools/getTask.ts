@@ -95,8 +95,8 @@ export async function getTask(args: GetTaskInput): Promise<string> {
     const status = getColumnText(colMap, TASK_COLUMNS.status) || "Unknown";
     const priority = getColumnText(colMap, TASK_COLUMNS.priority) || "—";
     const taskType = getColumnText(colMap, TASK_COLUMNS.type) || "—";
-    const estimatedHours = getColumnText(colMap, TASK_COLUMNS.estimatedHours);
-    const actualHours = getColumnText(colMap, TASK_COLUMNS.actualHours);
+    const estimatedHours = getMirrorDisplayValue(colMap, TASK_COLUMNS.estimatedHours);
+    const actualHours = getMirrorDisplayValue(colMap, TASK_COLUMNS.actualHours);
     const description = getColumnText(colMap, TASK_COLUMNS.description) || "";
     const owner = getColumnText(colMap, TASK_COLUMNS.owner) || "Unassigned";
 
