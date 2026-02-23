@@ -52,6 +52,7 @@ export async function getTask(args: GetTaskInput): Promise<string> {
       SUBTASK_COLUMNS.actualHours,
       SUBTASK_COLUMNS.description,
       SUBTASK_COLUMNS.date,
+      SUBTASK_COLUMNS.startedDate,
       SUBTASK_COLUMNS.owner,
     ].map(c => `"${c}"`).join(", ");
 
@@ -197,7 +198,8 @@ export async function getTask(args: GetTaskInput): Promise<string> {
         const check = sub.status === "Done" ? "[x]" : "[ ]";
         const typeStr = sub.type ? ` [${sub.type}]` : "";
         const hoursStr = sub.estimatedHours !== undefined ? ` (${sub.estimatedHours}h)` : "";
-        lines.push(`- ${check} **${sub.name}** (ID: ${sub.id}) — ${sub.status}${typeStr}${hoursStr}`);
+        const startedStr = sub.startedDate ? ` | Started: ${sub.startedDate}` : "";
+        lines.push(`- ${check} **${sub.name}** (ID: ${sub.id}) — ${sub.status}${typeStr}${hoursStr}${startedStr}`);
         if (sub.description) lines.push(`  ${sub.description}`);
       }
       lines.push("");

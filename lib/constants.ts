@@ -62,6 +62,7 @@ export const SUBTASK_COLUMNS = {
   actualHours: "numeric5",
   description: "long_text_mm0mbev7",
   date: "date_mm0m5pt4",
+  startedDate: "date_mm0v57rr",
   lastUpdated: "pulse_updated_mm0pfjdm",
   creationLog: "pulse_log_mm0pktg6",
 } as const;

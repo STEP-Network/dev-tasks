@@ -98,6 +98,7 @@ export interface FormattedSubtask {
   estimatedHours?: number;
   actualHours?: number;
   date?: string;
+  startedDate?: string;
   owner?: string;
 }
 
@@ -113,6 +114,7 @@ export function formatSubtask(sub: any): FormattedSubtask {
     estimatedHours: colMap.get(SUBTASK_COLUMNS.estimatedHours)?.text ? parseFloat(colMap.get(SUBTASK_COLUMNS.estimatedHours).text) : undefined,
     actualHours: colMap.get(SUBTASK_COLUMNS.actualHours)?.text ? parseFloat(colMap.get(SUBTASK_COLUMNS.actualHours).text) : undefined,
     date: parseMondayDate(colMap.get(SUBTASK_COLUMNS.date)),
+    startedDate: parseMondayDate(colMap.get(SUBTASK_COLUMNS.startedDate)),
     owner: getColumnText(colMap, SUBTASK_COLUMNS.owner) || undefined,
   };
 }
