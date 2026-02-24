@@ -14,6 +14,10 @@ import {
   ConvertBugToTaskSchema,
   CreateBugSchema,
   UpdateVersionSchema,
+  CreateVersionSchema,
+  ListVersionsSchema,
+  GetVersionSchema,
+  GenerateChangelogSchema,
   GetUpdatesSchema,
   CreateUpdateSchema,
   CreateEpicSchema,
@@ -34,6 +38,10 @@ import {
   convertBugToTask,
   createBug,
   updateVersion,
+  createVersion,
+  listVersions,
+  getVersion,
+  generateChangelog,
   getUpdates,
   createUpdate,
   createEpic,
@@ -194,13 +202,54 @@ const handler = createMcpHandler(
 
     server.tool(
       "updateVersion",
-      "Link completed tasks/bugs to a version and update release metadata. Set status (Planned, In Development, Release Candidate, Hotfix — 'Released' requires human approval), release summary, and link tasks/bugs/epics.",
+      "Update any version field: status, name, versionNumber, dates (expected/release), owner, release summary, link tasks/bugs/epics. Move between groups (upcoming/released). Set delete=true to delete. Setting status to 'Released' requires confirmRelease=true as a safety check. Use listVersions to find the versionId.",
       UpdateVersionSchema.shape,
       async (args) => {
         const result = await updateVersion(args);
         return { content: [{ type: "text", text: result }] };
       }
     );
+
+    server.tool(
+      "createVersion",
+      "Create a new version in the Upcoming group. Required: name, productId. Optional: versionNumber, status (default: Planned), dates, release summary, owner, and link tasks/bugs/epics. Use listProducts to find productId.",
+      CreateVersionSchema.shape,
+      async (args) => {
+        const result = await createVersion(args);
+        return { content: [{ type: "text", text: result }] };
+      }
+    );
+
+    server.tool(
+      "listVersions",
+      "List versions with status, version number, dates, owner, product, and linked item counts. Filter by status, productId, group (upcoming/released), or search text. Use this to discover version IDs.",
+      ListVersionsSchema.shape,
+      async (args) => {
+        const result = await listVersions(args);
+        return { content: [{ type: "text", text: result }] };
+      }
+    );
+
+    server.tool(
+      "getVersion",
+      "Get full version details by ID. Shows: status, version number, dates, owner, release summary, linked tasks (with status/type), linked epics (with status), fixed bugs (with status), and changelog content from Monday Doc.",
+      GetVersionSchema.shape,
+      async (args) => {
+        const result = await getVersion(args);
+        return { content: [{ type: "text", text: result }] };
+      }
+    );
+
+    server.tool(
+      "generateChangelog",
+      "Generate a structured changelog for a version. Auto-categorizes linked tasks (Development→Added, Bugfix→Fixed, Maintenance/Refine→Changed, Documentation→Documentation) and bugs (→Fixed). Creates/overwrites a Monday Doc attached to the version. Optional: highlights, breakingChanges, knownIssues arrays for additional sections.",
+      GenerateChangelogSchema.shape,
+      async (args) => {
+        const result = await generateChangelog(args);
+        return { content: [{ type: "text", text: result }] };
+      }
+    );
+
     // =========================================================================
     // Communication Phase
     // =========================================================================

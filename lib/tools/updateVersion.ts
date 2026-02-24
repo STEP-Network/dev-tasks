@@ -1,75 +1,159 @@
 import { executeMondayQuery } from "../monday-client";
-import { BOARDS, VERSION_COLUMNS, VERSION_STATUS } from "../constants";
+import { BOARDS, VERSION_COLUMNS, VERSION_STATUS, VERSION_GROUPS, PEOPLE } from "../constants";
 import type { UpdateVersionInput } from "../schemas";
 import { buildColumnValues, formatError } from "./utils";
 
 export async function updateVersion(args: UpdateVersionInput): Promise<string> {
   try {
-    const { versionId, status, releaseSummary, linkTaskIds, linkBugIds, linkEpicIds } = args;
+    const { versionId } = args;
+
+    // Handle deletion
+    if (args.delete) {
+      const deleteMutation = `
+        mutation {
+          delete_item(item_id: ${versionId}) {
+            id
+          }
+        }
+      `;
+      await executeMondayQuery<any>(deleteMutation);
+      return `# Version Deleted\n\nVersion #${versionId} has been deleted.`;
+    }
+
+    // Validate confirmRelease if status is Released
+    if (args.status === "Released" && !args.confirmRelease) {
+      return formatError("Setting status to 'Released' requires confirmRelease=true. This is a safety check to prevent accidental releases.");
+    }
 
     const columnValues: Record<string, unknown> = {};
     const updates: string[] = [];
 
     // Status
-    if (status) {
-      columnValues[VERSION_COLUMNS.status] = { index: VERSION_STATUS[status] };
-      updates.push(`Status → ${status}`);
+    if (args.status) {
+      columnValues[VERSION_COLUMNS.status] = { index: VERSION_STATUS[args.status] };
+      updates.push(`Status → ${args.status}`);
+    }
+
+    // Version number
+    if (args.versionNumber) {
+      columnValues[VERSION_COLUMNS.versionNumber] = args.versionNumber;
+      updates.push(`Version number → ${args.versionNumber}`);
+    }
+
+    // Expected release date
+    if (args.expectedReleaseDate) {
+      columnValues[VERSION_COLUMNS.expectedReleaseDate] = { date: args.expectedReleaseDate };
+      updates.push(`Expected release date → ${args.expectedReleaseDate}`);
+    }
+
+    // Release date
+    if (args.releaseDate) {
+      columnValues[VERSION_COLUMNS.releaseDate] = { date: args.releaseDate };
+      updates.push(`Release date → ${args.releaseDate}`);
     }
 
     // Release summary
-    if (releaseSummary) {
-      columnValues[VERSION_COLUMNS.releaseSummary] = { text: releaseSummary };
+    if (args.releaseSummary) {
+      columnValues[VERSION_COLUMNS.releaseSummary] = { text: args.releaseSummary };
       updates.push("Release summary updated");
     }
 
+    // Owner
+    if (args.owner) {
+      const ownerId = PEOPLE[args.owner];
+      if (ownerId) {
+        columnValues[VERSION_COLUMNS.owner] = { personsAndTeams: [{ id: ownerId, kind: "person" }] };
+        updates.push(`Owner → ${args.owner}`);
+      }
+    }
+
     // Link tasks
-    if (linkTaskIds && linkTaskIds.length > 0) {
-      columnValues[VERSION_COLUMNS.connectedTasks] = { item_ids: linkTaskIds };
-      updates.push(`Linked ${linkTaskIds.length} task${linkTaskIds.length > 1 ? "s" : ""}`);
+    if (args.linkTaskIds && args.linkTaskIds.length > 0) {
+      columnValues[VERSION_COLUMNS.connectedTasks] = { item_ids: args.linkTaskIds };
+      updates.push(`Linked ${args.linkTaskIds.length} task${args.linkTaskIds.length > 1 ? "s" : ""}`);
     }
 
     // Link bugs
-    if (linkBugIds && linkBugIds.length > 0) {
-      columnValues[VERSION_COLUMNS.fixedBugs] = { item_ids: linkBugIds };
-      updates.push(`Linked ${linkBugIds.length} bug${linkBugIds.length > 1 ? "s" : ""}`);
+    if (args.linkBugIds && args.linkBugIds.length > 0) {
+      columnValues[VERSION_COLUMNS.fixedBugs] = { item_ids: args.linkBugIds };
+      updates.push(`Linked ${args.linkBugIds.length} bug${args.linkBugIds.length > 1 ? "s" : ""}`);
     }
 
     // Link epics
-    if (linkEpicIds && linkEpicIds.length > 0) {
-      columnValues[VERSION_COLUMNS.connectedEpics] = { item_ids: linkEpicIds };
-      updates.push(`Linked ${linkEpicIds.length} epic${linkEpicIds.length > 1 ? "s" : ""}`);
+    if (args.linkEpicIds && args.linkEpicIds.length > 0) {
+      columnValues[VERSION_COLUMNS.connectedEpics] = { item_ids: args.linkEpicIds };
+      updates.push(`Linked ${args.linkEpicIds.length} epic${args.linkEpicIds.length > 1 ? "s" : ""}`);
     }
 
-    if (Object.keys(columnValues).length === 0) {
-      return formatError("No updates provided. Specify at least one field to update.");
-    }
-
-    // Execute update
-    const updateQuery = `
-      mutation {
-        change_multiple_column_values(
-          board_id: ${BOARDS.VERSIONS},
-          item_id: ${versionId},
-          column_values: ${buildColumnValues(columnValues)}
-        ) {
-          id
-          name
+    // Execute column value update if there are changes
+    let updatedItemName = `#${versionId}`;
+    if (Object.keys(columnValues).length > 0) {
+      const updateQuery = `
+        mutation {
+          change_multiple_column_values(
+            board_id: ${BOARDS.VERSIONS},
+            item_id: ${versionId},
+            column_values: ${buildColumnValues(columnValues)}
+          ) {
+            id
+            name
+          }
         }
+      `;
+
+      const updateResponse = await executeMondayQuery<any>(updateQuery);
+      const updatedItem = updateResponse.change_multiple_column_values;
+
+      if (!updatedItem) {
+        throw new Error(`Failed to update version #${versionId}.`);
       }
-    `;
+      updatedItemName = `${updatedItem.name} (#${updatedItem.id})`;
+    }
 
-    const updateResponse = await executeMondayQuery<any>(updateQuery);
-    const updatedItem = updateResponse.change_multiple_column_values;
+    // Handle name update separately (uses a different mutation field)
+    if (args.name !== undefined) {
+      const nameMutation = `
+        mutation {
+          change_simple_column_value(
+            item_id: ${versionId},
+            board_id: ${BOARDS.VERSIONS},
+            column_id: "name",
+            value: ${JSON.stringify(args.name)}
+          ) {
+            id
+          }
+        }
+      `;
+      await executeMondayQuery<any>(nameMutation);
+      updates.push(`Name → "${args.name}"`);
+    }
 
-    if (!updatedItem) {
-      throw new Error(`Failed to update version #${versionId}.`);
+    // Handle group move separately
+    if (args.groupId) {
+      const targetGroup = args.groupId === "released" ? VERSION_GROUPS.RELEASED : VERSION_GROUPS.UPCOMING;
+      const groupMutation = `
+        mutation {
+          move_item_to_group(
+            item_id: ${versionId},
+            group_id: "${targetGroup}"
+          ) {
+            id
+          }
+        }
+      `;
+      await executeMondayQuery<any>(groupMutation);
+      updates.push(`Moved to ${args.groupId} group`);
+    }
+
+    if (updates.length === 0) {
+      return formatError(`No fields provided to update for version #${versionId}.`);
     }
 
     // Format output
     const lines: string[] = [];
     lines.push("# Version Updated");
     lines.push("");
-    lines.push(`- **${updatedItem.name}** (#${updatedItem.id})`);
+    lines.push(`- **${updatedItemName}**`);
     for (const update of updates) {
       lines.push(`  - ${update}`);
     }

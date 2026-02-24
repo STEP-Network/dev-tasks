@@ -32,15 +32,15 @@ Products (5091839409) [read-only]
 Subtasks board: 5091706366 (linked from Tasks)
 
 ### MCP Server Entry Point
-- `app/api/mcp/route.ts` — Registers all 16 tools
+- `app/api/mcp/route.ts` — Registers all 22 tools
 
 ### Core Library
 - `lib/constants.ts` — Board IDs, column IDs, status/type/priority mappings, default owner ID
 - `lib/monday-client.ts` — GraphQL executor
-- `lib/schemas.ts` — Zod schemas for all 16 tools
+- `lib/schemas.ts` — Zod schemas for all 22 tools
 - `lib/tools/utils.ts` — Shared helpers
 
-### Tools (16 total)
+### Tools (22 total)
 
 | # | Tool | Phase | Purpose |
 |---|------|-------|---------|
@@ -57,9 +57,15 @@ Subtasks board: 5091706366 (linked from Tasks)
 | 11 | `createTask` | Creation | Create tasks with acceptance criteria, dependencies, subtasks |
 | 12 | `convertBugToTask` | Creation | Bug → Bugfix task conversion |
 | 13 | `createBug` | Creation | File new bugs |
-| 14 | `updateVersion` | Shipping | Link tasks/bugs to versions |
-| 15 | `createEpic` | Creation | Create epics with status, priority, timeline, product link |
-| 16 | `updateEpic` | Execution | Update any epic field or delete an epic |
+| 14 | `updateVersion` | Shipping | Update version fields, link items, delete, group moves |
+| 15 | `createVersion` | Shipping | Create versions with product link, status, dates |
+| 16 | `listVersions` | Context | List/search versions with group/status/product filters |
+| 17 | `getVersion` | Context | Full version details with linked items and changelog |
+| 18 | `generateChangelog` | Shipping | Auto-generate structured changelog as Monday Doc |
+| 19 | `getUpdates` | Communication | Read item updates/comments |
+| 20 | `createUpdate` | Communication | Post updates/comments on items |
+| 21 | `createEpic` | Creation | Create epics with status, priority, timeline, product link |
+| 22 | `updateEpic` | Execution | Update any epic field or delete an epic |
 
 ## Agent Workflow
 
@@ -70,7 +76,9 @@ Subtasks board: 5091706366 (linked from Tasks)
 4. claimTask(itemId, agentId, planId)   → Claim it (auto-assigns owner)
 5. manageSubtasks(parentItemId, ops)    → Create/update subtasks as you work
 6. updateTask(itemId, prLink, status)   → Set PR link, update status
-7. updateVersion(versionId, linkTaskIds) → Link to release version
+7. listVersions()                       → Find or create target version
+8. updateVersion(versionId, linkTaskIds) → Link to release version
+9. generateChangelog(versionId)         → Auto-generate changelog doc
 ```
 
 ## Claiming Protocol
@@ -93,6 +101,8 @@ Used in:
 - `createTask` — optional, assigns owner at creation time
 - `createEpic` — optional, assigns owner at creation time
 - `updateEpic` — optional, changes owner
+- `createVersion` — optional, assigns owner at creation time
+- `updateVersion` — optional, changes owner
 
 ## Key Status Mappings
 
@@ -103,6 +113,7 @@ Used in:
 **Subtask Type:** Test, Documentation, UX-UI, Database, Backend, PM-work
 **Epic Status:** Backlog, Planned, Refining, In Progress, Review, On Hold, Done
 **Epic Priority:** Critical, High, Medium, Low, Minimal, Not Prioritized
+**Version Status:** Planned, In Development, Release Candidate, Released, Hotfix
 **Agent ID:** Claude Code CLI, Claude Desktop Cloud, Codex Local, Claude Desktop Local, Codex Cloud
 
 ## Task Completion

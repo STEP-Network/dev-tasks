@@ -49,6 +49,14 @@ const EpicPriorityEnum = z.enum([
   "Critical", "High", "Medium", "Low", "Minimal", "Not Prioritized",
 ]);
 
+const VersionStatusEnum = z.enum([
+  "Planned", "In Development", "Release Candidate", "Released", "Hotfix",
+]);
+
+const VersionStatusCreateEnum = z.enum([
+  "Planned", "In Development", "Release Candidate", "Hotfix",
+]);
+
 // =============================================================================
 // Tool 1: getBacklog
 // =============================================================================
@@ -267,12 +275,69 @@ export const CreateBugSchema = z.object({
 
 export const UpdateVersionSchema = z.object({
   versionId: z.number().describe("Version item ID to update"),
-  status: z.enum(["Planned", "In Development", "Release Candidate", "Hotfix"]).optional()
-    .describe("New status (cannot set to Released — requires human approval)"),
+  delete: z.boolean().optional().describe("Set true to delete the version"),
+  name: z.string().optional().describe("Rename the version"),
+  status: VersionStatusEnum.optional()
+    .describe("New status — setting to 'Released' requires confirmRelease=true"),
+  confirmRelease: z.boolean().optional().describe("Required safety flag when setting status to 'Released'"),
+  versionNumber: z.string().optional().describe("Version number (e.g. '1.2.0')"),
+  expectedReleaseDate: z.string().optional().describe("Expected release date (YYYY-MM-DD)"),
+  releaseDate: z.string().optional().describe("Actual release date (YYYY-MM-DD)"),
   releaseSummary: z.string().optional().describe("Release summary text"),
+  owner: SystemUserEnum.optional().describe("Owner — use your system username (e.g. the output of `whoami`)"),
+  groupId: z.enum(["upcoming", "released"]).optional().describe("Move version to a group (upcoming or released)"),
   linkTaskIds: z.array(z.number()).optional().describe("Task IDs to link to this version"),
   linkBugIds: z.array(z.number()).optional().describe("Bug IDs to link as fixed in this version"),
   linkEpicIds: z.array(z.number()).optional().describe("Epic IDs to link to this version"),
+});
+
+// =============================================================================
+// Tool 19: createVersion
+// =============================================================================
+
+export const CreateVersionSchema = z.object({
+  name: z.string().describe("Version name (e.g. 'v1.2.0')"),
+  productId: z.number().describe("Product to link — use listProducts to find the ID"),
+  versionNumber: z.string().optional().describe("Version number (e.g. '1.2.0')"),
+  status: VersionStatusCreateEnum.optional().describe("Initial status (default: Planned). Cannot set to Released at creation"),
+  expectedReleaseDate: z.string().optional().describe("Expected release date (YYYY-MM-DD)"),
+  releaseDate: z.string().optional().describe("Actual release date (YYYY-MM-DD)"),
+  releaseSummary: z.string().optional().describe("Release summary text"),
+  owner: SystemUserEnum.optional().describe("Owner — use your system username (e.g. the output of `whoami`)"),
+  linkTaskIds: z.array(z.number()).optional().describe("Task IDs to link to this version"),
+  linkBugIds: z.array(z.number()).optional().describe("Bug IDs to link as fixed in this version"),
+  linkEpicIds: z.array(z.number()).optional().describe("Epic IDs to link to this version"),
+});
+
+// =============================================================================
+// Tool 20: listVersions
+// =============================================================================
+
+export const ListVersionsSchema = z.object({
+  status: VersionStatusEnum.optional().describe("Filter by version status"),
+  productId: z.number().optional().describe("Filter by product — use listProducts to find the ID"),
+  group: z.enum(["upcoming", "released"]).optional().describe("Filter by board group (upcoming or released)"),
+  search: z.string().optional().describe("Search text in version name"),
+  limit: z.number().optional().default(25).describe("Max versions to return (default: 25)"),
+});
+
+// =============================================================================
+// Tool 21: getVersion
+// =============================================================================
+
+export const GetVersionSchema = z.object({
+  versionId: z.number().describe("Version item ID — use listVersions to discover available versions"),
+});
+
+// =============================================================================
+// Tool 22: generateChangelog
+// =============================================================================
+
+export const GenerateChangelogSchema = z.object({
+  versionId: z.number().describe("Version item ID to generate changelog for"),
+  highlights: z.array(z.string()).optional().describe("Key highlights to feature at the top of the changelog"),
+  breakingChanges: z.array(z.string()).optional().describe("Breaking changes to include in the changelog"),
+  knownIssues: z.array(z.string()).optional().describe("Known issues to include in the changelog"),
 });
 
 // =============================================================================
@@ -349,6 +414,10 @@ export type CreateTaskInput = z.infer<typeof CreateTaskSchema>;
 export type ConvertBugToTaskInput = z.infer<typeof ConvertBugToTaskSchema>;
 export type CreateBugInput = z.infer<typeof CreateBugSchema>;
 export type UpdateVersionInput = z.infer<typeof UpdateVersionSchema>;
+export type CreateVersionInput = z.infer<typeof CreateVersionSchema>;
+export type ListVersionsInput = z.input<typeof ListVersionsSchema>;
+export type GetVersionInput = z.infer<typeof GetVersionSchema>;
+export type GenerateChangelogInput = z.infer<typeof GenerateChangelogSchema>;
 export type GetUpdatesInput = z.input<typeof GetUpdatesSchema>;
 export type CreateUpdateInput = z.infer<typeof CreateUpdateSchema>;
 export type CreateEpicInput = z.infer<typeof CreateEpicSchema>;

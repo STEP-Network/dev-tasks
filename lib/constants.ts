@@ -142,6 +142,8 @@ export const VERSION_COLUMNS = {
   connectedEpics: "board_relation_mm0m1d9r",
   connectedTasks: "board_relation_mm0mjmav",
   fixedBugs: "board_relation_mm0m8dvt",
+  versionNumber: "text_mm0rea7a",
+  expectedReleaseDate: "date_mm0rn0fk",
   changelog: "doc_mm0m764r",
   releaseSummary: "long_text_mm0mw7hp",
   epicStatus: "lookup_mm0mn59r",
