@@ -1,5 +1,5 @@
 import { executeMondayQuery } from "../monday-client";
-import { EPIC_COLUMNS, TASK_COLUMNS } from "../constants";
+import { EPIC_COLUMNS, TASK_COLUMNS, BUG_COLUMNS } from "../constants";
 import type { GetEpicInput } from "../schemas";
 import { getColumnText, getLinkedItems, getMirrorDisplayValue, parseMondayDate, resolveLinkedItems, formatError } from "./utils";
 
@@ -13,6 +13,7 @@ export async function getEpic(args: GetEpicInput): Promise<string> {
       EPIC_COLUMNS.description,
       EPIC_COLUMNS.timeline,
       EPIC_COLUMNS.connectedTasks,
+      EPIC_COLUMNS.connectedBugs,
       EPIC_COLUMNS.targetVersion,
       EPIC_COLUMNS.product,
       EPIC_COLUMNS.deadline,
@@ -57,6 +58,7 @@ export async function getEpic(args: GetEpicInput): Promise<string> {
 
     // Linked items
     const connectedTaskItems = getLinkedItems(colMap, EPIC_COLUMNS.connectedTasks);
+    const connectedBugItems = getLinkedItems(colMap, EPIC_COLUMNS.connectedBugs);
     const versionItems = getLinkedItems(colMap, EPIC_COLUMNS.targetVersion);
     const productItems = getLinkedItems(colMap, EPIC_COLUMNS.product);
 
@@ -148,6 +150,27 @@ export async function getEpic(args: GetEpicInput): Promise<string> {
         const check = taskStatus === "Done" ? "[x]" : "[ ]";
         lines.push(`- ${check} **${task.name}** (#${task.id})`);
         lines.push(`  Status: ${taskStatus} | Priority: ${taskPriority} | Type: ${taskType} | Hours: ${est} | Agent: ${agent}`);
+      }
+      lines.push("");
+    }
+
+    // Connected bugs
+    if (connectedBugItems.length > 0) {
+      const bugIds = connectedBugItems.map(b => Number(b.id));
+      const resolvedBugs = await resolveLinkedItems(bugIds, [
+        BUG_COLUMNS.status,
+        BUG_COLUMNS.priority,
+      ]);
+
+      lines.push(`## Bugs (${resolvedBugs.length})`);
+      for (const bug of resolvedBugs) {
+        const bugColMap = new Map<string, any>(bug.column_values?.map((c: any) => [c.id, c]) || []);
+        const bugStatus = getColumnText(bugColMap, BUG_COLUMNS.status) || "Unknown";
+        const bugPriority = getColumnText(bugColMap, BUG_COLUMNS.priority) || "—";
+
+        const check = bugStatus === "Fixed" ? "[x]" : "[ ]";
+        lines.push(`- ${check} **${bug.name}** (#${bug.id})`);
+        lines.push(`  Status: ${bugStatus} | Priority: ${bugPriority}`);
       }
       lines.push("");
     }

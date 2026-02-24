@@ -105,6 +105,7 @@ export const EPIC_COLUMNS = {
   epicId: "item_id",
   doneDate: "date_mm0m417x",
   deadline: "date_mm0m8asm",
+  connectedBugs: "board_relation_mm0ww7ef",
   lastUpdated: "pulse_updated_mm0mrej2",
   creationLog: "pulse_log_mm0mxd4x",
 } as const;
@@ -125,6 +126,7 @@ export const BUG_COLUMNS = {
   bugId: "item_id",
   fixedInVersion: "board_relation_mm0mtsqz",
   product: "board_relation_mm0mbw41",
+  epic: "board_relation_mm0ws076",
   fixedDate: "date_mm0nbxeb",
   creationLog: "pulse_log_mm0nb308",
   lastUpdated: "pulse_updated_mm0nh785",

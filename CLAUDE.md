@@ -20,11 +20,10 @@ npm run test         # Run integration tests
 ```
 Products (5091839409) [read-only]
   └→ Epics (5091706354) [read-write]
-       └→ Tasks (5091706356) [read-write] ←→ Sprints (5091706352) [read-only]
-            │  └→ Product (mirror via Epic)
-            ↑
-       Bugs (5091706353) [read-write]
-       Versions (5091847257) [read-write]
+       ├→ Tasks (5091706356) [read-write] ←→ Sprints (5091706352) [read-only]
+       │    └→ Product (mirror via Epic)
+       ├→ Bugs (5091706353) [read-write] ←→ Epics (two-way relation)
+       └→ Versions (5091847257) [read-write]
        Feedback (5091852801) [read-write] ←→ Tasks (two-way relation)
 ```
 
@@ -129,7 +128,7 @@ Used in:
 
 Every product should have a permanent "Maintenance & Hotfixes" epic (Status: In Progress, no deadline). This ensures all tasks have an epic — and therefore Product context via the Task mirror column.
 
-- `convertBugToTask` and `convertFeedbackToTask` auto-assign the maintenance epic when no explicit epicId is provided
+- `createBug`, `convertBugToTask`, and `convertFeedbackToTask` auto-assign the maintenance epic when no explicit epicId is provided
 - The resolver matches epics whose name contains "maintenance" (case-insensitive)
 - Convention: name the epic "{Product Name} — Maintenance & Hotfixes"
 - Hotfix tasks, tech debt, and miscellaneous work go here

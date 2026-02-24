@@ -5,7 +5,7 @@ import { getColumnText, getLinkedItems, formatError } from "./utils";
 
 export async function getBugs(args: GetBugsInput): Promise<string> {
   try {
-    const { status, priority, productId, search, limit = 25 } = args;
+    const { status, priority, productId, epicId, search, limit = 25 } = args;
 
     // Build query_params rules
     const rules: string[] = [];
@@ -22,6 +22,10 @@ export async function getBugs(args: GetBugsInput): Promise<string> {
 
     if (productId) {
       rules.push(`{ column_id: "${BUG_COLUMNS.product}", compare_value: [${productId}], operator: any_of }`);
+    }
+
+    if (epicId) {
+      rules.push(`{ column_id: "${BUG_COLUMNS.epic}", compare_value: [${epicId}], operator: any_of }`);
     }
 
     let queryParams = "";
@@ -41,6 +45,7 @@ export async function getBugs(args: GetBugsInput): Promise<string> {
       BUG_COLUMNS.description,
       BUG_COLUMNS.connectedTasks,
       BUG_COLUMNS.product,
+      BUG_COLUMNS.epic,
       BUG_COLUMNS.bugId,
     ].map(c => `"${c}"`).join(", ");
 
@@ -87,6 +92,7 @@ export async function getBugs(args: GetBugsInput): Promise<string> {
     if (status) filterParts.push(`status: ${status}`);
     if (priority) filterParts.push(`priority: ${priority}`);
     if (productId) filterParts.push(`product: #${productId}`);
+    if (epicId) filterParts.push(`epic: #${epicId}`);
     if (search) filterParts.push(`search: "${search}"`);
     const filterInfo = filterParts.length > 0 ? ` (${filterParts.join(", ")})` : "";
 
@@ -105,13 +111,15 @@ export async function getBugs(args: GetBugsInput): Promise<string> {
       const bugPriority = getColumnText(colMap, BUG_COLUMNS.priority) || "—";
       const productItems = getLinkedItems(colMap, BUG_COLUMNS.product);
       const productName = productItems.length > 0 ? `${productItems[0].name} (#${productItems[0].id})` : "—";
+      const epicItems = getLinkedItems(colMap, BUG_COLUMNS.epic);
+      const epicName = epicItems.length > 0 ? `${epicItems[0].name} (#${epicItems[0].id})` : "—";
       const linkedTasks = getLinkedItems(colMap, BUG_COLUMNS.connectedTasks);
       const linkedTasksStr = linkedTasks.length > 0
         ? linkedTasks.map(t => `${t.name} (#${t.id})`).join(", ")
         : "—";
 
       lines.push(`- **(#${item.id}) ${item.name}**`);
-      lines.push(`  Status: ${bugStatus} | Priority: ${bugPriority} | Product: ${productName}`);
+      lines.push(`  Status: ${bugStatus} | Priority: ${bugPriority} | Product: ${productName} | Epic: ${epicName}`);
       if (linkedTasks.length > 0) {
         lines.push(`  Linked Tasks: ${linkedTasksStr}`);
       }

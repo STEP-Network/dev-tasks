@@ -1,11 +1,18 @@
 import { executeMondayQuery } from "../monday-client";
 import { BOARDS, BUG_COLUMNS, BUG_STATUS, BUG_PRIORITY } from "../constants";
 import type { CreateBugInput } from "../schemas";
-import { buildColumnValues, formatError } from "./utils";
+import { buildColumnValues, resolveMaintenanceEpicId, formatError } from "./utils";
 
 export async function createBug(args: CreateBugInput): Promise<string> {
   try {
-    const { name, description, priority, productId, reporter } = args;
+    const { name, description, priority, productId, epicId, reporter } = args;
+
+    // Resolve epic: explicit epicId > product's maintenance epic
+    let resolvedEpicId: number | undefined = epicId;
+    if (!resolvedEpicId && productId) {
+      const maintenanceId = await resolveMaintenanceEpicId(productId);
+      if (maintenanceId) resolvedEpicId = maintenanceId;
+    }
 
     // Build column values
     const columnValues: Record<string, unknown> = {};
@@ -22,6 +29,11 @@ export async function createBug(args: CreateBugInput): Promise<string> {
     // Optional: Product link
     if (productId) {
       columnValues[BUG_COLUMNS.product] = { item_ids: [productId] };
+    }
+
+    // Optional: Epic link
+    if (resolvedEpicId) {
+      columnValues[BUG_COLUMNS.epic] = { item_ids: [resolvedEpicId] };
     }
 
     // Optional: Reporter
@@ -58,7 +70,10 @@ export async function createBug(args: CreateBugInput): Promise<string> {
     lines.push("# Bug Created");
     lines.push("");
     lines.push(`- **${createdBug.name}** (#${createdBug.id})`);
-    lines.push(`  Status: Awaiting Review | Priority: ${priority}`);
+    const epicInfo = resolvedEpicId
+      ? ` | Epic: #${resolvedEpicId}${!epicId ? " (auto-assigned)" : ""}`
+      : "";
+    lines.push(`  Status: Awaiting Review | Priority: ${priority}${epicInfo}`);
     if (productId) {
       lines.push(`  Product: #${productId}`);
     }

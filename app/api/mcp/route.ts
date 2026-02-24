@@ -74,7 +74,7 @@ const handler = createMcpHandler(
 
     server.tool(
       "getBugs",
-      "Get bugs from the Bugs Queue. Returns bugs with status, priority, product, and linked tasks. Use listProducts to find productId. Filters: status, priority, productId, search text.",
+      "Get bugs from the Bugs Queue. Returns bugs with status, priority, product, epic, and linked tasks. Use listProducts to find productId, listEpics for epicId. Filters: status, priority, productId, epicId, search text.",
       GetBugsSchema.shape,
       async (args) => {
         const result = await getBugs(args);
@@ -108,7 +108,7 @@ const handler = createMcpHandler(
 
     server.tool(
       "getEpic",
-      "Get full epic details by ID. Shows: description, PRD reference, linked tasks with progress breakdown, target version, product, timeline, and deadline. Use listEpics first to discover available epic IDs.",
+      "Get full epic details by ID. Shows: description, PRD reference, linked tasks with progress breakdown, connected bugs with status, target version, product, timeline, and deadline. Use listEpics first to discover available epic IDs.",
       GetEpicSchema.shape,
       async (args) => {
         const result = await getEpic(args);
@@ -196,7 +196,7 @@ const handler = createMcpHandler(
 
     server.tool(
       "createBug",
-      "File a new bug discovered during development. Set name (include component + symptom), description (reproduction steps), priority (by user impact). Use listProducts to find productId. Bug starts in 'Awaiting Review' status.",
+      "File a new bug discovered during development. Set name (include component + symptom), description (reproduction steps), priority (by user impact). Use listProducts to find productId, listEpics for epicId. If no epicId specified and productId is set, auto-assigns the product's maintenance epic. Bug starts in 'Awaiting Review' status.",
       CreateBugSchema.shape,
       async (args) => {
         const result = await createBug(args);

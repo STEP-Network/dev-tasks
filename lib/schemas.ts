@@ -90,6 +90,7 @@ export const GetBugsSchema = z.object({
   status: BugStatusEnum.optional().describe("Filter by bug status"),
   priority: BugPriorityEnum.optional().describe("Filter by bug priority"),
   productId: z.number().optional().describe("Filter by product — use listProducts to find the ID"),
+  epicId: z.number().optional().describe("Filter by epic — use listEpics to find the ID"),
   search: z.string().optional().describe("Search text in bug name and description"),
   limit: z.number().optional().default(25).describe("Max bugs to return (default: 25)"),
 });
@@ -276,6 +277,7 @@ export const CreateBugSchema = z.object({
   description: z.string().describe("Reproduction steps, expected vs actual behavior"),
   priority: BugPriorityEnum.describe("Bug severity"),
   productId: z.number().optional().describe("Product this bug affects — use listProducts to find the ID"),
+  epicId: z.number().optional().describe("Epic to link the bug to — use listEpics to find the ID. If omitted and productId is set, auto-assigns the product's maintenance epic"),
   reporter: z.number().optional().describe("Reporter person ID"),
 });
 
