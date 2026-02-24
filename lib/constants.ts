@@ -152,6 +152,7 @@ export const VERSION_COLUMNS = {
   releaseSummary: "long_text_mm0mw7hp",
   epicStatus: "lookup_mm0w3a0z",
   taskProgress: "lookup_mm0wzq1a",
+  tasksTimeline: "lookup_mm0wabye",
   product: "board_relation_mm0mfd4t",
   creationLog: "pulse_log_mm0n1jtx",
   lastUpdated: "pulse_updated_mm0njvet",

@@ -1,7 +1,7 @@
 import { executeMondayQuery } from "../monday-client";
 import { BOARDS, VERSION_COLUMNS, VERSION_STATUS, VERSION_GROUPS } from "../constants";
 import type { ListVersionsInput } from "../schemas";
-import { getColumnText, getLinkedItems, formatError } from "./utils";
+import { getColumnText, getLinkedItems, getMirrorDisplayValue, formatError } from "./utils";
 
 export async function listVersions(args: ListVersionsInput): Promise<string> {
   try {
@@ -17,6 +17,8 @@ export async function listVersions(args: ListVersionsInput): Promise<string> {
       VERSION_COLUMNS.connectedTasks,
       VERSION_COLUMNS.connectedEpics,
       VERSION_COLUMNS.fixedBugs,
+      VERSION_COLUMNS.taskProgress,
+      VERSION_COLUMNS.tasksTimeline,
     ].map(c => `"${c}"`).join(", ");
 
     // Build server-side status filter
@@ -53,6 +55,7 @@ export async function listVersions(args: ListVersionsInput): Promise<string> {
                     text
                     value
                     ... on BoardRelationValue { linked_items { id name } }
+                    ... on MirrorValue { display_value }
                   }
                 }
               }
@@ -133,9 +136,13 @@ export async function listVersions(args: ListVersionsInput): Promise<string> {
       const taskCount = getLinkedItems(colMap, VERSION_COLUMNS.connectedTasks).length;
       const epicCount = getLinkedItems(colMap, VERSION_COLUMNS.connectedEpics).length;
       const bugCount = getLinkedItems(colMap, VERSION_COLUMNS.fixedBugs).length;
+      const taskProgress = getMirrorDisplayValue(colMap, VERSION_COLUMNS.taskProgress) || "—";
+      const tasksTimeline = getMirrorDisplayValue(colMap, VERSION_COLUMNS.tasksTimeline) || "—";
 
       lines.push(`- **${item.name}** (#${item.id})`);
-      lines.push(`  Status: ${versionStatus} | Version: ${versionNumber} | Expected: ${expectedDate} | Released: ${releaseDate} | Owner: ${owner} | Product: ${product} | Tasks: ${taskCount} | Epics: ${epicCount} | Bugs: ${bugCount}`);
+      lines.push(`  Status: ${versionStatus} | Version: ${versionNumber} | Product: ${product} | Owner: ${owner}`);
+      lines.push(`  Expected: ${expectedDate} | Released: ${releaseDate} | Tasks Timeline: ${tasksTimeline}`);
+      lines.push(`  Tasks: ${taskCount} (${taskProgress}) | Epics: ${epicCount} | Bugs: ${bugCount}`);
     }
 
     return lines.join("\n").trim();
