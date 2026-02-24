@@ -30,7 +30,7 @@ export const TASK_COLUMNS = {
   sprint: "task_sprint",
   targetVersion: "board_relation_mm0mqer3",
   startedDate: "date_mm0pfwzk",
-  dueDate: "date_mm0pqj58",
+  dueDate: "date",
   doneDate: "date_mm0n499",
   githubLink: "link",
   prLink: "link_mm0m817p",
