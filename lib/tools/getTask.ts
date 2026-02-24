@@ -39,6 +39,7 @@ export async function getTask(args: GetTaskInput): Promise<string> {
       TASK_COLUMNS.taskId,
       TASK_COLUMNS.attachments,
       TASK_COLUMNS.product,
+      TASK_COLUMNS.bugs,
       TASK_COLUMNS.activeSprint,
       TASK_COLUMNS.sprintCompleted,
       TASK_COLUMNS.lastUpdated,
@@ -114,6 +115,7 @@ export async function getTask(args: GetTaskInput): Promise<string> {
     const epicItems = getLinkedItems(colMap, TASK_COLUMNS.epic);
     const sprintItems = getLinkedItems(colMap, TASK_COLUMNS.sprint);
     const versionItems = getLinkedItems(colMap, TASK_COLUMNS.targetVersion);
+    const bugItems = getLinkedItems(colMap, TASK_COLUMNS.bugs);
 
     // Agent workflow
     const agentId = getColumnText(colMap, TASK_COLUMNS.agentId);
@@ -171,6 +173,9 @@ export async function getTask(args: GetTaskInput): Promise<string> {
       }
       if (versionItems.length > 0) {
         lines.push(`- **Target Version:** ${versionItems.map(v => `${v.name} (#${v.id})`).join(", ")}`);
+      }
+      if (bugItems.length > 0) {
+        lines.push(`- **Linked Bugs:** ${bugItems.map(b => `${b.name} (#${b.id})`).join(", ")}`);
       }
       lines.push("");
     }

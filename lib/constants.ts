@@ -46,6 +46,7 @@ export const TASK_COLUMNS = {
   dependencies: "dependency_mm0pwbxn",
   acceptanceCriteria: "long_text_mm0pqaxy",
   branch: "text_mm0pvs3n",
+  bugs: "task_bugs",
   feedback: "board_relation_mm0wvysr",
   lastUpdated: "pulse_updated_mm0nxzxb",
   creationLog: "pulse_log_mm0nkhr2",
