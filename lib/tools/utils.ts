@@ -1,5 +1,5 @@
 import { executeMondayQuery } from "../monday-client";
-import { SUBTASK_COLUMNS, TASK_COLUMNS } from "../constants";
+import { BOARDS, SUBTASK_COLUMNS, TASK_COLUMNS, EPIC_COLUMNS } from "../constants";
 
 // =============================================================================
 // Column Value Helpers
@@ -183,6 +183,35 @@ export async function resolveLinkedItems(
 
   const response = await executeMondayQuery<any>(query);
   return response.items || [];
+}
+
+// =============================================================================
+// Maintenance Epic Resolver
+// =============================================================================
+
+/**
+ * Given a productId, find the product's "Maintenance" epic.
+ * Looks for epics linked to the product whose name contains "maintenance" (case-insensitive).
+ * Returns the epic ID if found, null otherwise.
+ */
+export async function resolveMaintenanceEpicId(productId: number): Promise<number | null> {
+  const query = `
+    query {
+      boards(ids: [${BOARDS.EPICS}]) {
+        items_page(limit: 100, query_params: {
+          rules: [{ column_id: "${EPIC_COLUMNS.product}", compare_value: [${productId}], operator: any_of }]
+        }) {
+          items { id name }
+        }
+      }
+    }
+  `;
+  const response = await executeMondayQuery<any>(query);
+  const epics = response.boards?.[0]?.items_page?.items || [];
+  const maintenance = epics.find((e: any) =>
+    e.name.toLowerCase().includes("maintenance")
+  );
+  return maintenance ? Number(maintenance.id) : null;
 }
 
 // =============================================================================

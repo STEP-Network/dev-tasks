@@ -10,7 +10,7 @@ import {
   AGENT_ID,
 } from "../constants";
 import type { ConvertBugToTaskInput } from "../schemas";
-import { buildColumnValues, getColumnText, formatError } from "./utils";
+import { buildColumnValues, getColumnText, getLinkedItems, resolveMaintenanceEpicId, formatError } from "./utils";
 
 export async function convertBugToTask(args: ConvertBugToTaskInput): Promise<string> {
   try {
@@ -62,6 +62,16 @@ export async function convertBugToTask(args: ConvertBugToTaskInput): Promise<str
     };
     const taskPriority = priorityMap[bugPriority] || "Medium";
 
+    // Resolve epic: explicit epicId > product's maintenance epic
+    let resolvedEpicId: number | undefined = epicId;
+    if (!resolvedEpicId) {
+      const productItems = getLinkedItems(colMap, BUG_COLUMNS.product);
+      if (productItems.length > 0) {
+        const maintenanceId = await resolveMaintenanceEpicId(Number(productItems[0].id));
+        if (maintenanceId) resolvedEpicId = maintenanceId;
+      }
+    }
+
     // Combine descriptions
     let fullDescription = bugDescription;
     if (additionalDescription) {
@@ -81,8 +91,8 @@ export async function convertBugToTask(args: ConvertBugToTaskInput): Promise<str
       taskColumnValues[TASK_COLUMNS.description] = { text: fullDescription };
     }
 
-    if (epicId) {
-      taskColumnValues[TASK_COLUMNS.epic] = { item_ids: [epicId] };
+    if (resolvedEpicId) {
+      taskColumnValues[TASK_COLUMNS.epic] = { item_ids: [resolvedEpicId] };
     }
 
     if (sprintId) {
@@ -161,7 +171,10 @@ export async function convertBugToTask(args: ConvertBugToTaskInput): Promise<str
     lines.push("# Bug Converted to Task");
     lines.push("");
     lines.push(`- **New Task:** ${newTask.name} (#${newTask.id})`);
-    lines.push(`  Type: Bugfix | Priority: ${taskPriority} | Status: Ready to Start`);
+    const epicInfo = resolvedEpicId
+      ? ` | Epic: #${resolvedEpicId}${!epicId ? " (auto-assigned)" : ""}`
+      : "";
+    lines.push(`  Type: Bugfix | Priority: ${taskPriority} | Status: Ready to Start${epicInfo}`);
     lines.push("");
     lines.push(`- **Bug #${bugId}:** Status updated to Fixing, linked to task #${newTask.id}`);
 

@@ -128,7 +128,7 @@ const handler = createMcpHandler(
 
     server.tool(
       "listProducts",
-      "List all products with status, owner, and counts of linked epics/bugs/versions. Use this to find the right productId when filing bugs via createBug.",
+      "List all products with status, owner, and counts of linked epics/bugs/versions/feedback. Use this to find the right productId when filing bugs via createBug.",
       ListProductsSchema.shape,
       async (args) => {
         const result = await listProducts(args);
@@ -186,7 +186,7 @@ const handler = createMcpHandler(
 
     server.tool(
       "convertBugToTask",
-      "Convert a bug into a Bugfix task. Use getBugs to find the bugId. Copies bug name, description, and priority. Creates task with type=Bugfix, links bug<->task, and sets bug status to 'Fixing'. Optionally link to epic/sprint.",
+      "Convert a bug into a Bugfix task. Use getBugs to find the bugId. Copies bug name, description, and priority. Creates task with type=Bugfix, links bug<->task, and sets bug status to 'Fixing'. If no epicId specified, auto-assigns the product's maintenance epic (if one exists). Optionally link to epic/sprint.",
       ConvertBugToTaskSchema.shape,
       async (args) => {
         const result = await convertBugToTask(args);
@@ -342,7 +342,7 @@ const handler = createMcpHandler(
 
     server.tool(
       "convertFeedbackToTask",
-      "Convert a feedback/request item into a task. Copies name, priority, and description from the feedback item. Auto-infers task type from feedback type (Request→Development, Feedback→Maintenance) unless overridden. Links the new task back to the feedback item via two-way relation and sets feedback status to 'Converted'. Optionally assign to epic/sprint or add extra description.",
+      "Convert a feedback/request item into a task. Copies name, priority, and description from the feedback item. Auto-infers task type from feedback type (Request→Development, Feedback→Maintenance) unless overridden. If no epicId specified, auto-assigns the product's maintenance epic (if one exists). Links the new task back to the feedback item via two-way relation and sets feedback status to 'Converted'. Optionally assign to epic/sprint or add extra description.",
       ConvertFeedbackToTaskSchema.shape,
       async (args) => {
         const result = await convertFeedbackToTask(args);

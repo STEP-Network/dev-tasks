@@ -9,7 +9,7 @@ import {
   FEEDBACK_STATUS,
 } from "../constants";
 import type { ConvertFeedbackToTaskInput } from "../schemas";
-import { buildColumnValues, getColumnText, formatError } from "./utils";
+import { buildColumnValues, getColumnText, getLinkedItems, resolveMaintenanceEpicId, formatError } from "./utils";
 
 export async function convertFeedbackToTask(args: ConvertFeedbackToTaskInput): Promise<string> {
   try {
@@ -24,7 +24,8 @@ export async function convertFeedbackToTask(args: ConvertFeedbackToTaskInput): P
           column_values(ids: [
             "${FEEDBACK_COLUMNS.type}",
             "${FEEDBACK_COLUMNS.priority}",
-            "${FEEDBACK_COLUMNS.description}"
+            "${FEEDBACK_COLUMNS.description}",
+            "${FEEDBACK_COLUMNS.product}"
           ]) {
             id
             text
@@ -63,6 +64,16 @@ export async function convertFeedbackToTask(args: ConvertFeedbackToTaskInput): P
     // Determine task type: explicit override > inferred from feedback type
     const resolvedTaskType = taskType || (itemType === "Request" ? "Development" : "Maintenance");
 
+    // Resolve epic: explicit epicId > product's maintenance epic
+    let resolvedEpicId: number | undefined = epicId;
+    if (!resolvedEpicId) {
+      const productItems = getLinkedItems(colMap, FEEDBACK_COLUMNS.product);
+      if (productItems.length > 0) {
+        const maintenanceId = await resolveMaintenanceEpicId(Number(productItems[0].id));
+        if (maintenanceId) resolvedEpicId = maintenanceId;
+      }
+    }
+
     // Combine descriptions
     let fullDescription = itemDescription;
     if (additionalDescription) {
@@ -85,8 +96,8 @@ export async function convertFeedbackToTask(args: ConvertFeedbackToTaskInput): P
       taskColumnValues[TASK_COLUMNS.description] = { text: fullDescription };
     }
 
-    if (epicId) {
-      taskColumnValues[TASK_COLUMNS.epic] = { item_ids: [epicId] };
+    if (resolvedEpicId) {
+      taskColumnValues[TASK_COLUMNS.epic] = { item_ids: [resolvedEpicId] };
     }
 
     if (sprintId) {
@@ -138,7 +149,10 @@ export async function convertFeedbackToTask(args: ConvertFeedbackToTaskInput): P
     lines.push("# Feedback Converted to Task");
     lines.push("");
     lines.push(`- **New Task:** ${newTask.name} (#${newTask.id})`);
-    lines.push(`  Type: ${resolvedTaskType} | Priority: ${taskPriority} | Status: Ready to Start`);
+    const epicInfo = resolvedEpicId
+      ? ` | Epic: #${resolvedEpicId}${!epicId ? " (auto-assigned)" : ""}`
+      : "";
+    lines.push(`  Type: ${resolvedTaskType} | Priority: ${taskPriority} | Status: Ready to Start${epicInfo}`);
     lines.push("");
     lines.push(`- **${itemType} #${feedbackId}:** Status updated to Converted, linked to task #${newTask.id}`);
 

@@ -125,6 +125,19 @@ Used in:
 **Feedback Source:** User, Internal, Support, Partner
 **Agent ID:** Claude Code CLI, Claude Desktop Cloud, Codex Local, Claude Desktop Local, Codex Cloud
 
+## Maintenance Epics
+
+Every product should have a permanent "Maintenance & Hotfixes" epic (Status: In Progress, no deadline). This ensures all tasks have an epic — and therefore Product context via the Task mirror column.
+
+- `convertBugToTask` and `convertFeedbackToTask` auto-assign the maintenance epic when no explicit epicId is provided
+- The resolver matches epics whose name contains "maintenance" (case-insensitive)
+- Convention: name the epic "{Product Name} — Maintenance & Hotfixes"
+- Hotfix tasks, tech debt, and miscellaneous work go here
+
+## Product Inheritance
+
+Product flows through the hierarchy: **Product → Epic → Task** (mirror column). Bugs, Feedback, and Versions keep direct Product connections because they exist at different lifecycle stages (intake/output) before tasks or epics are assigned.
+
 ## Task Completion
 
 Monday.com automation auto-completes the parent task when all subtasks are Done:

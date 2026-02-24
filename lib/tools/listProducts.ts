@@ -14,6 +14,7 @@ export async function listProducts(args: ListProductsInput): Promise<string> {
       PRODUCT_COLUMNS.epics,
       PRODUCT_COLUMNS.bugs,
       PRODUCT_COLUMNS.versions,
+      PRODUCT_COLUMNS.feedback,
     ].map(c => `"${c}"`).join(", ");
 
     const query = `
@@ -61,9 +62,10 @@ export async function listProducts(args: ListProductsInput): Promise<string> {
       const epics = getLinkedItems(colMap, PRODUCT_COLUMNS.epics);
       const bugs = getLinkedItems(colMap, PRODUCT_COLUMNS.bugs);
       const versions = getLinkedItems(colMap, PRODUCT_COLUMNS.versions);
+      const feedback = getLinkedItems(colMap, PRODUCT_COLUMNS.feedback);
 
       lines.push(`- **${item.name}** (#${item.id})`);
-      lines.push(`  Status: ${status} | Priority: ${priority} | Owner: ${owner} | Epics: ${epics.length} | Bugs: ${bugs.length} | Versions: ${versions.length}`);
+      lines.push(`  Status: ${status} | Priority: ${priority} | Owner: ${owner} | Epics: ${epics.length} | Bugs: ${bugs.length} | Versions: ${versions.length} | Feedback: ${feedback.length}`);
     }
 
     return lines.join("\n").trim();
