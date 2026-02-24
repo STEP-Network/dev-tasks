@@ -10,6 +10,7 @@ export const BOARDS = {
   BUGS: 5091706353,
   VERSIONS: 5091847257,
   PRODUCTS: 5091839409,
+  FEEDBACK: 5091852801,
 } as const;
 
 // =============================================================================
@@ -45,6 +46,7 @@ export const TASK_COLUMNS = {
   dependencies: "dependency_mm0pwbxn",
   acceptanceCriteria: "long_text_mm0pqaxy",
   branch: "text_mm0pvs3n",
+  feedback: "board_relation_mm0wvysr",
   lastUpdated: "pulse_updated_mm0nxzxb",
   creationLog: "pulse_log_mm0nkhr2",
 } as const;
@@ -152,6 +154,26 @@ export const VERSION_COLUMNS = {
   product: "board_relation_mm0mfd4t",
   creationLog: "pulse_log_mm0n1jtx",
   lastUpdated: "pulse_updated_mm0njvet",
+} as const;
+
+// =============================================================================
+// Requests & Feedback Board (5091852801) — Column IDs
+// =============================================================================
+
+export const FEEDBACK_COLUMNS = {
+  name: "name",
+  reporter: "multiple_person_mm0m7w50",
+  attachments: "file_mm0mvtm3",
+  description: "long_text_mm0wvj92",
+  status: "color_mm0wrpmn",
+  type: "color_mm0wnher",
+  priority: "color_mm0wathj",
+  source: "color_mm0wrd82",
+  product: "board_relation_mm0mcda1",
+  connectedTasks: "board_relation_mm0w5j8m",
+  lastUpdated: "pulse_updated_mm0nzv8y",
+  creationLog: "pulse_log_mm0nqcwe",
+  itemId: "pulse_id_mm0mqk43",
 } as const;
 
 // =============================================================================
@@ -286,6 +308,38 @@ export const VERSION_STATUS: Record<string, number> = {
   "Hotfix": 2,
 };
 
+// Feedback Status (color_mm0wrpmn column)
+export const FEEDBACK_STATUS: Record<string, number> = {
+  "New": 19,
+  "Under Review": 0,
+  "Accepted": 3,
+  "Declined": 2,
+  "Converted": 4,
+  "Done": 1,
+};
+
+// Feedback Type (color_mm0wnher column)
+export const FEEDBACK_TYPE: Record<string, number> = {
+  "Request": 0,
+  "Feedback": 1,
+};
+
+// Feedback Priority (color_mm0wathj column)
+export const FEEDBACK_PRIORITY: Record<string, number> = {
+  "Critical": 0,
+  "High": 2,
+  "Medium": 7,
+  "Low": 1,
+};
+
+// Feedback Source (color_mm0wrd82 column)
+export const FEEDBACK_SOURCE: Record<string, number> = {
+  "User": 0,
+  "Internal": 1,
+  "Support": 2,
+  "Partner": 3,
+};
+
 // =============================================================================
 // Agent ID Dropdown (dropdown_mm0mrcex on Tasks board)
 // =============================================================================
@@ -332,4 +386,10 @@ export const EPIC_GROUPS = {
 export const VERSION_GROUPS = {
   RELEASED: "group_mm0m6bkb",
   UPCOMING: "topics",
+} as const;
+
+export const FEEDBACK_GROUPS = {
+  INCOMING: "topics",
+  IN_PROGRESS: "group_mm0wmef6",
+  RESOLVED: "group_mm0wvb8m",
 } as const;

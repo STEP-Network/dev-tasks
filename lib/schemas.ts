@@ -57,6 +57,16 @@ const VersionStatusCreateEnum = z.enum([
   "Planned", "In Development", "Release Candidate", "Hotfix",
 ]);
 
+const FeedbackStatusEnum = z.enum([
+  "New", "Under Review", "Accepted", "Declined", "Converted", "Done",
+]);
+
+const FeedbackTypeEnum = z.enum(["Request", "Feedback"]);
+
+const FeedbackPriorityEnum = z.enum(["Critical", "High", "Medium", "Low"]);
+
+const FeedbackSourceEnum = z.enum(["User", "Internal", "Support", "Partner"]);
+
 // =============================================================================
 // Tool 1: getBacklog
 // =============================================================================
@@ -397,6 +407,54 @@ export const UpdateEpicSchema = z.object({
 });
 
 // =============================================================================
+// Tool 23: listFeedback
+// =============================================================================
+
+export const ListFeedbackSchema = z.object({
+  type: FeedbackTypeEnum.optional().describe("Filter by type (Request or Feedback)"),
+  status: FeedbackStatusEnum.optional().describe("Filter by status"),
+  priority: FeedbackPriorityEnum.optional().describe("Filter by priority"),
+  source: FeedbackSourceEnum.optional().describe("Filter by source"),
+  productId: z.number().optional().describe("Filter by product — use listProducts to find the ID"),
+  search: z.string().optional().describe("Search text in name and description"),
+  limit: z.number().optional().default(25).describe("Max items to return (default: 25)"),
+});
+
+// =============================================================================
+// Tool 24: getFeedback
+// =============================================================================
+
+export const GetFeedbackSchema = z.object({
+  feedbackId: z.number().describe("Feedback/request item ID — use listFeedback to discover available items"),
+});
+
+// =============================================================================
+// Tool 25: createFeedback
+// =============================================================================
+
+export const CreateFeedbackSchema = z.object({
+  name: z.string().describe("Title — clearly describe the request or feedback"),
+  type: FeedbackTypeEnum.describe("Item type: Request (feature/enhancement) or Feedback (observation/suggestion)"),
+  description: z.string().optional().describe("Full details, context, and any relevant information"),
+  priority: FeedbackPriorityEnum.optional().describe("Priority level"),
+  source: FeedbackSourceEnum.optional().describe("Where this came from: User, Internal, Support, Partner"),
+  productId: z.number().optional().describe("Product this relates to — use listProducts to find the ID"),
+  reporter: z.number().optional().describe("Reporter person ID"),
+});
+
+// =============================================================================
+// Tool 26: convertFeedbackToTask
+// =============================================================================
+
+export const ConvertFeedbackToTaskSchema = z.object({
+  feedbackId: z.number().describe("Feedback/request item ID to convert — use listFeedback to find the ID"),
+  epicId: z.number().optional().describe("Epic to link the new task to — use listEpics to find the ID"),
+  sprintId: z.number().optional().describe("Sprint to assign the new task to — use getSprint() to find the ID"),
+  taskType: TaskTypeEnum.optional().describe("Task type override (default: Development for requests, Maintenance for feedback)"),
+  additionalDescription: z.string().optional().describe("Extra context to append to the description"),
+});
+
+// =============================================================================
 // Type Exports
 // =============================================================================
 
@@ -422,3 +480,7 @@ export type GetUpdatesInput = z.input<typeof GetUpdatesSchema>;
 export type CreateUpdateInput = z.infer<typeof CreateUpdateSchema>;
 export type CreateEpicInput = z.infer<typeof CreateEpicSchema>;
 export type UpdateEpicInput = z.infer<typeof UpdateEpicSchema>;
+export type ListFeedbackInput = z.input<typeof ListFeedbackSchema>;
+export type GetFeedbackInput = z.infer<typeof GetFeedbackSchema>;
+export type CreateFeedbackInput = z.infer<typeof CreateFeedbackSchema>;
+export type ConvertFeedbackToTaskInput = z.infer<typeof ConvertFeedbackToTaskSchema>;

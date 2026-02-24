@@ -2,7 +2,7 @@
 
 ## Overview
 
-MCP server for autonomous coding agents managing development work across a Monday.com board ecosystem: Tasks, Sprints, Epics, Bugs, Versions, and Products.
+MCP server for autonomous coding agents managing development work across a Monday.com board ecosystem: Tasks, Sprints, Epics, Bugs, Versions, Products, and Feedback.
 
 ## Commands
 
@@ -25,6 +25,7 @@ Products (5091839409) [read-only]
             ↑
        Bugs (5091706353) [read-write]
        Versions (5091847257) [read-write]
+       Feedback (5091852801) [read-write] ←→ Tasks (two-way relation)
 ```
 
 **Mirror columns:** Tasks has a Product mirror column (`lookup_mm0vsq7f`) mirrored through the Epic relation (`task_epic`). Mirror columns are read-only and cannot be filtered server-side — `getBacklog` resolves product → epics → tasks instead.
@@ -32,15 +33,15 @@ Products (5091839409) [read-only]
 Subtasks board: 5091706366 (linked from Tasks)
 
 ### MCP Server Entry Point
-- `app/api/mcp/route.ts` — Registers all 22 tools
+- `app/api/mcp/route.ts` — Registers all 26 tools
 
 ### Core Library
 - `lib/constants.ts` — Board IDs, column IDs, status/type/priority mappings, default owner ID
 - `lib/monday-client.ts` — GraphQL executor
-- `lib/schemas.ts` — Zod schemas for all 22 tools
+- `lib/schemas.ts` — Zod schemas for all 26 tools
 - `lib/tools/utils.ts` — Shared helpers
 
-### Tools (22 total)
+### Tools (26 total)
 
 | # | Tool | Phase | Purpose |
 |---|------|-------|---------|
@@ -66,6 +67,10 @@ Subtasks board: 5091706366 (linked from Tasks)
 | 20 | `createUpdate` | Communication | Post updates/comments on items |
 | 21 | `createEpic` | Creation | Create epics with status, priority, timeline, product link |
 | 22 | `updateEpic` | Execution | Update any epic field or delete an epic |
+| 23 | `listFeedback` | Discovery | List/filter requests and feedback items |
+| 24 | `getFeedback` | Context | Full feedback details with connected tasks |
+| 25 | `createFeedback` | Creation | File new requests or feedback |
+| 26 | `convertFeedbackToTask` | Creation | Convert feedback → task with auto-linking |
 
 ## Agent Workflow
 
@@ -114,6 +119,10 @@ Used in:
 **Epic Status:** Backlog, Planned, Refining, In Progress, Review, On Hold, Done
 **Epic Priority:** Critical, High, Medium, Low, Minimal, Not Prioritized
 **Version Status:** Planned, In Development, Release Candidate, Released, Hotfix
+**Feedback Status:** New → Under Review → Accepted → Converted / Declined / Done
+**Feedback Type:** Request, Feedback
+**Feedback Priority:** Critical, High, Medium, Low
+**Feedback Source:** User, Internal, Support, Partner
 **Agent ID:** Claude Code CLI, Claude Desktop Cloud, Codex Local, Claude Desktop Local, Codex Cloud
 
 ## Task Completion

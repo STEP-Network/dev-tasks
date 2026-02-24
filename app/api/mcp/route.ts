@@ -22,6 +22,10 @@ import {
   CreateUpdateSchema,
   CreateEpicSchema,
   UpdateEpicSchema,
+  ListFeedbackSchema,
+  GetFeedbackSchema,
+  CreateFeedbackSchema,
+  ConvertFeedbackToTaskSchema,
 } from "@/lib/schemas";
 import {
   getBacklog,
@@ -46,6 +50,10 @@ import {
   createUpdate,
   createEpic,
   updateEpic,
+  listFeedback,
+  getFeedback,
+  createFeedback,
+  convertFeedbackToTask,
 } from "@/lib/tools";
 
 const handler = createMcpHandler(
@@ -294,6 +302,50 @@ const handler = createMcpHandler(
       UpdateEpicSchema.shape,
       async (args) => {
         const result = await updateEpic(args);
+        return { content: [{ type: "text", text: result }] };
+      }
+    );
+
+    // =========================================================================
+    // Feedback & Requests
+    // =========================================================================
+
+    server.tool(
+      "listFeedback",
+      "List requests and feedback items. Filter by type (Request/Feedback), status (New/Under Review/Accepted/Declined/Converted/Done), priority, source (User/Internal/Support/Partner), productId, or search text. Returns: name, type, status, priority, source, reporter, product, and connected task count.",
+      ListFeedbackSchema.shape,
+      async (args) => {
+        const result = await listFeedback(args);
+        return { content: [{ type: "text", text: result }] };
+      }
+    );
+
+    server.tool(
+      "getFeedback",
+      "Get full details of a feedback/request item by ID. Shows: type, status, priority, source, reporter, product, description, and connected tasks (resolved with status/type/priority). Use listFeedback first to discover item IDs.",
+      GetFeedbackSchema.shape,
+      async (args) => {
+        const result = await getFeedback(args);
+        return { content: [{ type: "text", text: result }] };
+      }
+    );
+
+    server.tool(
+      "createFeedback",
+      "Create a new request or feedback item. Required: name, type (Request/Feedback). Optional: description, priority (Critical/High/Medium/Low), source (User/Internal/Support/Partner), productId, reporter (person ID). Items start with status 'New' in the Incoming group.",
+      CreateFeedbackSchema.shape,
+      async (args) => {
+        const result = await createFeedback(args);
+        return { content: [{ type: "text", text: result }] };
+      }
+    );
+
+    server.tool(
+      "convertFeedbackToTask",
+      "Convert a feedback/request item into a task. Copies name, priority, and description from the feedback item. Auto-infers task type from feedback type (Request→Development, Feedback→Maintenance) unless overridden. Links the new task back to the feedback item via two-way relation and sets feedback status to 'Converted'. Optionally assign to epic/sprint or add extra description.",
+      ConvertFeedbackToTaskSchema.shape,
+      async (args) => {
+        const result = await convertFeedbackToTask(args);
         return { content: [{ type: "text", text: result }] };
       }
     );
