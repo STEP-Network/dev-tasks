@@ -448,6 +448,18 @@ export const CreateFeedbackSchema = z.object({
 // Tool 26: convertFeedbackToTask
 // =============================================================================
 
+export const UpdateFeedbackSchema = z.object({
+  feedbackId: z.number().describe("Feedback/request item ID to update — use listFeedback to find the ID"),
+  delete: z.boolean().optional().describe("Set true to delete the feedback item"),
+  name: z.string().optional().describe("New title"),
+  status: FeedbackStatusEnum.optional().describe("New status"),
+  type: FeedbackTypeEnum.optional().describe("Change type (Request or Feedback)"),
+  priority: FeedbackPriorityEnum.optional().describe("New priority"),
+  source: FeedbackSourceEnum.optional().describe("Change source"),
+  description: z.string().optional().describe("Updated description"),
+  productId: z.number().optional().describe("Link to product — use listProducts to find the ID"),
+});
+
 export const ConvertFeedbackToTaskSchema = z.object({
   feedbackId: z.number().describe("Feedback/request item ID to convert — use listFeedback to find the ID"),
   epicId: z.number().optional().describe("Epic to link the new task to — use listEpics to find the ID"),
@@ -485,4 +497,5 @@ export type UpdateEpicInput = z.infer<typeof UpdateEpicSchema>;
 export type ListFeedbackInput = z.input<typeof ListFeedbackSchema>;
 export type GetFeedbackInput = z.infer<typeof GetFeedbackSchema>;
 export type CreateFeedbackInput = z.infer<typeof CreateFeedbackSchema>;
+export type UpdateFeedbackInput = z.infer<typeof UpdateFeedbackSchema>;
 export type ConvertFeedbackToTaskInput = z.infer<typeof ConvertFeedbackToTaskSchema>;

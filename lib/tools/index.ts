@@ -23,4 +23,5 @@ export { updateEpic } from "./updateEpic";
 export { listFeedback } from "./listFeedback";
 export { getFeedback } from "./getFeedback";
 export { createFeedback } from "./createFeedback";
+export { updateFeedback } from "./updateFeedback";
 export { convertFeedbackToTask } from "./convertFeedbackToTask";

@@ -25,6 +25,7 @@ import {
   ListFeedbackSchema,
   GetFeedbackSchema,
   CreateFeedbackSchema,
+  UpdateFeedbackSchema,
   ConvertFeedbackToTaskSchema,
 } from "@/lib/schemas";
 import {
@@ -53,6 +54,7 @@ import {
   listFeedback,
   getFeedback,
   createFeedback,
+  updateFeedback,
   convertFeedbackToTask,
 } from "@/lib/tools";
 
@@ -336,6 +338,16 @@ const handler = createMcpHandler(
       CreateFeedbackSchema.shape,
       async (args) => {
         const result = await createFeedback(args);
+        return { content: [{ type: "text", text: result }] };
+      }
+    );
+
+    server.tool(
+      "updateFeedback",
+      "Update any feedback/request field. Supports: name, status (New/Under Review/Accepted/Declined/Converted/Done), type (Request/Feedback), priority, source, description, productId. Set delete=true to delete. Use listFeedback to find the feedbackId.",
+      UpdateFeedbackSchema.shape,
+      async (args) => {
+        const result = await updateFeedback(args);
         return { content: [{ type: "text", text: result }] };
       }
     );

@@ -32,7 +32,7 @@ Products (5091839409) [read-only]
 Subtasks board: 5091706366 (linked from Tasks)
 
 ### MCP Server Entry Point
-- `app/api/mcp/route.ts` — Registers all 26 tools
+- `app/api/mcp/route.ts` — Registers all 27 tools
 
 ### Core Library
 - `lib/constants.ts` — Board IDs, column IDs, status/type/priority mappings, default owner ID
@@ -40,7 +40,7 @@ Subtasks board: 5091706366 (linked from Tasks)
 - `lib/schemas.ts` — Zod schemas for all 26 tools
 - `lib/tools/utils.ts` — Shared helpers
 
-### Tools (26 total)
+### Tools (27 total)
 
 | # | Tool | Phase | Purpose |
 |---|------|-------|---------|
@@ -69,7 +69,8 @@ Subtasks board: 5091706366 (linked from Tasks)
 | 23 | `listFeedback` | Discovery | List/filter requests and feedback items |
 | 24 | `getFeedback` | Context | Full feedback details with connected tasks |
 | 25 | `createFeedback` | Creation | File new requests or feedback |
-| 26 | `convertFeedbackToTask` | Creation | Convert feedback → task with auto-linking |
+| 26 | `updateFeedback` | Execution | Update any feedback field or delete |
+| 27 | `convertFeedbackToTask` | Creation | Convert feedback → task with auto-linking |
 
 ## Agent Workflow
 
