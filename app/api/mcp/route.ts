@@ -404,7 +404,7 @@ const handler = createMcpHandler(
 
     server.tool(
       "updateStructuredChangelog",
-      "Apply patch operations to the structured changelog. Ops: addTask (by taskId — auto-categorizes from task type — or manual {name, category}), setSummary, setHighlights, setBreakingChanges, setKnownIssues. Read-modify-write happens server-side; callers do not need to fetch first.",
+      "Apply patch operations to the structured changelog. Ops: addTask (by taskId — auto-categorizes from task type — or manual {name, category}), removeTask (by taskId, or manual {name, category}), setSummary, setHighlights, setBreakingChanges, setKnownIssues. Read-modify-write happens server-side; callers do not need to fetch first. To clear a list field, pass an empty array (e.g. setHighlights with items: []).",
       UpdateStructuredChangelogSchema.shape,
       async (args) => {
         const result = await updateStructuredChangelog(args);

@@ -92,23 +92,28 @@ function parseRawChangelog(raw: string): unknown | undefined {
 // Migration — upgrade legacy shapes to canonical 3-cat
 // =============================================================================
 
+// Case-insensitive: lookup keys are lowercased before matching.
 const LEGACY_CATEGORY_MAP: Record<string, Category> = {
-  Added: "Feature",
-  Feature: "Feature",
-  Features: "Feature",
-  New: "Feature",
-  Fixed: "Fix",
-  Fix: "Fix",
-  Fixes: "Fix",
-  Bugfix: "Fix",
-  Changed: "Improvement",
-  Improvement: "Improvement",
-  Improvements: "Improvement",
-  Documentation: "Improvement",
-  Docs: "Improvement",
-  Maintenance: "Improvement",
-  Other: "Improvement",
+  added: "Feature",
+  feature: "Feature",
+  features: "Feature",
+  new: "Feature",
+  fixed: "Fix",
+  fix: "Fix",
+  fixes: "Fix",
+  bugfix: "Fix",
+  changed: "Improvement",
+  improvement: "Improvement",
+  improvements: "Improvement",
+  documentation: "Improvement",
+  docs: "Improvement",
+  maintenance: "Improvement",
+  other: "Improvement",
 };
+
+function lookupCategory(bucket: string): Category | undefined {
+  return LEGACY_CATEGORY_MAP[bucket.toLowerCase()];
+}
 
 function migrateChangelog(parsed: unknown): StructuredChangelog {
   if (!parsed || typeof parsed !== "object") return emptyChangelog();
@@ -120,14 +125,16 @@ function migrateChangelog(parsed: unknown): StructuredChangelog {
   if (Array.isArray(obj.breakingChanges)) out.breakingChanges = obj.breakingChanges.filter((h): h is string => typeof h === "string");
   if (Array.isArray(obj.knownIssues)) out.knownIssues = obj.knownIssues.filter((h): h is string => typeof h === "string");
 
-  // Two source layouts — canonical (`tasks: { Feature, Fix, Improvement }`) or
-  // legacy flat (`Added: [], Fixed: [], Changed: [], Documentation: [], Other: []`).
-  const taskBuckets: Record<string, unknown> = (obj.tasks && typeof obj.tasks === "object")
-    ? obj.tasks as Record<string, unknown>
-    : obj as Record<string, unknown>;
+  // Bucket source — canonical wraps tasks under `tasks`, the original 4-cat
+  // and the lowercase 3-cat backfill wrap under `categories`, and the very
+  // earliest flat shape put bucket keys at the top level.
+  const taskBuckets: Record<string, unknown> =
+    (obj.tasks && typeof obj.tasks === "object") ? obj.tasks as Record<string, unknown>
+    : (obj.categories && typeof obj.categories === "object") ? obj.categories as Record<string, unknown>
+    : obj;
 
   for (const [bucket, value] of Object.entries(taskBuckets)) {
-    const target = LEGACY_CATEGORY_MAP[bucket];
+    const target = lookupCategory(bucket);
     if (!target) continue;
     if (!Array.isArray(value)) continue;
     for (const entry of value) {
@@ -269,6 +276,29 @@ export async function updateStructuredChangelog(args: UpdateStructuredChangelogI
             }
             current.tasks[op.category].push({ name: op.name });
             applied.push(`addTask: manual entry → ${op.category} (${op.name})`);
+          }
+          break;
+        }
+        case "removeTask": {
+          let removed = 0;
+          if (op.taskId) {
+            for (const cat of ["Feature", "Fix", "Improvement"] as Category[]) {
+              const before = current.tasks[cat].length;
+              current.tasks[cat] = current.tasks[cat].filter(e => e.id !== op.taskId);
+              removed += before - current.tasks[cat].length;
+            }
+            applied.push(`removeTask: #${op.taskId} (removed ${removed})`);
+          } else {
+            if (!op.name || !op.category) {
+              return formatError(`removeTask op without taskId requires both 'name' and 'category'.`);
+            }
+            const before = current.tasks[op.category].length;
+            // Only remove manual entries (id === undefined) to avoid clobbering task-linked entries by name collision
+            current.tasks[op.category] = current.tasks[op.category].filter(
+              e => !(e.name === op.name && e.id === undefined),
+            );
+            removed = before - current.tasks[op.category].length;
+            applied.push(`removeTask: manual ${op.category}/"${op.name}" (removed ${removed})`);
           }
           break;
         }

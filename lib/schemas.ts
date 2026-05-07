@@ -502,6 +502,13 @@ const AddTaskOp = z.object({
   category: ChangelogCategoryEnum.optional().describe("Manual entry category (required if taskId is omitted)"),
 });
 
+const RemoveTaskOp = z.object({
+  op: z.literal("removeTask"),
+  taskId: z.number().optional().describe("Task ID — removes the task-linked entry with this id from all categories"),
+  name: z.string().optional().describe("Manual entry name to remove (no taskId) — must be paired with category"),
+  category: ChangelogCategoryEnum.optional().describe("Category to remove the manual entry from (required when using name)"),
+});
+
 const SetSummaryOp = z.object({
   op: z.literal("setSummary"),
   text: z.string(),
@@ -524,7 +531,7 @@ const SetKnownIssuesOp = z.object({
 
 export const UpdateStructuredChangelogSchema = z.object({
   versionId: z.number().describe("Version item ID"),
-  patch: z.array(z.union([AddTaskOp, SetSummaryOp, SetHighlightsOp, SetBreakingChangesOp, SetKnownIssuesOp]))
+  patch: z.array(z.union([AddTaskOp, RemoveTaskOp, SetSummaryOp, SetHighlightsOp, SetBreakingChangesOp, SetKnownIssuesOp]))
     .describe("Patch operations applied in order. Read-modify-write is atomic for the caller."),
 });
 
