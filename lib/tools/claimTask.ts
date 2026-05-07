@@ -5,7 +5,9 @@ import {
   getColumnText,
   getDropdownValues,
   getColumnValue,
+  getLinkedItems,
   checkDependenciesResolved,
+  validateTaskInActiveSprint,
   buildColumnValues,
   todayDate,
   formatError,
@@ -19,6 +21,7 @@ export async function claimTask(args: ClaimTaskInput): Promise<string> {
     const columnIds = [
       TASK_COLUMNS.status,
       TASK_COLUMNS.agentId,
+      TASK_COLUMNS.sprint,
     ].map(c => `"${c}"`).join(", ");
 
     const fetchQuery = `
@@ -66,6 +69,15 @@ export async function claimTask(args: ClaimTaskInput): Promise<string> {
       return formatError(
         `Cannot claim task #${itemId} "${item.name}".\n` +
         `Already claimed by: ${agentText}.`
+      );
+    }
+
+    // Check task is in the active sprint (claiming sets status to "In Progress")
+    const linkedSprintIds = getLinkedItems(colMap, TASK_COLUMNS.sprint).map(s => Number(s.id));
+    const sprintCheck = await validateTaskInActiveSprint(linkedSprintIds);
+    if (!sprintCheck.valid) {
+      return formatError(
+        `Cannot claim task #${itemId} "${item.name}".\n${sprintCheck.message}`
       );
     }
 

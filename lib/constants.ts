@@ -19,6 +19,7 @@ export const BOARDS = {
 
 export const TASK_COLUMNS = {
   name: "name",
+  publicTaskName: "text_mm349ah6",
   status: "task_status",
   priority: "task_priority",
   type: "task_type",
@@ -361,6 +362,15 @@ export const AGENT_ID: Record<string, number> = {
 export const PEOPLE: Record<string, number> = {
   "naref": 48307552,
   "krmoj": 38667531,
+};
+
+// =============================================================================
+// Products (name → Monday.com item ID on the Products board)
+// =============================================================================
+
+export const PRODUCT_IDS: Record<string, number> = {
+  "STEPhie": 2730518827,
+  "PolAds": 2723505568,
 };
 
 // =============================================================================

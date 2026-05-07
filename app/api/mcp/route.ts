@@ -27,6 +27,11 @@ import {
   CreateFeedbackSchema,
   UpdateFeedbackSchema,
   ConvertFeedbackToTaskSchema,
+  SetPublicTaskNameSchema,
+  GetPublicRoadmapSchema,
+  GetStructuredChangelogSchema,
+  UpdateStructuredChangelogSchema,
+  MigrateStructuredChangelogSchema,
 } from "@/lib/schemas";
 import {
   getBacklog,
@@ -56,6 +61,11 @@ import {
   createFeedback,
   updateFeedback,
   convertFeedbackToTask,
+  setPublicTaskName,
+  getPublicRoadmap,
+  getStructuredChangelog,
+  updateStructuredChangelog,
+  migrateStructuredChangelog,
 } from "@/lib/tools";
 
 const handler = createMcpHandler(
@@ -120,7 +130,7 @@ const handler = createMcpHandler(
 
     server.tool(
       "listEpics",
-      "List available epics with status, progress, and product. Use this to discover epic IDs before assigning tasks to epics via createTask or updateTask. Filters: status (e.g. 'In Progress', 'Planned'), search text in name.",
+      "List all epics for a product with status, progress, owner, and deadline. Use this to discover epic IDs before assigning tasks to epics via createTask or updateTask. Required: product ('STEPhie' or 'PolAds').",
       ListEpicsSchema.shape,
       async (args) => {
         const result = await listEpics(args);
@@ -358,6 +368,56 @@ const handler = createMcpHandler(
       ConvertFeedbackToTaskSchema.shape,
       async (args) => {
         const result = await convertFeedbackToTask(args);
+        return { content: [{ type: "text", text: result }] };
+      }
+    );
+
+    server.tool(
+      "setPublicTaskName",
+      "Set the public-facing name of a task. Used in changelogs and the public roadmap so external-facing copy can differ from the internal task name.",
+      SetPublicTaskNameSchema.shape,
+      async (args) => {
+        const result = await setPublicTaskName(args);
+        return { content: [{ type: "text", text: result }] };
+      }
+    );
+
+    server.tool(
+      "getPublicRoadmap",
+      "Get a public-facing roadmap for a product as Epic → Sprint → Task markdown. Uses each task's public name when set, otherwise the internal name. Required: product ('STEPhie' or 'PolAds'). Optional: onlyInProgress to limit to in-progress epics.",
+      GetPublicRoadmapSchema.shape,
+      async (args) => {
+        const result = await getPublicRoadmap(args);
+        return { content: [{ type: "text", text: result }] };
+      }
+    );
+
+    server.tool(
+      "getStructuredChangelog",
+      "Read the structured changelog for a version as JSON. Canonical 3-cat shape: { version, summary?, highlights?, breakingChanges?, knownIssues?, tasks: { Feature, Fix, Improvement } }. Auto-migrates legacy shapes. Stored in the version's release summary column.",
+      GetStructuredChangelogSchema.shape,
+      async (args) => {
+        const result = await getStructuredChangelog(args);
+        return { content: [{ type: "text", text: result }] };
+      }
+    );
+
+    server.tool(
+      "updateStructuredChangelog",
+      "Apply patch operations to the structured changelog. Ops: addTask (by taskId — auto-categorizes from task type — or manual {name, category}), setSummary, setHighlights, setBreakingChanges, setKnownIssues. Read-modify-write happens server-side; callers do not need to fetch first.",
+      UpdateStructuredChangelogSchema.shape,
+      async (args) => {
+        const result = await updateStructuredChangelog(args);
+        return { content: [{ type: "text", text: result }] };
+      }
+    );
+
+    server.tool(
+      "migrateStructuredChangelog",
+      "Pure migration helper. Takes raw JSON or marker-wrapped text and returns the canonical 3-cat shape. Useful for migrating data from external sources without touching Monday.",
+      MigrateStructuredChangelogSchema.shape,
+      async (args) => {
+        const result = await migrateStructuredChangelog(args);
         return { content: [{ type: "text", text: result }] };
       }
     );

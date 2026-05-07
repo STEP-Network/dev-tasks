@@ -1,5 +1,5 @@
 import { executeMondayQuery } from "../monday-client";
-import { BOARDS, SUBTASK_COLUMNS, TASK_COLUMNS, EPIC_COLUMNS } from "../constants";
+import { BOARDS, SUBTASK_COLUMNS, TASK_COLUMNS, EPIC_COLUMNS, SPRINT_COLUMNS } from "../constants";
 
 // =============================================================================
 // Column Value Helpers
@@ -165,24 +165,32 @@ export async function resolveLinkedItems(
 ): Promise<any[]> {
   if (itemIds.length === 0) return [];
 
-  const query = `
-    query {
-      items(ids: [${itemIds.join(",")}]) {
-        id
-        name
-        column_values(ids: [${columnIds.map(c => `"${c}"`).join(",")}]) {
+  // Monday's items(ids: [...]) call caps at 100 IDs — chunk to stay under the limit.
+  const CHUNK = 100;
+  const results: any[] = [];
+
+  for (let i = 0; i < itemIds.length; i += CHUNK) {
+    const chunk = itemIds.slice(i, i + CHUNK);
+    const query = `
+      query {
+        items(ids: [${chunk.join(",")}]) {
           id
-          text
-          value
-          ... on BoardRelationValue { linked_items { id name } }
-          ... on MirrorValue { display_value }
+          name
+          column_values(ids: [${columnIds.map(c => `"${c}"`).join(",")}]) {
+            id
+            text
+            value
+            ... on BoardRelationValue { linked_items { id name } }
+            ... on MirrorValue { display_value }
+          }
         }
       }
-    }
-  `;
+    `;
+    const response = await executeMondayQuery<any>(query);
+    if (response.items) results.push(...response.items);
+  }
 
-  const response = await executeMondayQuery<any>(query);
-  return response.items || [];
+  return results;
 }
 
 // =============================================================================
@@ -212,6 +220,53 @@ export async function resolveMaintenanceEpicId(productId: number): Promise<numbe
     e.name.toLowerCase().includes("maintenance")
   );
   return maintenance ? Number(maintenance.id) : null;
+}
+
+// =============================================================================
+// Active Sprint Validator
+// =============================================================================
+
+export async function getActiveSprintIds(): Promise<number[]> {
+  const query = `
+    query {
+      boards(ids: [${BOARDS.SPRINTS}]) {
+        items_page(limit: 10, query_params: {
+          rules: [{ column_id: "${SPRINT_COLUMNS.active}", compare_value: [], operator: is_not_empty }]
+        }) {
+          items { id }
+        }
+      }
+    }
+  `;
+  const response = await executeMondayQuery<any>(query);
+  const items = response.boards?.[0]?.items_page?.items || [];
+  return items.map((i: any) => Number(i.id));
+}
+
+export async function validateTaskInActiveSprint(
+  linkedSprintIds: number[],
+): Promise<{ valid: boolean; message?: string }> {
+  const activeIds = await getActiveSprintIds();
+  if (activeIds.length === 0) {
+    return {
+      valid: false,
+      message: `No active sprint found. A task can only be set to "In Progress" when an active sprint exists.`,
+    };
+  }
+  if (linkedSprintIds.length === 0) {
+    return {
+      valid: false,
+      message: `Task is not assigned to any sprint. Move it into the active sprint (#${activeIds.join(", #")}) before setting it to "In Progress".`,
+    };
+  }
+  const isInActive = linkedSprintIds.some(id => activeIds.includes(id));
+  if (!isInActive) {
+    return {
+      valid: false,
+      message: `Task is not in the active sprint (active: #${activeIds.join(", #")}). Move the task into the active sprint before setting it to "In Progress".`,
+    };
+  }
+  return { valid: true };
 }
 
 // =============================================================================

@@ -8,7 +8,7 @@ import {
   AGENT_ID,
 } from "../constants";
 import type { UpdateTaskInput } from "../schemas";
-import { buildColumnValues, formatError, formatSubtask } from "./utils";
+import { buildColumnValues, formatError, formatSubtask, getLinkedItems, validateTaskInActiveSprint } from "./utils";
 
 export async function updateTask(args: UpdateTaskInput): Promise<string> {
   try {
@@ -32,6 +32,36 @@ export async function updateTask(args: UpdateTaskInput): Promise<string> {
     const changes: string[] = [];
 
     if (args.status !== undefined) {
+      // If setting status to In Progress, the task must belong to the active sprint.
+      // Check the post-update sprint state: a sprintId in the same call overrides the current value.
+      if (args.status === "In Progress") {
+        let linkedSprintIds: number[];
+        if (args.sprintId !== undefined) {
+          linkedSprintIds = [args.sprintId];
+        } else {
+          const sprintQuery = `
+            query {
+              items(ids: [${itemId}]) {
+                column_values(ids: ["${TASK_COLUMNS.sprint}"]) {
+                  id
+                  ... on BoardRelationValue { linked_items { id name } }
+                }
+              }
+            }
+          `;
+          const sprintResponse = await executeMondayQuery<any>(sprintQuery);
+          const sprintCols = sprintResponse.items?.[0]?.column_values || [];
+          const colMap = new Map<string, any>(sprintCols.map((c: any) => [c.id, c]));
+          linkedSprintIds = getLinkedItems(colMap, TASK_COLUMNS.sprint).map(s => Number(s.id));
+        }
+        const sprintCheck = await validateTaskInActiveSprint(linkedSprintIds);
+        if (!sprintCheck.valid) {
+          return formatError(
+            `Cannot set task #${itemId} to "In Progress".\n${sprintCheck.message}`
+          );
+        }
+      }
+
       // If setting status to Done, validate all subtasks are Done/Rejected first
       if (args.status === "Done") {
         const subtaskQuery = `

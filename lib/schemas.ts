@@ -67,6 +67,8 @@ const FeedbackPriorityEnum = z.enum(["Critical", "High", "Medium", "Low"]);
 
 const FeedbackSourceEnum = z.enum(["User", "Internal", "Support", "Partner"]);
 
+const ProductEnum = z.enum(["STEPhie", "PolAds"]);
+
 // =============================================================================
 // Tool 1: getBacklog
 // =============================================================================
@@ -124,10 +126,7 @@ export const GetEpicSchema = z.object({
 // =============================================================================
 
 export const ListEpicsSchema = z.object({
-  status: EpicStatusEnum.optional().describe("Filter by epic status (e.g. 'In Progress', 'Planned')"),
-  productId: z.number().optional().describe("Filter by product — use listProducts to find the ID"),
-  search: z.string().optional().describe("Search text in epic name"),
-  limit: z.number().optional().default(25).describe("Max epics to return (default: 25)"),
+  product: ProductEnum.describe("Product to list epics for"),
 });
 
 // =============================================================================
@@ -469,6 +468,71 @@ export const ConvertFeedbackToTaskSchema = z.object({
 });
 
 // =============================================================================
+// Tool 28: setPublicTaskName
+// =============================================================================
+
+export const SetPublicTaskNameSchema = z.object({
+  taskId: z.number().describe("Task item ID"),
+  name: z.string().describe("Public-facing task name (used in changelogs and the public roadmap)"),
+});
+
+// =============================================================================
+// Tool 29: getPublicRoadmap
+// =============================================================================
+
+export const GetPublicRoadmapSchema = z.object({
+  product: z.enum(["STEPhie", "PolAds"]).describe("Product to fetch the roadmap for"),
+  onlyInProgress: z.boolean().optional().default(false).describe("Filter to epics with status 'In Progress' only"),
+});
+
+// =============================================================================
+// Tool 30-32: Structured Changelog
+// =============================================================================
+
+const ChangelogCategoryEnum = z.enum(["Feature", "Fix", "Improvement"]);
+
+export const GetStructuredChangelogSchema = z.object({
+  versionId: z.number().describe("Version item ID"),
+});
+
+const AddTaskOp = z.object({
+  op: z.literal("addTask"),
+  taskId: z.number().optional().describe("Task ID to add — name and category are auto-derived from the task"),
+  name: z.string().optional().describe("Manual entry name (use when there's no Monday task to reference)"),
+  category: ChangelogCategoryEnum.optional().describe("Manual entry category (required if taskId is omitted)"),
+});
+
+const SetSummaryOp = z.object({
+  op: z.literal("setSummary"),
+  text: z.string(),
+});
+
+const SetHighlightsOp = z.object({
+  op: z.literal("setHighlights"),
+  items: z.array(z.string()),
+});
+
+const SetBreakingChangesOp = z.object({
+  op: z.literal("setBreakingChanges"),
+  items: z.array(z.string()),
+});
+
+const SetKnownIssuesOp = z.object({
+  op: z.literal("setKnownIssues"),
+  items: z.array(z.string()),
+});
+
+export const UpdateStructuredChangelogSchema = z.object({
+  versionId: z.number().describe("Version item ID"),
+  patch: z.array(z.union([AddTaskOp, SetSummaryOp, SetHighlightsOp, SetBreakingChangesOp, SetKnownIssuesOp]))
+    .describe("Patch operations applied in order. Read-modify-write is atomic for the caller."),
+});
+
+export const MigrateStructuredChangelogSchema = z.object({
+  json: z.string().describe("Raw JSON or marker-wrapped text. Returns the canonical 3-cat shape."),
+});
+
+// =============================================================================
 // Type Exports
 // =============================================================================
 
@@ -499,3 +563,8 @@ export type GetFeedbackInput = z.infer<typeof GetFeedbackSchema>;
 export type CreateFeedbackInput = z.infer<typeof CreateFeedbackSchema>;
 export type UpdateFeedbackInput = z.infer<typeof UpdateFeedbackSchema>;
 export type ConvertFeedbackToTaskInput = z.infer<typeof ConvertFeedbackToTaskSchema>;
+export type SetPublicTaskNameInput = z.infer<typeof SetPublicTaskNameSchema>;
+export type GetPublicRoadmapInput = z.input<typeof GetPublicRoadmapSchema>;
+export type GetStructuredChangelogInput = z.infer<typeof GetStructuredChangelogSchema>;
+export type UpdateStructuredChangelogInput = z.infer<typeof UpdateStructuredChangelogSchema>;
+export type MigrateStructuredChangelogInput = z.infer<typeof MigrateStructuredChangelogSchema>;
