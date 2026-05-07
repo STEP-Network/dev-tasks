@@ -128,21 +128,31 @@ export async function updateVersion(args: UpdateVersionInput): Promise<string> {
       updates.push(`Name → "${args.name}"`);
     }
 
-    // Handle group move separately
+    // Handle group move — explicit groupId takes precedence; otherwise auto-move
+    // to the Released group when status is being set to Released.
+    let targetGroupId: string | undefined;
+    let targetGroupLabel: string | undefined;
     if (args.groupId) {
-      const targetGroup = args.groupId === "released" ? VERSION_GROUPS.RELEASED : VERSION_GROUPS.UPCOMING;
+      targetGroupId = args.groupId === "released" ? VERSION_GROUPS.RELEASED : VERSION_GROUPS.UPCOMING;
+      targetGroupLabel = args.groupId;
+    } else if (args.status === "Released") {
+      targetGroupId = VERSION_GROUPS.RELEASED;
+      targetGroupLabel = "released (auto)";
+    }
+
+    if (targetGroupId) {
       const groupMutation = `
         mutation {
           move_item_to_group(
             item_id: ${versionId},
-            group_id: "${targetGroup}"
+            group_id: "${targetGroupId}"
           ) {
             id
           }
         }
       `;
       await executeMondayQuery<any>(groupMutation);
-      updates.push(`Moved to ${args.groupId} group`);
+      updates.push(`Moved to ${targetGroupLabel} group`);
     }
 
     if (updates.length === 0) {

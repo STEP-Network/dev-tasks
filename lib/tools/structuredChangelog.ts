@@ -5,7 +5,7 @@ import type {
   UpdateStructuredChangelogInput,
   MigrateStructuredChangelogInput,
 } from "../schemas";
-import { buildColumnValues, getColumnText, formatError } from "./utils";
+import { getColumnText, formatError } from "./utils";
 
 // =============================================================================
 // Canonical shape
@@ -54,10 +54,33 @@ export function categoryForTaskType(taskType: string | undefined): Category {
 }
 
 // =============================================================================
+// Storage serialization — bare strings to fit Monday's 2000-char long_text cap
+// =============================================================================
+
+function entryToString(entry: ChangelogEntry): string {
+  const display = entry.publicName || entry.name;
+  return entry.id ? `${display} (#${entry.id})` : display;
+}
+
+export function serializeForStorage(c: StructuredChangelog): unknown {
+  const out: Record<string, unknown> = { version: c.version };
+  if (c.summary !== undefined) out.summary = c.summary;
+  if (c.highlights !== undefined) out.highlights = c.highlights;
+  if (c.breakingChanges !== undefined) out.breakingChanges = c.breakingChanges;
+  if (c.knownIssues !== undefined) out.knownIssues = c.knownIssues;
+  out.tasks = {
+    Feature: c.tasks.Feature.map(entryToString),
+    Fix: c.tasks.Fix.map(entryToString),
+    Improvement: c.tasks.Improvement.map(entryToString),
+  };
+  return out;
+}
+
+// =============================================================================
 // Parser — strips markers / fences and extracts JSON
 // =============================================================================
 
-function parseRawChangelog(raw: string): unknown | undefined {
+export function parseRawChangelog(raw: string): unknown | undefined {
   if (!raw || !raw.trim()) return undefined;
 
   // Strip common wrappers — comment markers, custom delimiters, fenced code blocks
@@ -115,7 +138,7 @@ function lookupCategory(bucket: string): Category | undefined {
   return LEGACY_CATEGORY_MAP[bucket.toLowerCase()];
 }
 
-function migrateChangelog(parsed: unknown): StructuredChangelog {
+export function migrateChangelog(parsed: unknown): StructuredChangelog {
   if (!parsed || typeof parsed !== "object") return emptyChangelog();
   const obj = parsed as Record<string, unknown>;
 
@@ -186,26 +209,64 @@ async function readChangelog(versionId: number): Promise<{ raw: string; parsed: 
   `;
   const response = await executeMondayQuery<any>(query);
   const cols = response.items?.[0]?.column_values || [];
-  const raw = cols[0]?.text || cols[0]?.value || "";
-  const cleaned = typeof raw === "string" ? raw : "";
-  const parsed = parseRawChangelog(cleaned);
-  return { raw: cleaned, parsed: parsed ? migrateChangelog(parsed) : emptyChangelog() };
+  const text = typeof cols[0]?.text === "string" ? cols[0].text : "";
+  const value = typeof cols[0]?.value === "string" ? cols[0].value : "";
+
+  // Prefer the `text` field (canonical for long_text). Fall back to `value`,
+  // which for long_text writes via change_multiple_column_values may contain a
+  // {"text": "<inner>", "changed_at": "..."} wrapper instead of raw content.
+  let raw = "";
+  if (text.trim()) {
+    raw = text;
+  } else if (value.trim()) {
+    try {
+      const maybeWrapper = JSON.parse(value);
+      if (maybeWrapper && typeof maybeWrapper === "object" && !Array.isArray(maybeWrapper) && typeof (maybeWrapper as Record<string, unknown>).text === "string") {
+        raw = (maybeWrapper as Record<string, unknown>).text as string;
+      } else {
+        raw = value;
+      }
+    } catch {
+      raw = value;
+    }
+  }
+
+  const parsed = parseRawChangelog(raw);
+  return { raw, parsed: parsed ? migrateChangelog(parsed) : emptyChangelog() };
 }
 
-async function writeChangelog(versionId: number, data: StructuredChangelog): Promise<void> {
-  const json = JSON.stringify(data);
+export async function writeChangelog(versionId: number, data: StructuredChangelog): Promise<void> {
+  // Serialize to bare-string entries (~3x smaller than {id,name,publicName}
+  // objects) so we stay under Monday's ~2000-char long_text cap. Monday silently
+  // truncates anything larger, producing unparseable JSON.
+  const json = JSON.stringify(serializeForStorage(data));
+  // change_simple_column_value populates both the `text` and `value` fields on
+  // long_text columns; change_multiple_column_values with `{"text": ...}` has
+  // historically left `text` null in this codebase, which broke downstream
+  // readers that default to the text field.
   const mutation = `
     mutation {
-      change_multiple_column_values(
+      change_simple_column_value(
         board_id: ${BOARDS.VERSIONS},
         item_id: ${versionId},
-        column_values: ${buildColumnValues({ [VERSION_COLUMNS.releaseSummary]: { text: json } })}
+        column_id: "${VERSION_COLUMNS.releaseSummary}",
+        value: ${JSON.stringify(json)}
       ) {
         id
       }
     }
   `;
   await executeMondayQuery<unknown>(mutation);
+}
+
+function isEmptyChangelog(c: StructuredChangelog): boolean {
+  return !c.summary
+    && !(c.highlights && c.highlights.length > 0)
+    && !(c.breakingChanges && c.breakingChanges.length > 0)
+    && !(c.knownIssues && c.knownIssues.length > 0)
+    && c.tasks.Feature.length === 0
+    && c.tasks.Fix.length === 0
+    && c.tasks.Improvement.length === 0;
 }
 
 async function fetchTaskForChangelog(taskId: number): Promise<{ name: string; publicName?: string; category: Category } | undefined> {
@@ -252,7 +313,17 @@ export async function getStructuredChangelog(args: GetStructuredChangelogInput):
 export async function updateStructuredChangelog(args: UpdateStructuredChangelogInput): Promise<string> {
   try {
     const { versionId, patch } = args;
-    const { parsed: current } = await readChangelog(versionId);
+    const { raw, parsed: current } = await readChangelog(versionId);
+
+    // Defensive: if raw storage has content but the parser returned empty, refuse
+    // to write — applying patch ops to empty state would silently wipe the data.
+    if (raw.trim().length > 0 && isEmptyChangelog(current)) {
+      return formatError(
+        `Refusing to update version #${versionId}: storage has content but the parser returned empty buckets. ` +
+        `This usually means the stored shape is unrecognized. Inspect the raw value via mcp__monday__get_board_items_page ` +
+        `and report the shape so the migrator can be extended.`,
+      );
+    }
 
     const applied: string[] = [];
 

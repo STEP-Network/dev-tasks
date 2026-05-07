@@ -1,8 +1,8 @@
 import { executeMondayQuery } from "../monday-client";
-import { BOARDS, VERSION_COLUMNS, TASK_COLUMNS, BUG_COLUMNS } from "../constants";
+import { VERSION_COLUMNS, TASK_COLUMNS, BUG_COLUMNS } from "../constants";
 import type { GenerateChangelogInput } from "../schemas";
-import { buildColumnValues, getColumnText, getColumnValue, getLinkedItems, resolveLinkedItems, todayDate, formatError } from "./utils";
-import { categoryForTaskType, emptyChangelog, type StructuredChangelog } from "./structuredChangelog";
+import { getColumnText, getColumnValue, getLinkedItems, resolveLinkedItems, todayDate, formatError } from "./utils";
+import { categoryForTaskType, emptyChangelog, writeChangelog, type StructuredChangelog } from "./structuredChangelog";
 
 export async function generateChangelog(args: GenerateChangelogInput): Promise<string> {
   try {
@@ -238,18 +238,7 @@ export async function generateChangelog(args: GenerateChangelogInput): Promise<s
     if (knownIssues?.length) structured.knownIssues = knownIssues;
 
     try {
-      const summaryMutation = `
-        mutation {
-          change_multiple_column_values(
-            board_id: ${BOARDS.VERSIONS},
-            item_id: ${versionId},
-            column_values: ${buildColumnValues({ [VERSION_COLUMNS.releaseSummary]: { text: JSON.stringify(structured) } })}
-          ) {
-            id
-          }
-        }
-      `;
-      await executeMondayQuery<any>(summaryMutation);
+      await writeChangelog(versionId, structured);
     } catch {
       // Non-critical — changelog markdown was still written to the doc
     }

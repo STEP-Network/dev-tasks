@@ -296,7 +296,7 @@ export const UpdateVersionSchema = z.object({
   releaseDate: z.string().optional().describe("Actual release date (YYYY-MM-DD)"),
   releaseSummary: z.string().optional().describe("Release summary text"),
   owner: SystemUserEnum.optional().describe("Owner — use your system username (e.g. the output of `whoami`)"),
-  groupId: z.enum(["upcoming", "released"]).optional().describe("Move version to a group (upcoming or released)"),
+  groupId: z.enum(["upcoming", "released"]).optional().describe("Move version to a group. Note: setting status='Released' auto-moves to the released group; pass groupId only when you want to override that or move without changing status."),
   linkTaskIds: z.array(z.number()).optional().describe("Task IDs to link to this version"),
   linkBugIds: z.array(z.number()).optional().describe("Bug IDs to link as fixed in this version"),
   linkEpicIds: z.array(z.number()).optional().describe("Epic IDs to link to this version"),
