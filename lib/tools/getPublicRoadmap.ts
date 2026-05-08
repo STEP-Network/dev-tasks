@@ -1,7 +1,7 @@
 import { executeMondayQuery } from "../monday-client";
 import { BOARDS, EPIC_COLUMNS, PRODUCT_IDS, TASK_COLUMNS } from "../constants";
 import type { GetPublicRoadmapInput } from "../schemas";
-import { getColumnText, getLinkedItems, resolveLinkedItems, formatError } from "./utils";
+import { evaluatePublicVisibility, getColumnText, getLinkedItems, resolveLinkedItems, formatError } from "./utils";
 
 export async function getPublicRoadmap(args: GetPublicRoadmapInput): Promise<string> {
   try {
@@ -69,24 +69,27 @@ export async function getPublicRoadmap(args: GetPublicRoadmapInput): Promise<str
       allTaskIds.push(...ids);
     }
 
-    // publicTaskName gates roadmap visibility — only tasks with a non-empty value
-    // appear publicly. Empty = internal (skipped: documentation, security work, etc.).
-    const taskMap = new Map<number, { publicName: string; status: string; sprintName?: string }>();
+    // Public visibility gate: a task appears on the roadmap only when ALL three
+    // conditions hold — publicTaskName set, linked to an epic, assigned to a sprint.
+    // The epic-iteration loop above already implies a linked epic, but we re-check
+    // via evaluatePublicVisibility so the rule lives in one place.
+    const taskMap = new Map<number, { publicName: string; status: string; sprintName: string }>();
     if (allTaskIds.length > 0) {
       const resolved = await resolveLinkedItems(allTaskIds, [
         TASK_COLUMNS.publicTaskName,
         TASK_COLUMNS.status,
+        TASK_COLUMNS.epic,
         TASK_COLUMNS.sprint,
       ]);
       for (const task of resolved) {
         const colMap = new Map<string, any>(task.column_values?.map((c: any) => [c.id, c]) || []);
-        const publicName = getColumnText(colMap, TASK_COLUMNS.publicTaskName);
-        if (!publicName) continue; // gate: skip private tasks
+        const visibility = evaluatePublicVisibility(colMap);
         const sprintItems = getLinkedItems(colMap, TASK_COLUMNS.sprint);
+        if (!visibility.isPublic || !visibility.publicName || sprintItems.length === 0) continue;
         taskMap.set(Number(task.id), {
-          publicName,
+          publicName: visibility.publicName,
           status: getColumnText(colMap, TASK_COLUMNS.status) || "Unknown",
-          sprintName: sprintItems[0]?.name,
+          sprintName: sprintItems[0].name,
         });
       }
     }
@@ -112,21 +115,20 @@ export async function getPublicRoadmap(args: GetPublicRoadmapInput): Promise<str
         continue;
       }
 
-      // Group tasks by sprint
+      // Group tasks by sprint (every public task is sprint-assigned by definition)
       const bySprintName = new Map<string, typeof tasks>();
       for (const task of tasks) {
-        const key = task.sprintName || "Unscheduled";
-        if (!bySprintName.has(key)) bySprintName.set(key, []);
-        bySprintName.get(key)!.push(task);
+        const list = bySprintName.get(task.sprintName);
+        if (list) list.push(task);
+        else bySprintName.set(task.sprintName, [task]);
       }
 
-      // Render: scheduled sprints first (sorted), then Unscheduled at the end
-      const sprintNames = [...bySprintName.keys()].filter(n => n !== "Unscheduled").sort();
-      if (bySprintName.has("Unscheduled")) sprintNames.push("Unscheduled");
-
+      const sprintNames = [...bySprintName.keys()].sort();
       for (const sprintName of sprintNames) {
+        const sprintTasks = bySprintName.get(sprintName);
+        if (!sprintTasks) continue;
         lines.push(`### ${sprintName}`);
-        for (const task of bySprintName.get(sprintName)!) {
+        for (const task of sprintTasks) {
           lines.push(`- **${task.publicName}** — ${task.status}`);
         }
         lines.push("");

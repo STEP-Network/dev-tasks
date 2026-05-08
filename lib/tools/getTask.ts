@@ -2,6 +2,7 @@ import { executeMondayQuery } from "../monday-client";
 import { TASK_COLUMNS, SUBTASK_COLUMNS } from "../constants";
 import type { GetTaskInput } from "../schemas";
 import {
+  evaluatePublicVisibility,
   getColumnText,
   getColumnValue,
   getLinkedItems,
@@ -94,7 +95,6 @@ export async function getTask(args: GetTaskInput): Promise<string> {
     const colMap = new Map<string, any>(item.column_values?.map((c: any) => [c.id, c]) || []);
 
     // Core fields
-    const publicTaskName = getColumnText(colMap, TASK_COLUMNS.publicTaskName);
     const status = getColumnText(colMap, TASK_COLUMNS.status) || "Unknown";
     const priority = getColumnText(colMap, TASK_COLUMNS.priority) || "—";
     const taskType = getColumnText(colMap, TASK_COLUMNS.type) || "—";
@@ -131,10 +131,11 @@ export async function getTask(args: GetTaskInput): Promise<string> {
     // Build output
     const lines: string[] = [];
     lines.push(`# ${item.name} (#${item.id})`);
-    if (publicTaskName) {
-      lines.push(`*Public name:* ${publicTaskName}  ·  *Visibility:* Public (appears on roadmap & changelog)`);
+    const visibility = evaluatePublicVisibility(colMap);
+    if (visibility.isPublic && visibility.publicName) {
+      lines.push(`*Public name:* ${visibility.publicName}  ·  *Visibility:* Public (appears on roadmap & changelog)`);
     } else {
-      lines.push(`*Visibility:* Private (no public name set — hidden from roadmap & changelog)`);
+      lines.push(`*Visibility:* Private — hidden from roadmap & changelog (${visibility.reasons.join(", ")})`);
     }
     lines.push("");
 

@@ -473,7 +473,7 @@ export const ConvertFeedbackToTaskSchema = z.object({
 
 export const SetPublicTaskNameSchema = z.object({
   taskId: z.number().describe("Task item ID"),
-  name: z.string().describe("Public-facing task name. ALSO acts as the public/private gate: a non-empty value exposes the task on the public roadmap and changelog; an empty string ('') makes the task private (hidden from both). Use this to expose features/fixes/improvements relevant to stakeholders and keep internal todos, security work, and documentation tasks hidden."),
+  name: z.string().describe("Public-facing task name. Sets the display string AND counts toward the public/private gate. A task is public ONLY when ALL three conditions hold: (1) public name is non-empty, (2) the task is linked to an epic, (3) the task is assigned to a sprint. Setting a public name alone is not enough if the task lacks an epic or sprint — link those via updateTask({ epicId, sprintId }) too. Pass '' to clear the public name and force the task private."),
 });
 
 // =============================================================================

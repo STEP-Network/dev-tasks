@@ -223,6 +223,35 @@ export async function resolveMaintenanceEpicId(productId: number): Promise<numbe
 }
 
 // =============================================================================
+// Public Task Visibility Gate
+// =============================================================================
+
+/**
+ * A task is publicly visible (roadmap + changelog) only when ALL three are true:
+ *   1. publicTaskName is non-empty
+ *   2. linked to at least one epic
+ *   3. linked to at least one sprint
+ * Internal todos / security work / undated work stay private.
+ *
+ * Returns the reasons it's private (if any) so callers can surface a clear
+ * error instead of silently dropping work.
+ */
+export function evaluatePublicVisibility(colMap: Map<string, any>): {
+  isPublic: boolean;
+  publicName?: string;
+  reasons: string[];
+} {
+  const publicName = getColumnText(colMap, TASK_COLUMNS.publicTaskName);
+  const epicCount = getLinkedItems(colMap, TASK_COLUMNS.epic).length;
+  const sprintCount = getLinkedItems(colMap, TASK_COLUMNS.sprint).length;
+  const reasons: string[] = [];
+  if (!publicName) reasons.push("no public name");
+  if (epicCount === 0) reasons.push("not linked to an epic");
+  if (sprintCount === 0) reasons.push("not assigned to a sprint");
+  return { isPublic: reasons.length === 0, publicName, reasons };
+}
+
+// =============================================================================
 // Active Sprint Validator
 // =============================================================================
 

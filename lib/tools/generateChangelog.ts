@@ -1,7 +1,7 @@
 import { executeMondayQuery } from "../monday-client";
 import { VERSION_COLUMNS, TASK_COLUMNS, BUG_COLUMNS } from "../constants";
 import type { GenerateChangelogInput } from "../schemas";
-import { getColumnText, getColumnValue, getLinkedItems, resolveLinkedItems, todayDate, formatError } from "./utils";
+import { evaluatePublicVisibility, getColumnText, getColumnValue, getLinkedItems, resolveLinkedItems, todayDate, formatError } from "./utils";
 import { categoryForTaskType, emptyChangelog, writeChangelog, type StructuredChangelog } from "./structuredChangelog";
 
 export async function generateChangelog(args: GenerateChangelogInput): Promise<string> {
@@ -52,6 +52,8 @@ export async function generateChangelog(args: GenerateChangelogInput): Promise<s
         TASK_COLUMNS.status,
         TASK_COLUMNS.type,
         TASK_COLUMNS.publicTaskName,
+        TASK_COLUMNS.epic,
+        TASK_COLUMNS.sprint,
       ]);
     }
 
@@ -64,16 +66,18 @@ export async function generateChangelog(args: GenerateChangelogInput): Promise<s
     }
 
     // Step 3: Categorize tasks by type — canonical 3-cat shape.
-    // Tasks without a publicTaskName are private (internal todos, security work,
-    // documentation) and are skipped entirely — no public exposure.
+    // A task is public only when ALL three hold: publicTaskName set, linked to
+    // an epic, and assigned to a sprint. Anything missing is private and skipped.
     const structured: StructuredChangelog = emptyChangelog();
     let skippedPrivate = 0;
+    const skipReasons: string[] = [];
 
     for (const task of resolvedTasks) {
       const taskColMap = new Map<string, any>(task.column_values?.map((c: any) => [c.id, c]) || []);
-      const publicName = getColumnText(taskColMap, TASK_COLUMNS.publicTaskName);
-      if (!publicName) {
+      const visibility = evaluatePublicVisibility(taskColMap);
+      if (!visibility.isPublic || !visibility.publicName) {
         skippedPrivate++;
+        skipReasons.push(`#${task.id} ${task.name}: ${visibility.reasons.join(", ")}`);
         continue;
       }
       const taskType = getColumnText(taskColMap, TASK_COLUMNS.type);
@@ -81,7 +85,7 @@ export async function generateChangelog(args: GenerateChangelogInput): Promise<s
       structured.tasks[category].push({
         id: Number(task.id),
         name: task.name,
-        publicName,
+        publicName: visibility.publicName,
       });
     }
 
@@ -270,7 +274,12 @@ export async function generateChangelog(args: GenerateChangelogInput): Promise<s
     if (highlights?.length) outputLines.push(`- **Highlights:** ${highlights.length}`);
     if (breakingChanges?.length) outputLines.push(`- **Breaking Changes:** ${breakingChanges.length}`);
     if (knownIssues?.length) outputLines.push(`- **Known Issues:** ${knownIssues.length}`);
-    if (skippedPrivate > 0) outputLines.push(`- **Skipped (private — no public name set):** ${skippedPrivate}`);
+    if (skippedPrivate > 0) {
+      outputLines.push(`- **Skipped (private — missing public name, epic, or sprint):** ${skippedPrivate}`);
+      const preview = skipReasons.slice(0, 5);
+      for (const reason of preview) outputLines.push(`  - ${reason}`);
+      if (skipReasons.length > 5) outputLines.push(`  - …and ${skipReasons.length - 5} more`);
+    }
     outputLines.push(`- **Total items:** ${totalItems}`);
     outputLines.push(``);
     outputLines.push(`**Summary:** ${condensedSummary}`);

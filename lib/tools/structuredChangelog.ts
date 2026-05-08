@@ -5,7 +5,7 @@ import type {
   UpdateStructuredChangelogInput,
   MigrateStructuredChangelogInput,
 } from "../schemas";
-import { getColumnText, formatError } from "./utils";
+import { evaluatePublicVisibility, getColumnText, formatError } from "./utils";
 
 // =============================================================================
 // Canonical shape
@@ -269,15 +269,22 @@ function isEmptyChangelog(c: StructuredChangelog): boolean {
     && c.tasks.Improvement.length === 0;
 }
 
-async function fetchTaskForChangelog(taskId: number): Promise<{ name: string; publicName?: string; category: Category } | undefined> {
+async function fetchTaskForChangelog(taskId: number): Promise<{
+  name: string;
+  publicName?: string;
+  category: Category;
+  visibilityReasons: string[];
+  isPublic: boolean;
+} | undefined> {
   const query = `
     query {
       items(ids: [${taskId}]) {
         id
         name
-        column_values(ids: ["${TASK_COLUMNS.publicTaskName}", "${TASK_COLUMNS.type}"]) {
+        column_values(ids: ["${TASK_COLUMNS.publicTaskName}", "${TASK_COLUMNS.type}", "${TASK_COLUMNS.epic}", "${TASK_COLUMNS.sprint}"]) {
           id
           text
+          ... on BoardRelationValue { linked_items { id name } }
         }
       }
     }
@@ -286,10 +293,13 @@ async function fetchTaskForChangelog(taskId: number): Promise<{ name: string; pu
   const item = response.items?.[0];
   if (!item) return undefined;
   const colMap = new Map<string, any>(item.column_values?.map((c: any) => [c.id, c]) || []);
+  const visibility = evaluatePublicVisibility(colMap);
   return {
     name: item.name,
-    publicName: getColumnText(colMap, TASK_COLUMNS.publicTaskName),
+    publicName: visibility.publicName,
     category: categoryForTaskType(getColumnText(colMap, TASK_COLUMNS.type)),
+    visibilityReasons: visibility.reasons,
+    isPublic: visibility.isPublic,
   };
 }
 
@@ -335,13 +345,12 @@ export async function updateStructuredChangelog(args: UpdateStructuredChangelogI
             if (!fetched) {
               return formatError(`Task #${op.taskId} not found.`);
             }
-            // publicTaskName gates public exposure — refuse to add private tasks
-            // to the changelog. Caller should setPublicTaskName first if exposure
-            // is intended.
-            if (!fetched.publicName) {
+            // Public visibility requires ALL of: publicTaskName set, linked epic,
+            // assigned sprint. Refuse so private work isn't accidentally exposed.
+            if (!fetched.isPublic || !fetched.publicName) {
               return formatError(
-                `Task #${op.taskId} has no public name set, so it is private and cannot be added to the changelog. ` +
-                `Call setPublicTaskName(taskId, name) first if this task should be exposed.`,
+                `Task #${op.taskId} is private and cannot be added to the changelog (${fetched.visibilityReasons.join(", ")}). ` +
+                `Set a public name with setPublicTaskName, link the task to an epic via updateTask({ epicId }), and assign it to a sprint via updateTask({ sprintId }), then retry.`,
               );
             }
             current.tasks[fetched.category].push({

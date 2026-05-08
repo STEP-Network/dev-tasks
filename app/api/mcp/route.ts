@@ -262,7 +262,7 @@ const handler = createMcpHandler(
 
     server.tool(
       "generateChangelog",
-      "Generate a public changelog for a version. ONLY tasks with a public name set (text_mm349ah6 / publicTaskName) are included; private tasks (no public name) are skipped — the response reports the skipped count. Tasks are categorized by type (Development→Feature, Bugfix→Fix, Maintenance/Refine/Documentation/PM-work→Improvement); bugs always go in Fix. Writes the canonical 3-cat JSON to the version's release summary AND creates/overwrites a Monday Doc with the human-readable changelog. Optional: highlights, breakingChanges, knownIssues arrays for additional sections.",
+      "Generate a public changelog for a version. A task is only included when ALL THREE conditions hold: (1) publicTaskName is set, (2) linked to an epic, (3) assigned to a sprint. Tasks missing any are skipped; the response reports the count and per-task reasons. Bugs are always included as Fix. Tasks are categorized by type (Development→Feature, Bugfix→Fix, Maintenance/Refine/Documentation/PM-work→Improvement). Writes the canonical 3-cat JSON to the version's release summary AND creates/overwrites a Monday Doc with the human-readable changelog. Optional: highlights, breakingChanges, knownIssues arrays for additional sections.",
       GenerateChangelogSchema.shape,
       async (args) => {
         const result = await generateChangelog(args);
@@ -374,7 +374,7 @@ const handler = createMcpHandler(
 
     server.tool(
       "setPublicTaskName",
-      "Set the public-facing name of a task. ALSO acts as the public/private gate: a non-empty public name exposes the task on the public roadmap and in changelogs; an empty value keeps the task private (good for internal todos, security work, documentation, etc.). Setting an empty string makes a previously-public task private again.",
+      "Set the public-facing name of a task. This is ONE of three requirements for public exposure — a task appears on the public roadmap and in changelogs only when ALL of these hold: (1) public name is non-empty, (2) task is linked to an epic, (3) task is assigned to a sprint. If any are missing, the task stays private. Setting an empty string clears the public name and forces the task private regardless of epic/sprint.",
       SetPublicTaskNameSchema.shape,
       async (args) => {
         const result = await setPublicTaskName(args);
@@ -384,7 +384,7 @@ const handler = createMcpHandler(
 
     server.tool(
       "getPublicRoadmap",
-      "Get a public-facing roadmap for a product as Epic → Sprint → Task markdown. ONLY tasks with a public name set (text_mm349ah6 / publicTaskName) appear; tasks without one are private and excluded. Required: product ('STEPhie' or 'PolAds'). Optional: onlyInProgress to limit to in-progress epics.",
+      "Get a public-facing roadmap for a product as Epic → Sprint → Task markdown. A task only appears when ALL THREE conditions hold: (1) publicTaskName is set, (2) it's linked to an epic, (3) it's assigned to a sprint. Tasks missing any of these are private and excluded. Required: product ('STEPhie' or 'PolAds'). Optional: onlyInProgress to limit to in-progress epics.",
       GetPublicRoadmapSchema.shape,
       async (args) => {
         const result = await getPublicRoadmap(args);
@@ -404,7 +404,7 @@ const handler = createMcpHandler(
 
     server.tool(
       "updateStructuredChangelog",
-      "Apply patch operations to the structured changelog. Ops: addTask (by taskId — auto-categorizes from task type AND requires the task to have a public name set; refuses if private — or manual {name, category}), removeTask (by taskId, or manual {name, category}), setSummary, setHighlights, setBreakingChanges, setKnownIssues. Read-modify-write happens server-side; callers do not need to fetch first. To clear a list field, pass an empty array (e.g. setHighlights with items: []).",
+      "Apply patch operations to the structured changelog. Ops: addTask (by taskId — auto-categorizes from task type AND requires the task to be public, i.e. publicTaskName set + linked epic + assigned sprint; refuses with reasons if private — or manual {name, category} which bypasses the gate), removeTask (by taskId, or manual {name, category}), setSummary, setHighlights, setBreakingChanges, setKnownIssues. Read-modify-write happens server-side; callers do not need to fetch first. To clear a list field, pass an empty array (e.g. setHighlights with items: []).",
       UpdateStructuredChangelogSchema.shape,
       async (args) => {
         const result = await updateStructuredChangelog(args);
