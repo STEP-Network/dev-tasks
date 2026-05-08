@@ -473,7 +473,7 @@ export const ConvertFeedbackToTaskSchema = z.object({
 
 export const SetPublicTaskNameSchema = z.object({
   taskId: z.number().describe("Task item ID"),
-  name: z.string().describe("Public-facing task name (used in changelogs and the public roadmap)"),
+  name: z.string().describe("Public-facing task name. ALSO acts as the public/private gate: a non-empty value exposes the task on the public roadmap and changelog; an empty string ('') makes the task private (hidden from both). Use this to expose features/fixes/improvements relevant to stakeholders and keep internal todos, security work, and documentation tasks hidden."),
 });
 
 // =============================================================================

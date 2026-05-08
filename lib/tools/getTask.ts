@@ -131,7 +131,11 @@ export async function getTask(args: GetTaskInput): Promise<string> {
     // Build output
     const lines: string[] = [];
     lines.push(`# ${item.name} (#${item.id})`);
-    if (publicTaskName) lines.push(`*Public name:* ${publicTaskName}`);
+    if (publicTaskName) {
+      lines.push(`*Public name:* ${publicTaskName}  ·  *Visibility:* Public (appears on roadmap & changelog)`);
+    } else {
+      lines.push(`*Visibility:* Private (no public name set — hidden from roadmap & changelog)`);
+    }
     lines.push("");
 
     // Status section

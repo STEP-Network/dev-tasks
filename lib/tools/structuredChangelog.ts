@@ -335,12 +335,21 @@ export async function updateStructuredChangelog(args: UpdateStructuredChangelogI
             if (!fetched) {
               return formatError(`Task #${op.taskId} not found.`);
             }
+            // publicTaskName gates public exposure — refuse to add private tasks
+            // to the changelog. Caller should setPublicTaskName first if exposure
+            // is intended.
+            if (!fetched.publicName) {
+              return formatError(
+                `Task #${op.taskId} has no public name set, so it is private and cannot be added to the changelog. ` +
+                `Call setPublicTaskName(taskId, name) first if this task should be exposed.`,
+              );
+            }
             current.tasks[fetched.category].push({
               id: op.taskId,
               name: fetched.name,
               publicName: fetched.publicName,
             });
-            applied.push(`addTask: #${op.taskId} → ${fetched.category} (${fetched.publicName || fetched.name})`);
+            applied.push(`addTask: #${op.taskId} → ${fetched.category} (${fetched.publicName})`);
           } else {
             if (!op.name || !op.category) {
               return formatError(`addTask op without taskId requires both 'name' and 'category'.`);

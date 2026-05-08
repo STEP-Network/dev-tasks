@@ -69,7 +69,9 @@ export async function getPublicRoadmap(args: GetPublicRoadmapInput): Promise<str
       allTaskIds.push(...ids);
     }
 
-    const taskMap = new Map<number, { name: string; publicName?: string; status: string; sprintName?: string }>();
+    // publicTaskName gates roadmap visibility — only tasks with a non-empty value
+    // appear publicly. Empty = internal (skipped: documentation, security work, etc.).
+    const taskMap = new Map<number, { publicName: string; status: string; sprintName?: string }>();
     if (allTaskIds.length > 0) {
       const resolved = await resolveLinkedItems(allTaskIds, [
         TASK_COLUMNS.publicTaskName,
@@ -78,10 +80,11 @@ export async function getPublicRoadmap(args: GetPublicRoadmapInput): Promise<str
       ]);
       for (const task of resolved) {
         const colMap = new Map<string, any>(task.column_values?.map((c: any) => [c.id, c]) || []);
+        const publicName = getColumnText(colMap, TASK_COLUMNS.publicTaskName);
+        if (!publicName) continue; // gate: skip private tasks
         const sprintItems = getLinkedItems(colMap, TASK_COLUMNS.sprint);
         taskMap.set(Number(task.id), {
-          name: task.name,
-          publicName: getColumnText(colMap, TASK_COLUMNS.publicTaskName),
+          publicName,
           status: getColumnText(colMap, TASK_COLUMNS.status) || "Unknown",
           sprintName: sprintItems[0]?.name,
         });
@@ -104,7 +107,7 @@ export async function getPublicRoadmap(args: GetPublicRoadmapInput): Promise<str
       const tasks = taskIds.map(id => taskMap.get(id)).filter((t): t is NonNullable<typeof t> => !!t);
 
       if (tasks.length === 0) {
-        lines.push("_No tasks yet._");
+        lines.push("_No public tasks._");
         lines.push("");
         continue;
       }
@@ -124,8 +127,7 @@ export async function getPublicRoadmap(args: GetPublicRoadmapInput): Promise<str
       for (const sprintName of sprintNames) {
         lines.push(`### ${sprintName}`);
         for (const task of bySprintName.get(sprintName)!) {
-          const display = task.publicName || task.name;
-          lines.push(`- **${display}** — ${task.status}`);
+          lines.push(`- **${task.publicName}** — ${task.status}`);
         }
         lines.push("");
       }

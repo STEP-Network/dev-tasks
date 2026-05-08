@@ -63,13 +63,20 @@ export async function generateChangelog(args: GenerateChangelogInput): Promise<s
       ]);
     }
 
-    // Step 3: Categorize tasks by type — canonical 3-cat shape
+    // Step 3: Categorize tasks by type — canonical 3-cat shape.
+    // Tasks without a publicTaskName are private (internal todos, security work,
+    // documentation) and are skipped entirely — no public exposure.
     const structured: StructuredChangelog = emptyChangelog();
+    let skippedPrivate = 0;
 
     for (const task of resolvedTasks) {
       const taskColMap = new Map<string, any>(task.column_values?.map((c: any) => [c.id, c]) || []);
-      const taskType = getColumnText(taskColMap, TASK_COLUMNS.type);
       const publicName = getColumnText(taskColMap, TASK_COLUMNS.publicTaskName);
+      if (!publicName) {
+        skippedPrivate++;
+        continue;
+      }
+      const taskType = getColumnText(taskColMap, TASK_COLUMNS.type);
       const category = categoryForTaskType(taskType);
       structured.tasks[category].push({
         id: Number(task.id),
@@ -221,7 +228,6 @@ export async function generateChangelog(args: GenerateChangelogInput): Promise<s
     }
 
     // Step 6: Persist canonical structured JSON to releaseSummary
-    const totalItems = resolvedTasks.length + resolvedBugs.length;
     const summaryParts: string[] = [];
     const featureCount = structured.tasks.Feature.length;
     const fixCount = structured.tasks.Fix.length;
@@ -230,6 +236,7 @@ export async function generateChangelog(args: GenerateChangelogInput): Promise<s
     if (fixCount > 0) summaryParts.push(`${fixCount} fix${fixCount > 1 ? "es" : ""}`);
     if (improvementCount > 0) summaryParts.push(`${improvementCount} improvement${improvementCount > 1 ? "s" : ""}`);
 
+    const totalItems = featureCount + fixCount + improvementCount;
     const condensedSummary = `v${versionNumber}: ${summaryParts.join(", ")} (${totalItems} items total)`;
 
     structured.summary = condensedSummary;
@@ -263,6 +270,7 @@ export async function generateChangelog(args: GenerateChangelogInput): Promise<s
     if (highlights?.length) outputLines.push(`- **Highlights:** ${highlights.length}`);
     if (breakingChanges?.length) outputLines.push(`- **Breaking Changes:** ${breakingChanges.length}`);
     if (knownIssues?.length) outputLines.push(`- **Known Issues:** ${knownIssues.length}`);
+    if (skippedPrivate > 0) outputLines.push(`- **Skipped (private — no public name set):** ${skippedPrivate}`);
     outputLines.push(`- **Total items:** ${totalItems}`);
     outputLines.push(``);
     outputLines.push(`**Summary:** ${condensedSummary}`);
