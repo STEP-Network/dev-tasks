@@ -27,6 +27,8 @@ import {
   CreateFeedbackSchema,
   UpdateFeedbackSchema,
   ConvertFeedbackToTaskSchema,
+  CreateRetroSchema,
+  ListRetrosSchema,
   SetPublicTaskNameSchema,
   GetPublicRoadmapSchema,
   GetStructuredChangelogSchema,
@@ -61,6 +63,8 @@ import {
   createFeedback,
   updateFeedback,
   convertFeedbackToTask,
+  createRetro,
+  listRetros,
   setPublicTaskName,
   getPublicRoadmap,
   getStructuredChangelog,
@@ -368,6 +372,30 @@ const handler = createMcpHandler(
       ConvertFeedbackToTaskSchema.shape,
       async (args) => {
         const result = await convertFeedbackToTask(args);
+        return { content: [{ type: "text", text: result }] };
+      }
+    );
+
+    // =========================================================================
+    // Retrospectives
+    // =========================================================================
+
+    server.tool(
+      "createRetro",
+      "Create a retrospective item on the Retrospectives board. Required: name, type ('Discussion' | 'Keep' | 'Improve'). Optional: description (long_text — reasoning, examples, links, next steps), repeating (carries over between sprints), submitter / owner person IDs. File retros first-class instead of dropping into raw mcp__monday__create_item.",
+      CreateRetroSchema.shape,
+      async (args) => {
+        const result = await createRetro(args);
+        return { content: [{ type: "text", text: result }] };
+      }
+    );
+
+    server.tool(
+      "listRetros",
+      "List retro items from the Retrospectives board. Filters: type (Discussion / Keep / Improve), repeating (true/false), search text. Use this to dedupe before filing a new retro. Returns name, type, repeating flag, submitter, owner, and vote count.",
+      ListRetrosSchema.shape,
+      async (args) => {
+        const result = await listRetros(args);
         return { content: [{ type: "text", text: result }] };
       }
     );

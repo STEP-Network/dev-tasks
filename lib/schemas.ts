@@ -67,6 +67,8 @@ const FeedbackPriorityEnum = z.enum(["Critical", "High", "Medium", "Low"]);
 
 const FeedbackSourceEnum = z.enum(["User", "Internal", "Support", "Partner"]);
 
+const RetroTypeEnum = z.enum(["Discussion", "Keep", "Improve"]);
+
 const ProductEnum = z.enum(["STEPhie", "PolAds"]);
 
 // =============================================================================
@@ -468,7 +470,31 @@ export const ConvertFeedbackToTaskSchema = z.object({
 });
 
 // =============================================================================
-// Tool 28: setPublicTaskName
+// Tool 28: createRetro
+// =============================================================================
+
+export const CreateRetroSchema = z.object({
+  name: z.string().describe("Retro item title — short, headline-style (e.g. 'Improve our bugs process')"),
+  type: RetroTypeEnum.describe("Retro item type: Discussion (talk about it), Keep (working well), Improve (change this)"),
+  description: z.string().optional().describe("Optional longer-form context — reasoning, examples, links, suggested next steps. Stored on the Description long_text column."),
+  repeating: z.boolean().optional().describe("Mark as repeating (carries over between sprints) — flips the Repeating? checkbox"),
+  submitter: z.number().optional().describe("Submitter person ID"),
+  owner: z.number().optional().describe("Owner person ID"),
+});
+
+// =============================================================================
+// Tool 29: listRetros
+// =============================================================================
+
+export const ListRetrosSchema = z.object({
+  type: RetroTypeEnum.optional().describe("Filter by type (Discussion / Keep / Improve)"),
+  repeating: z.boolean().optional().describe("Filter by repeating status (true = only repeating items, false = only non-repeating)"),
+  search: z.string().optional().describe("Search text in name"),
+  limit: z.number().optional().default(25).describe("Max items to return (default: 25)"),
+});
+
+// =============================================================================
+// Tool 30: setPublicTaskName
 // =============================================================================
 
 export const SetPublicTaskNameSchema = z.object({
@@ -570,6 +596,8 @@ export type GetFeedbackInput = z.infer<typeof GetFeedbackSchema>;
 export type CreateFeedbackInput = z.infer<typeof CreateFeedbackSchema>;
 export type UpdateFeedbackInput = z.infer<typeof UpdateFeedbackSchema>;
 export type ConvertFeedbackToTaskInput = z.infer<typeof ConvertFeedbackToTaskSchema>;
+export type CreateRetroInput = z.infer<typeof CreateRetroSchema>;
+export type ListRetrosInput = z.input<typeof ListRetrosSchema>;
 export type SetPublicTaskNameInput = z.infer<typeof SetPublicTaskNameSchema>;
 export type GetPublicRoadmapInput = z.input<typeof GetPublicRoadmapSchema>;
 export type GetStructuredChangelogInput = z.infer<typeof GetStructuredChangelogSchema>;

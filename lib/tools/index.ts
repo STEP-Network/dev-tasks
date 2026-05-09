@@ -25,6 +25,8 @@ export { getFeedback } from "./getFeedback";
 export { createFeedback } from "./createFeedback";
 export { updateFeedback } from "./updateFeedback";
 export { convertFeedbackToTask } from "./convertFeedbackToTask";
+export { createRetro } from "./createRetro";
+export { listRetros } from "./listRetros";
 export { setPublicTaskName } from "./setPublicTaskName";
 export { getPublicRoadmap } from "./getPublicRoadmap";
 export { getStructuredChangelog, updateStructuredChangelog, migrateStructuredChangelog } from "./structuredChangelog";

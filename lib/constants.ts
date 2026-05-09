@@ -11,6 +11,7 @@ export const BOARDS = {
   VERSIONS: 5091847257,
   PRODUCTS: 5091839409,
   FEEDBACK: 5091852801,
+  RETROS: 5091706350,
 } as const;
 
 // =============================================================================
@@ -180,6 +181,23 @@ export const FEEDBACK_COLUMNS = {
 } as const;
 
 // =============================================================================
+// Retrospectives Board (5091706350) — Column IDs
+// =============================================================================
+
+export const RETRO_COLUMNS = {
+  name: "name",
+  type: "status",
+  repeating: "check",
+  submitter: "people1",
+  owner: "people",
+  vote: "vote",
+  description: "long_text_mm362mkh",
+  subitems: "subitems",
+  creationLog: "pulse_log_mm0nbxdt",
+  lastUpdated: "pulse_updated_mm0ne1ny",
+} as const;
+
+// =============================================================================
 // Products Board (5091839409) — Column IDs
 // =============================================================================
 
@@ -343,6 +361,14 @@ export const FEEDBACK_SOURCE: Record<string, number> = {
   "Partner": 3,
 };
 
+// Retro Type (status column on Retrospectives board)
+// Index values come directly from the board: Discussion=0, Improve=1, Keep=2.
+export const RETRO_TYPE: Record<string, number> = {
+  "Discussion": 0,
+  "Improve": 1,
+  "Keep": 2,
+};
+
 // =============================================================================
 // Agent ID Dropdown (dropdown_mm0mrcex on Tasks board)
 // =============================================================================
@@ -404,4 +430,8 @@ export const FEEDBACK_GROUPS = {
   INCOMING: "topics",
   IN_PROGRESS: "group_mm0wmef6",
   RESOLVED: "group_mm0wvb8m",
+} as const;
+
+export const RETRO_GROUPS = {
+  DEFAULT: "group_title",
 } as const;
