@@ -108,6 +108,7 @@ export async function listSprints(args: ListSprintsInput): Promise<string> {
       const startDate = parseMondayDate(colMap.get(SPRINT_COLUMNS.startDate)) || "—";
       const endDate = parseMondayDate(colMap.get(SPRINT_COLUMNS.endDate)) || "—";
       const capacity = getColumnText(colMap, SPRINT_COLUMNS.capacity);
+      const goal = getColumnText(colMap, SPRINT_COLUMNS.goals);
       const linkedTasks = getLinkedItems(colMap, SPRINT_COLUMNS.connectedTasks);
       const taskCount = linkedTasks.length;
 
@@ -126,6 +127,7 @@ export async function listSprints(args: ListSprintsInput): Promise<string> {
       lines.push(`- **${item.name}** (#${item.id})${flags ? ` ${flags}` : ""}`);
       lines.push(`  Timeline: ${startDate} → ${endDate} | Tasks: ${taskCount}${capacity ? ` | Capacity: ${capacity}h` : ""}`);
       lines.push(`  Epics (${epicEntries.length}): ${epicsLine}`);
+      if (goal) lines.push(`  Goal: ${goal}`);
     }
 
     return lines.join("\n").trim();
