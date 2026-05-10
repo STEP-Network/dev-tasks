@@ -81,7 +81,7 @@ export const GetBacklogSchema = z.object({
   unclaimedOnly: z.boolean().optional().default(false).describe("Only show tasks with no Agent ID set (available for claiming)"),
   agentId: AgentIdEnum.optional().describe("Filter by agent currently working on the task"),
   epicId: z.number().optional().describe("Filter by epic — use listEpics to find the ID"),
-  sprintId: z.number().optional().describe("Filter by sprint — use getSprint() to find the ID"),
+  sprintId: z.number().optional().describe("Filter by sprint — use listSprints to discover the ID"),
   productId: z.number().optional().describe("Filter by product — use listProducts to find the ID. Resolves product → epics → tasks"),
   limit: z.number().optional().default(25).describe("Max tasks to return (default: 25)"),
 });
@@ -112,7 +112,17 @@ export const GetTaskSchema = z.object({
 // =============================================================================
 
 export const GetSprintSchema = z.object({
-  sprintId: z.number().optional().describe("Specific sprint ID. If omitted, returns the active sprint"),
+  sprintId: z.number().optional().describe("Specific sprint ID. If omitted, returns the active sprint. Use listSprints to discover sprint IDs"),
+});
+
+// =============================================================================
+// Tool 4b: listSprints
+// =============================================================================
+
+export const ListSprintsSchema = z.object({
+  activeOnly: z.boolean().optional().default(false).describe("Only return sprints with the activation checkbox set"),
+  search: z.string().optional().describe("Filter sprints whose name contains this text (case-insensitive)"),
+  limit: z.number().optional().default(25).describe("Max sprints to return (default: 25)"),
 });
 
 // =============================================================================
@@ -165,7 +175,7 @@ export const UpdateTaskSchema = z.object({
   dueDate: z.string().optional().describe("Due date (YYYY-MM-DD)"),
   startedDate: z.string().optional().describe("Started date (YYYY-MM-DD)"),
   epicId: z.number().optional().describe("Link to epic — use listEpics to find the ID"),
-  sprintId: z.number().optional().describe("Link to sprint — use getSprint() to find the ID"),
+  sprintId: z.number().optional().describe("Link to sprint — use listSprints to discover the ID"),
   versionId: z.number().optional().describe("Link to target version"),
   githubLink: z.string().optional().describe("GitHub branch/repo URL"),
   prLink: z.string().optional().describe("Pull request URL"),
@@ -243,7 +253,7 @@ export const CreateTaskSchema = z.object({
     description: z.string().optional().describe("Task description"),
     dueDate: z.string().optional().describe("Due date (YYYY-MM-DD)"),
     epicId: z.number().optional().describe("Link to epic — use listEpics to find the ID"),
-    sprintId: z.number().optional().describe("Link to sprint — use getSprint() to find the ID"),
+    sprintId: z.number().optional().describe("Link to sprint — use listSprints to discover the ID"),
     versionId: z.number().optional().describe("Link to target version"),
     agentId: AgentIdEnum.optional().describe("Agent creating this task"),
     planId: z.string().optional().describe("Today's date + plan file name (format: YYYY-MM-DD_plan-name, e.g. 2026-02-18_enumerated-scribbling-rose). Found in ~/.claude/plans/"),
@@ -263,7 +273,7 @@ export const CreateTaskSchema = z.object({
 export const ConvertBugToTaskSchema = z.object({
   bugId: z.number().describe("Bug item ID — use getBugs to find the ID"),
   epicId: z.number().optional().describe("Epic to link the new task to — use listEpics to find the ID"),
-  sprintId: z.number().optional().describe("Sprint to assign the new task to — use getSprint() to find the ID"),
+  sprintId: z.number().optional().describe("Sprint to assign the new task to — use listSprints to discover the ID"),
   agentId: AgentIdEnum.optional().describe("Agent performing the conversion"),
   planId: z.string().optional().describe("Today's date + plan file name (format: YYYY-MM-DD_plan-name, e.g. 2026-02-18_enumerated-scribbling-rose). Found in ~/.claude/plans/"),
   additionalDescription: z.string().optional().describe("Extra context to append to the bug description"),
@@ -464,7 +474,7 @@ export const UpdateFeedbackSchema = z.object({
 export const ConvertFeedbackToTaskSchema = z.object({
   feedbackId: z.number().describe("Feedback/request item ID to convert — use listFeedback to find the ID"),
   epicId: z.number().optional().describe("Epic to link the new task to — use listEpics to find the ID"),
-  sprintId: z.number().optional().describe("Sprint to assign the new task to — use getSprint() to find the ID"),
+  sprintId: z.number().optional().describe("Sprint to assign the new task to — use listSprints to discover the ID"),
   taskType: TaskTypeEnum.optional().describe("Task type override (default: Development for requests, Maintenance for feedback)"),
   additionalDescription: z.string().optional().describe("Extra context to append to the description"),
 });
@@ -573,6 +583,7 @@ export type GetBacklogInput = z.input<typeof GetBacklogSchema>;
 export type GetBugsInput = z.input<typeof GetBugsSchema>;
 export type GetTaskInput = z.infer<typeof GetTaskSchema>;
 export type GetSprintInput = z.infer<typeof GetSprintSchema>;
+export type ListSprintsInput = z.input<typeof ListSprintsSchema>;
 export type GetEpicInput = z.infer<typeof GetEpicSchema>;
 export type ListEpicsInput = z.input<typeof ListEpicsSchema>;
 export type ListProductsInput = z.infer<typeof ListProductsSchema>;

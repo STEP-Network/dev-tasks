@@ -4,6 +4,7 @@ import {
   GetBugsSchema,
   GetTaskSchema,
   GetSprintSchema,
+  ListSprintsSchema,
   GetEpicSchema,
   ListEpicsSchema,
   ListProductsSchema,
@@ -40,6 +41,7 @@ import {
   getBugs,
   getTask,
   getSprint,
+  listSprints,
   getEpic,
   listEpics,
   listProducts,
@@ -123,6 +125,16 @@ const handler = createMcpHandler(
     );
 
     server.tool(
+      "listSprints",
+      "List sprints with their IDs, timelines, task counts, and completion. Use this to discover sprintId before passing it to getSprint, getBacklog, createTask, updateTask, etc. Sorted by start date (newest first). Filters: activeOnly (only sprints with the activation checkbox set), search (case-insensitive name match), limit.",
+      ListSprintsSchema.shape,
+      async (args) => {
+        const result = await listSprints(args);
+        return { content: [{ type: "text", text: result }] };
+      }
+    );
+
+    server.tool(
       "getEpic",
       "Get full epic details by ID. Shows: description, PRD reference, linked tasks with progress breakdown, connected bugs with status, target version, product, timeline, and deadline. Use listEpics first to discover available epic IDs.",
       GetEpicSchema.shape,
@@ -168,7 +180,7 @@ const handler = createMcpHandler(
 
     server.tool(
       "updateTask",
-      "Update any task field. Supports: status, priority, type, description, hours (estimated/actual), links (GitHub/PR/Demo), epic, sprint, version, agent metadata, branch name, acceptance criteria, dependencies. Set delete=true to delete. IMPORTANT: Do NOT set status to 'Done' directly — mark all subtasks as Done instead (Monday automation auto-completes the parent). Remember to set actualHours when moving to 'Waiting for Review'. Use listEpics/getSprint to find epicId/sprintId.",
+      "Update any task field. Supports: status, priority, type, description, hours (estimated/actual), links (GitHub/PR/Demo), epic, sprint, version, agent metadata, branch name, acceptance criteria, dependencies. Set delete=true to delete. IMPORTANT: Do NOT set status to 'Done' directly — mark all subtasks as Done instead (Monday automation auto-completes the parent). Remember to set actualHours when moving to 'Waiting for Review'. Use listEpics/listSprints to find epicId/sprintId.",
       UpdateTaskSchema.shape,
       async (args) => {
         const result = await updateTask(args);

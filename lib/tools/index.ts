@@ -2,6 +2,7 @@ export { getBacklog } from "./getBacklog";
 export { getBugs } from "./getBugs";
 export { getTask } from "./getTask";
 export { getSprint } from "./getSprint";
+export { listSprints } from "./listSprints";
 export { getEpic } from "./getEpic";
 export { listEpics } from "./listEpics";
 export { listProducts } from "./listProducts";

@@ -40,7 +40,7 @@ Subtasks board: 5091706366 (linked from Tasks)
 - `lib/schemas.ts` — Zod schemas for all 26 tools
 - `lib/tools/utils.ts` — Shared helpers
 
-### Tools (27 total)
+### Tools (28 total)
 
 | # | Tool | Phase | Purpose |
 |---|------|-------|---------|
@@ -48,29 +48,30 @@ Subtasks board: 5091706366 (linked from Tasks)
 | 2 | `getBugs` | Discovery | Bug queue with filters |
 | 3 | `getTask` | Context | Full task details with subtasks/context |
 | 4 | `getSprint` | Context | Sprint overview with progress stats |
-| 5 | `getEpic` | Context | Epic details with task progress |
-| 6 | `listEpics` | Context | List/search epics to discover epic IDs |
-| 7 | `listProducts` | Context | List products to discover product IDs |
-| 8 | `claimTask` | Execution | Atomically claim a task (auto-assigns owner) |
-| 9 | `updateTask` | Execution | Update any task field |
-| 10 | `manageSubtasks` | Execution | Create/update/delete subtasks |
-| 11 | `createTask` | Creation | Create tasks with acceptance criteria, dependencies, subtasks |
-| 12 | `convertBugToTask` | Creation | Bug → Bugfix task conversion |
-| 13 | `createBug` | Creation | File new bugs |
-| 14 | `updateVersion` | Shipping | Update version fields, link items, delete, group moves |
-| 15 | `createVersion` | Shipping | Create versions with product link, status, dates |
-| 16 | `listVersions` | Context | List/search versions with group/status/product filters |
-| 17 | `getVersion` | Context | Full version details with linked items and changelog |
-| 18 | `generateChangelog` | Shipping | Auto-generate structured changelog as Monday Doc |
-| 19 | `getUpdates` | Communication | Read item updates/comments |
-| 20 | `createUpdate` | Communication | Post updates/comments on items |
-| 21 | `createEpic` | Creation | Create epics with status, priority, timeline, product link |
-| 22 | `updateEpic` | Execution | Update any epic field or delete an epic |
-| 23 | `listFeedback` | Discovery | List/filter requests and feedback items |
-| 24 | `getFeedback` | Context | Full feedback details with connected tasks |
-| 25 | `createFeedback` | Creation | File new requests or feedback |
-| 26 | `updateFeedback` | Execution | Update any feedback field or delete |
-| 27 | `convertFeedbackToTask` | Creation | Convert feedback → task with auto-linking |
+| 5 | `listSprints` | Context | List/search sprints to discover sprint IDs |
+| 6 | `getEpic` | Context | Epic details with task progress |
+| 7 | `listEpics` | Context | List/search epics to discover epic IDs |
+| 8 | `listProducts` | Context | List products to discover product IDs |
+| 9 | `claimTask` | Execution | Atomically claim a task (auto-assigns owner) |
+| 10 | `updateTask` | Execution | Update any task field |
+| 11 | `manageSubtasks` | Execution | Create/update/delete subtasks |
+| 12 | `createTask` | Creation | Create tasks with acceptance criteria, dependencies, subtasks |
+| 13 | `convertBugToTask` | Creation | Bug → Bugfix task conversion |
+| 14 | `createBug` | Creation | File new bugs |
+| 15 | `updateVersion` | Shipping | Update version fields, link items, delete, group moves |
+| 16 | `createVersion` | Shipping | Create versions with product link, status, dates |
+| 17 | `listVersions` | Context | List/search versions with group/status/product filters |
+| 18 | `getVersion` | Context | Full version details with linked items and changelog |
+| 19 | `generateChangelog` | Shipping | Auto-generate structured changelog as Monday Doc |
+| 20 | `getUpdates` | Communication | Read item updates/comments |
+| 21 | `createUpdate` | Communication | Post updates/comments on items |
+| 22 | `createEpic` | Creation | Create epics with status, priority, timeline, product link |
+| 23 | `updateEpic` | Execution | Update any epic field or delete an epic |
+| 24 | `listFeedback` | Discovery | List/filter requests and feedback items |
+| 25 | `getFeedback` | Context | Full feedback details with connected tasks |
+| 26 | `createFeedback` | Creation | File new requests or feedback |
+| 27 | `updateFeedback` | Execution | Update any feedback field or delete |
+| 28 | `convertFeedbackToTask` | Creation | Convert feedback → task with auto-linking |
 
 ## Agent Workflow
 
