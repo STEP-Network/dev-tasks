@@ -42,10 +42,8 @@ describe("createRetro + listRetros", () => {
     expect(text).toBe(description);
   });
 
-  it("appears in listRetros search filtered by type+repeating", async () => {
+  it("appears in listRetros when searched by name", async () => {
     const result = await listRetros({
-      type: "Improve",
-      repeating: true,
       search: "[TEST] Integration Test Retro",
       limit: 25,
     });
@@ -53,15 +51,13 @@ describe("createRetro + listRetros", () => {
     expect(result).toContain("Repeating: Yes");
   });
 
-  it("excludes the test item when filtering for non-repeating", async () => {
+  it("matches search against description text", async () => {
+    // Use a unique fragment of the seeded description to prove search hits the
+    // long_text column, not just the item name.
     const result = await listRetros({
-      type: "Improve",
-      repeating: false,
-      search: "[TEST] Integration Test Retro",
+      search: "Long-form context goes here",
       limit: 25,
     });
-    // Result is either the no-match error (which echoes the search term) or a
-    // success listing — either way the test item's ID must not appear.
-    expect(result).not.toContain(`#${retroId}`);
+    expect(result).toContain(`#${retroId}`);
   });
 });

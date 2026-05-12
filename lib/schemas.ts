@@ -514,9 +514,9 @@ export const UpdateRetroSchema = z.object({
 // =============================================================================
 
 export const ListRetrosSchema = z.object({
-  type: RetroTypeEnum.optional().describe("Filter by type (Discussion / Keep / Improve)"),
-  repeating: z.boolean().optional().describe("Filter by repeating status (true = only repeating items, false = only non-repeating)"),
-  search: z.string().optional().describe("Search text in name"),
+  sprintId: z.number().optional().describe("Filter to retros linked to this sprint — use listSprints to discover the ID"),
+  activeSprint: z.boolean().optional().default(false).describe("Filter to retros linked to the currently active sprint (mutually exclusive with sprintId)"),
+  search: z.string().optional().describe("Search text in name and description (case-insensitive)"),
   limit: z.number().optional().default(25).describe("Max items to return (default: 25)"),
 });
 

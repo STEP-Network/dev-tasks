@@ -416,7 +416,7 @@ const handler = createMcpHandler(
 
     server.tool(
       "listRetros",
-      "List retro items from the Retrospectives board. Filters: type (Discussion / Keep / Improve), repeating (true/false), search text. Use this to dedupe before filing a new retro. Returns name, type, repeating flag, submitter, owner, and vote count.",
+      "List retro items from the Retrospectives board. Filters: sprintId (use listSprints to find), activeSprint (resolves to the currently active sprint — mutually exclusive with sprintId), search (case-insensitive match across name + description). Use this to dedupe before filing a new retro or to review what was raised in a given sprint. Returns name, type, repeating flag, sprint link, submitter, owner, and vote count.",
       ListRetrosSchema.shape,
       async (args) => {
         const result = await listRetros(args);

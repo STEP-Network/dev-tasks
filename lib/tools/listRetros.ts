@@ -1,11 +1,11 @@
 import { executeMondayQuery } from "../monday-client";
-import { BOARDS, RETRO_COLUMNS, RETRO_TYPE } from "../constants";
+import { BOARDS, RETRO_COLUMNS } from "../constants";
 import type { ListRetrosInput } from "../schemas";
-import { getColumnText, getColumnValue, formatError } from "./utils";
+import { getActiveSprintIds, getColumnText, getColumnValue, getLinkedItems, formatError } from "./utils";
 
 export async function listRetros(args: ListRetrosInput): Promise<string> {
   try {
-    const { type, repeating, search, limit = 25 } = args;
+    const { sprintId, activeSprint = false, search, limit = 25 } = args;
 
     const columnIds = [
       RETRO_COLUMNS.type,
@@ -13,24 +13,32 @@ export async function listRetros(args: ListRetrosInput): Promise<string> {
       RETRO_COLUMNS.submitter,
       RETRO_COLUMNS.owner,
       RETRO_COLUMNS.vote,
+      RETRO_COLUMNS.sprint,
+      RETRO_COLUMNS.description,
     ].map(c => `"${c}"`).join(", ");
 
-    // Server-side filter on type (status column) when provided.
-    const rules: string[] = [];
-    if (type) {
-      const idx = RETRO_TYPE[type];
-      if (idx !== undefined) {
-        rules.push(`{ column_id: "${RETRO_COLUMNS.type}", compare_value: [${idx}], operator: any_of }`);
+    // Resolve sprint filter — activeSprint expands to all active sprint IDs.
+    let sprintFilterIds: number[] | null = null;
+    if (activeSprint) {
+      sprintFilterIds = await getActiveSprintIds();
+      if (sprintFilterIds.length === 0) {
+        return formatError("No active sprint found.");
       }
+    } else if (sprintId !== undefined) {
+      sprintFilterIds = [sprintId];
+    }
+
+    const rules: string[] = [];
+    if (sprintFilterIds) {
+      rules.push(`{ column_id: "${RETRO_COLUMNS.sprint}", compare_value: [${sprintFilterIds.join(",")}], operator: any_of }`);
     }
 
     const queryParams = rules.length > 0
       ? `query_params: { rules: [${rules.join(", ")}], operator: and }`
       : "";
 
-    // Repeating + search are filtered client-side, so over-fetch when those are in play.
-    const needsClientFilter = repeating !== undefined || search;
-    const fetchLimit = needsClientFilter ? 200 : limit;
+    // Search is filtered client-side (matches name + description), so over-fetch when in play.
+    const fetchLimit = search ? 200 : limit;
 
     const query = `
       query {
@@ -43,6 +51,7 @@ export async function listRetros(args: ListRetrosInput): Promise<string> {
                 id
                 text
                 value
+                ... on BoardRelationValue { linked_items { id name } }
               }
             }
           }
@@ -53,26 +62,22 @@ export async function listRetros(args: ListRetrosInput): Promise<string> {
     const response = await executeMondayQuery<any>(query);
     let items = response.boards?.[0]?.items_page?.items || [];
 
-    if (repeating !== undefined) {
-      items = items.filter((item: any) => {
-        const colMap = new Map<string, any>(item.column_values?.map((c: any) => [c.id, c]) || []);
-        const checkVal = getColumnValue(colMap, RETRO_COLUMNS.repeating);
-        const isChecked = checkVal?.checked === true || checkVal?.checked === "true";
-        return isChecked === repeating;
-      });
-    }
-
     if (search) {
       const term = search.toLowerCase();
-      items = items.filter((item: any) => item.name.toLowerCase().includes(term));
+      items = items.filter((item: any) => {
+        if (item.name.toLowerCase().includes(term)) return true;
+        const colMap = new Map<string, any>(item.column_values?.map((c: any) => [c.id, c]) || []);
+        const desc = getColumnText(colMap, RETRO_COLUMNS.description) || "";
+        return desc.toLowerCase().includes(term);
+      });
     }
 
     items = items.slice(0, limit);
 
     if (items.length === 0) {
       const filterDesc = [
-        type && `type="${type}"`,
-        repeating !== undefined && `repeating=${repeating}`,
+        activeSprint && "activeSprint",
+        sprintId !== undefined && `sprintId=${sprintId}`,
         search && `search="${search}"`,
       ].filter(Boolean).join(", ");
       return formatError(`No retro items found${filterDesc ? ` matching ${filterDesc}` : ""}.`);
@@ -91,9 +96,11 @@ export async function listRetros(args: ListRetrosInput): Promise<string> {
       const submitter = getColumnText(colMap, RETRO_COLUMNS.submitter) || "—";
       const owner = getColumnText(colMap, RETRO_COLUMNS.owner) || "—";
       const voteText = getColumnText(colMap, RETRO_COLUMNS.vote) || "0";
+      const sprintItems = getLinkedItems(colMap, RETRO_COLUMNS.sprint);
+      const sprint = sprintItems.length > 0 ? `${sprintItems[0].name} (#${sprintItems[0].id})` : "—";
 
       lines.push(`- **${item.name}** (#${item.id})`);
-      lines.push(`  Type: ${itemType} | Repeating: ${isRepeating ? "Yes" : "No"} | Submitter: ${submitter} | Owner: ${owner} | Votes: ${voteText}`);
+      lines.push(`  Type: ${itemType} | Repeating: ${isRepeating ? "Yes" : "No"} | Sprint: ${sprint} | Submitter: ${submitter} | Owner: ${owner} | Votes: ${voteText}`);
     }
 
     return lines.join("\n").trim();
