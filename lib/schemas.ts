@@ -490,6 +490,23 @@ export const CreateRetroSchema = z.object({
   repeating: z.boolean().optional().describe("Mark as repeating (carries over between sprints) — flips the Repeating? checkbox"),
   submitter: z.number().optional().describe("Submitter person ID"),
   owner: z.number().optional().describe("Owner person ID"),
+  sprintId: z.number().optional().describe("Sprint this retro was registered or implemented for — use listSprints to discover the ID"),
+});
+
+// =============================================================================
+// Tool: updateRetro
+// =============================================================================
+
+export const UpdateRetroSchema = z.object({
+  retroId: z.number().describe("Retro item ID to update — use listRetros to discover available items"),
+  delete: z.boolean().optional().describe("Set true to delete the retro item"),
+  name: z.string().optional().describe("New retro title"),
+  type: RetroTypeEnum.optional().describe("New retro type (Discussion / Keep / Improve)"),
+  description: z.string().optional().describe("Updated longer-form context — reasoning, examples, links, suggested next steps"),
+  repeating: z.boolean().optional().describe("Toggle the Repeating? checkbox"),
+  submitter: z.number().optional().describe("Submitter person ID"),
+  owner: z.number().optional().describe("Owner person ID"),
+  sprintId: z.number().optional().describe("Sprint this retro was registered or implemented for — use listSprints to discover the ID"),
 });
 
 // =============================================================================
@@ -608,6 +625,7 @@ export type CreateFeedbackInput = z.infer<typeof CreateFeedbackSchema>;
 export type UpdateFeedbackInput = z.infer<typeof UpdateFeedbackSchema>;
 export type ConvertFeedbackToTaskInput = z.infer<typeof ConvertFeedbackToTaskSchema>;
 export type CreateRetroInput = z.infer<typeof CreateRetroSchema>;
+export type UpdateRetroInput = z.infer<typeof UpdateRetroSchema>;
 export type ListRetrosInput = z.input<typeof ListRetrosSchema>;
 export type SetPublicTaskNameInput = z.infer<typeof SetPublicTaskNameSchema>;
 export type GetPublicRoadmapInput = z.input<typeof GetPublicRoadmapSchema>;

@@ -29,6 +29,7 @@ import {
   UpdateFeedbackSchema,
   ConvertFeedbackToTaskSchema,
   CreateRetroSchema,
+  UpdateRetroSchema,
   ListRetrosSchema,
   SetPublicTaskNameSchema,
   GetPublicRoadmapSchema,
@@ -66,6 +67,7 @@ import {
   updateFeedback,
   convertFeedbackToTask,
   createRetro,
+  updateRetro,
   listRetros,
   setPublicTaskName,
   getPublicRoadmap,
@@ -394,10 +396,20 @@ const handler = createMcpHandler(
 
     server.tool(
       "createRetro",
-      "Create a retrospective item on the Retrospectives board. Required: name, type ('Discussion' | 'Keep' | 'Improve'). Optional: description (long_text — reasoning, examples, links, next steps), repeating (carries over between sprints), submitter / owner person IDs. File retros first-class instead of dropping into raw mcp__monday__create_item.",
+      "Create a retrospective item on the Retrospectives board. Required: name, type ('Discussion' | 'Keep' | 'Improve'). Optional: description (long_text — reasoning, examples, links, next steps), repeating (carries over between sprints), submitter / owner person IDs, sprintId (sprint this retro was registered or implemented for — use listSprints to discover the ID). File retros first-class instead of dropping into raw mcp__monday__create_item.",
       CreateRetroSchema.shape,
       async (args) => {
         const result = await createRetro(args);
+        return { content: [{ type: "text", text: result }] };
+      }
+    );
+
+    server.tool(
+      "updateRetro",
+      "Update any retro item field. Supports: name, type (Discussion/Keep/Improve), description, repeating, submitter, owner, sprintId (sprint this retro was registered or implemented for — use listSprints to discover the ID). Set delete=true to delete the retro item. Use listRetros to find the retroId.",
+      UpdateRetroSchema.shape,
+      async (args) => {
+        const result = await updateRetro(args);
         return { content: [{ type: "text", text: result }] };
       }
     );

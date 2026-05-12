@@ -26,6 +26,10 @@ export async function createRetro(args: CreateRetroInput): Promise<string> {
       columnValues[RETRO_COLUMNS.owner] = { personsAndTeams: [{ id: args.owner, kind: "person" }] };
     }
 
+    if (args.sprintId !== undefined) {
+      columnValues[RETRO_COLUMNS.sprint] = { item_ids: [args.sprintId] };
+    }
+
     const createQuery = `
       mutation {
         create_item(
@@ -51,7 +55,7 @@ export async function createRetro(args: CreateRetroInput): Promise<string> {
       `# Retro Item Created`,
       ``,
       `- **${created.name}** (#${created.id})`,
-      `  Type: ${args.type}${args.repeating !== undefined ? ` | Repeating: ${args.repeating ? "Yes" : "No"}` : ""}`,
+      `  Type: ${args.type}${args.repeating !== undefined ? ` | Repeating: ${args.repeating ? "Yes" : "No"}` : ""}${args.sprintId !== undefined ? ` | Sprint: #${args.sprintId}` : ""}`,
     ];
 
     return lines.join("\n").trim();

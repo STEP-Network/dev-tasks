@@ -192,6 +192,7 @@ export const RETRO_COLUMNS = {
   owner: "people",
   vote: "vote",
   description: "long_text_mm362mkh",
+  sprint: "board_relation_mm39dksv",
   subitems: "subitems",
   creationLog: "pulse_log_mm0nbxdt",
   lastUpdated: "pulse_updated_mm0ne1ny",

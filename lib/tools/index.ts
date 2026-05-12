@@ -27,6 +27,7 @@ export { createFeedback } from "./createFeedback";
 export { updateFeedback } from "./updateFeedback";
 export { convertFeedbackToTask } from "./convertFeedbackToTask";
 export { createRetro } from "./createRetro";
+export { updateRetro } from "./updateRetro";
 export { listRetros } from "./listRetros";
 export { setPublicTaskName } from "./setPublicTaskName";
 export { getPublicRoadmap } from "./getPublicRoadmap";
