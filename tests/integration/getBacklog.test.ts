@@ -7,20 +7,18 @@ describe("getBacklog", () => {
 
     expect(result).toBeTruthy();
     expect(typeof result).toBe("string");
-    // Default filter shows Needs Refinement + Ready to Start (everything not yet in flight)
     expect(result).toContain("# Backlog");
-    expect(result).toContain("status: Needs Refinement + Ready to Start");
-    // Should contain task formatting
+    // Default filter shows Needs Refinement + Ready to Start
+    expect(result).toContain("Needs Refinement");
     expect(result).toMatch(/tasks/);
   });
 
   it("filters tasks by a specific status", async () => {
-    const result = await getBacklog({ status: "Ready to Start" });
+    const result = await getBacklog({ statuses: ["Ready to Start"] });
 
     expect(result).toBeTruthy();
     expect(result).toContain("# Backlog");
-    expect(result).toContain("status: Ready to Start");
-    // If tasks are returned, they should show the status
+    expect(result).toContain("Ready to Start");
     if (!result.includes("No tasks found")) {
       expect(result).toContain("Status: Ready to Start");
     }
@@ -31,10 +29,8 @@ describe("getBacklog", () => {
 
     expect(result).toBeTruthy();
     expect(result).toContain("# Backlog");
-    expect(result).toContain("unclaimed only");
-    // Unclaimed tasks should not have an agent assigned (shown as "—")
+    expect(result).toContain("unclaimedOnly");
     if (!result.includes("No tasks found")) {
-      // Every listed task should have Agent: —
       const agentMatches = result.match(/Agent: .+/g) || [];
       for (const match of agentMatches) {
         expect(match).toBe("Agent: —");
@@ -42,46 +38,45 @@ describe("getBacklog", () => {
     }
   });
 
-  it("filters tasks by productId", async () => {
-    // STEPhie product
-    const result = await getBacklog({ productId: 2730518827 });
+  it("filters tasks by product (STEPhie)", async () => {
+    const result = await getBacklog({ product: "STEPhie" });
 
     expect(result).toBeTruthy();
     expect(result).toContain("# Backlog");
-    expect(result).toContain("product: #2730518827");
-    // If tasks are found, they should show Product in output
+    expect(result).toContain("product: STEPhie");
     if (!result.includes("No tasks found") && !result.includes("No epics found")) {
       expect(result).toContain("Product:");
     }
   });
 
-  it("returns empty when productId has no epics", async () => {
-    // Non-existent product ID
-    const result = await getBacklog({ productId: 9999999999 });
-
-    expect(result).toBeTruthy();
-    expect(result).toContain("No epics found");
+  it("returns JSON shape when format='json'", async () => {
+    const result = await getBacklog({ limit: 3, format: "json" });
+    const parsed = JSON.parse(result);
+    expect(parsed.tasks).toBeInstanceOf(Array);
+    expect(parsed).toHaveProperty("nextCursor");
+    expect(parsed).toHaveProperty("filters");
+    if (parsed.tasks.length > 0) {
+      const t = parsed.tasks[0];
+      expect(typeof t.id).toBe("number");
+      expect(typeof t.url).toBe("string");
+      expect(t.url).toMatch(/stepas\.monday\.com\/boards/);
+    }
   });
 
   it("contains expected markdown formatting", async () => {
     const result = await getBacklog({ limit: 5 });
 
     expect(result).toBeTruthy();
-    // Should start with a markdown heading
     expect(result).toMatch(/^# Backlog/);
-    // If tasks exist, verify markdown structure
     if (!result.includes("No tasks found")) {
-      // Tasks are formatted with item ID in parentheses
       expect(result).toMatch(/\(#\d+\)/);
-      // Status/Priority/Type/Hours line
       expect(result).toContain("Status:");
       expect(result).toContain("Priority:");
       expect(result).toContain("Type:");
-      expect(result).toContain("Hours:");
-      // Product/Epic/Agent line
       expect(result).toContain("Product:");
       expect(result).toContain("Epic:");
       expect(result).toContain("Agent:");
+      expect(result).toContain("URL:");
     }
   });
 });

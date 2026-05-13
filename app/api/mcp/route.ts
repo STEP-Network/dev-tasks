@@ -90,7 +90,7 @@ const handler = createMcpHandler(
 
     server.tool(
       "getBacklog",
-      "Get the prioritized task queue for coding agents. Returns tasks ordered by board position (priority). Default: shows Needs Refinement + Ready to Start tasks (everything not yet in flight). Use unclaimedOnly=true to see tasks available for claiming. Filters: status, type, unclaimedOnly, agentId, epicId, sprintId.",
+      "Get the prioritized task queue. Default: Needs Refinement + Ready to Start tasks. Compound array filters: statuses, types, epicIds, sprintIds (each `any_of`). Single-value filters: agentId, unclaimedOnly, product ('STEPhie' | 'PolAds' — resolved server-side via the product's epics). Server-side name search: query (contains_text). Pagination: pass `cursor` (from a previous nextCursor) to fetch the next page; limit defaults to 25 (Monday caps at 500). Pass format='json' for { tasks, nextCursor, filters } — recommended for UIs and when paginating. Every task carries a Monday URL.",
       GetBacklogSchema.shape,
       async (args) => {
         const result = await getBacklog(args);

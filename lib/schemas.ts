@@ -79,14 +79,17 @@ const FormatEnum = z.enum(["markdown", "json"]);
 // =============================================================================
 
 export const GetBacklogSchema = z.object({
-  status: TaskStatusEnum.optional().describe("Filter by specific status. Defaults to showing Needs Refinement + Ready to Start tasks (everything not yet in flight)"),
-  type: TaskTypeEnum.optional().describe("Filter by task type"),
-  unclaimedOnly: z.boolean().optional().default(false).describe("Only show tasks with no Agent ID set (available for claiming)"),
-  agentId: AgentIdEnum.optional().describe("Filter by agent currently working on the task"),
-  epicId: z.number().optional().describe("Filter by epic — use listEpics to find the ID"),
-  sprintId: z.number().optional().describe("Filter by sprint — use listSprints to discover the ID"),
-  productId: z.number().optional().describe("Filter by product — use listProducts to find the ID. Resolves product → epics → tasks"),
-  limit: z.number().optional().default(25).describe("Max tasks to return (default: 25)"),
+  statuses: z.array(TaskStatusEnum).optional().describe("Filter to one or more statuses (any_of). Default: Needs Refinement + Ready to Start — the tasks not yet in flight."),
+  types: z.array(TaskTypeEnum).optional().describe("Filter to one or more task types (any_of). Server-side filter."),
+  unclaimedOnly: z.boolean().optional().default(false).describe("Only show tasks with no Agent ID set (available for claiming)."),
+  agentId: AgentIdEnum.optional().describe("Filter by agent currently working on the task."),
+  epicIds: z.array(z.number()).optional().describe("Filter to one or more epic IDs (any_of). Use listEpics to discover IDs."),
+  sprintIds: z.array(z.number()).optional().describe("Filter to one or more sprint IDs (any_of). Use listSprints to discover IDs."),
+  product: ProductEnum.optional().describe("Filter by product (STEPhie or PolAds). Resolves product → epics → tasks server-side."),
+  query: z.string().optional().describe("Server-side text search on task name (case-insensitive contains)."),
+  cursor: z.string().optional().describe("Pagination cursor. Pass nextCursor from a previous response (any format) to fetch the next page. Note: Monday inherits the original filter set with the cursor — additional filter args are ignored when paginating."),
+  limit: z.number().optional().default(25).describe("Max tasks per page (default 25). Monday caps at 500 per page."),
+  format: FormatEnum.optional().default("markdown").describe("Output format. 'json' returns { tasks, nextCursor, filters } — recommended for UIs and for paginating."),
 });
 
 // =============================================================================

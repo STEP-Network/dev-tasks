@@ -1,19 +1,63 @@
 import { executeMondayQuery } from "../monday-client";
-import { BOARDS, TASK_COLUMNS, TASK_STATUS, AGENT_ID, EPIC_COLUMNS } from "../constants";
+import { AGENT_ID, BOARDS, EPIC_COLUMNS, PRODUCT_IDS, TASK_COLUMNS, TASK_STATUS, TASK_TYPE } from "../constants";
 import type { GetBacklogInput } from "../schemas";
-import { getColumnText, getLinkedItems, getMirrorDisplayValue, formatError } from "./utils";
+import { getColumnText, getLinkedItems, getMirrorDisplayValue, mondayItemUrl, formatError } from "./utils";
 
-/**
- * Resolve a productId to the list of epic IDs linked to that product.
- * Used to filter tasks by product via the epic board_relation (since the
- * Product mirror column on Tasks cannot be filtered server-side).
- */
-async function resolveProductEpicIds(productId: number): Promise<number[]> {
+interface BacklogTaskEntry {
+  id: number;
+  name: string;
+  url: string;
+  status: string;
+  priority: string;
+  type: string;
+  estimatedHours?: string;
+  product?: string;
+  epic?: { id: number; name: string };
+  sprint?: { id: number; name: string };
+  agent?: string;
+}
+
+interface BacklogResponse {
+  tasks: BacklogTaskEntry[];
+  nextCursor: string | null;
+  filters: Record<string, unknown>;
+}
+
+const TASK_COLUMN_IDS_FOR_BACKLOG = [
+  TASK_COLUMNS.status,
+  TASK_COLUMNS.priority,
+  TASK_COLUMNS.type,
+  TASK_COLUMNS.estimatedHours,
+  TASK_COLUMNS.epic,
+  TASK_COLUMNS.sprint,
+  TASK_COLUMNS.agentId,
+  TASK_COLUMNS.planId,
+  TASK_COLUMNS.taskId,
+  TASK_COLUMNS.product,
+].map(c => `"${c}"`).join(", ");
+
+const ITEMS_PAGE_FRAGMENT = `
+  items {
+    id
+    name
+    column_values(ids: [${TASK_COLUMN_IDS_FOR_BACKLOG}]) {
+      id
+      text
+      value
+      ... on BoardRelationValue { linked_items { id name } }
+      ... on MirrorValue { display_value }
+    }
+  }
+`;
+
+// Resolve a product enum to the list of epic IDs linked to that product on Monday.
+// Tasks can't be filtered by product directly (mirror column) so we filter via epic.
+async function resolveProductEpicIds(productItemId: number): Promise<number[]> {
   const query = `
     query {
       boards(ids: [${BOARDS.EPICS}]) {
         items_page(limit: 500, query_params: {
-          rules: [{ column_id: "${EPIC_COLUMNS.product}", compare_value: [${productId}], operator: any_of }]
+          rules: [{ column_id: "${EPIC_COLUMNS.product}", compare_value: [${productItemId}], operator: any_of }]
         }) {
           items { id }
         }
@@ -25,28 +69,82 @@ async function resolveProductEpicIds(productId: number): Promise<number[]> {
   return items.map((item: any) => Number(item.id));
 }
 
+function buildTaskEntry(item: any): BacklogTaskEntry {
+  const colMap = new Map<string, any>(item.column_values?.map((c: any) => [c.id, c]) || []);
+  const epicItems = getLinkedItems(colMap, TASK_COLUMNS.epic);
+  const sprintItems = getLinkedItems(colMap, TASK_COLUMNS.sprint);
+  return {
+    id: Number(item.id),
+    name: String(item.name),
+    url: mondayItemUrl(BOARDS.TASKS, item.id),
+    status: getColumnText(colMap, TASK_COLUMNS.status) || "Unknown",
+    priority: getColumnText(colMap, TASK_COLUMNS.priority) || "—",
+    type: getColumnText(colMap, TASK_COLUMNS.type) || "—",
+    estimatedHours: getMirrorDisplayValue(colMap, TASK_COLUMNS.estimatedHours),
+    product: getMirrorDisplayValue(colMap, TASK_COLUMNS.product),
+    epic: epicItems[0] ? { id: Number(epicItems[0].id), name: epicItems[0].name } : undefined,
+    sprint: sprintItems[0] ? { id: Number(sprintItems[0].id), name: sprintItems[0].name } : undefined,
+    agent: getColumnText(colMap, TASK_COLUMNS.agentId),
+  };
+}
+
 export async function getBacklog(args: GetBacklogInput): Promise<string> {
   try {
-    const { status, type, unclaimedOnly = false, agentId, epicId, sprintId, productId, limit = 25 } = args;
+    const {
+      statuses,
+      types,
+      unclaimedOnly = false,
+      agentId,
+      epicIds,
+      sprintIds,
+      product,
+      query,
+      cursor,
+      limit = 25,
+      format = "markdown",
+    } = args;
 
-    // If productId is provided, resolve to epic IDs first (mirror columns can't be filtered server-side)
-    let epicIdsForProduct: number[] | undefined;
-    if (productId) {
-      epicIdsForProduct = await resolveProductEpicIds(productId);
-      if (epicIdsForProduct.length === 0) {
-        return `# Backlog — 0 tasks (product: #${productId})\n\nNo epics found for this product, so no tasks match.`;
+    // Cursor-driven page fetch — Monday inherits the original filter set from
+    // the seed page, so we don't (and can't) re-apply any of the other args.
+    let response: any;
+    if (cursor) {
+      const cursorQuery = `
+        query {
+          next_items_page(limit: ${limit}, cursor: ${JSON.stringify(cursor)}) {
+            cursor
+            ${ITEMS_PAGE_FRAGMENT}
+          }
+        }
+      `;
+      response = await executeMondayQuery<any>(cursorQuery);
+      const page = response.next_items_page;
+      return renderResponse(
+        (page?.items || []).map(buildTaskEntry),
+        page?.cursor ?? null,
+        { cursor },
+        format,
+      );
+    }
+
+    // Resolve product → epic IDs server-side (mirror columns aren't filterable).
+    let productEpicIds: number[] | undefined;
+    if (product) {
+      const productItemId = PRODUCT_IDS[product];
+      productEpicIds = await resolveProductEpicIds(productItemId);
+      if (productEpicIds.length === 0) {
+        return renderResponse([], null, { product }, format, `No epics found for product ${product}.`);
       }
     }
 
-    // Build query_params rules
     const rules: string[] = [];
 
-    if (status) {
-      const statusIndex = TASK_STATUS[status];
-      rules.push(`{ column_id: "${TASK_COLUMNS.status}", compare_value: [${statusIndex}], operator: any_of }`);
-    } else {
-      // Default: tasks not yet in flight — Needs Refinement + Ready to Start
-      rules.push(`{ column_id: "${TASK_COLUMNS.status}", compare_value: [${TASK_STATUS["Needs Refinement"]}, ${TASK_STATUS["Ready to Start"]}], operator: any_of }`);
+    // Statuses — default to "not yet in flight" if not provided.
+    const statusIndices = (statuses ?? ["Needs Refinement", "Ready to Start"]).map(s => TASK_STATUS[s]);
+    rules.push(`{ column_id: "${TASK_COLUMNS.status}", compare_value: [${statusIndices.join(",")}], operator: any_of }`);
+
+    if (types && types.length > 0) {
+      const typeIndices = types.map(t => TASK_TYPE[t]);
+      rules.push(`{ column_id: "${TASK_COLUMNS.type}", compare_value: [${typeIndices.join(",")}], operator: any_of }`);
     }
 
     if (unclaimedOnly) {
@@ -54,121 +152,119 @@ export async function getBacklog(args: GetBacklogInput): Promise<string> {
     }
 
     if (agentId) {
-      const agentIndex = AGENT_ID[agentId];
-      rules.push(`{ column_id: "${TASK_COLUMNS.agentId}", compare_value: [${agentIndex}], operator: any_of }`);
+      rules.push(`{ column_id: "${TASK_COLUMNS.agentId}", compare_value: [${AGENT_ID[agentId]}], operator: any_of }`);
     }
 
-    if (epicId && epicIdsForProduct) {
-      // Both epicId and productId: intersect — only include the epicId if it belongs to the product
-      const intersection = epicIdsForProduct.includes(epicId) ? [epicId] : [];
-      if (intersection.length === 0) {
-        return `# Backlog — 0 tasks (epic: #${epicId}, product: #${productId})\n\nThe specified epic does not belong to this product.`;
+    // Epic filter: intersect explicit epicIds with productEpicIds when both given.
+    let effectiveEpicIds: number[] | undefined;
+    if (epicIds && productEpicIds) {
+      const allowed = new Set(productEpicIds);
+      effectiveEpicIds = epicIds.filter(id => allowed.has(id));
+      if (effectiveEpicIds.length === 0) {
+        return renderResponse([], null, { epicIds, product }, format,
+          `None of the specified epicIds belong to product ${product}.`);
       }
-      rules.push(`{ column_id: "${TASK_COLUMNS.epic}", compare_value: [${intersection.join(",")}], operator: any_of }`);
-    } else if (epicId) {
-      rules.push(`{ column_id: "${TASK_COLUMNS.epic}", compare_value: [${epicId}], operator: any_of }`);
-    } else if (epicIdsForProduct) {
-      rules.push(`{ column_id: "${TASK_COLUMNS.epic}", compare_value: [${epicIdsForProduct.join(",")}], operator: any_of }`);
+    } else if (epicIds) {
+      effectiveEpicIds = epicIds;
+    } else if (productEpicIds) {
+      effectiveEpicIds = productEpicIds;
     }
 
-    if (sprintId) {
-      rules.push(`{ column_id: "${TASK_COLUMNS.sprint}", compare_value: [${sprintId}], operator: any_of }`);
+    if (effectiveEpicIds && effectiveEpicIds.length > 0) {
+      rules.push(`{ column_id: "${TASK_COLUMNS.epic}", compare_value: [${effectiveEpicIds.join(",")}], operator: any_of }`);
     }
 
-    const queryParams = `query_params: {
-      rules: [${rules.join(",\n        ")}]
-      operator: and
-    }`;
+    if (sprintIds && sprintIds.length > 0) {
+      rules.push(`{ column_id: "${TASK_COLUMNS.sprint}", compare_value: [${sprintIds.join(",")}], operator: any_of }`);
+    }
 
-    const columnIds = [
-      TASK_COLUMNS.status,
-      TASK_COLUMNS.priority,
-      TASK_COLUMNS.type,
-      TASK_COLUMNS.estimatedHours,
-      TASK_COLUMNS.epic,
-      TASK_COLUMNS.sprint,
-      TASK_COLUMNS.agentId,
-      TASK_COLUMNS.planId,
-      TASK_COLUMNS.taskId,
-      TASK_COLUMNS.product,
-    ].map(c => `"${c}"`).join(", ");
+    if (query && query.trim().length > 0) {
+      // contains_text matches on the item name column case-insensitively.
+      rules.push(`{ column_id: "name", compare_value: [${JSON.stringify(query.trim())}], operator: contains_text }`);
+    }
 
-    const query = `
+    const queryParams = `query_params: { rules: [${rules.join(", ")}], operator: and }`;
+
+    const pageQuery = `
       query {
         boards(ids: [${BOARDS.TASKS}]) {
           items_page(limit: ${limit}, ${queryParams}) {
-            items {
-              id
-              name
-              column_values(ids: [${columnIds}]) {
-                id
-                text
-                value
-                ... on BoardRelationValue { linked_items { id name } }
-                ... on MirrorValue { display_value }
-              }
-            }
+            cursor
+            ${ITEMS_PAGE_FRAGMENT}
           }
         }
       }
     `;
 
-    const response = await executeMondayQuery<any>(query);
-    const items = response.boards?.[0]?.items_page?.items || [];
+    response = await executeMondayQuery<any>(pageQuery);
+    const page = response.boards?.[0]?.items_page;
+    const tasks = (page?.items || []).map(buildTaskEntry);
+    const nextCursor = page?.cursor ?? null;
 
-    // Client-side type filter if provided (not a native filter column)
-    let filteredItems = items;
-    if (type) {
-      filteredItems = items.filter((item: any) => {
-        const colMap = new Map<string, any>(item.column_values?.map((c: any) => [c.id, c]) || []);
-        const taskType = getColumnText(colMap, TASK_COLUMNS.type);
-        return taskType === type;
-      });
-    }
+    const filters = {
+      statuses: statuses ?? ["Needs Refinement", "Ready to Start"],
+      types: types?.length ? types : undefined,
+      unclaimedOnly: unclaimedOnly || undefined,
+      agentId,
+      epicIds: epicIds?.length ? epicIds : undefined,
+      sprintIds: sprintIds?.length ? sprintIds : undefined,
+      product,
+      query: query?.trim() || undefined,
+    };
 
-    // Format output
-    const lines: string[] = [];
-    const filterParts: string[] = [];
-    if (status) filterParts.push(`status: ${status}`);
-    else filterParts.push("status: Needs Refinement + Ready to Start");
-    if (type) filterParts.push(`type: ${type}`);
-    if (unclaimedOnly) filterParts.push("unclaimed only");
-    if (agentId) filterParts.push(`agent: ${agentId}`);
-    if (epicId) filterParts.push(`epic: #${epicId}`);
-    if (sprintId) filterParts.push(`sprint: #${sprintId}`);
-    if (productId) filterParts.push(`product: #${productId}`);
-    const filterInfo = filterParts.length > 0 ? ` (${filterParts.join(", ")})` : "";
-
-    lines.push(`# Backlog — ${filteredItems.length} tasks${filterInfo}`);
-    lines.push("");
-
-    if (filteredItems.length === 0) {
-      lines.push("No tasks found matching the filters.");
-      return lines.join("\n");
-    }
-
-    for (const item of filteredItems) {
-      const colMap = new Map<string, any>(item.column_values?.map((c: any) => [c.id, c]) || []);
-
-      const taskStatus = getColumnText(colMap, TASK_COLUMNS.status) || "Unknown";
-      const priority = getColumnText(colMap, TASK_COLUMNS.priority) || "—";
-      const taskType = getColumnText(colMap, TASK_COLUMNS.type) || "—";
-      const hours = getMirrorDisplayValue(colMap, TASK_COLUMNS.estimatedHours) || "—";
-      const epicItems = getLinkedItems(colMap, TASK_COLUMNS.epic);
-      const epic = epicItems.length > 0 ? `${epicItems[0].name} (#${epicItems[0].id})` : "—";
-      const sprintItems = getLinkedItems(colMap, TASK_COLUMNS.sprint);
-      const sprint = sprintItems.length > 0 ? `${sprintItems[0].name} (#${sprintItems[0].id})` : "—";
-      const agent = getColumnText(colMap, TASK_COLUMNS.agentId) || "—";
-      const product = getMirrorDisplayValue(colMap, TASK_COLUMNS.product) || "—";
-
-      lines.push(`- **(#${item.id}) ${item.name}**`);
-      lines.push(`  Status: ${taskStatus} | Priority: ${priority} | Type: ${taskType} | Hours: ${hours}`);
-      lines.push(`  Product: ${product} | Epic: ${epic} | Sprint: ${sprint} | Agent: ${agent}`);
-      lines.push("");
-    }
-
-    return lines.join("\n").trim();
+    return renderResponse(tasks, nextCursor, filters, format);
   } catch (error) {
     return formatError(`Failed to fetch backlog: ${error instanceof Error ? error.message : String(error)}`);
   }
+}
+
+function renderResponse(
+  tasks: BacklogTaskEntry[],
+  nextCursor: string | null,
+  filters: Record<string, unknown>,
+  format: "markdown" | "json",
+  emptyNote?: string,
+): string {
+  // Strip undefined filter values for a clean JSON shape.
+  const cleanFilters = Object.fromEntries(
+    Object.entries(filters).filter(([, v]) => v !== undefined),
+  );
+
+  if (format === "json") {
+    const body: BacklogResponse = { tasks, nextCursor, filters: cleanFilters };
+    return JSON.stringify(body, null, 2);
+  }
+
+  const filterParts: string[] = [];
+  for (const [k, v] of Object.entries(cleanFilters)) {
+    if (Array.isArray(v)) filterParts.push(`${k}: ${v.join(", ")}`);
+    else filterParts.push(`${k}: ${v}`);
+  }
+  const filterInfo = filterParts.length > 0 ? ` (${filterParts.join(" | ")})` : "";
+
+  const lines: string[] = [];
+  lines.push(`# Backlog — ${tasks.length} task${tasks.length === 1 ? "" : "s"}${filterInfo}`);
+  lines.push("");
+
+  if (tasks.length === 0) {
+    lines.push(emptyNote ?? "No tasks found matching the filters.");
+    return lines.join("\n");
+  }
+
+  for (const t of tasks) {
+    const epicLabel = t.epic ? `${t.epic.name} (#${t.epic.id})` : "—";
+    const sprintLabel = t.sprint ? `${t.sprint.name} (#${t.sprint.id})` : "—";
+    lines.push(`- **(#${t.id}) ${t.name}**`);
+    lines.push(`  Status: ${t.status} | Priority: ${t.priority} | Type: ${t.type} | Hours: ${t.estimatedHours ?? "—"}`);
+    lines.push(`  Product: ${t.product ?? "—"} | Epic: ${epicLabel} | Sprint: ${sprintLabel} | Agent: ${t.agent ?? "—"}`);
+    lines.push(`  URL: ${t.url}`);
+    lines.push("");
+  }
+
+  if (nextCursor) {
+    lines.push(`*Next cursor:* ${nextCursor}`);
+    lines.push(`(pass as \`cursor\` to fetch the next page)`);
+  }
+
+  return lines.join("\n").trim();
 }
