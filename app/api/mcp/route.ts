@@ -134,7 +134,7 @@ const handler = createMcpHandler(
 
     server.tool(
       "listSprints",
-      "List sprints with their IDs, timelines, task lists (name + status per task), and completion. Use this to discover sprintId before passing it to getSprint, getBacklog, createTask, updateTask, etc. DEFAULT VIEW: active + upcoming sprints (end date today or later, plus sprints with no end date), sorted oldest-start-first so the current sprint surfaces above future ones. Pass pastOnly=true for ended sprints (newest-ended first). Pass activeOnly=true to filter to just the activation-checkbox sprint (mutually exclusive with pastOnly).",
+      "List sprints with their IDs, timelines, per-status task counts, hours, and (optionally) full task lists. Use this to discover sprintId before passing it to getSprint, getBacklog, createTask, updateTask, etc. DEFAULT VIEW: active + upcoming sprints (end date today or later, plus sprints with no end date), sorted oldest-start-first so the current sprint surfaces above future ones. Pass pastOnly=true for ended sprints (newest-ended first). Pass activeOnly=true to filter to just the activation-checkbox sprint (mutually exclusive with pastOnly). DEFAULT-ON: includeStatusCounts adds a `Counts: NR · Ready · InP · UAT · PendingDeploy · Done · Stuck` line and an `Hours: actual / estimated` line per sprint — pass false to skip. OPT-IN: includeTasks=true expands each sprint with its full task list (name + status).",
       ListSprintsSchema.shape,
       async (args) => {
         const result = await listSprints(args);

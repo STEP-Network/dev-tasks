@@ -1,14 +1,35 @@
 import { executeMondayQuery } from "../monday-client";
 import { BOARDS, SPRINT_COLUMNS, TASK_COLUMNS } from "../constants";
 import type { ListSprintsInput } from "../schemas";
-import { getColumnText, getLinkedItems, parseMondayDate, resolveLinkedItems, todayDate, formatError } from "./utils";
+import { getColumnText, getLinkedItems, getMirrorDisplayValue, parseMondayDate, resolveLinkedItems, todayDate, formatError } from "./utils";
 
 // Monday's items_page caps at 500; 200 is plenty for years of sprints.
 const FETCH_CAP = 200;
 
+// Order matches the workflow: NR → Ready → InP → UAT → PendingDeploy → Done → Stuck.
+const STATUS_COUNT_ORDER: Array<{ label: string; abbrev: string }> = [
+  { label: "Needs Refinement", abbrev: "NR" },
+  { label: "Ready to Start", abbrev: "Ready" },
+  { label: "In Progress", abbrev: "InP" },
+  { label: "Waiting for UAT", abbrev: "UAT" },
+  { label: "Pending Deploy to Prod", abbrev: "PendingDeploy" },
+  { label: "Done", abbrev: "Done" },
+  { label: "Stuck", abbrev: "Stuck" },
+];
+
+function formatHours(n: number): string {
+  // Trim trailing zeros after the decimal so 25.10 → 25.1 and 30.00 → 30.
+  return Number(n.toFixed(2)).toString();
+}
+
 export async function listSprints(args: ListSprintsInput): Promise<string> {
   try {
-    const { activeOnly = false, pastOnly = false } = args;
+    const {
+      activeOnly = false,
+      pastOnly = false,
+      includeStatusCounts = true,
+      includeTasks = false,
+    } = args;
 
     if (activeOnly && pastOnly) {
       return formatError(`activeOnly and pastOnly are mutually exclusive — pass only one.`);
@@ -114,15 +135,23 @@ export async function listSprints(args: ListSprintsInput): Promise<string> {
     }
 
     const taskEpicsMap = new Map<number, Array<{ id: string; name: string }>>();
-    const taskMetaMap = new Map<number, { name: string; status: string }>();
+    const taskMetaMap = new Map<number, { name: string; status: string; estimated: number; actual: number }>();
     if (allTaskIds.size > 0) {
-      const resolvedTasks = await resolveLinkedItems([...allTaskIds], [TASK_COLUMNS.epic, TASK_COLUMNS.status]);
+      const cols: string[] = [TASK_COLUMNS.epic, TASK_COLUMNS.status];
+      if (includeStatusCounts) {
+        cols.push(TASK_COLUMNS.estimatedHours, TASK_COLUMNS.actualHours);
+      }
+      const resolvedTasks = await resolveLinkedItems([...allTaskIds], cols);
       for (const task of resolvedTasks) {
         const taskColMap = new Map<string, any>(task.column_values?.map((c: any) => [c.id, c]) || []);
         taskEpicsMap.set(Number(task.id), getLinkedItems(taskColMap, TASK_COLUMNS.epic));
+        const est = includeStatusCounts ? parseFloat(getMirrorDisplayValue(taskColMap, TASK_COLUMNS.estimatedHours) || "0") : 0;
+        const act = includeStatusCounts ? parseFloat(getMirrorDisplayValue(taskColMap, TASK_COLUMNS.actualHours) || "0") : 0;
         taskMetaMap.set(Number(task.id), {
           name: String(task.name),
           status: getColumnText(taskColMap, TASK_COLUMNS.status) || "Unknown",
+          estimated: Number.isFinite(est) ? est : 0,
+          actual: Number.isFinite(act) ? act : 0,
         });
       }
     }
@@ -160,7 +189,23 @@ export async function listSprints(args: ListSprintsInput): Promise<string> {
       lines.push(`  Epics (${epicEntries.length}): ${epicsLine}`);
       if (goal) lines.push(`  Goal: ${goal}`);
 
-      if (linkedTasks.length > 0) {
+      if (includeStatusCounts && linkedTasks.length > 0) {
+        const counts: Record<string, number> = Object.fromEntries(STATUS_COUNT_ORDER.map(s => [s.label, 0]));
+        let totalEstimated = 0;
+        let totalActual = 0;
+        for (const t of linkedTasks) {
+          const meta = taskMetaMap.get(Number(t.id));
+          if (!meta) continue;
+          if (counts[meta.status] !== undefined) counts[meta.status]++;
+          totalEstimated += meta.estimated;
+          totalActual += meta.actual;
+        }
+        const countsLine = STATUS_COUNT_ORDER.map(s => `${s.abbrev} ${counts[s.label]}`).join(" · ");
+        lines.push(`  Counts: ${countsLine}`);
+        lines.push(`  Hours: ${formatHours(totalActual)} actual / ${formatHours(totalEstimated)} estimated`);
+      }
+
+      if (includeTasks && linkedTasks.length > 0) {
         lines.push(`  Tasks:`);
         for (const t of linkedTasks) {
           const meta = taskMetaMap.get(Number(t.id));
