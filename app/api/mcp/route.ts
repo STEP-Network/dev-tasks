@@ -124,7 +124,7 @@ const handler = createMcpHandler(
 
     server.tool(
       "getSprint",
-      "Get sprint overview. If no sprintId provided, returns the active sprint. Shows: goals, timeline, capacity, all tasks with their statuses/agents, and progress stats (tasks by status, estimated vs actual hours).",
+      "Get sprint overview. If no sprintId provided, returns the active sprint. Shows: goals, timeline, capacity, all tasks (no truncation) with their statuses/agents, and progress stats (total, byStatus, estimated vs actual hours). Pass format='json' to get a structured response (id as number, url, progress.byStatus dict, tasks: [{id, name, url, status, priority, type, agent?, estimatedHours?, actualHours?}]) instead of markdown.",
       GetSprintSchema.shape,
       async (args) => {
         const result = await getSprint(args);

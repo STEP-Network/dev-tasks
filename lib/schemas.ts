@@ -116,6 +116,7 @@ export const GetTaskSchema = z.object({
 
 export const GetSprintSchema = z.object({
   sprintId: z.number().optional().describe("Specific sprint ID. If omitted, returns the active sprint. Use listSprints to discover sprint IDs"),
+  format: FormatEnum.optional().default("markdown").describe("Output format. 'markdown' (default) is LLM-friendly; 'json' returns a structured response."),
 });
 
 // =============================================================================
@@ -623,7 +624,7 @@ export const UpdateTaskUatDocSchema = z.object({
 export type GetBacklogInput = z.input<typeof GetBacklogSchema>;
 export type GetBugsInput = z.input<typeof GetBugsSchema>;
 export type GetTaskInput = z.infer<typeof GetTaskSchema>;
-export type GetSprintInput = z.infer<typeof GetSprintSchema>;
+export type GetSprintInput = z.input<typeof GetSprintSchema>;
 export type ListSprintsInput = z.input<typeof ListSprintsSchema>;
 export type GetEpicInput = z.infer<typeof GetEpicSchema>;
 export type ListEpicsInput = z.input<typeof ListEpicsSchema>;
