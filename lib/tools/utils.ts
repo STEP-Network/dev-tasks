@@ -165,7 +165,9 @@ export async function resolveLinkedItems(
 ): Promise<any[]> {
   if (itemIds.length === 0) return [];
 
-  // Monday's items(ids: [...]) call caps at 100 IDs — chunk to stay under the limit.
+  // Monday's items(ids: [...]) has a default `limit: 25` even when you pass more
+  // IDs — anything past the first 25 is silently dropped. Pass `limit` explicitly
+  // matching the chunk size. The hard cap is 100 per page.
   const CHUNK = 100;
   const results: any[] = [];
 
@@ -173,7 +175,7 @@ export async function resolveLinkedItems(
     const chunk = itemIds.slice(i, i + CHUNK);
     const query = `
       query {
-        items(ids: [${chunk.join(",")}]) {
+        items(ids: [${chunk.join(",")}], limit: ${chunk.length}) {
           id
           name
           column_values(ids: [${columnIds.map(c => `"${c}"`).join(",")}]) {
