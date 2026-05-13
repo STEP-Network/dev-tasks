@@ -1,7 +1,31 @@
 import { executeMondayQuery } from "../monday-client";
 import { BOARDS, SPRINT_COLUMNS, TASK_COLUMNS } from "../constants";
 import type { ListSprintsInput } from "../schemas";
-import { getColumnText, getLinkedItems, getMirrorDisplayValue, parseMondayDate, resolveLinkedItems, todayDate, formatError } from "./utils";
+import { getColumnText, getLinkedItems, getMirrorDisplayValue, mondayItemUrl, parseMondayDate, resolveLinkedItems, todayDate, formatError } from "./utils";
+
+interface SprintTaskEntry {
+  id: number;
+  name: string;
+  url: string;
+  status: string;
+}
+
+interface SprintEntry {
+  id: number;
+  name: string;
+  url: string;
+  active: boolean;
+  completed: boolean;
+  startDate?: string;
+  endDate?: string;
+  capacity?: string;
+  goal?: string;
+  taskCount: number;
+  epics: Array<{ id: number; name: string }>;
+  statusCounts?: Record<string, number>;
+  hours?: { actual: number; estimated: number };
+  tasks?: SprintTaskEntry[];
+}
 
 // Monday's items_page caps at 500; 200 is plenty for years of sprints.
 const FETCH_CAP = 200;
@@ -29,6 +53,7 @@ export async function listSprints(args: ListSprintsInput): Promise<string> {
       pastOnly = false,
       includeStatusCounts = true,
       includeTasks = false,
+      format = "markdown",
     } = args;
 
     if (activeOnly && pastOnly) {
@@ -156,38 +181,33 @@ export async function listSprints(args: ListSprintsInput): Promise<string> {
       }
     }
 
-    const lines: string[] = [];
-    lines.push(`# Sprints (${items.length})`);
-    lines.push("");
-
-    for (const item of items) {
+    // Build structured SprintEntry objects first; render markdown or JSON below.
+    const sprints: SprintEntry[] = items.map((item: any) => {
       const colMap = new Map<string, any>(item.column_values?.map((c: any) => [c.id, c]) || []);
 
-      const isActive = !!getColumnText(colMap, SPRINT_COLUMNS.active);
-      const isCompleted = !!getColumnText(colMap, SPRINT_COLUMNS.completed);
-      const startDate = parseMondayDate(colMap.get(SPRINT_COLUMNS.startDate)) || "—";
-      const endDate = parseMondayDate(colMap.get(SPRINT_COLUMNS.endDate)) || "—";
-      const capacity = getColumnText(colMap, SPRINT_COLUMNS.capacity);
-      const goal = getColumnText(colMap, SPRINT_COLUMNS.goals);
       const linkedTasks = getLinkedItems(colMap, SPRINT_COLUMNS.connectedTasks);
-      const taskCount = linkedTasks.length;
 
-      // Aggregate unique epics across this sprint's tasks (some tasks have no epic, so use a Map keyed by epic id)
-      const epicsById = new Map<string, string>();
+      const epicsById = new Map<number, string>();
       for (const t of linkedTasks) {
         const epics = taskEpicsMap.get(Number(t.id)) || [];
-        for (const e of epics) epicsById.set(e.id, e.name);
+        for (const e of epics) epicsById.set(Number(e.id), e.name);
       }
-      const epicEntries = [...epicsById.entries()].sort((a, b) => a[1].localeCompare(b[1]));
-      const epicsLine = epicEntries.length > 0
-        ? epicEntries.map(([id, name]) => `${name} (#${id})`).join(", ")
-        : "—";
 
-      const flags = [isActive && "[Active]", isCompleted && "[Completed]"].filter(Boolean).join(" ");
-      lines.push(`- **${item.name}** (#${item.id})${flags ? ` ${flags}` : ""}`);
-      lines.push(`  Timeline: ${startDate} → ${endDate} | Tasks: ${taskCount}${capacity ? ` | Capacity: ${capacity}h` : ""}`);
-      lines.push(`  Epics (${epicEntries.length}): ${epicsLine}`);
-      if (goal) lines.push(`  Goal: ${goal}`);
+      const entry: SprintEntry = {
+        id: Number(item.id),
+        name: item.name,
+        url: mondayItemUrl(BOARDS.SPRINTS, item.id),
+        active: !!getColumnText(colMap, SPRINT_COLUMNS.active),
+        completed: !!getColumnText(colMap, SPRINT_COLUMNS.completed),
+        startDate: parseMondayDate(colMap.get(SPRINT_COLUMNS.startDate)),
+        endDate: parseMondayDate(colMap.get(SPRINT_COLUMNS.endDate)),
+        capacity: getColumnText(colMap, SPRINT_COLUMNS.capacity),
+        goal: getColumnText(colMap, SPRINT_COLUMNS.goals),
+        taskCount: linkedTasks.length,
+        epics: [...epicsById.entries()]
+          .sort((a, b) => a[1].localeCompare(b[1]))
+          .map(([id, name]) => ({ id, name })),
+      };
 
       if (includeStatusCounts && linkedTasks.length > 0) {
         const counts: Record<string, number> = Object.fromEntries(STATUS_COUNT_ORDER.map(s => [s.label, 0]));
@@ -200,18 +220,59 @@ export async function listSprints(args: ListSprintsInput): Promise<string> {
           totalEstimated += meta.estimated;
           totalActual += meta.actual;
         }
-        const countsLine = STATUS_COUNT_ORDER.map(s => `${s.abbrev} ${counts[s.label]}`).join(" · ");
-        lines.push(`  Counts: ${countsLine}`);
-        lines.push(`  Hours: ${formatHours(totalActual)} actual / ${formatHours(totalEstimated)} estimated`);
+        entry.statusCounts = counts;
+        entry.hours = {
+          actual: Number(totalActual.toFixed(2)),
+          estimated: Number(totalEstimated.toFixed(2)),
+        };
       }
 
       if (includeTasks && linkedTasks.length > 0) {
-        lines.push(`  Tasks:`);
-        for (const t of linkedTasks) {
+        entry.tasks = linkedTasks.map(t => {
           const meta = taskMetaMap.get(Number(t.id));
-          const name = meta?.name ?? t.name;
-          const status = meta?.status ?? "Unknown";
-          lines.push(`    - ${name} (#${t.id}) — ${status}`);
+          return {
+            id: Number(t.id),
+            name: meta?.name ?? t.name,
+            url: mondayItemUrl(BOARDS.TASKS, t.id),
+            status: meta?.status ?? "Unknown",
+          };
+        });
+      }
+
+      return entry;
+    });
+
+    if (format === "json") {
+      return JSON.stringify({ sprints }, null, 2);
+    }
+
+    const lines: string[] = [];
+    lines.push(`# Sprints (${sprints.length})`);
+    lines.push("");
+
+    for (const s of sprints) {
+      const flags = [s.active && "[Active]", s.completed && "[Completed]"].filter(Boolean).join(" ");
+      const epicsLine = s.epics.length > 0
+        ? s.epics.map(e => `${e.name} (#${e.id})`).join(", ")
+        : "—";
+      lines.push(`- **${s.name}** (#${s.id})${flags ? ` ${flags}` : ""}`);
+      lines.push(`  Timeline: ${s.startDate ?? "—"} → ${s.endDate ?? "—"} | Tasks: ${s.taskCount}${s.capacity ? ` | Capacity: ${s.capacity}h` : ""}`);
+      lines.push(`  Epics (${s.epics.length}): ${epicsLine}`);
+      if (s.goal) lines.push(`  Goal: ${s.goal}`);
+
+      if (s.statusCounts) {
+        const counts = s.statusCounts;
+        const countsLine = STATUS_COUNT_ORDER.map(o => `${o.abbrev} ${counts[o.label] ?? 0}`).join(" · ");
+        lines.push(`  Counts: ${countsLine}`);
+      }
+      if (s.hours) {
+        lines.push(`  Hours: ${formatHours(s.hours.actual)} actual / ${formatHours(s.hours.estimated)} estimated`);
+      }
+
+      if (s.tasks && s.tasks.length > 0) {
+        lines.push(`  Tasks:`);
+        for (const t of s.tasks) {
+          lines.push(`    - ${t.name} (#${t.id}) — ${t.status}`);
         }
       }
     }

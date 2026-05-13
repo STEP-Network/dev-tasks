@@ -70,6 +70,10 @@ const RetroTypeEnum = z.enum(["Discussion", "Keep", "Improve"]);
 
 const ProductEnum = z.enum(["STEPhie", "PolAds"]);
 
+// Shared `format` enum for read tools that support both markdown (default,
+// LLM-friendly) and JSON (UI-friendly) outputs.
+const FormatEnum = z.enum(["markdown", "json"]);
+
 // =============================================================================
 // Tool 1: getBacklog
 // =============================================================================
@@ -123,6 +127,7 @@ export const ListSprintsSchema = z.object({
   activeOnly: z.boolean().optional().default(false).describe("Only return sprints with the activation checkbox set. Mutually exclusive with pastOnly."),
   includeStatusCounts: z.boolean().optional().default(true).describe("Include a per-status count line (NR/Ready/InP/UAT/PendingDeploy/Done/Stuck) and an Hours line (actual / estimated) per sprint. Default true — these are cheap and most callers need them for kanban-style summaries."),
   includeTasks: z.boolean().optional().default(false).describe("Expand each sprint with its full task list (name + status). Default false to keep the output compact; the per-status counts (see includeStatusCounts) usually answer what you need. Flip on for full per-task scanning."),
+  format: FormatEnum.optional().default("markdown").describe("Output format. 'markdown' (default) is LLM-friendly; 'json' returns a structured response UIs can render without parsing markdown."),
 });
 
 // =============================================================================
