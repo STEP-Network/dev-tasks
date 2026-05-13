@@ -8,7 +8,15 @@ import {
   AGENT_ID,
 } from "../constants";
 import type { UpdateTaskInput } from "../schemas";
-import { buildColumnValues, formatError, formatSubtask, getLinkedItems, validateTaskInActiveSprint } from "./utils";
+import {
+  buildColumnValues,
+  formatError,
+  formatSubtask,
+  getLinkedItems,
+  validateReadyToStart,
+  validateTaskInActiveSprint,
+  validateWaitingForUAT,
+} from "./utils";
 
 export async function updateTask(args: UpdateTaskInput): Promise<string> {
   try {
@@ -31,7 +39,47 @@ export async function updateTask(args: UpdateTaskInput): Promise<string> {
     const columnValues: Record<string, unknown> = {};
     const changes: string[] = [];
 
+    // List of warnings to surface in the success output (non-blocking)
+    const warnings: string[] = [];
+
     if (args.status !== undefined) {
+      // Ready to Start gate: refuse unless the task is fully specified.
+      // Same-call args override Monday-side values so a single updateTask that
+      // sets description + acceptanceCriteria + status="Ready to Start" succeeds.
+      if (args.status === "Ready to Start") {
+        const check = await validateReadyToStart(itemId, {
+          type: args.type,
+          priority: args.priority,
+          epicId: args.epicId,
+          description: args.description,
+          acceptanceCriteria: args.acceptanceCriteria,
+        });
+        if (!check.valid) {
+          const list = check.blockers.map(b => `  - ${b}`).join("\n");
+          return formatError(
+            `Cannot set task #${itemId} to "Ready to Start". The task is not fully specified:\n${list}`
+          );
+        }
+      }
+
+      // Waiting for UAT gate: hard-block on incomplete subtasks or missing UAT doc;
+      // warn on missing GitHub/branch/demo/PR.
+      if (args.status === "Waiting for UAT") {
+        const check = await validateWaitingForUAT(itemId, {
+          githubLink: args.githubLink,
+          prLink: args.prLink,
+          demoUrl: args.demoUrl,
+          branch: args.branch,
+        });
+        if (check.blockers.length > 0) {
+          const list = check.blockers.map(b => `  - ${b}`).join("\n");
+          return formatError(
+            `Cannot set task #${itemId} to "Waiting for UAT":\n${list}`
+          );
+        }
+        for (const w of check.warnings) warnings.push(`Waiting for UAT: ${w}`);
+      }
+
       // If setting status to In Progress, the task must belong to the active sprint.
       // Check the post-update sprint state: a sprintId in the same call overrides the current value.
       if (args.status === "In Progress") {
@@ -260,6 +308,12 @@ export async function updateTask(args: UpdateTaskInput): Promise<string> {
       `**Changes:**`,
       ...changes.map(c => `- ${c}`),
     ];
+
+    if (warnings.length > 0) {
+      lines.push("");
+      lines.push("**Warnings:**");
+      for (const w of warnings) lines.push(`- ${w}`);
+    }
 
     return lines.join("\n");
   } catch (error) {

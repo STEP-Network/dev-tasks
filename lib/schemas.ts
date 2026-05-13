@@ -592,6 +592,25 @@ export const MigrateStructuredChangelogSchema = z.object({
 });
 
 // =============================================================================
+// UAT Doc tools (column doc_mm3adfdg on Tasks board)
+// =============================================================================
+
+export const GetTaskUatDocSchema = z.object({
+  taskId: z.number().describe("Task item ID"),
+});
+
+export const CreateTaskUatDocSchema = z.object({
+  taskId: z.number().describe("Task item ID — must not already have a UAT doc; use updateTaskUatDoc to modify an existing one"),
+  markdown: z.string().describe("Markdown content for the UAT testing doc (what the user should test, steps, expected results)"),
+});
+
+export const UpdateTaskUatDocSchema = z.object({
+  taskId: z.number().describe("Task item ID — must already have a UAT doc; use createTaskUatDoc otherwise"),
+  markdown: z.string().describe("Markdown content"),
+  overwrite: z.boolean().optional().default(true).describe("true (default) replaces the doc; false appends to existing content"),
+});
+
+// =============================================================================
 // Type Exports
 // =============================================================================
 
@@ -631,3 +650,6 @@ export type GetPublicRoadmapInput = z.input<typeof GetPublicRoadmapSchema>;
 export type GetStructuredChangelogInput = z.infer<typeof GetStructuredChangelogSchema>;
 export type UpdateStructuredChangelogInput = z.infer<typeof UpdateStructuredChangelogSchema>;
 export type MigrateStructuredChangelogInput = z.infer<typeof MigrateStructuredChangelogSchema>;
+export type GetTaskUatDocInput = z.infer<typeof GetTaskUatDocSchema>;
+export type CreateTaskUatDocInput = z.infer<typeof CreateTaskUatDocSchema>;
+export type UpdateTaskUatDocInput = z.input<typeof UpdateTaskUatDocSchema>;

@@ -47,6 +47,7 @@ export const TASK_COLUMNS = {
   sprintCompleted: "mirror__1",
   dependencies: "dependency_mm0pwbxn",
   acceptanceCriteria: "long_text_mm0pqaxy",
+  uatDoc: "doc_mm3adfdg",
   branch: "text_mm0pvs3n",
   bugs: "task_bugs",
   feedback: "board_relation_mm0wvysr",

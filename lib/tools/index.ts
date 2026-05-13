@@ -32,3 +32,4 @@ export { listRetros } from "./listRetros";
 export { setPublicTaskName } from "./setPublicTaskName";
 export { getPublicRoadmap } from "./getPublicRoadmap";
 export { getStructuredChangelog, updateStructuredChangelog, migrateStructuredChangelog } from "./structuredChangelog";
+export { getTaskUatDoc, createTaskUatDoc, updateTaskUatDoc } from "./taskDoc";

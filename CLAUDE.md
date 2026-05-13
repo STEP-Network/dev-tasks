@@ -40,7 +40,7 @@ Subtasks board: 5091706366 (linked from Tasks)
 - `lib/schemas.ts` — Zod schemas for all 26 tools
 - `lib/tools/utils.ts` — Shared helpers
 
-### Tools (28 total)
+### Tools (table excerpt — list may lag the actual server)
 
 | # | Tool | Phase | Purpose |
 |---|------|-------|---------|
@@ -72,6 +72,9 @@ Subtasks board: 5091706366 (linked from Tasks)
 | 26 | `createFeedback` | Creation | File new requests or feedback |
 | 27 | `updateFeedback` | Execution | Update any feedback field or delete |
 | 28 | `convertFeedbackToTask` | Creation | Convert feedback → task with auto-linking |
+| 29 | `getTaskUatDoc` | Context | Read a task's UAT testing doc as markdown |
+| 30 | `createTaskUatDoc` | Execution | Create a task's UAT testing doc (required before "Waiting for UAT") |
+| 31 | `updateTaskUatDoc` | Execution | Overwrite or append to a task's UAT testing doc |
 
 ## Agent Workflow
 
@@ -126,6 +129,38 @@ Used in:
 **Feedback Priority:** Critical, High, Medium, Low
 **Feedback Source:** User, Internal, Support, Partner
 **Agent ID:** Claude Code CLI, Claude Desktop Cloud, Codex Local, Claude Desktop Local, Codex Cloud
+
+## Status Transition Gates
+
+`updateTask` enforces preconditions before letting status advance:
+
+- **Ready to Start** requires the task to be fully specified:
+  - `type` is set (not "Not Set")
+  - `priority` is set (not "Missing")
+  - linked to an epic
+  - `description` is non-empty
+  - acceptance criteria (`long_text_mm0pqaxy`) is non-empty
+  - at least one subtask with name, description, type (not "Missing Status"), and a positive estimate
+
+  Same-call args count: `updateTask({ acceptanceCriteria, description, status: "Ready to Start" })` succeeds if those fields complete the spec. `createTask` honors the same gate — if you pass `status: "Ready to Start"`, the task is created at Needs Refinement and promoted to Ready to Start after subitems exist, only if the gate passes.
+
+- **Waiting for UAT** hard-blocks unless:
+  - all subtasks are Done
+  - the UAT testing doc column (`doc_mm3adfdg`) is set (use `createTaskUatDoc` first)
+
+  …and warns (but doesn't block) when missing GitHub link, branch (`text_mm0pvs3n`), demo URL, or PR link.
+
+- **In Progress** requires the task to be in the active sprint (existing behavior).
+
+Subtasks should describe work-on-code, not human verification (testing belongs in the UAT doc) — otherwise the "all subtasks Done" gate can't ever be satisfied.
+
+## UAT Doc Tools
+
+`text_mm3adfdg` *(doc_mm3adfdg)* is a Monday Doc on each task that describes what a human should verify. Three tools manage it:
+
+- `getTaskUatDoc(taskId)` — returns the doc's markdown (via `export_markdown_from_doc`)
+- `createTaskUatDoc(taskId, markdown)` — creates a fresh doc (refuses if one already exists)
+- `updateTaskUatDoc(taskId, markdown, overwrite?)` — overwrite (default) or append to an existing doc
 
 ## Task Dependencies
 

@@ -299,6 +299,283 @@ export async function validateTaskInActiveSprint(
 }
 
 // =============================================================================
+// Ready-to-Start Validator
+// =============================================================================
+//
+// A task can transition to "Ready to Start" only when it's fully specified:
+// type and priority set, linked to an epic, description and acceptance criteria
+// written, and at least one subtask with name + description + type + estimate.
+
+export interface SubitemSnapshot {
+  id?: string;
+  name?: string;
+  description?: string;
+  type?: string;
+  estimatedHours?: number;
+  status?: string;
+}
+
+export interface ReadyToStartSnapshot {
+  type?: string;
+  priority?: string;
+  epicCount: number;
+  description?: string;
+  acceptanceCriteria?: string;
+  subitems: SubitemSnapshot[];
+}
+
+export function classifyReadyToStartBlockers(snapshot: ReadyToStartSnapshot): string[] {
+  const blockers: string[] = [];
+
+  if (!snapshot.type || snapshot.type === "Not Set") {
+    blockers.push("type not set");
+  }
+  if (!snapshot.priority || snapshot.priority === "Missing") {
+    blockers.push("priority not set (Missing)");
+  }
+  if (snapshot.epicCount === 0) {
+    blockers.push("not linked to an epic");
+  }
+  if (!snapshot.description?.trim()) {
+    blockers.push("description is empty");
+  }
+  if (!snapshot.acceptanceCriteria?.trim()) {
+    blockers.push("acceptance criteria is empty");
+  }
+
+  if (snapshot.subitems.length === 0) {
+    blockers.push("no subtasks (need at least one with name, description, type, estimate)");
+  } else {
+    snapshot.subitems.forEach((s, i) => {
+      const missing: string[] = [];
+      if (!s.name?.trim()) missing.push("name");
+      if (!s.description?.trim()) missing.push("description");
+      if (!s.type || s.type === "Missing Status") missing.push("type");
+      if (!s.estimatedHours || s.estimatedHours <= 0) missing.push("estimate");
+      if (missing.length > 0) {
+        const label = s.name?.trim() || `#${i + 1}`;
+        blockers.push(`subtask "${label}" missing: ${missing.join(", ")}`);
+      }
+    });
+  }
+
+  return blockers;
+}
+
+export async function validateReadyToStart(
+  itemId: number,
+  proposed: {
+    type?: string;
+    priority?: string;
+    epicId?: number;
+    description?: string;
+    acceptanceCriteria?: string;
+  },
+): Promise<{ valid: boolean; blockers: string[] }> {
+  const colIds = [
+    TASK_COLUMNS.type,
+    TASK_COLUMNS.priority,
+    TASK_COLUMNS.epic,
+    TASK_COLUMNS.description,
+    TASK_COLUMNS.acceptanceCriteria,
+  ].map(c => `"${c}"`).join(", ");
+
+  const subColIds = [
+    SUBTASK_COLUMNS.status,
+    SUBTASK_COLUMNS.type,
+    SUBTASK_COLUMNS.description,
+    SUBTASK_COLUMNS.estimatedHours,
+  ].map(c => `"${c}"`).join(", ");
+
+  const query = `
+    query {
+      items(ids: [${itemId}]) {
+        column_values(ids: [${colIds}]) {
+          id
+          text
+          value
+          ... on BoardRelationValue { linked_items { id name } }
+        }
+        subitems {
+          id
+          name
+          column_values(ids: [${subColIds}]) {
+            id
+            text
+            value
+          }
+        }
+      }
+    }
+  `;
+
+  const response = await executeMondayQuery<any>(query);
+  const item = response.items?.[0];
+  if (!item) return { valid: false, blockers: [`task #${itemId} not found`] };
+
+  const colMap = new Map<string, any>(item.column_values?.map((c: any) => [c.id, c]) || []);
+  const subitems: SubitemSnapshot[] = (item.subitems || []).map((sub: any) => {
+    const subCols = new Map<string, any>(sub.column_values?.map((c: any) => [c.id, c]) || []);
+    const estText = subCols.get(SUBTASK_COLUMNS.estimatedHours)?.text;
+    return {
+      id: String(sub.id),
+      name: sub.name,
+      description: getColumnText(subCols, SUBTASK_COLUMNS.description),
+      type: getColumnText(subCols, SUBTASK_COLUMNS.type),
+      estimatedHours: estText ? parseFloat(estText) : undefined,
+      status: getColumnText(subCols, SUBTASK_COLUMNS.status),
+    };
+  });
+
+  // Apply proposed updates over the fetched state so same-call updates count.
+  const snapshot: ReadyToStartSnapshot = {
+    type: proposed.type ?? getColumnText(colMap, TASK_COLUMNS.type),
+    priority: proposed.priority ?? getColumnText(colMap, TASK_COLUMNS.priority),
+    epicCount:
+      proposed.epicId !== undefined ? 1 : getLinkedItems(colMap, TASK_COLUMNS.epic).length,
+    description: proposed.description ?? getColumnText(colMap, TASK_COLUMNS.description),
+    acceptanceCriteria:
+      proposed.acceptanceCriteria ?? getColumnText(colMap, TASK_COLUMNS.acceptanceCriteria),
+    subitems,
+  };
+
+  const blockers = classifyReadyToStartBlockers(snapshot);
+  return { valid: blockers.length === 0, blockers };
+}
+
+// =============================================================================
+// Waiting-for-UAT Validator
+// =============================================================================
+//
+// Hard blockers: all subtasks Done + UAT doc set (doc_mm3adfdg).
+// Soft warnings (not blocking): GitHub link, branch, demo URL, PR link.
+
+export interface WaitingForUATSnapshot {
+  subitems: SubitemSnapshot[];
+  hasUatDoc: boolean;
+  hasGitHubLink: boolean;
+  hasBranch: boolean;
+  hasDemoUrl: boolean;
+  hasPrLink: boolean;
+}
+
+export function classifyWaitingForUATIssues(snapshot: WaitingForUATSnapshot): {
+  blockers: string[];
+  warnings: string[];
+} {
+  const blockers: string[] = [];
+  const warnings: string[] = [];
+
+  if (snapshot.subitems.length === 0) {
+    blockers.push("no subtasks (need at least one Done subtask before UAT)");
+  } else {
+    const incomplete = snapshot.subitems.filter(s => s.status !== "Done");
+    if (incomplete.length > 0) {
+      const names = incomplete.map(s => `"${s.name || "(unnamed)"}" [${s.status || "no status"}]`).join(", ");
+      blockers.push(`${incomplete.length} subtask(s) not Done: ${names}`);
+    }
+  }
+
+  if (!snapshot.hasUatDoc) {
+    blockers.push("UAT testing doc (doc_mm3adfdg) not set — use createTaskUatDoc to add test instructions");
+  }
+
+  if (!snapshot.hasGitHubLink) warnings.push("GitHub link not set");
+  if (!snapshot.hasBranch) warnings.push("Branch name not set");
+  if (!snapshot.hasDemoUrl) warnings.push("Demo URL not set");
+  if (!snapshot.hasPrLink) warnings.push("PR link not set");
+
+  return { blockers, warnings };
+}
+
+export function hasDocColumn(colMap: Map<string, any>, columnId: string): boolean {
+  const docValue = getColumnValue(colMap, columnId);
+  if (!docValue) return false;
+  if (typeof docValue !== "object") return false;
+  const obj = docValue as Record<string, unknown>;
+  if (typeof obj.doc_id === "number" || typeof obj.doc_id === "string") return true;
+  const files = obj.files as Array<Record<string, unknown>> | undefined;
+  if (files && files.length > 0 && (typeof files[0].fileId === "number" || typeof files[0].fileId === "string")) {
+    return true;
+  }
+  // Fallback: any nested id-shaped key
+  return /"(?:doc_id|id|fileId)"\s*:\s*\d+/.test(JSON.stringify(obj));
+}
+
+export async function validateWaitingForUAT(
+  itemId: number,
+  proposed: {
+    githubLink?: string;
+    prLink?: string;
+    demoUrl?: string;
+    branch?: string;
+  },
+): Promise<{ blockers: string[]; warnings: string[] }> {
+  const colIds = [
+    TASK_COLUMNS.uatDoc,
+    TASK_COLUMNS.githubLink,
+    TASK_COLUMNS.prLink,
+    TASK_COLUMNS.demoUrl,
+    TASK_COLUMNS.branch,
+  ].map(c => `"${c}"`).join(", ");
+
+  const subColIds = `"${SUBTASK_COLUMNS.status}"`;
+
+  const query = `
+    query {
+      items(ids: [${itemId}]) {
+        column_values(ids: [${colIds}]) {
+          id
+          text
+          value
+        }
+        subitems {
+          id
+          name
+          column_values(ids: [${subColIds}]) {
+            id
+            text
+          }
+        }
+      }
+    }
+  `;
+
+  const response = await executeMondayQuery<any>(query);
+  const item = response.items?.[0];
+  if (!item) return { blockers: [`task #${itemId} not found`], warnings: [] };
+
+  const colMap = new Map<string, any>(item.column_values?.map((c: any) => [c.id, c]) || []);
+  const subitems: SubitemSnapshot[] = (item.subitems || []).map((sub: any) => {
+    const subCols = new Map<string, any>(sub.column_values?.map((c: any) => [c.id, c]) || []);
+    return {
+      id: String(sub.id),
+      name: sub.name,
+      status: getColumnText(subCols, SUBTASK_COLUMNS.status),
+    };
+  });
+
+  const snapshot: WaitingForUATSnapshot = {
+    subitems,
+    hasUatDoc: hasDocColumn(colMap, TASK_COLUMNS.uatDoc),
+    hasGitHubLink: proposed.githubLink !== undefined
+      ? proposed.githubLink.trim().length > 0
+      : !!getLinkUrl(colMap, TASK_COLUMNS.githubLink),
+    hasPrLink: proposed.prLink !== undefined
+      ? proposed.prLink.trim().length > 0
+      : !!getLinkUrl(colMap, TASK_COLUMNS.prLink),
+    hasDemoUrl: proposed.demoUrl !== undefined
+      ? proposed.demoUrl.trim().length > 0
+      : !!getLinkUrl(colMap, TASK_COLUMNS.demoUrl),
+    hasBranch: proposed.branch !== undefined
+      ? proposed.branch.trim().length > 0
+      : !!getColumnText(colMap, TASK_COLUMNS.branch),
+  };
+
+  return classifyWaitingForUATIssues(snapshot);
+}
+
+// =============================================================================
 // Error Formatter
 // =============================================================================
 

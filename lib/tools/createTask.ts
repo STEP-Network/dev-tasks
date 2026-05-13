@@ -12,11 +12,17 @@ import {
   PEOPLE,
 } from "../constants";
 import type { CreateTaskInput } from "../schemas";
-import { buildColumnValues, formatError } from "./utils";
+import { buildColumnValues, formatError, validateReadyToStart } from "./utils";
 
 export async function createTask(args: CreateTaskInput): Promise<string> {
   try {
-    const results: Array<{ id: string; name: string; subitemCount: number }> = [];
+    const results: Array<{
+      id: string;
+      name: string;
+      subitemCount: number;
+      promoted?: boolean;
+      promotionBlockers?: string[];
+    }> = [];
 
     for (const task of args.tasks) {
       // Build column values for the parent task
@@ -28,9 +34,14 @@ export async function createTask(args: CreateTaskInput): Promise<string> {
       // Priority (required)
       columnValues[TASK_COLUMNS.priority] = { index: TASK_PRIORITY[task.priority] };
 
-      // Status (default: Needs Refinement — caller can pass "Ready to Start" if already refined)
+      // Status: any requested status above "Needs Refinement" needs to pass the
+      // Ready-to-Start gate AFTER subtasks are created. Hold the requested status
+      // here and promote at the end if it validates.
+      const requestedStatus = task.status;
+      const wantsReadyToStart = requestedStatus === "Ready to Start";
+      const initialStatus = wantsReadyToStart ? "Needs Refinement" : (requestedStatus || "Needs Refinement");
       columnValues[TASK_COLUMNS.status] = {
-        index: TASK_STATUS[task.status || "Needs Refinement"],
+        index: TASK_STATUS[initialStatus],
       };
 
       // Optional fields
@@ -163,10 +174,36 @@ export async function createTask(args: CreateTaskInput): Promise<string> {
         }
       }
 
+      // If the caller asked for "Ready to Start", validate the now-complete task
+      // (including freshly-created subitems) and promote if it passes the gate.
+      let promoted: boolean | undefined;
+      let promotionBlockers: string[] | undefined;
+      if (wantsReadyToStart) {
+        const check = await validateReadyToStart(Number(createdItem.id), {});
+        if (check.valid) {
+          const promoteMutation = `
+            mutation {
+              change_multiple_column_values(
+                item_id: ${createdItem.id},
+                board_id: ${BOARDS.TASKS},
+                column_values: ${buildColumnValues({ [TASK_COLUMNS.status]: { index: TASK_STATUS["Ready to Start"] } })}
+              ) { id }
+            }
+          `;
+          await executeMondayQuery<any>(promoteMutation);
+          promoted = true;
+        } else {
+          promoted = false;
+          promotionBlockers = check.blockers;
+        }
+      }
+
       results.push({
         id: createdItem.id,
         name: createdItem.name,
         subitemCount,
+        promoted,
+        promotionBlockers,
       });
     }
 
@@ -179,6 +216,14 @@ export async function createTask(args: CreateTaskInput): Promise<string> {
       lines.push(`- **${result.name}** (#${result.id})`);
       if (result.subitemCount > 0) {
         lines.push(`  Subitems created: ${result.subitemCount}`);
+      }
+      if (result.promoted === true) {
+        lines.push(`  Status: Ready to Start (promoted after passing the readiness gate)`);
+      } else if (result.promoted === false && result.promotionBlockers) {
+        lines.push(`  Status: Needs Refinement (kept private — readiness gate failed)`);
+        for (const b of result.promotionBlockers) {
+          lines.push(`    - ${b}`);
+        }
       }
     }
 

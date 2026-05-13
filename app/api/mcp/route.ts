@@ -36,6 +36,9 @@ import {
   GetStructuredChangelogSchema,
   UpdateStructuredChangelogSchema,
   MigrateStructuredChangelogSchema,
+  GetTaskUatDocSchema,
+  CreateTaskUatDocSchema,
+  UpdateTaskUatDocSchema,
 } from "@/lib/schemas";
 import {
   getBacklog,
@@ -74,6 +77,9 @@ import {
   getStructuredChangelog,
   updateStructuredChangelog,
   migrateStructuredChangelog,
+  getTaskUatDoc,
+  createTaskUatDoc,
+  updateTaskUatDoc,
 } from "@/lib/tools";
 
 const handler = createMcpHandler(
@@ -182,7 +188,7 @@ const handler = createMcpHandler(
 
     server.tool(
       "updateTask",
-      "Update any task field. Supports: status (Needs Refinement, Ready to Start, In Progress, Waiting for UAT, Pending Deploy to Prod, Done, Stuck), priority (Critical/High/Medium/Low/Missing), type (Feature/Fix/Improvement/To Do/Not Set), description, hours (estimated/actual), links (GitHub/PR/Demo), epic, sprint, version, agent metadata, branch name, acceptance criteria, dependencyIds (array of task IDs this task is blocked-by — stored in column dependency_mm0pwbxn; claimTask refuses until all are Done). Set delete=true to delete. IMPORTANT: Do NOT set status to 'Done' directly — mark all subtasks as Done instead (Monday automation auto-completes the parent). Set actualHours when moving to 'Waiting for UAT'. Use listEpics/listSprints to find epicId/sprintId.",
+      "Update any task field. Supports: status (Needs Refinement, Ready to Start, In Progress, Waiting for UAT, Pending Deploy to Prod, Done, Stuck), priority (Critical/High/Medium/Low/Missing), type (Feature/Fix/Improvement/To Do/Not Set), description, hours (estimated/actual), links (GitHub/PR/Demo), epic, sprint, version, agent metadata, branch name, acceptance criteria, dependencyIds (array of task IDs this task is blocked-by — stored in column dependency_mm0pwbxn; claimTask refuses until all are Done). Set delete=true to delete. STATUS GATES: 'Ready to Start' requires type + priority + epic + description + acceptance criteria + ≥1 subtask with name/description/type/estimate. 'Waiting for UAT' requires all subtasks Done + UAT doc set (use createTaskUatDoc); warns on missing GitHub/branch/demo/PR links. 'In Progress' requires the task to be in the active sprint. Do NOT set status to 'Done' directly — mark all subtasks as Done instead (Monday automation auto-completes the parent). Set actualHours when moving to 'Waiting for UAT'. Use listEpics/listSprints to find epicId/sprintId.",
       UpdateTaskSchema.shape,
       async (args) => {
         const result = await updateTask(args);
@@ -470,6 +476,36 @@ const handler = createMcpHandler(
       MigrateStructuredChangelogSchema.shape,
       async (args) => {
         const result = await migrateStructuredChangelog(args);
+        return { content: [{ type: "text", text: result }] };
+      }
+    );
+
+    server.tool(
+      "getTaskUatDoc",
+      "Read the UAT testing doc (Monday Doc on column doc_mm3adfdg) for a task as markdown. Returns an error if the task has no UAT doc.",
+      GetTaskUatDocSchema.shape,
+      async (args) => {
+        const result = await getTaskUatDoc(args);
+        return { content: [{ type: "text", text: result }] };
+      }
+    );
+
+    server.tool(
+      "createTaskUatDoc",
+      "Create a new UAT testing doc on a task (column doc_mm3adfdg). Used to describe what the user should test for the task. Refuses if a doc already exists — use updateTaskUatDoc to modify. Setting this doc is required before updateTask can transition the task to 'Waiting for UAT'.",
+      CreateTaskUatDocSchema.shape,
+      async (args) => {
+        const result = await createTaskUatDoc(args);
+        return { content: [{ type: "text", text: result }] };
+      }
+    );
+
+    server.tool(
+      "updateTaskUatDoc",
+      "Update the existing UAT testing doc on a task (column doc_mm3adfdg). overwrite=true (default) replaces the doc; overwrite=false appends. Refuses if no doc exists — use createTaskUatDoc first.",
+      UpdateTaskUatDocSchema.shape,
+      async (args) => {
+        const result = await updateTaskUatDoc(args);
         return { content: [{ type: "text", text: result }] };
       }
     );
