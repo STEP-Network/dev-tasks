@@ -14,9 +14,52 @@ import {
   formatError,
 } from "./utils";
 
+interface TaskLinkedRef { id: number; name: string; url: string }
+
+interface TaskSubitemDetail {
+  id: string;
+  name: string;
+  status: string;
+  type?: string;
+  description?: string;
+  estimatedHours?: number;
+  actualHours?: number;
+  date?: string;
+  startedDate?: string;
+  owner?: string;
+}
+
+interface TaskDetail {
+  id: number;
+  name: string;
+  url: string;
+  publicName?: string;
+  visibility: { isPublic: boolean; reasons: string[] };
+  status: string;
+  priority: string;
+  type: string;
+  estimatedHours?: string;
+  actualHours?: string;
+  unplanned: boolean;
+  description?: string;
+  owner: string;
+  startedDate?: string;
+  dueDate?: string;
+  doneDate?: string;
+  links: { github?: string; pr?: string; demo?: string };
+  product?: string;
+  epics: TaskLinkedRef[];
+  sprints: TaskLinkedRef[];
+  versions: TaskLinkedRef[];
+  bugs: TaskLinkedRef[];
+  agent?: string;
+  planId?: string;
+  subtasks: TaskSubitemDetail[];
+}
+
 export async function getTask(args: GetTaskInput): Promise<string> {
   try {
-    const { itemId } = args;
+    const { itemId, format = "markdown" } = args;
 
     const columnIds = [
       TASK_COLUMNS.publicTaskName,
@@ -129,87 +172,109 @@ export async function getTask(args: GetTaskInput): Promise<string> {
     // Subitems
     const subitems = (item.subitems || []).map((sub: any) => formatSubtask(sub));
 
-    // Build output
-    const lines: string[] = [];
-    lines.push(`# ${item.name} (#${item.id})`);
-    lines.push(`*URL:* ${mondayItemUrl(BOARDS.TASKS, item.id)}`);
     const visibility = evaluatePublicVisibility(colMap);
-    if (visibility.isPublic && visibility.publicName) {
-      lines.push(`*Public name:* ${visibility.publicName}  ·  *Visibility:* Public (appears on roadmap & changelog)`);
-    } else {
-      lines.push(`*Visibility:* Private — hidden from roadmap & changelog (${visibility.reasons.join(", ")})`);
-    }
-    lines.push("");
-
-    // Status section
-    lines.push("## Status");
-    lines.push(`- **Status:** ${status}`);
-    lines.push(`- **Priority:** ${priority}`);
-    lines.push(`- **Type:** ${taskType}`);
-    if (estimatedHours) lines.push(`- **Estimated Hours:** ${estimatedHours}`);
-    if (actualHours) lines.push(`- **Actual Hours:** ${actualHours}`);
-    if (unplanned) lines.push(`- **Unplanned:** Yes`);
-    lines.push("");
-
-    // Assignment & Dates
-    lines.push("## Assignment & Dates");
-    lines.push(`- **Owner:** ${owner}`);
-    if (startedDate) lines.push(`- **Started:** ${startedDate}`);
-    if (dueDate) lines.push(`- **Due Date:** ${dueDate}`);
-    if (doneDate) lines.push(`- **Done Date:** ${doneDate}`);
-    lines.push("");
-
-    // Links
-    if (githubLink || prLink || demoUrl) {
-      lines.push("## Links");
-      if (githubLink) lines.push(`- **GitHub:** ${githubLink}`);
-      if (prLink) lines.push(`- **PR:** ${prLink}`);
-      if (demoUrl) lines.push(`- **Demo:** ${demoUrl}`);
-      lines.push("");
-    }
-
-    // Product / Epic / Sprint / Version Context
     const product = getMirrorDisplayValue(colMap, TASK_COLUMNS.product);
-    if (product || epicItems.length > 0 || sprintItems.length > 0 || versionItems.length > 0) {
+
+    const toRef = (boardId: number, x: { id: string | number; name: string }): TaskLinkedRef => ({
+      id: Number(x.id),
+      name: x.name,
+      url: mondayItemUrl(boardId, x.id),
+    });
+
+    const detail: TaskDetail = {
+      id: Number(item.id),
+      name: String(item.name),
+      url: mondayItemUrl(BOARDS.TASKS, item.id),
+      publicName: visibility.publicName,
+      visibility: { isPublic: visibility.isPublic, reasons: visibility.reasons },
+      status,
+      priority,
+      type: taskType,
+      estimatedHours,
+      actualHours,
+      unplanned,
+      description: description || undefined,
+      owner,
+      startedDate,
+      dueDate,
+      doneDate,
+      links: { github: githubLink, pr: prLink, demo: demoUrl },
+      product,
+      epics: epicItems.map(e => toRef(BOARDS.EPICS, e)),
+      sprints: sprintItems.map(s => toRef(BOARDS.SPRINTS, s)),
+      versions: versionItems.map(v => toRef(BOARDS.VERSIONS, v)),
+      bugs: bugItems.map(b => toRef(BOARDS.BUGS, b)),
+      agent: agentId,
+      planId,
+      subtasks: subitems as TaskSubitemDetail[],
+    };
+
+    if (format === "json") {
+      return JSON.stringify(detail, null, 2);
+    }
+
+    // Markdown rendering
+    const lines: string[] = [];
+    lines.push(`# ${detail.name} (#${detail.id})`);
+    lines.push(`*URL:* ${detail.url}`);
+    if (detail.visibility.isPublic && detail.publicName) {
+      lines.push(`*Public name:* ${detail.publicName}  ·  *Visibility:* Public (appears on roadmap & changelog)`);
+    } else {
+      lines.push(`*Visibility:* Private — hidden from roadmap & changelog (${detail.visibility.reasons.join(", ")})`);
+    }
+    lines.push("");
+
+    lines.push("## Status");
+    lines.push(`- **Status:** ${detail.status}`);
+    lines.push(`- **Priority:** ${detail.priority}`);
+    lines.push(`- **Type:** ${detail.type}`);
+    if (detail.estimatedHours) lines.push(`- **Estimated Hours:** ${detail.estimatedHours}`);
+    if (detail.actualHours) lines.push(`- **Actual Hours:** ${detail.actualHours}`);
+    if (detail.unplanned) lines.push(`- **Unplanned:** Yes`);
+    lines.push("");
+
+    lines.push("## Assignment & Dates");
+    lines.push(`- **Owner:** ${detail.owner}`);
+    if (detail.startedDate) lines.push(`- **Started:** ${detail.startedDate}`);
+    if (detail.dueDate) lines.push(`- **Due Date:** ${detail.dueDate}`);
+    if (detail.doneDate) lines.push(`- **Done Date:** ${detail.doneDate}`);
+    lines.push("");
+
+    if (detail.links.github || detail.links.pr || detail.links.demo) {
+      lines.push("## Links");
+      if (detail.links.github) lines.push(`- **GitHub:** ${detail.links.github}`);
+      if (detail.links.pr) lines.push(`- **PR:** ${detail.links.pr}`);
+      if (detail.links.demo) lines.push(`- **Demo:** ${detail.links.demo}`);
+      lines.push("");
+    }
+
+    if (detail.product || detail.epics.length || detail.sprints.length || detail.versions.length || detail.bugs.length) {
       lines.push("## Product / Epic / Sprint / Version");
-      if (product) {
-        lines.push(`- **Product:** ${product}`);
-      }
-      if (epicItems.length > 0) {
-        lines.push(`- **Epic:** ${epicItems.map(e => `${e.name} (#${e.id})`).join(", ")}`);
-      }
-      if (sprintItems.length > 0) {
-        lines.push(`- **Sprint:** ${sprintItems.map(s => `${s.name} (#${s.id})`).join(", ")}`);
-      }
-      if (versionItems.length > 0) {
-        lines.push(`- **Target Version:** ${versionItems.map(v => `${v.name} (#${v.id})`).join(", ")}`);
-      }
-      if (bugItems.length > 0) {
-        lines.push(`- **Linked Bugs:** ${bugItems.map(b => `${b.name} (#${b.id})`).join(", ")}`);
-      }
+      if (detail.product) lines.push(`- **Product:** ${detail.product}`);
+      if (detail.epics.length) lines.push(`- **Epic:** ${detail.epics.map(e => `${e.name} (#${e.id})`).join(", ")}`);
+      if (detail.sprints.length) lines.push(`- **Sprint:** ${detail.sprints.map(s => `${s.name} (#${s.id})`).join(", ")}`);
+      if (detail.versions.length) lines.push(`- **Target Version:** ${detail.versions.map(v => `${v.name} (#${v.id})`).join(", ")}`);
+      if (detail.bugs.length) lines.push(`- **Linked Bugs:** ${detail.bugs.map(b => `${b.name} (#${b.id})`).join(", ")}`);
       lines.push("");
     }
 
-    // Description
-    if (description) {
+    if (detail.description) {
       lines.push("## Description");
-      lines.push(description);
+      lines.push(detail.description);
       lines.push("");
     }
 
-    // Agent Workflow
-    if (agentId || planId) {
+    if (detail.agent || detail.planId) {
       lines.push("## Agent Workflow");
-      if (agentId) lines.push(`- **Agent:** ${agentId}`);
-      if (planId) lines.push(`- **Plan ID:** ${planId}`);
+      if (detail.agent) lines.push(`- **Agent:** ${detail.agent}`);
+      if (detail.planId) lines.push(`- **Plan ID:** ${detail.planId}`);
       lines.push("");
     }
 
-    // Subtasks
-    if (subitems.length > 0) {
-      const completed = subitems.filter((s: any) => s.status === "Done").length;
-      lines.push(`## Subtasks (${completed}/${subitems.length} complete)`);
-      for (const sub of subitems) {
+    if (detail.subtasks.length > 0) {
+      const completed = detail.subtasks.filter(s => s.status === "Done").length;
+      lines.push(`## Subtasks (${completed}/${detail.subtasks.length} complete)`);
+      for (const sub of detail.subtasks) {
         const check = sub.status === "Done" ? "[x]" : "[ ]";
         const typeStr = sub.type ? ` [${sub.type}]` : "";
         const hoursStr = sub.estimatedHours !== undefined ? ` (${sub.estimatedHours}h)` : "";

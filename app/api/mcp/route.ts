@@ -114,7 +114,7 @@ const handler = createMcpHandler(
 
     server.tool(
       "getTask",
-      "Get full task details by ID. Returns: status, priority, type, description, acceptance criteria, subtasks with progress, epic/sprint/version context, agent workflow fields, links (GitHub, PR, Demo), hours, and dates. Use this before starting work on a task.",
+      "Get full task details by ID. Returns: status, priority, type, description, acceptance criteria, subtasks with progress, epic/sprint/version context, agent workflow fields, links (GitHub, PR, Demo), hours, and dates. Includes a stable Monday URL on the task and on every linked item (epic/sprint/version/bug). Pass format='json' to get a structured response instead of markdown.",
       GetTaskSchema.shape,
       async (args) => {
         const result = await getTask(args);

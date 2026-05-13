@@ -108,6 +108,7 @@ export const GetBugsSchema = z.object({
 
 export const GetTaskSchema = z.object({
   itemId: z.number().describe("Monday.com task item ID"),
+  format: FormatEnum.optional().default("markdown").describe("Output format. 'markdown' (default) is LLM-friendly; 'json' returns a structured response."),
 });
 
 // =============================================================================
@@ -623,7 +624,7 @@ export const UpdateTaskUatDocSchema = z.object({
 
 export type GetBacklogInput = z.input<typeof GetBacklogSchema>;
 export type GetBugsInput = z.input<typeof GetBugsSchema>;
-export type GetTaskInput = z.infer<typeof GetTaskSchema>;
+export type GetTaskInput = z.input<typeof GetTaskSchema>;
 export type GetSprintInput = z.input<typeof GetSprintSchema>;
 export type ListSprintsInput = z.input<typeof ListSprintsSchema>;
 export type GetEpicInput = z.infer<typeof GetEpicSchema>;
