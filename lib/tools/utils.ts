@@ -494,12 +494,22 @@ export function hasDocColumn(colMap: Map<string, any>, columnId: string): boolea
   if (typeof docValue !== "object") return false;
   const obj = docValue as Record<string, unknown>;
   if (typeof obj.doc_id === "number" || typeof obj.doc_id === "string") return true;
+  // Monday's doc-column value uses `files: [{ fileId: "<uuid>", objectId: <id>, ... }]`.
+  // The objectId is the numeric doc id; presence of a files entry means a doc exists.
   const files = obj.files as Array<Record<string, unknown>> | undefined;
-  if (files && files.length > 0 && (typeof files[0].fileId === "number" || typeof files[0].fileId === "string")) {
-    return true;
+  if (files && files.length > 0) {
+    const f = files[0];
+    if (
+      typeof f.objectId === "number" ||
+      typeof f.objectId === "string" ||
+      typeof f.fileId === "string" ||
+      typeof f.fileId === "number"
+    ) {
+      return true;
+    }
   }
-  // Fallback: any nested id-shaped key
-  return /"(?:doc_id|id|fileId)"\s*:\s*\d+/.test(JSON.stringify(obj));
+  // Fallback: any nested doc-id-shaped key
+  return /"(?:doc_id|objectId|object_id)"\s*:\s*\d+/.test(JSON.stringify(obj));
 }
 
 export async function validateWaitingForUAT(

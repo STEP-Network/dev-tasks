@@ -1,4 +1,6 @@
-import { executeMondayQuery } from "../monday-client";
+import { DOC_API_VERSION, executeMondayQuery } from "../monday-client";
+
+const DOC_OPTS = { apiVersion: DOC_API_VERSION };
 import { VERSION_COLUMNS, TASK_COLUMNS, BUG_COLUMNS } from "../constants";
 import type { GenerateChangelogInput } from "../schemas";
 import { evaluatePublicVisibility, getColumnText, getColumnValue, getLinkedItems, resolveLinkedItems, todayDate, formatError } from "./utils";
@@ -150,52 +152,81 @@ export async function generateChangelog(args: GenerateChangelogInput): Promise<s
     const markdown = mdLines.join("\n");
 
     // Step 5: Write to Monday Doc
+    // Monday's doc column stores `{ files: [{ fileId: "<uuid>", objectId: <object id> }] }`.
+    // The objectId is the per-item linkage id, but `add_content_to_doc_from_markdown(docId: ...)`
+    // and `export_markdown_from_doc(docId: ...)` need the doc's primary `id` instead.
+    // Resolve via `docs(object_ids: [objectId]) { id }`.
     const docValue = getColumnValue(colMap, VERSION_COLUMNS.changelog);
     let docId: number | undefined;
+    let docObjectId: number | undefined;
 
-    if (docValue) {
-      if (docValue.doc_id) {
-        docId = docValue.doc_id;
-      } else if (docValue.files?.[0]?.fileId) {
-        docId = docValue.files[0].fileId;
-      } else if (typeof docValue === "object") {
-        const idMatch = JSON.stringify(docValue).match(/"(?:doc_id|id|fileId)"\s*:\s*(\d+)/);
-        if (idMatch) docId = parseInt(idMatch[1]);
+    if (docValue && typeof docValue === "object") {
+      const obj = docValue as Record<string, unknown>;
+      const files = obj.files as Array<Record<string, unknown>> | undefined;
+      if (files && files.length > 0) {
+        const oid = files[0].objectId;
+        if (typeof oid === "number") docObjectId = oid;
+        else if (typeof oid === "string" && /^\d+$/.test(oid)) docObjectId = Number(oid);
+      }
+      if (!docObjectId) {
+        const idMatch = JSON.stringify(obj).match(/"(?:objectId|object_id)"\s*:\s*(\d+)/);
+        if (idMatch) docObjectId = Number(idMatch[1]);
       }
     }
 
+    if (docObjectId) {
+      const resolveQuery = `
+        query {
+          docs(object_ids: [${docObjectId}]) { id }
+        }
+      `;
+      const resolveResponse = await executeMondayQuery<any>(resolveQuery, undefined, DOC_OPTS);
+      const rawId = resolveResponse.docs?.[0]?.id;
+      if (typeof rawId === "number") docId = rawId;
+      else if (typeof rawId === "string" && /^\d+$/.test(rawId)) docId = Number(rawId);
+    }
+
     if (docId) {
-      // Overwrite existing doc content
+      // 2025-10 dropped the `overwrite` flag — content is always appended.
+      // To emulate overwrite, drain every existing block first. Monday paginates
+      // blocks at ~25 per query, so loop until the doc is empty (capped to keep
+      // a buggy response from looping forever).
       try {
-        const overwriteQuery = `
-          mutation {
-            add_content_to_doc_from_markdown(
-              doc_id: ${docId},
-              markdown: ${JSON.stringify(markdown)},
-              overwrite: true
-            ) {
-              doc_id
-            }
-          }
-        `;
-        await executeMondayQuery<any>(overwriteQuery);
-      } catch {
-        // Fallback: try without overwrite flag
-        try {
-          const appendQuery = `
-            mutation {
-              add_content_to_doc_from_markdown(
-                doc_id: ${docId},
-                markdown: ${JSON.stringify(markdown)}
-              ) {
-                doc_id
+        for (let pass = 0; pass < 50; pass++) {
+          const blocksQuery = `
+            query {
+              docs(ids: [${docId}]) {
+                blocks { id }
               }
             }
           `;
-          await executeMondayQuery<any>(appendQuery);
-        } catch (docErr) {
-          return formatError(`Changelog generated but failed to write to doc: ${docErr instanceof Error ? docErr.message : String(docErr)}`);
+          const blocksResponse = await executeMondayQuery<any>(blocksQuery, undefined, DOC_OPTS);
+          const blocks: Array<{ id: string }> = blocksResponse.docs?.[0]?.blocks || [];
+          if (blocks.length === 0) break;
+          for (const block of blocks) {
+            if (!block.id) continue;
+            const delMutation = `
+              mutation {
+                delete_doc_block(block_id: ${JSON.stringify(block.id)}) { id }
+              }
+            `;
+            await executeMondayQuery<unknown>(delMutation, undefined, DOC_OPTS);
+          }
         }
+
+        const writeQuery = `
+          mutation {
+            add_content_to_doc_from_markdown(
+              docId: ${docId},
+              markdown: ${JSON.stringify(markdown)}
+            ) {
+              success
+            }
+          }
+        `;
+        await executeMondayQuery<any>(writeQuery, undefined, DOC_OPTS);
+      } catch (docErr) {
+        return formatError(`Changelog generated but failed to write to doc: ${docErr instanceof Error ? docErr.message : String(docErr)}`);
       }
     } else {
       // Create new doc attached to the version item
@@ -209,21 +240,21 @@ export async function generateChangelog(args: GenerateChangelogInput): Promise<s
             }
           }
         `;
-        const createDocResponse = await executeMondayQuery<any>(createDocQuery);
+        const createDocResponse = await executeMondayQuery<any>(createDocQuery, undefined, DOC_OPTS);
         const newDocId = createDocResponse.create_doc?.id;
 
         if (newDocId) {
           const writeQuery = `
             mutation {
               add_content_to_doc_from_markdown(
-                doc_id: ${newDocId},
+                docId: ${newDocId},
                 markdown: ${JSON.stringify(markdown)}
               ) {
-                doc_id
+                success
               }
             }
           `;
-          await executeMondayQuery<any>(writeQuery);
+          await executeMondayQuery<any>(writeQuery, undefined, DOC_OPTS);
           docId = newDocId;
         }
       } catch (createErr) {

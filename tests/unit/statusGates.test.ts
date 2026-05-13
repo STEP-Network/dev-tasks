@@ -150,6 +150,12 @@ describe("hasDocColumn", () => {
     expect(hasDocColumn(colMap({ files: [{ fileId: 999 }] }), "doc_col")).toBe(true);
   });
 
+  it("detects a doc via files[0].objectId (Monday's real shape: uuid fileId + numeric objectId)", () => {
+    expect(hasDocColumn(colMap({
+      files: [{ fileId: "40527c4d-ba99-4830-af20-4bb190e88a5a", objectId: 5096385810 }],
+    }), "doc_col")).toBe(true);
+  });
+
   it("returns false for empty/missing values", () => {
     expect(hasDocColumn(new Map(), "doc_col")).toBe(false);
     expect(hasDocColumn(colMap(""), "doc_col")).toBe(false);

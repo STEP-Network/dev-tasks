@@ -1,7 +1,17 @@
 const MONDAY_API_URL = "https://api.monday.com/v2";
-const API_VERSION = "2024-10";
+const DEFAULT_API_VERSION = "2024-10";
 
-export async function executeMondayQuery<T>(query: string, variables?: Record<string, unknown>): Promise<T> {
+// Doc-related GraphQL fields (`add_content_to_doc_from_markdown`,
+// `export_markdown_from_doc`) only exist on API 2025-10+. Pass this as
+// `apiVersion` when calling those ops; everything else stays on 2024-10
+// so other tools aren't exposed to year-old behavior changes.
+export const DOC_API_VERSION = "2025-10";
+
+export async function executeMondayQuery<T>(
+  query: string,
+  variables?: Record<string, unknown>,
+  options?: { apiVersion?: string },
+): Promise<T> {
   const apiKey = process.env.MONDAY_API_KEY;
 
   if (!apiKey) {
@@ -18,7 +28,7 @@ export async function executeMondayQuery<T>(query: string, variables?: Record<st
     headers: {
       "Content-Type": "application/json",
       Authorization: apiKey,
-      "API-Version": API_VERSION,
+      "API-Version": options?.apiVersion ?? DEFAULT_API_VERSION,
     },
     body: JSON.stringify(body),
   });

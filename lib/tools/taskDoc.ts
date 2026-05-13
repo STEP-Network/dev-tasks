@@ -1,5 +1,5 @@
-import { executeMondayQuery } from "../monday-client";
-import { BOARDS, TASK_COLUMNS } from "../constants";
+import { DOC_API_VERSION, executeMondayQuery } from "../monday-client";
+import { TASK_COLUMNS } from "../constants";
 import type {
   GetTaskUatDocInput,
   CreateTaskUatDocInput,
@@ -7,7 +7,34 @@ import type {
 } from "../schemas";
 import { getColumnValue, formatError } from "./utils";
 
-// Fetch the doc_id from the task's UAT doc column. Returns undefined if no doc.
+// Doc-related GraphQL fields are exposed on API 2025-10+ (`docId` camelCase
+// args, `export_markdown_from_doc`, `add_content_to_doc_from_markdown`).
+// The rest of the codebase stays on the project default (2024-10).
+const DOC_OPTS = { apiVersion: DOC_API_VERSION };
+
+// Extract Monday's object_id (the per-item doc reference) from the column value.
+// The doc column stores `{ files: [{ fileId: "<uuid>", objectId: <numeric> }] }`.
+// objectId is what `docs(object_ids: [...])` needs to resolve to the primary doc id.
+function extractDocObjectId(docValue: unknown): number | undefined {
+  if (!docValue || typeof docValue !== "object") return undefined;
+  const obj = docValue as Record<string, unknown>;
+  if (typeof obj.doc_id === "number") return obj.doc_id;
+  if (typeof obj.doc_id === "string" && /^\d+$/.test(obj.doc_id)) return Number(obj.doc_id);
+  const files = obj.files as Array<Record<string, unknown>> | undefined;
+  if (files && files.length > 0) {
+    const oid = files[0].objectId;
+    if (typeof oid === "number") return oid;
+    if (typeof oid === "string" && /^\d+$/.test(oid)) return Number(oid);
+  }
+  const match = JSON.stringify(obj).match(/"(?:doc_id|objectId|object_id)"\s*:\s*(\d+)/);
+  return match ? Number(match[1]) : undefined;
+}
+
+// Fetch the task's UAT doc primary id. Returns undefined if no doc.
+// Monday's doc API uses TWO different ids:
+//   - object_id (5096385810): per-item linkage, stored in the column value
+//   - id (8664429): the doc's primary key, needed for export/write mutations
+// We resolve object_id → primary id via `docs(object_ids: [...]) { id }`.
 async function fetchUatDocId(taskId: number): Promise<number | undefined> {
   const query = `
     query {
@@ -25,22 +52,60 @@ async function fetchUatDocId(taskId: number): Promise<number | undefined> {
 
   const colMap = new Map<string, any>(item.column_values?.map((c: any) => [c.id, c]) || []);
   const docValue = getColumnValue(colMap, TASK_COLUMNS.uatDoc);
-  if (!docValue || typeof docValue !== "object") return undefined;
+  const objectId = extractDocObjectId(docValue);
+  if (!objectId) return undefined;
 
-  const obj = docValue as Record<string, unknown>;
-  if (typeof obj.doc_id === "number") return obj.doc_id;
-  if (typeof obj.doc_id === "string" && /^\d+$/.test(obj.doc_id)) return Number(obj.doc_id);
+  const docQuery = `
+    query {
+      docs(object_ids: [${objectId}]) {
+        id
+      }
+    }
+  `;
+  const docResponse = await executeMondayQuery<any>(docQuery, undefined, DOC_OPTS);
+  const rawId = docResponse.docs?.[0]?.id;
+  if (typeof rawId === "number") return rawId;
+  if (typeof rawId === "string" && /^\d+$/.test(rawId)) return Number(rawId);
+  return undefined;
+}
 
-  const files = obj.files as Array<Record<string, unknown>> | undefined;
-  if (files && files.length > 0) {
-    const fid = files[0].fileId;
-    if (typeof fid === "number") return fid;
-    if (typeof fid === "string" && /^\d+$/.test(fid)) return Number(fid);
+async function fetchDocBlockIds(docId: number): Promise<string[]> {
+  // docId here is the doc's primary id (resolved by fetchUatDocId),
+  // so look it up via `docs(ids: [...])` rather than `docs(object_ids: [...])`.
+  const query = `
+    query {
+      docs(ids: [${docId}]) {
+        blocks {
+          id
+        }
+      }
+    }
+  `;
+  const response = await executeMondayQuery<any>(query, undefined, DOC_OPTS);
+  const blocks = response.docs?.[0]?.blocks || [];
+  return blocks.map((b: { id: string }) => b.id).filter(Boolean);
+}
+
+async function deleteAllDocBlocks(docId: number): Promise<number> {
+  // Monday returns blocks in pages of ~25. Loop until the doc is empty.
+  // Cap the iterations so a buggy reply can't spin forever.
+  let total = 0;
+  for (let pass = 0; pass < 50; pass++) {
+    const ids = await fetchDocBlockIds(docId);
+    if (ids.length === 0) break;
+    for (const id of ids) {
+      const mutation = `
+        mutation {
+          delete_doc_block(block_id: ${JSON.stringify(id)}) {
+            id
+          }
+        }
+      `;
+      await executeMondayQuery<unknown>(mutation, undefined, DOC_OPTS);
+      total++;
+    }
   }
-
-  // Fallback: regex-scan the serialized object for any id-shaped key
-  const match = JSON.stringify(obj).match(/"(?:doc_id|id|fileId)"\s*:\s*(\d+)/);
-  return match ? Number(match[1]) : undefined;
+  return total;
 }
 
 export async function getTaskUatDoc(args: GetTaskUatDocInput): Promise<string> {
@@ -55,14 +120,14 @@ export async function getTaskUatDoc(args: GetTaskUatDocInput): Promise<string> {
 
     const query = `
       query {
-        export_markdown_from_doc(doc_id: ${docId}) {
+        export_markdown_from_doc(docId: ${docId}) {
           success
           markdown
           error
         }
       }
     `;
-    const response = await executeMondayQuery<any>(query);
+    const response = await executeMondayQuery<any>(query, undefined, DOC_OPTS);
     const result = response.export_markdown_from_doc;
     if (!result?.success) {
       return formatError(`Failed to export UAT doc for task #${taskId}: ${result?.error ?? "unknown error"}`);
@@ -89,16 +154,20 @@ export async function createTaskUatDoc(args: CreateTaskUatDocInput): Promise<str
       );
     }
 
+    // CreateDocBoardInput only accepts column_id + item_id (verified via schema
+    // introspection on 2026-05-13). Earlier versions of this code included a
+    // board_id field, which Monday rejected with "Field 'board_id' is not
+    // defined by type 'CreateDocBoardInput'". The board is inferred from item_id.
     const createMutation = `
       mutation {
         create_doc(
-          location: { board: { item_id: ${taskId}, column_id: "${TASK_COLUMNS.uatDoc}", board_id: ${BOARDS.TASKS} } }
+          location: { board: { item_id: ${taskId}, column_id: "${TASK_COLUMNS.uatDoc}" } }
         ) {
           id
         }
       }
     `;
-    const createResponse = await executeMondayQuery<any>(createMutation);
+    const createResponse = await executeMondayQuery<any>(createMutation, undefined, DOC_OPTS);
     const newDocId = createResponse.create_doc?.id;
     if (!newDocId) {
       return formatError(`Failed to create UAT doc for task #${taskId}: Monday did not return a doc id.`);
@@ -107,14 +176,14 @@ export async function createTaskUatDoc(args: CreateTaskUatDocInput): Promise<str
     const writeMutation = `
       mutation {
         add_content_to_doc_from_markdown(
-          doc_id: ${newDocId},
+          docId: ${newDocId},
           markdown: ${JSON.stringify(markdown)}
         ) {
-          doc_id
+          success
         }
       }
     `;
-    await executeMondayQuery<any>(writeMutation);
+    await executeMondayQuery<any>(writeMutation, undefined, DOC_OPTS);
 
     return [
       `# UAT Doc Created`,
@@ -138,25 +207,32 @@ export async function updateTaskUatDoc(args: UpdateTaskUatDocInput): Promise<str
       );
     }
 
+    // Monday's 2025-10 API removed the `overwrite` flag from
+    // add_content_to_doc_from_markdown — content is always appended. To emulate
+    // overwrite, delete every existing block first, then append.
+    let deletedBlocks = 0;
+    if (overwrite) {
+      deletedBlocks = await deleteAllDocBlocks(docId);
+    }
+
     const mutation = `
       mutation {
         add_content_to_doc_from_markdown(
-          doc_id: ${docId},
-          markdown: ${JSON.stringify(markdown)},
-          overwrite: ${overwrite ? "true" : "false"}
+          docId: ${docId},
+          markdown: ${JSON.stringify(markdown)}
         ) {
-          doc_id
+          success
         }
       }
     `;
-    await executeMondayQuery<any>(mutation);
+    await executeMondayQuery<any>(mutation, undefined, DOC_OPTS);
 
     return [
       `# UAT Doc Updated`,
       ``,
       `**Task:** #${taskId}`,
       `**Doc ID:** ${docId}`,
-      `**Mode:** ${overwrite ? "overwrite" : "append"}`,
+      `**Mode:** ${overwrite ? `overwrite (deleted ${deletedBlocks} block${deletedBlocks === 1 ? "" : "s"})` : "append"}`,
       `**Characters written:** ${markdown.length}`,
     ].join("\n");
   } catch (error) {
