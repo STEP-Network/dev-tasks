@@ -1,11 +1,18 @@
 import { executeMondayQuery } from "../monday-client";
 import { BOARDS, SPRINT_COLUMNS, TASK_COLUMNS } from "../constants";
 import type { ListSprintsInput } from "../schemas";
-import { getColumnText, getLinkedItems, parseMondayDate, resolveLinkedItems, formatError } from "./utils";
+import { getColumnText, getLinkedItems, parseMondayDate, resolveLinkedItems, todayDate, formatError } from "./utils";
+
+// Monday's items_page caps at 500; 200 is plenty for years of sprints.
+const FETCH_CAP = 200;
 
 export async function listSprints(args: ListSprintsInput): Promise<string> {
   try {
-    const { activeOnly = false, search, limit = 25 } = args;
+    const { activeOnly = false, pastOnly = false, search } = args;
+
+    if (activeOnly && pastOnly) {
+      return formatError(`activeOnly and pastOnly are mutually exclusive — pass only one.`);
+    }
 
     const columnIds = [
       SPRINT_COLUMNS.goals,
@@ -25,13 +32,10 @@ export async function listSprints(args: ListSprintsInput): Promise<string> {
       ? `, query_params: { rules: [${rules.join(", ")}] }`
       : "";
 
-    // Fetch more if filtering client-side via search
-    const fetchLimit = search ? 200 : limit;
-
     const query = `
       query {
         boards(ids: [${BOARDS.SPRINTS}]) {
-          items_page(limit: ${fetchLimit}${queryParams}) {
+          items_page(limit: ${FETCH_CAP}${queryParams}) {
             items {
               id
               name
@@ -55,26 +59,54 @@ export async function listSprints(args: ListSprintsInput): Promise<string> {
       items = items.filter((item: any) => item.name.toLowerCase().includes(term));
     }
 
-    // Sort by start date descending (newest first); items missing a start date sink to the bottom
+    // Filter by sprint end date relative to today.
+    //   default          → keep sprints with endDate >= today, OR endDate missing
+    //   pastOnly=true    → keep sprints with endDate < today
+    //   activeOnly=true  → already filtered server-side; skip the date filter
+    if (!activeOnly) {
+      const today = todayDate();
+      items = items.filter((item: any) => {
+        const map = new Map<string, any>(item.column_values?.map((c: any) => [c.id, c]) || []);
+        const end = parseMondayDate(map.get(SPRINT_COLUMNS.endDate));
+        if (pastOnly) {
+          return !!end && end < today;
+        }
+        return !end || end >= today;
+      });
+    }
+
+    // Sort:
+    //   default          → oldest startDate first (current sprint surfaces above future ones)
+    //   pastOnly=true    → newest endDate first (most recently ended on top)
+    //   activeOnly=true  → newest startDate first (existing behavior)
     items.sort((a: any, b: any) => {
       const aMap = new Map<string, any>(a.column_values?.map((c: any) => [c.id, c]) || []);
       const bMap = new Map<string, any>(b.column_values?.map((c: any) => [c.id, c]) || []);
+      if (pastOnly) {
+        const aEnd = parseMondayDate(aMap.get(SPRINT_COLUMNS.endDate)) || "";
+        const bEnd = parseMondayDate(bMap.get(SPRINT_COLUMNS.endDate)) || "";
+        if (!aEnd && !bEnd) return 0;
+        if (!aEnd) return 1;
+        if (!bEnd) return -1;
+        return bEnd.localeCompare(aEnd);
+      }
       const aStart = parseMondayDate(aMap.get(SPRINT_COLUMNS.startDate)) || "";
       const bStart = parseMondayDate(bMap.get(SPRINT_COLUMNS.startDate)) || "";
       if (!aStart && !bStart) return 0;
       if (!aStart) return 1;
       if (!bStart) return -1;
-      return bStart.localeCompare(aStart);
+      if (activeOnly) return bStart.localeCompare(aStart);
+      return aStart.localeCompare(bStart);
     });
-
-    items = items.slice(0, limit);
 
     if (items.length === 0) {
       const filterDesc = [
+        pastOnly && "pastOnly=true",
         activeOnly && "activeOnly=true",
+        !pastOnly && !activeOnly && "default view (active + upcoming)",
         search && `search="${search}"`,
       ].filter(Boolean).join(", ");
-      return formatError(`No sprints found${filterDesc ? ` matching ${filterDesc}` : ""}.`);
+      return formatError(`No sprints found${filterDesc ? ` (${filterDesc})` : ""}.`);
     }
 
     // Batch-resolve every linked task across all sprints in one shot, then read back

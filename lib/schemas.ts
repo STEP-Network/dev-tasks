@@ -119,9 +119,9 @@ export const GetSprintSchema = z.object({
 // =============================================================================
 
 export const ListSprintsSchema = z.object({
-  activeOnly: z.boolean().optional().default(false).describe("Only return sprints with the activation checkbox set"),
+  pastOnly: z.boolean().optional().default(false).describe("Show only past (ended) sprints — those whose end date is before today, sorted newest-ended first. Default: list active + upcoming sprints (end date today or later, plus sprints with no end date), sorted oldest-start-first so the current sprint comes before future ones."),
+  activeOnly: z.boolean().optional().default(false).describe("Only return sprints with the activation checkbox set. Mutually exclusive with pastOnly."),
   search: z.string().optional().describe("Filter sprints whose name contains this text (case-insensitive)"),
-  limit: z.number().optional().default(25).describe("Max sprints to return (default: 25)"),
 });
 
 // =============================================================================
