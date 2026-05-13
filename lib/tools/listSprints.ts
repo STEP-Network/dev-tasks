@@ -8,7 +8,7 @@ const FETCH_CAP = 200;
 
 export async function listSprints(args: ListSprintsInput): Promise<string> {
   try {
-    const { activeOnly = false, pastOnly = false, includeTasks = false } = args;
+    const { activeOnly = false, pastOnly = false } = args;
 
     if (activeOnly && pastOnly) {
       return formatError(`activeOnly and pastOnly are mutually exclusive — pass only one.`);
@@ -116,19 +116,14 @@ export async function listSprints(args: ListSprintsInput): Promise<string> {
     const taskEpicsMap = new Map<number, Array<{ id: string; name: string }>>();
     const taskMetaMap = new Map<number, { name: string; status: string }>();
     if (allTaskIds.size > 0) {
-      const columnsToFetch = includeTasks
-        ? [TASK_COLUMNS.epic, TASK_COLUMNS.status]
-        : [TASK_COLUMNS.epic];
-      const resolvedTasks = await resolveLinkedItems([...allTaskIds], columnsToFetch);
+      const resolvedTasks = await resolveLinkedItems([...allTaskIds], [TASK_COLUMNS.epic, TASK_COLUMNS.status]);
       for (const task of resolvedTasks) {
         const taskColMap = new Map<string, any>(task.column_values?.map((c: any) => [c.id, c]) || []);
         taskEpicsMap.set(Number(task.id), getLinkedItems(taskColMap, TASK_COLUMNS.epic));
-        if (includeTasks) {
-          taskMetaMap.set(Number(task.id), {
-            name: String(task.name),
-            status: getColumnText(taskColMap, TASK_COLUMNS.status) || "Unknown",
-          });
-        }
+        taskMetaMap.set(Number(task.id), {
+          name: String(task.name),
+          status: getColumnText(taskColMap, TASK_COLUMNS.status) || "Unknown",
+        });
       }
     }
 
@@ -165,7 +160,7 @@ export async function listSprints(args: ListSprintsInput): Promise<string> {
       lines.push(`  Epics (${epicEntries.length}): ${epicsLine}`);
       if (goal) lines.push(`  Goal: ${goal}`);
 
-      if (includeTasks && linkedTasks.length > 0) {
+      if (linkedTasks.length > 0) {
         lines.push(`  Tasks:`);
         for (const t of linkedTasks) {
           const meta = taskMetaMap.get(Number(t.id));
