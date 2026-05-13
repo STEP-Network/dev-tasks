@@ -588,6 +588,19 @@ export async function validateWaitingForUAT(
 }
 
 // =============================================================================
+// Monday deep links
+// =============================================================================
+//
+// Stable URL to a Monday item view. The workspace subdomain is hard-coded —
+// move it to env if/when the MCP serves other workspaces.
+
+const MONDAY_WORKSPACE = "stepas";
+
+export function mondayItemUrl(boardId: number | string, itemId: number | string): string {
+  return `https://${MONDAY_WORKSPACE}.monday.com/boards/${boardId}/pulses/${itemId}`;
+}
+
+// =============================================================================
 // Error Formatter
 // =============================================================================
 

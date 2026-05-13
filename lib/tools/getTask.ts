@@ -1,5 +1,5 @@
 import { executeMondayQuery } from "../monday-client";
-import { TASK_COLUMNS, SUBTASK_COLUMNS } from "../constants";
+import { BOARDS, TASK_COLUMNS, SUBTASK_COLUMNS } from "../constants";
 import type { GetTaskInput } from "../schemas";
 import {
   evaluatePublicVisibility,
@@ -8,6 +8,7 @@ import {
   getLinkedItems,
   getMirrorDisplayValue,
   getLinkUrl,
+  mondayItemUrl,
   parseMondayDate,
   formatSubtask,
   formatError,
@@ -131,6 +132,7 @@ export async function getTask(args: GetTaskInput): Promise<string> {
     // Build output
     const lines: string[] = [];
     lines.push(`# ${item.name} (#${item.id})`);
+    lines.push(`*URL:* ${mondayItemUrl(BOARDS.TASKS, item.id)}`);
     const visibility = evaluatePublicVisibility(colMap);
     if (visibility.isPublic && visibility.publicName) {
       lines.push(`*Public name:* ${visibility.publicName}  ·  *Visibility:* Public (appears on roadmap & changelog)`);
