@@ -15,7 +15,7 @@ describe("createTask", () => {
       tasks: [
         {
           name: "[TEST] Integration Test Task",
-          type: "Development",
+          type: "Feature",
           priority: "Low",
           description: "Integration test - will be deleted",
         },
@@ -29,7 +29,7 @@ describe("createTask", () => {
   it("should retrieve the created task with getTask", async () => {
     const result = await getTask({ itemId: taskId });
     expect(result).toContain("[TEST] Integration Test Task");
-    expect(result).toContain("Development");
+    expect(result).toContain("Feature");
     expect(result).toContain("Low");
   });
 

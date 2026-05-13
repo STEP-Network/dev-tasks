@@ -15,7 +15,7 @@ describe("claimTask", () => {
       tasks: [
         {
           name: "[TEST] Claim Test Task",
-          type: "Development",
+          type: "Feature",
           priority: "Low",
           status: "Ready to Start",
           description: "Claiming test - will be deleted",

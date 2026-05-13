@@ -1,11 +1,31 @@
 import { describe, it, expect } from "vitest";
 import {
+  categoryForTaskType,
   emptyChangelog,
   serializeForStorage,
   parseRawChangelog,
   migrateChangelog,
   type StructuredChangelog,
 } from "@/lib/tools/structuredChangelog";
+
+describe("categoryForTaskType", () => {
+  it("maps task types 1:1 to changelog categories", () => {
+    expect(categoryForTaskType("Feature")).toBe("Feature");
+    expect(categoryForTaskType("Fix")).toBe("Fix");
+    expect(categoryForTaskType("Improvement")).toBe("Improvement");
+  });
+
+  it("maps human and unset types to Improvement", () => {
+    expect(categoryForTaskType("To Do")).toBe("Improvement");
+    expect(categoryForTaskType("Not Set")).toBe("Improvement");
+  });
+
+  it("falls back to Improvement for unknown and missing types", () => {
+    expect(categoryForTaskType(undefined)).toBe("Improvement");
+    expect(categoryForTaskType("")).toBe("Improvement");
+    expect(categoryForTaskType("Mystery")).toBe("Improvement");
+  });
+});
 
 describe("serializeForStorage", () => {
   it("renders entries as bare strings with public name + (#id) suffix", () => {

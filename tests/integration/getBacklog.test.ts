@@ -7,9 +7,9 @@ describe("getBacklog", () => {
 
     expect(result).toBeTruthy();
     expect(typeof result).toBe("string");
-    // Default filter shows Backlog + Ready to Start
+    // Default filter shows Needs Refinement + Ready to Start (everything not yet in flight)
     expect(result).toContain("# Backlog");
-    expect(result).toContain("status: Backlog + Ready to Start");
+    expect(result).toContain("status: Needs Refinement + Ready to Start");
     // Should contain task formatting
     expect(result).toMatch(/tasks/);
   });

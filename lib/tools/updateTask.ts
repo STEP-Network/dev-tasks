@@ -207,17 +207,10 @@ export async function updateTask(args: UpdateTaskInput): Promise<string> {
     }
 
     if (args.dependencyIds !== undefined) {
-      try {
-        const depColumnId = (TASK_COLUMNS as Record<string, string>)["dependencies"];
-        if (depColumnId) {
-          columnValues[depColumnId] = { item_ids: args.dependencyIds };
-          changes.push(`Dependencies -> [${args.dependencyIds.join(", ")}]`);
-        } else {
-          changes.push(`Dependencies -> skipped (column not configured)`);
-        }
-      } catch {
-        changes.push(`Dependencies -> skipped (column not configured)`);
-      }
+      columnValues[TASK_COLUMNS.dependencies] = { item_ids: args.dependencyIds };
+      changes.push(args.dependencyIds.length > 0
+        ? `Dependencies -> [${args.dependencyIds.join(", ")}]`
+        : `Dependencies -> cleared`);
     }
 
     // Execute column value update if there are changes

@@ -54,11 +54,12 @@ export async function claimTask(args: ClaimTaskInput): Promise<string> {
 
     // Check status is Backlog or Ready to Start
     const currentStatus = getColumnText(colMap, TASK_COLUMNS.status) || "Unknown";
-    const claimableStatuses = ["Backlog", "Ready to Start"];
+    const claimableStatuses = ["Ready to Start"];
     if (!claimableStatuses.includes(currentStatus)) {
       return formatError(
         `Cannot claim task #${itemId} "${item.name}".\n` +
-        `Current status is "${currentStatus}" — task must be "Backlog" or "Ready to Start" to claim.`
+        `Current status is "${currentStatus}" — task must be "Ready to Start" to claim. ` +
+        `(Tasks in "Needs Refinement" must be refined and sprint-assigned before they can be started.)`
       );
     }
 

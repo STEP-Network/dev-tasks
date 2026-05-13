@@ -62,7 +62,8 @@ export async function convertFeedbackToTask(args: ConvertFeedbackToTaskInput): P
     const taskPriority = priorityMap[itemPriority] || "Medium";
 
     // Determine task type: explicit override > inferred from feedback type
-    const resolvedTaskType = taskType || (itemType === "Request" ? "Development" : "Maintenance");
+    // Requests typically describe new functionality → Feature; raw feedback maps to Improvement.
+    const resolvedTaskType = taskType || (itemType === "Request" ? "Feature" : "Improvement");
 
     // Resolve epic: explicit epicId > product's maintenance epic
     let resolvedEpicId: number | undefined = epicId;

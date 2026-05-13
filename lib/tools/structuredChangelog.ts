@@ -39,13 +39,15 @@ export function emptyChangelog(): StructuredChangelog {
 // Task type → category mapping
 // =============================================================================
 
+// Task types map 1:1 to changelog categories (Feature/Fix/Improvement). Human todos
+// and unset types fall through to Improvement, but in practice they're filtered out
+// upstream by evaluatePublicVisibility since they shouldn't have a public name.
 const TASK_TYPE_TO_CATEGORY: Record<string, Category> = {
-  Development: "Feature",
-  Bugfix: "Fix",
-  Maintenance: "Improvement",
-  Refine: "Improvement",
-  Documentation: "Improvement",
-  "PM-work": "Improvement",
+  Feature: "Feature",
+  Fix: "Fix",
+  Improvement: "Improvement",
+  "To Do": "Improvement",
+  "Not Set": "Improvement",
 };
 
 export function categoryForTaskType(taskType: string | undefined): Category {

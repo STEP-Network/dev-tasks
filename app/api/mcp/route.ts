@@ -84,7 +84,7 @@ const handler = createMcpHandler(
 
     server.tool(
       "getBacklog",
-      "Get the prioritized task queue for coding agents. Returns tasks ordered by board position (priority). Default: shows Backlog + Ready to Start tasks. Use unclaimedOnly=true to see tasks available for claiming. Filters: status, type, unclaimedOnly, agentId, epicId, sprintId.",
+      "Get the prioritized task queue for coding agents. Returns tasks ordered by board position (priority). Default: shows Needs Refinement + Ready to Start tasks (everything not yet in flight). Use unclaimedOnly=true to see tasks available for claiming. Filters: status, type, unclaimedOnly, agentId, epicId, sprintId.",
       GetBacklogSchema.shape,
       async (args) => {
         const result = await getBacklog(args);
@@ -172,7 +172,7 @@ const handler = createMcpHandler(
 
     server.tool(
       "claimTask",
-      "Atomically claim a task for your agent. Pass your system username (output of `whoami`) as owner. Validates: task must be 'Backlog' or 'Ready to Start', must not be claimed by another agent, and all dependencies must be resolved (Done). On success: sets status to 'In Progress', assigns owner, records Agent ID, Plan ID, and started date. Returns error with current owner if already claimed.",
+      "Atomically claim a task for your agent. Pass your system username (output of `whoami`) as owner. Validates: task must be 'Ready to Start' (tasks in 'Needs Refinement' must be refined and sprint-assigned first), must be in the active sprint, must not be claimed by another agent, and all blocked-by dependencies (dependency_mm0pwbxn column) must be Done. On success: sets status to 'In Progress', assigns owner, records Agent ID, Plan ID, and started date. Returns error with current owner if already claimed.",
       ClaimTaskSchema.shape,
       async (args) => {
         const result = await claimTask(args);
@@ -182,7 +182,7 @@ const handler = createMcpHandler(
 
     server.tool(
       "updateTask",
-      "Update any task field. Supports: status, priority, type, description, hours (estimated/actual), links (GitHub/PR/Demo), epic, sprint, version, agent metadata, branch name, acceptance criteria, dependencies. Set delete=true to delete. IMPORTANT: Do NOT set status to 'Done' directly — mark all subtasks as Done instead (Monday automation auto-completes the parent). Remember to set actualHours when moving to 'Waiting for Review'. Use listEpics/listSprints to find epicId/sprintId.",
+      "Update any task field. Supports: status (Needs Refinement, Ready to Start, In Progress, Waiting for UAT, Pending Deploy to Prod, Done, Stuck), priority (Critical/High/Medium/Low/Missing), type (Feature/Fix/Improvement/To Do/Not Set), description, hours (estimated/actual), links (GitHub/PR/Demo), epic, sprint, version, agent metadata, branch name, acceptance criteria, dependencyIds (array of task IDs this task is blocked-by — stored in column dependency_mm0pwbxn; claimTask refuses until all are Done). Set delete=true to delete. IMPORTANT: Do NOT set status to 'Done' directly — mark all subtasks as Done instead (Monday automation auto-completes the parent). Set actualHours when moving to 'Waiting for UAT'. Use listEpics/listSprints to find epicId/sprintId.",
       UpdateTaskSchema.shape,
       async (args) => {
         const result = await updateTask(args);
@@ -192,7 +192,7 @@ const handler = createMcpHandler(
 
     server.tool(
       "manageSubtasks",
-      "Create, update, and delete subtasks in a single call. Each operation specifies action='create'|'update'|'delete'. Supports typed subtasks (Backend, Test, Documentation, UX-UI, Database, PM-work), status tracking, hours, and name-based lookup for updates/deletes. Remember to set actualHours on subtasks when marking them Done. IMPORTANT: When all subtasks are Done, Monday automation auto-completes the parent task — delete unwanted subtasks before marking the last one Done.",
+      "Create, update, and delete subtasks in a single call. Each operation specifies action='create'|'update'|'delete'. Subtask types: Backend, Test, Documentation, UX-UI, Database, To Do. Subtask statuses: Needs Refinement → Ready to Start → In Progress → Done (+ Stuck). Always set the type on every subtask. Remember to set actualHours when marking a subtask Done. IMPORTANT: When all subtasks are Done, Monday automation auto-completes the parent task — delete unwanted subtasks before marking the last one Done.",
       ManageSubtasksSchema.shape,
       async (args) => {
         const result = await manageSubtasks(args);
@@ -206,7 +206,7 @@ const handler = createMcpHandler(
 
     server.tool(
       "createTask",
-      "IMPORTANT: Use getBacklog first to check for existing similar tasks. Create one or more tasks with optional subtasks, epic/sprint linkage, acceptance criteria, dependencies, and agent metadata. Pass your system username (output of `whoami`) as owner. Use listEpics to find the right epicId. For discovered tech debt, follow-up work, or breaking down larger tasks.",
+      "IMPORTANT: Use getBacklog first to check for existing similar tasks. Create one or more tasks with optional subtasks, epic/sprint linkage, acceptance criteria, dependencyIds (blocked-by tasks stored in column dependency_mm0pwbxn), and agent metadata. Status defaults to 'Needs Refinement'; pass 'Ready to Start' once name/priority/type/epic/description are filled in and subtasks exist. Type values: Feature (new functionality), Fix (bugfix), Improvement (tech debt / refactor / small UX), To Do (human task), Not Set. Pass your system username (output of `whoami`) as owner. Use listEpics to find the right epicId. For discovered tech debt, follow-up work, or breaking down larger tasks.",
       CreateTaskSchema.shape,
       async (args) => {
         const result = await createTask(args);
@@ -216,7 +216,7 @@ const handler = createMcpHandler(
 
     server.tool(
       "convertBugToTask",
-      "Convert a bug into a Bugfix task. Use getBugs to find the bugId. Copies bug name, description, and priority. Creates task with type=Bugfix, links bug<->task, and sets bug status to 'Fixing'. If no epicId specified, auto-assigns the product's maintenance epic (if one exists). Optionally link to epic/sprint.",
+      "Convert a bug into a Fix task. Use getBugs to find the bugId. Copies bug name, description, and priority. Creates task with type=Fix, status='Ready to Start', links bug<->task, and sets bug status to 'Fixing'. If no epicId specified, auto-assigns the product's maintenance epic (if one exists). Optionally link to epic/sprint.",
       ConvertBugToTaskSchema.shape,
       async (args) => {
         const result = await convertBugToTask(args);
@@ -382,7 +382,7 @@ const handler = createMcpHandler(
 
     server.tool(
       "convertFeedbackToTask",
-      "Convert a feedback/request item into a task. Copies name, priority, and description from the feedback item. Auto-infers task type from feedback type (Request→Development, Feedback→Maintenance) unless overridden. If no epicId specified, auto-assigns the product's maintenance epic (if one exists). Links the new task back to the feedback item via two-way relation and sets feedback status to 'Converted'. Optionally assign to epic/sprint or add extra description.",
+      "Convert a feedback/request item into a task. Copies name, priority, and description from the feedback item. Auto-infers task type from feedback type (Request→Feature, Feedback→Improvement) unless overridden. If no epicId specified, auto-assigns the product's maintenance epic (if one exists). Links the new task back to the feedback item via two-way relation and sets feedback status to 'Converted'. Optionally assign to epic/sprint or add extra description.",
       ConvertFeedbackToTaskSchema.shape,
       async (args) => {
         const result = await convertFeedbackToTask(args);

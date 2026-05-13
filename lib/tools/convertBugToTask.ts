@@ -83,7 +83,7 @@ export async function convertBugToTask(args: ConvertBugToTaskInput): Promise<str
     // Step 2: Create the new task
     const taskColumnValues: Record<string, unknown> = {};
 
-    taskColumnValues[TASK_COLUMNS.type] = { index: TASK_TYPE["Bugfix"] };
+    taskColumnValues[TASK_COLUMNS.type] = { index: TASK_TYPE["Fix"] };
     taskColumnValues[TASK_COLUMNS.priority] = { index: TASK_PRIORITY[taskPriority] };
     taskColumnValues[TASK_COLUMNS.status] = { index: TASK_STATUS["Ready to Start"] };
 

@@ -28,9 +28,9 @@ export async function createTask(args: CreateTaskInput): Promise<string> {
       // Priority (required)
       columnValues[TASK_COLUMNS.priority] = { index: TASK_PRIORITY[task.priority] };
 
-      // Status (default: Backlog)
+      // Status (default: Needs Refinement — caller can pass "Ready to Start" if already refined)
       columnValues[TASK_COLUMNS.status] = {
-        index: TASK_STATUS[task.status || "Backlog"],
+        index: TASK_STATUS[task.status || "Needs Refinement"],
       };
 
       // Optional fields
@@ -106,25 +106,21 @@ export async function createTask(args: CreateTaskInput): Promise<string> {
         throw new Error(`Failed to create task "${task.name}"`);
       }
 
-      // Set dependencies after creation (dependency column requires separate mutation)
+      // Set dependencies after creation (dependency column requires a separate mutation)
       if (task.dependencyIds && task.dependencyIds.length > 0) {
-        try {
-          const depValues: Record<string, unknown> = {
-            [TASK_COLUMNS.dependencies]: { item_ids: task.dependencyIds },
-          };
-          const depMutation = `
-            mutation {
-              change_multiple_column_values(
-                item_id: ${createdItem.id},
-                board_id: ${BOARDS.TASKS},
-                column_values: ${buildColumnValues(depValues)}
-              ) { id }
-            }
-          `;
-          await executeMondayQuery<any>(depMutation);
-        } catch {
-          // Dependencies column may not work as expected — skip gracefully
-        }
+        const depValues: Record<string, unknown> = {
+          [TASK_COLUMNS.dependencies]: { item_ids: task.dependencyIds },
+        };
+        const depMutation = `
+          mutation {
+            change_multiple_column_values(
+              item_id: ${createdItem.id},
+              board_id: ${BOARDS.TASKS},
+              column_values: ${buildColumnValues(depValues)}
+            ) { id }
+          }
+        `;
+        await executeMondayQuery<any>(depMutation);
       }
 
       let subitemCount = 0;

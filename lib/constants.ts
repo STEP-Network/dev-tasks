@@ -224,17 +224,16 @@ export const PRODUCT_COLUMNS = {
 // Status Mappings (label → Monday.com label ID for mutations)
 // =============================================================================
 
-// Task Status (task_status column)
+// Task Status (task_status column) — workflow:
+// Needs Refinement → Ready to Start → In Progress → Waiting for UAT → Pending Deploy to Prod → Done (+ Stuck)
 export const TASK_STATUS: Record<string, number> = {
-  "Backlog": 104,
+  "Needs Refinement": 5,
   "Ready to Start": 11,
   "In Progress": 0,
-  "Waiting for Review": 3,
-  "Pending Deploy": 2,
+  "Waiting for UAT": 3,
+  "Pending Deploy to Prod": 2,
   "Done": 1,
   "Stuck": 103,
-  "Move to Sprints": 4,
-  "Not Set": 5,
 };
 
 // Task Priority (task_priority column)
@@ -243,40 +242,37 @@ export const TASK_PRIORITY: Record<string, number> = {
   "High": 2,
   "Medium": 7,
   "Low": 12,
-  "Best Effort": 1,
   "Missing": 5,
 };
 
-// Task Type (task_type column)
+// Task Type (task_type column) — these map 1:1 to the public changelog categories
+// (Feature/Fix/Improvement) when generateChangelog runs. "To Do" = human task,
+// "Not Set" = needs refinement of type.
 export const TASK_TYPE: Record<string, number> = {
-  "Development": 1,
-  "Bugfix": 2,
-  "Maintenance": 3,
-  "Refine": 12,
-  "Documentation": 0,
-  "PM-work": 4,
+  "Feature": 1,
+  "Fix": 2,
+  "Improvement": 3,
+  "To Do": 4,
   "Not Set": 5,
 };
 
 // Subtask Status (status column on subtasks board)
 export const SUBTASK_STATUS: Record<string, number> = {
-  "Stuck": 2,
+  "Needs Refinement": 5,
+  "Ready to Start": 153,
   "In Progress": 0,
   "Done": 1,
-  "Ready to Start": 153,
-  "Waiting for Review": 158,
-  "Pending Deploy": 18,
-  "Backlog": 104,
+  "Stuck": 2,
 };
 
 // Subtask Type (color_mm0mcpha column on subtasks board)
 export const SUBTASK_TYPE: Record<string, number> = {
-  "Test": 9,
-  "Documentation": 7,
-  "UX-UI": 12,
+  "To Do": 0,
   "Database": 3,
   "Backend": 6,
-  "PM-work": 1,
+  "Documentation": 7,
+  "Test": 9,
+  "UX-UI": 12,
 };
 
 // Bug Status (bug_status column)

@@ -45,8 +45,8 @@ export async function getBacklog(args: GetBacklogInput): Promise<string> {
       const statusIndex = TASK_STATUS[status];
       rules.push(`{ column_id: "${TASK_COLUMNS.status}", compare_value: [${statusIndex}], operator: any_of }`);
     } else {
-      // Default: Backlog + Ready to Start
-      rules.push(`{ column_id: "${TASK_COLUMNS.status}", compare_value: [${TASK_STATUS["Backlog"]}, ${TASK_STATUS["Ready to Start"]}], operator: any_of }`);
+      // Default: tasks not yet in flight — Needs Refinement + Ready to Start
+      rules.push(`{ column_id: "${TASK_COLUMNS.status}", compare_value: [${TASK_STATUS["Needs Refinement"]}, ${TASK_STATUS["Ready to Start"]}], operator: any_of }`);
     }
 
     if (unclaimedOnly) {
@@ -130,7 +130,7 @@ export async function getBacklog(args: GetBacklogInput): Promise<string> {
     const lines: string[] = [];
     const filterParts: string[] = [];
     if (status) filterParts.push(`status: ${status}`);
-    else filterParts.push("status: Backlog + Ready to Start");
+    else filterParts.push("status: Needs Refinement + Ready to Start");
     if (type) filterParts.push(`type: ${type}`);
     if (unclaimedOnly) filterParts.push("unclaimed only");
     if (agentId) filterParts.push(`agent: ${agentId}`);

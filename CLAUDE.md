@@ -56,7 +56,7 @@ Subtasks board: 5091706366 (linked from Tasks)
 | 10 | `updateTask` | Execution | Update any task field |
 | 11 | `manageSubtasks` | Execution | Create/update/delete subtasks |
 | 12 | `createTask` | Creation | Create tasks with acceptance criteria, dependencies, subtasks |
-| 13 | `convertBugToTask` | Creation | Bug → Bugfix task conversion |
+| 13 | `convertBugToTask` | Creation | Bug → Fix task conversion |
 | 14 | `createBug` | Creation | File new bugs |
 | 15 | `updateVersion` | Shipping | Update version fields, link items, delete, group moves |
 | 16 | `createVersion` | Shipping | Create versions with product link, status, dates |
@@ -90,9 +90,10 @@ Subtasks board: 5091706366 (linked from Tasks)
 ## Claiming Protocol
 
 - Agent calls `claimTask` → server validates:
-  - Status is "Backlog" or "Ready to Start"
+  - Status is "Ready to Start" (tasks in "Needs Refinement" must be refined and sprint-assigned first)
+  - Task is in the active sprint
   - Agent ID dropdown is empty
-  - Dependencies are all Done
+  - All blocked-by dependencies (column `dependency_mm0pwbxn`) are Done
 - Success → sets In Progress + Agent ID + Plan ID + Started Date + Owner (auto-assigned)
 - Conflict → returns error with current owner
 
@@ -112,11 +113,11 @@ Used in:
 
 ## Key Status Mappings
 
-**Task Status:** Backlog → Ready to Start → In Progress → Waiting for Review → Pending Deploy → Done (+ Stuck)
-**Task Priority:** Critical, High, Medium, Low, Best Effort, Missing
-**Task Type:** Development, Bugfix, Maintenance, Refine, Documentation, PM-work
-**Subtask Status:** Backlog → Ready to Start → In Progress → Waiting for Review → Pending Deploy → Done (+ Stuck)
-**Subtask Type:** Test, Documentation, UX-UI, Database, Backend, PM-work
+**Task Status:** Needs Refinement → Ready to Start → In Progress → Waiting for UAT → Pending Deploy to Prod → Done (+ Stuck)
+**Task Priority:** Critical, High, Medium, Low, Missing
+**Task Type:** Feature, Fix, Improvement, To Do, Not Set
+**Subtask Status:** Needs Refinement → Ready to Start → In Progress → Done (+ Stuck)
+**Subtask Type:** To Do, Database, Backend, Documentation, Test, UX-UI
 **Epic Status:** Backlog, Planned, Refining, In Progress, Review, On Hold, Done
 **Epic Priority:** Critical, High, Medium, Low, Minimal, Not Prioritized
 **Version Status:** Planned, In Development, Release Candidate, Released, Hotfix
@@ -125,6 +126,10 @@ Used in:
 **Feedback Priority:** Critical, High, Medium, Low
 **Feedback Source:** User, Internal, Support, Partner
 **Agent ID:** Claude Code CLI, Claude Desktop Cloud, Codex Local, Claude Desktop Local, Codex Cloud
+
+## Task Dependencies
+
+Tasks can declare blocked-by relationships via the `dependency_mm0pwbxn` column. Pass `dependencyIds: number[]` to `createTask` or `updateTask` (empty array clears). `claimTask` refuses to start a task whose dependencies are not all Done.
 
 ## Maintenance Epics
 

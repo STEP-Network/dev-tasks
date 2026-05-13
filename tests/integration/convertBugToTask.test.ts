@@ -28,9 +28,9 @@ describe("convertBugToTask", () => {
     registerCleanup(BOARDS.TASKS, taskId);
   });
 
-  it("should verify the new task has type=Bugfix", async () => {
+  it("should verify the new task has type=Fix", async () => {
     const result = await getTask({ itemId: taskId });
-    expect(result).toContain("Bugfix");
+    expect(result).toContain("Fix");
     expect(result).toContain("[TEST] Bug to Convert");
   });
 });

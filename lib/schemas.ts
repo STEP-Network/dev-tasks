@@ -5,25 +5,24 @@ import { z } from "zod";
 // =============================================================================
 
 const TaskStatusEnum = z.enum([
-  "Backlog", "Ready to Start", "In Progress", "Waiting for Review",
-  "Pending Deploy", "Done", "Stuck", "Move to Sprints",
+  "Needs Refinement", "Ready to Start", "In Progress",
+  "Waiting for UAT", "Pending Deploy to Prod", "Done", "Stuck",
 ]);
 
 const TaskPriorityEnum = z.enum([
-  "Critical", "High", "Medium", "Low", "Best Effort", "Missing",
+  "Critical", "High", "Medium", "Low", "Missing",
 ]);
 
 const TaskTypeEnum = z.enum([
-  "Development", "Bugfix", "Maintenance", "Refine", "Documentation", "PM-work",
+  "Feature", "Fix", "Improvement", "To Do", "Not Set",
 ]);
 
 const SubtaskStatusEnum = z.enum([
-  "Stuck", "In Progress", "Done", "Ready to Start",
-  "Waiting for Review", "Pending Deploy", "Backlog",
+  "Needs Refinement", "Ready to Start", "In Progress", "Done", "Stuck",
 ]);
 
 const SubtaskTypeEnum = z.enum([
-  "Test", "Documentation", "UX-UI", "Database", "Backend", "PM-work",
+  "To Do", "Database", "Backend", "Documentation", "Test", "UX-UI",
 ]);
 
 const BugStatusEnum = z.enum([
@@ -76,7 +75,7 @@ const ProductEnum = z.enum(["STEPhie", "PolAds"]);
 // =============================================================================
 
 export const GetBacklogSchema = z.object({
-  status: TaskStatusEnum.optional().describe("Filter by specific status. Defaults to showing Backlog + Ready to Start tasks"),
+  status: TaskStatusEnum.optional().describe("Filter by specific status. Defaults to showing Needs Refinement + Ready to Start tasks (everything not yet in flight)"),
   type: TaskTypeEnum.optional().describe("Filter by task type"),
   unclaimedOnly: z.boolean().optional().default(false).describe("Only show tasks with no Agent ID set (available for claiming)"),
   agentId: AgentIdEnum.optional().describe("Filter by agent currently working on the task"),
@@ -185,7 +184,7 @@ export const UpdateTaskSchema = z.object({
   unplanned: z.boolean().optional().describe("Mark as unplanned (added mid-sprint)"),
   branch: z.string().optional().describe("Git branch name"),
   acceptanceCriteria: z.string().optional().describe("Machine-readable acceptance criteria"),
-  dependencyIds: z.array(z.number()).optional().describe("Task IDs this task depends on (blocked by)"),
+  dependencyIds: z.array(z.number()).optional().describe("Blocked-by relationships: task IDs that must be Done before this one can start. Stored in Monday's dependency_mm0pwbxn column. claimTask refuses to start a task whose dependencies aren't all Done. Pass an empty array [] to clear."),
 });
 
 // =============================================================================
@@ -249,7 +248,7 @@ export const CreateTaskSchema = z.object({
     name: z.string().describe("Task name"),
     type: TaskTypeEnum.describe("Task type"),
     priority: TaskPriorityEnum.describe("Task priority"),
-    status: TaskStatusEnum.optional().describe("Initial status (default: Backlog)"),
+    status: TaskStatusEnum.optional().describe("Initial status (default: 'Needs Refinement'; pass 'Ready to Start' if the task is already specified and sprint-assigned)"),
     description: z.string().optional().describe("Task description"),
     dueDate: z.string().optional().describe("Due date (YYYY-MM-DD)"),
     epicId: z.number().optional().describe("Link to epic — use listEpics to find the ID"),
@@ -259,7 +258,7 @@ export const CreateTaskSchema = z.object({
     planId: z.string().optional().describe("Today's date + plan file name (format: YYYY-MM-DD_plan-name, e.g. 2026-02-18_enumerated-scribbling-rose). Found in ~/.claude/plans/"),
     unplanned: z.boolean().optional().describe("Mark as unplanned mid-sprint addition"),
     acceptanceCriteria: z.string().optional().describe("Machine-readable acceptance criteria (definition of done)"),
-    dependencyIds: z.array(z.number()).optional().describe("Task IDs this task depends on (blocked by)"),
+    dependencyIds: z.array(z.number()).optional().describe("Blocked-by relationships: task IDs that must be Done before this one can start. Stored in column dependency_mm0pwbxn."),
     branch: z.string().optional().describe("Git branch name"),
     owner: SystemUserEnum.optional().describe("Owner — use your system username (e.g. the output of `whoami`)"),
     subitems: z.array(SubitemSpec).optional().describe("Subtasks to create with the task"),
@@ -475,7 +474,7 @@ export const ConvertFeedbackToTaskSchema = z.object({
   feedbackId: z.number().describe("Feedback/request item ID to convert — use listFeedback to find the ID"),
   epicId: z.number().optional().describe("Epic to link the new task to — use listEpics to find the ID"),
   sprintId: z.number().optional().describe("Sprint to assign the new task to — use listSprints to discover the ID"),
-  taskType: TaskTypeEnum.optional().describe("Task type override (default: Development for requests, Maintenance for feedback)"),
+  taskType: TaskTypeEnum.optional().describe("Task type override (default: Feature for requests, Improvement for feedback)"),
   additionalDescription: z.string().optional().describe("Extra context to append to the description"),
 });
 

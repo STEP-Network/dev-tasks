@@ -26,7 +26,7 @@ describe("updateVersion", () => {
       tasks: [
         {
           name: "[TEST] Version Link Task",
-          type: "Development",
+          type: "Feature",
           priority: "Low",
         },
       ],

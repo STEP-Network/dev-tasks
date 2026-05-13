@@ -15,7 +15,7 @@ describe("manageSubtasks", () => {
       tasks: [
         {
           name: "[TEST] Subtask Parent",
-          type: "Development",
+          type: "Feature",
           priority: "Low",
         },
       ],
