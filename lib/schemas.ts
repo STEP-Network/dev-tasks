@@ -389,7 +389,7 @@ export const GetUpdatesSchema = z.object({
 
 export const CreateUpdateSchema = z.object({
   itemId: z.number().describe("Monday.com item ID to add the update to"),
-  body: z.string().describe("Update text content (supports HTML formatting)"),
+  body: z.string().describe("Update body as HTML. Monday Updates render HTML — markdown is stripped to plaintext, so use <p>, <strong>, <em>, <ul>/<li>, <a href>, <br>, <code>, <pre> instead of markdown syntax."),
   parentUpdateId: z.number().optional().describe("ID of an existing update to reply to (creates a threaded reply)"),
 });
 

@@ -310,7 +310,7 @@ const handler = createMcpHandler(
 
     server.tool(
       "createUpdate",
-      "Post an update (comment) on a Monday.com item. Use to share progress, blockers, completion notes, or ask questions. Supports HTML formatting. Set parentUpdateId to reply to an existing update thread.",
+      "Post an update (comment) on a Monday.com item. Use to share progress, blockers, completion notes, or ask questions. Body must be HTML — Monday Updates render HTML and strip markdown to plaintext (use <p>, <strong>, <em>, <ul>/<li>, <a href>, <br>, <code>, <pre>, not **bold** or - bullets). Set parentUpdateId to reply to an existing update thread.",
       CreateUpdateSchema.shape,
       async (args) => {
         const result = await createUpdate(args);
