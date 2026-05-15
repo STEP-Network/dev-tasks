@@ -63,9 +63,13 @@ export async function claimTask(args: ClaimTaskInput): Promise<string> {
       );
     }
 
-    // Check Agent ID is empty (no one has claimed it)
+    // Check Agent ID. Empty is fine. Non-empty is fine only if every entry matches
+    // the claimer (e.g. the same agent pre-marked themselves at createTask time).
+    // Any *other* agent in the dropdown means the task is already claimed.
     const currentAgentIds = getDropdownValues(colMap, TASK_COLUMNS.agentId);
-    if (currentAgentIds.length > 0) {
+    const claimerAgentNumericId = String(AGENT_ID[agentId]);
+    const otherAgentIds = currentAgentIds.filter(id => id !== claimerAgentNumericId);
+    if (otherAgentIds.length > 0) {
       const agentText = getColumnText(colMap, TASK_COLUMNS.agentId) || "Unknown agent";
       return formatError(
         `Cannot claim task #${itemId} "${item.name}".\n` +
