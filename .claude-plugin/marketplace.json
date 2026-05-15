@@ -1,0 +1,7 @@
+{
+  "name": "monday-task-flow-marketplace",
+  "owner": { "name": "STEP Network" },
+  "plugins": [
+    { "name": "monday-task-flow", "source": "./plugin" }
+  ]
+}
