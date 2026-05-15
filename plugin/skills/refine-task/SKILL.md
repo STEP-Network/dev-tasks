@@ -11,23 +11,23 @@ user_invocable: true
 
 ## Workflow
 
-1. **Fetch task**: `mcp__dev-tasks__getTask` — read type, priority, epic, description, acceptance criteria, existing subtasks, dependencies.
+1. **Fetch task**: `mcp__plugin_monday-task-flow_monday-tasks__getTask` — read type, priority, epic, description, acceptance criteria, existing subtasks, dependencies.
 2. **Verify task-level prereqs** (required by the `Ready to Start` gate):
    - `type` (`Feature`/`Fix`/`Improvement`/`To Do`)
    - `priority` (`Critical`/`High`/`Medium`/`Low`)
    - `epicId`
    - `description`
    - `acceptanceCriteria`
-   - If any are missing: prompt the user (or fill via `mcp__dev-tasks__updateTask` if inference is safe).
+   - If any are missing: prompt the user (or fill via `mcp__plugin_monday-task-flow_monday-tasks__updateTask` if inference is safe).
 3. **Read source files**: Use Glob/Grep to find related code; ground each subtask in a real code path.
 4. **Decompose into 3–7 subtasks** with logical ordering (often: schema → backend → ui → test → docs):
    - Each subtask MUST carry `name` + `description` + `type` + `estimatedHours`.
    - Subtask types: `Backend` · `Test` · `Documentation` · `UX-UI` · `Database` · `To Do`. See "Subtask type guidance" below.
    - **Never include a human-test subtask.** Human verification = parent's `Waiting for UAT` status + auto-generated UAT doc (written by `/ship-pr` Phase 4.5). The legacy "Always add a test subitem with owner 48307552" rule is **removed**.
-5. **Apply subtasks**: `mcp__dev-tasks__manageSubtasks` with one `create` op per new subtask, and `delete`/`update` ops for any obsolete ones (rescoping is fine).
-6. **Optional dependency declaration**: if you discover this task is blocked by another task, set `dependencyIds` via `mcp__dev-tasks__updateTask` (column `dependency_mm0pwbxn`).
-7. **Promote status** (if appropriate): if the task was `Needs Refinement` and now satisfies all gate prereqs, call `mcp__dev-tasks__updateTask` with `status: "Ready to Start"`. The MCP validates; on rejection it lists what's still missing.
-8. **Post PLAN_CREATED event**: `mcp__dev-tasks__createUpdate` with the subtask list + total estimate.
+5. **Apply subtasks**: `mcp__plugin_monday-task-flow_monday-tasks__manageSubtasks` with one `create` op per new subtask, and `delete`/`update` ops for any obsolete ones (rescoping is fine).
+6. **Optional dependency declaration**: if you discover this task is blocked by another task, set `dependencyIds` via `mcp__plugin_monday-task-flow_monday-tasks__updateTask` (column `dependency_mm0pwbxn`).
+7. **Promote status** (if appropriate): if the task was `Needs Refinement` and now satisfies all gate prereqs, call `mcp__plugin_monday-task-flow_monday-tasks__updateTask` with `status: "Ready to Start"`. The MCP validates; on rejection it lists what's still missing.
+8. **Post PLAN_CREATED event**: `mcp__plugin_monday-task-flow_monday-tasks__createUpdate` with the subtask list + total estimate.
 
 ## Arguments
 

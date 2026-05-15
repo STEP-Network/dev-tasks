@@ -19,11 +19,11 @@ user_invocable: true
 
 ## Workflow
 
-1. **Fetch available work**: Use `mcp__dev-tasks__getSprint` to get current sprint, or `mcp__dev-tasks__getBacklog` to see backlog items
+1. **Fetch available work**: Use `mcp__plugin_monday-task-flow_monday-tasks__getSprint` to get current sprint, or `mcp__plugin_monday-task-flow_monday-tasks__getBacklog` to see backlog items
 2. **Show available tasks**: Display task list with IDs, names, status, and estimated hours
 3. **User selects task** (or specify task ID as argument)
 4. **Validate task readiness** (HARD BLOCK — must happen before claiming):
-    - Fetch full task data via `mcp__dev-tasks__getTask` — read status, epic, dependencies.
+    - Fetch full task data via `mcp__plugin_monday-task-flow_monday-tasks__getTask` — read status, epic, dependencies.
     - **Status check** — `claimTask` only accepts tasks in `Ready to Start`:
       - If status is `Needs Refinement`: STOP here. The task lacks one or more of `type`/`priority`/`epicId`/`description`/`acceptanceCriteria`/≥1 typed-estimated subtask. Run `/refine-task <id>` first; the MCP gate will surface what's missing.
       - If status is `In Progress` and the current agent is `Claude Code CLI`: a session may already be active; check `.claude/active-task.json` before continuing.
@@ -32,12 +32,12 @@ user_invocable: true
     - **Epic check**:
       - **If task has an epic**: note the `epicId` and `epicName`, continue to step 4.5.
       - **If task has NO epic**: HARD BLOCK — do NOT claim until resolved:
-        a. Call `mcp__dev-tasks__listEpics(product: "PolAds")` to show available epics.
+        a. Call `mcp__plugin_monday-task-flow_monday-tasks__listEpics(product: "PolAds")` to show available epics.
         b. Try to match by task name/description keywords to an epic.
         c. If confident (>80% match): suggest the epic to user, proceed if confirmed.
         d. If not confident: ask user "This task has no epic. Which epic should it belong to?"
         e. Present epic list with IDs.
-        f. After user selects: call `mcp__dev-tasks__updateTask(itemId, epicId: selectedEpicId)`.
+        f. After user selects: call `mcp__plugin_monday-task-flow_monday-tasks__updateTask(itemId, epicId: selectedEpicId)`.
         g. For hotfixes/bugs: suggest the product's Maintenance epic by default.
       - **NEVER claim a task without an epic. This is a hard requirement.**
 
@@ -62,7 +62,7 @@ user_invocable: true
 4.6. **Dependency soft warning** (NON-BLOCKING — claimTask is the actual gate):
     - From the `getTask` response in step 4, read `dependencyIds` (column `dependency_mm0pwbxn`).
     - If empty: continue to step 5.
-    - If non-empty: for each dependency, call `mcp__dev-tasks__getTask(dependencyId)` and check its status.
+    - If non-empty: for each dependency, call `mcp__plugin_monday-task-flow_monday-tasks__getTask(dependencyId)` and check its status.
     - **If all dependencies are `Done`**: log "All N dependencies satisfied" and continue.
     - **If any dependency is NOT `Done`**: emit a clear warning naming the blocking task(s) and their statuses, then:
       - If the user accepts the risk and wants to continue: proceed — `claimTask` in step 6 will refuse with the same information, at which point the user can either wait for the blocker to clear or remove the dependency via `updateTask(itemId, dependencyIds: [])` (rare; only when the dependency was misfiled).
@@ -70,43 +70,43 @@ user_invocable: true
     - This is a soft warning so a determined agent can override if context warrants. The MCP's `claimTask` is the hard gate.
 
 5. **Version Suggestion** (proactive, NON-BLOCKING):
-    - Call `mcp__dev-tasks__getEpic(epicId)` — check if epic has a Target Version
+    - Call `mcp__plugin_monday-task-flow_monday-tasks__getEpic(epicId)` — check if epic has a Target Version
     - **If linked to a version**: note `versionId` and `versionName`, continue
     - **If NOT linked**:
-      a. Call `mcp__dev-tasks__listVersions(group: "upcoming")` to find suitable versions
+      a. Call `mcp__plugin_monday-task-flow_monday-tasks__listVersions(group: "upcoming")` to find suitable versions
       b. Prefer "In Development" status, then nearest `expectedReleaseDate`
       c. If a suitable version exists:
          Ask user: "Epic '{epicName}' has no target version. Suggest: {versionName}. Link? (y/n/skip)"
-         - If yes → `mcp__dev-tasks__updateVersion(versionId, linkEpicIds: [epicId])`
+         - If yes → `mcp__plugin_monday-task-flow_monday-tasks__updateVersion(versionId, linkEpicIds: [epicId])`
          - If skip → continue (Phase 8 of `/ship-pr` catches this later)
       d. If NO upcoming versions exist:
          - Compute the suggested next version via `computeBumpSuggestion` from `lib/services/version-bump.ts` (canonical implementation — handles the v1.0 milestone gate). Inputs: latest released (`listVersions(group: "released")` → highest, parsed via `parseSemVer`), the task list classified via `classifyTaskType()`, and `v1MilestoneReady` from `getEpic(2833952138)` + `getEpic(2738006659)`.
          - Ask: "No upcoming versions. Create v{result.next}? ({result.rationale}) (y/n/skip)"
-         - If yes → `mcp__dev-tasks__createVersion(name, versionNumber, productId)` + link epic
+         - If yes → `mcp__plugin_monday-task-flow_monday-tasks__createVersion(name, versionNumber, productId)` + link epic
          - If skip → continue
     - This is NON-BLOCKING: user can always skip
     - Store `versionId` and `versionName` in state file if linked
-6. **Claim the task**: Use `mcp__dev-tasks__claimTask` to assign it. The MCP validates server-side:
+6. **Claim the task**: Use `mcp__plugin_monday-task-flow_monday-tasks__claimTask` to assign it. The MCP validates server-side:
     - Task status must be `Ready to Start` (step 4 already checked).
     - Task must be in the active sprint (step 7 auto-assigns).
     - All `dependencyIds` must be `Done` (step 4.6 already warned).
     - No other agent currently owns the task.
     - On rejection, `claimTask` returns a structured error naming the failing precondition — fix the named field via `updateTask`/`manageSubtasks` and retry.
 7. **Sprint auto-assignment** (MUST happen before setting status):
-    - Use `mcp__dev-tasks__getTask` to check if the task already has a Sprint linked (`task_sprint` field)
-    - Get the active sprint via `mcp__dev-tasks__getSprint` (no args = active sprint)
+    - Use `mcp__plugin_monday-task-flow_monday-tasks__getTask` to check if the task already has a Sprint linked (`task_sprint` field)
+    - Get the active sprint via `mcp__plugin_monday-task-flow_monday-tasks__getSprint` (no args = active sprint)
     - **If the task has NO sprint assigned:**
-      a. Assign the task to the active sprint: `mcp__dev-tasks__updateTask` with `sprintId: <active sprint ID>`
-      b. Mark as unplanned: `mcp__dev-tasks__updateTask` with `unplanned: true`
+      a. Assign the task to the active sprint: `mcp__plugin_monday-task-flow_monday-tasks__updateTask` with `sprintId: <active sprint ID>`
+      b. Mark as unplanned: `mcp__plugin_monday-task-flow_monday-tasks__updateTask` with `unplanned: true`
       c. Note in the TASK_CLAIMED event that this was an unplanned addition
     - **If the task is already in the ACTIVE sprint:**
       a. Do nothing (planned work)
     - **If the task is in a DIFFERENT sprint (past or future):**
-      a. Reassign to the active sprint: `mcp__dev-tasks__updateTask` with `sprintId: <active sprint ID>`
-      b. Mark as unplanned: `mcp__dev-tasks__updateTask` with `unplanned: true`
+      a. Reassign to the active sprint: `mcp__plugin_monday-task-flow_monday-tasks__updateTask` with `sprintId: <active sprint ID>`
+      b. Mark as unplanned: `mcp__plugin_monday-task-flow_monday-tasks__updateTask` with `unplanned: true`
       c. Note in the TASK_CLAIMED event: "Moved from sprint X to active sprint Y (unplanned)"
-8. **Set status**: Use `mcp__dev-tasks__updateTask` to set status to "In Progress"
-9. **Set first subtask to "In Progress"**: Use `mcp__dev-tasks__manageSubtasks` to start first subtask (this triggers `started_date` in Monday.com)
+8. **Set status**: Use `mcp__plugin_monday-task-flow_monday-tasks__updateTask` to set status to "In Progress"
+9. **Set first subtask to "In Progress"**: Use `mcp__plugin_monday-task-flow_monday-tasks__manageSubtasks` to start first subtask (this triggers `started_date` in Monday.com)
 10. **Rename the worktree branch to project convention**:
     - Step 4.5's `EnterWorktree` created branch `worktree-feat-<slug>`. Rename it
       to the canonical `feat/<task-slug>` (or `hotfix/<slug>` for hotfixes — see
@@ -125,7 +125,7 @@ user_invocable: true
     - If the check fails, fix one of: rename the worktree directory, or rename the branch. The convention must hold so `.claude/scripts/find-worktree-for-task.sh` and `worktree-audit.sh` can locate the worktree from the Monday task.
     - Reverse direction: `bash .claude/scripts/find-worktree-for-task.sh <monday-task-id>` prints the worktree path for any task whose Branch column is populated.
 11. **Post TASK_CLAIMED event** (do this BEFORE creating state file — the response provides the `claimToken`):
-    Use `mcp__dev-tasks__createUpdate` with structured format:
+    Use `mcp__plugin_monday-task-flow_monday-tasks__createUpdate` with structured format:
     ```
     [TASK_CLAIMED] Agent Progress Update
     Time: {ISO 8601} | Branch: feat/<task-slug>
@@ -136,7 +136,7 @@ user_invocable: true
     ```
     **Save the returned update ID** — this becomes the `claimToken` in the state file.
 12. **Create state file** (uses `claimToken` from step 11):
-    - Fetch full task data via `mcp__dev-tasks__getTask` (includes subtask IDs, names, statuses)
+    - Fetch full task data via `mcp__plugin_monday-task-flow_monday-tasks__getTask` (includes subtask IDs, names, statuses)
     - Write `.claude/active-task.json` with structure:
       ```json
       {

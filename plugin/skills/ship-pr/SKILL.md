@@ -90,7 +90,7 @@ user_invocable: true
     - If not ready yet, wait 30 seconds and retry (max 3 retries)
     - Extract the deployment URL (use the branch alias format: `{project}-git-{branch}-{team}.vercel.app`)
 
-13. **Post preview URL + link metadata to Monday.com**: Call `mcp__dev-tasks__updateTask` with:
+13. **Post preview URL + link metadata to Monday.com**: Call `mcp__plugin_monday-task-flow_monday-tasks__updateTask` with:
     - `itemId`: the task ID from `.claude/active-task.json`
     - `demoUrl`: the Vercel preview URL (column `link_mm0mtyf4`)
     - `prLink`: the PR URL from step 9/10 (column `link_mm0m817p`)
@@ -121,7 +121,7 @@ user_invocable: true
 14a. **Decide flow type**: read the PR base from step 9. If `--base main` → skip to Phase 5. If `--base staging` → continue.
 
 14b. **Gather UAT inputs**:
-    - Read task `name`, `description`, `acceptanceCriteria` from `mcp__dev-tasks__getTask`.
+    - Read task `name`, `description`, `acceptanceCriteria` from `mcp__plugin_monday-task-flow_monday-tasks__getTask`.
     - Read subtask list (names + types + status) from `.claude/active-task.json`.
     - Compute git diff summary: `git diff staging...HEAD --stat` and `git log staging..HEAD --oneline`.
     - Note the preview URL from step 12.
@@ -168,8 +168,8 @@ user_invocable: true
     ```
 
 14d. **Create or update the UAT doc**:
-    - First call attempt: `mcp__dev-tasks__createTaskUatDoc({ taskId, markdown })`.
-    - If response indicates a doc already exists (re-push scenario): call `mcp__dev-tasks__updateTaskUatDoc({ taskId, markdown, overwrite: true })` instead.
+    - First call attempt: `mcp__plugin_monday-task-flow_monday-tasks__createTaskUatDoc({ taskId, markdown })`.
+    - If response indicates a doc already exists (re-push scenario): call `mcp__plugin_monday-task-flow_monday-tasks__updateTaskUatDoc({ taskId, markdown, overwrite: true })` instead.
     - On success, the doc is set on column `doc_mm3adfdg`. The `Waiting for UAT` gate at Phase 6.5 will accept this.
 
 14e. **Log progress**: `/log-progress UAT_DOC_GENERATED` with a one-line summary of what's in the doc.
@@ -516,12 +516,12 @@ fine to continue; detect the anti-pattern where fixes actively create new proble
 
 20b. **Verify gate prereqs** (the MCP enforces these server-side; this is early validation for clearer errors):
     - All subtasks in `.claude/active-task.json` have `"status": "done"` and `"actualHours"` set.
-    - UAT doc exists on column `doc_mm3adfdg` — verify via `mcp__dev-tasks__getTaskUatDoc(taskId)`. If absent, re-run Phase 4.5.
+    - UAT doc exists on column `doc_mm3adfdg` — verify via `mcp__plugin_monday-task-flow_monday-tasks__getTaskUatDoc(taskId)`. If absent, re-run Phase 4.5.
     - `demoUrl`, `prLink`, `branch`, `githubLink` set on the task (Phase 4 already did this; the gate warns but doesn't block if any are missing).
 
 20c. **Transition status**:
     ```
-    mcp__dev-tasks__updateTask({
+    mcp__plugin_monday-task-flow_monday-tasks__updateTask({
       itemId: taskId,
       status: "Waiting for UAT"
     })
@@ -585,9 +585,9 @@ fine to continue; detect the anti-pattern where fixes actively create new proble
 
 22. **Refresh Vercel preview URL**: Use `mcp__vercel__list_deployments` to get the latest
     deployment URL (may have changed after review fixes). Update `previewUrl` in state file
-    and `demoUrl` on Monday.com via `mcp__dev-tasks__updateTask` if it changed.
+    and `demoUrl` on Monday.com via `mcp__plugin_monday-task-flow_monday-tasks__updateTask` if it changed.
 
-23. **Update Monday.com parent task**: Use `mcp__dev-tasks__createUpdate` to post:
+23. **Update Monday.com parent task**: Use `mcp__plugin_monday-task-flow_monday-tasks__createUpdate` to post:
     ```
     [PIPELINE_COMPLETE] Agent Progress Update
     Time: {ISO 8601} | Branch: {branch}
@@ -606,19 +606,19 @@ fine to continue; detect the anti-pattern where fixes actively create new proble
 
 25. **Check version linkage**:
     - Read `epicId` from `.claude/active-task.json`
-    - Call `mcp__dev-tasks__getEpic(epicId)` to check if epic is already linked to a version
+    - Call `mcp__plugin_monday-task-flow_monday-tasks__getEpic(epicId)` to check if epic is already linked to a version
     - **If linked**: log "Task's epic ({epicName}) is linked to version {name}" — done
     - **If NOT linked**: HARD BLOCK — do NOT complete the pipeline until resolved:
-      a. Call `mcp__dev-tasks__listVersions(status: "Planned", group: "upcoming")` to show upcoming versions
+      a. Call `mcp__plugin_monday-task-flow_monday-tasks__listVersions(status: "Planned", group: "upcoming")` to show upcoming versions
       b. Ask user: "This task's epic ({epicName}) is not linked to any version. Which version should it belong to?"
       c. Present version list with IDs
-      d. If user selects a version → call `mcp__dev-tasks__updateVersion(versionId, linkEpicIds: [epicId])`
-      e. If no upcoming versions exist → ask user if they want to create one via `mcp__dev-tasks__createVersion`
+      d. If user selects a version → call `mcp__plugin_monday-task-flow_monday-tasks__updateVersion(versionId, linkEpicIds: [epicId])`
+      e. If no upcoming versions exist → ask user if they want to create one via `mcp__plugin_monday-task-flow_monday-tasks__createVersion`
     - **Every shipped task must trace to a version. No orphaned work.**
 
 25b. **Update structured Release Summary** (after version is confirmed linked):
     - Read `versionId` from state file (set in step 25a or from `/pickup-task`)
-    - Call `mcp__dev-tasks__getVersion(versionId)` to get current Release Summary and task details
+    - Call `mcp__plugin_monday-task-flow_monday-tasks__getVersion(versionId)` to get current Release Summary and task details
     - Read current Release Summary text from the version
 
     **3-category mapping (Feature / Improvement / Fix)** — established 2026-05-07:
@@ -631,13 +631,13 @@ fine to continue; detect the anti-pattern where fixes actively create new proble
       a. Parse existing JSON via `parseStructuredChangelog` from `lib/services/monday.ts` — the parser auto-migrates legacy 4-cat data to the canonical 3-cat shape, so old versions written before 2026-05-07 are upgraded transparently.
       b. Add the just-shipped task to its 3-cat bucket per the mapping above.
       c. Update progress: `{ totalTasks, doneTasks, totalBugs, fixedBugs }` from version data.
-      d. Write back: `mcp__dev-tasks__updateVersion(versionId, releaseSummary: updatedJSON)`.
+      d. Write back: `mcp__plugin_monday-task-flow_monday-tasks__updateVersion(versionId, releaseSummary: updatedJSON)`.
     - **If plain text or empty** (first task shipped for this version):
       a. Create initial structured JSON with the task in its 3-cat bucket.
       b. Set summary from version name or "In development".
       c. Set progress counts from version data.
       d. Wrap in `STRUCTURED_CHANGELOG_V1` markers.
-      e. Write back: `mcp__dev-tasks__updateVersion(versionId, releaseSummary: structuredContent)`.
+      e. Write back: `mcp__plugin_monday-task-flow_monday-tasks__updateVersion(versionId, releaseSummary: structuredContent)`.
 
     **Auto-bump check** (NON-BLOCKING — informational suggestion only):
     - If the version's `versionNumber` is empty AND the version has at least 1 task:
@@ -678,7 +678,7 @@ fine to continue; detect the anti-pattern where fixes actively create new proble
     **Preview URL**: {url}
     ```
 
-28. **Post checklist to Monday.com**: Use `mcp__dev-tasks__createUpdate` to post the same
+28. **Post checklist to Monday.com**: Use `mcp__plugin_monday-task-flow_monday-tasks__createUpdate` to post the same
     checklist (HTML-formatted) as an update on the task. This lets the user (and team) see
     the test plan directly on the Monday.com task board without needing the terminal.
 
@@ -712,7 +712,7 @@ fine to continue; detect the anti-pattern where fixes actively create new proble
         ```
       c. Delete `.claude/active-task.json` (cleanup for next task).
     - **Hotfix flow (`baseRefName == "main"`)**:
-      a. Call `mcp__dev-tasks__updateTask(itemId, status: "Done")`. The MCP gate accepts this because all subtasks are `Done` (hotfix had no UAT doc requirement).
+      a. Call `mcp__plugin_monday-task-flow_monday-tasks__updateTask(itemId, status: "Done")`. The MCP gate accepts this because all subtasks are `Done` (hotfix had no UAT doc requirement).
       b. Post final update:
         ```
         [TASK_COMPLETED] Agent Progress Update
