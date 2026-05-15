@@ -4,7 +4,8 @@ Claude Code plugin for Monday-driven task-first development. Ships:
 
 - **MCP server** — 37 stdio tools (Monday task/sprint/epic/bug/version/feedback management)
 - **Rules** — 8 universal lifecycle rules, auto-injected on Edit/Write via PreToolUse
-- **project-config** — JSON schema for per-consumer config (no skills/hooks read it yet — Phase 2b)
+- **Skills** — 7 core lifecycle skills (Phase 2b.i): `pickup-task`, `create-task`, `refine-task`, `log-progress`, `self-review`, `ship-pr`, `release-version`. Invoked as `/monday-task-flow:<skill>`.
+- **project-config** — JSON schema for per-consumer config (no skills/hooks read it yet — Phase 2b.ii)
 
 ## Requirements
 
@@ -48,6 +49,14 @@ plugin/
 │   ├── meta-workflow.md
 │   └── testing.md
 ├── rules-routing.json             # file-glob → rule-file mapping for auto-load
+├── skills/                        # 7 core lifecycle skills (Phase 2b.i, lifted from PolAds)
+│   ├── pickup-task/SKILL.md
+│   ├── create-task/SKILL.md
+│   ├── refine-task/SKILL.md
+│   ├── log-progress/SKILL.md
+│   ├── self-review/SKILL.md
+│   ├── ship-pr/SKILL.md
+│   └── release-version/SKILL.md
 ├── hooks/
 │   ├── hooks.json                 # PreToolUse rule-autoload registration
 │   ├── rule-autoload.sh           # the hook script (fail-open, session-dedup)
@@ -92,8 +101,24 @@ After editing **MCP code**, you must fully restart Claude Code — `/reload-plug
 
 37 tools across these phases: Discovery, Context, Execution, Creation, Shipping, Communication, Epic Management, Feedback & Requests, Retrospectives, Public Roadmap, Structured Changelog, UAT Docs. See `src/server.ts` for the full registration list with descriptions.
 
-## project-config (Phase 2a defines, Phase 2b consumes)
+## Skills (Phase 2b.i)
 
-Consumers may add `.claude/project-config.json` validated against `schemas/project-config.schema.json`. The schema covers `git`, `i18n`, `ci`, `monday`, and `rules` fields. **Phase 2a ships only the schema** — no plugin code currently reads it. Phase 2b's hooks (i18n parity, worktree-required, etc.) will use `hooks/lib/config-reader.sh` to load values.
+7 core lifecycle skills, invoked as `/monday-task-flow:<name>`. Lifted from `v0-politiske-annoncer/.claude/skills/` as-is. Each skill carries PolAds-specific references (branch names, deploy URLs, package manager) that Phase 3 will genericize via project-config.
+
+| Skill | Purpose |
+|---|---|
+| `pickup-task` | Claim a Monday.com task, create feature branch / worktree, write `.claude/active-task.json` |
+| `create-task` | Create a new task with duplicate-check + Ready-to-Start gate enforcement |
+| `refine-task` | Break a task into typed subtasks with estimates and Ready-to-Start prereqs |
+| `log-progress` | Post structured Monday update and manage subtask lifecycle |
+| `self-review` | Iterative 10-point code review until all checks pass |
+| `ship-pr` | Build → lint → test → validate-schema → push → PR → preview URL → UAT doc → `Waiting for UAT` |
+| `release-version` | Cut a release: FF main from staging + apply prod migrations + tag |
+
+**Known references to clean up (Phase 3 genericization):** `polads.eu`, `pnpm`, `staging` (branch), `PolAds` (product), `Neon`, `Drizzle`, `v0-politiske-annoncer`, `mcp__dev-tasks__*` (63 tool-name references — these break when the Next.js MCP route is deleted; rewrite to `mcp__plugin_monday-task-flow_monday-tasks__*` during cutover).
+
+## project-config (Phase 2a defines, Phase 2b.ii consumes)
+
+Consumers may add `.claude/project-config.json` validated against `schemas/project-config.schema.json`. The schema covers `git`, `i18n`, `ci`, `monday`, and `rules` fields. **Phase 2a ships only the schema** — no plugin code currently reads it. Phase 2b.ii's hooks (i18n parity, worktree-required, etc.) will use `hooks/lib/config-reader.sh` to load values.
 
 A starter at `templates/starter-project-config.json` shows the minimum shape.
