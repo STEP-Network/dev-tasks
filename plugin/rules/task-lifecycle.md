@@ -5,6 +5,19 @@
 > by `/pickup-task`, `/create-task`, `/refine-task`, `/log-progress`, `/ship-pr`,
 > and `/release-version`. CLAUDE.md carries a compact summary + pointer here.
 
+## TL;DR
+
+**Status flow:** Needs Refinement → Ready to Start → In Progress → Waiting for UAT → Pending Deploy to Prod → Done (+ Stuck escapes the flow on blockers).
+
+**Hard gates** (server-enforced by `updateTask`):
+- **Ready to Start** ← type + priority + epicId + description + acceptanceCriteria + ≥1 subtask with name+description+type+estimatedHours
+- **In Progress** ← task in active sprint + all `dependencyIds` Done
+- **Waiting for UAT** ← all subtasks Done + UAT doc set via `createTaskUatDoc`
+
+**Subtask types** (6): `Backend` · `Test` · `Documentation` · `UX-UI` · `Database` · `To Do`. Every subtask MUST have name+description+type+estimatedHours.
+
+**Never set status to `Done` directly** — Monday automation does it when the last subtask flips Done (default flow), or `/release-version` does (release ceremony), or `/ship-pr` Phase 10 does (hotfix-to-`main` only).
+
 ## The 7-status flow
 
 ```text

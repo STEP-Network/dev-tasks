@@ -5,6 +5,21 @@
 > on demand when the agent encounters a tooling friction point during normal
 > work.
 
+## TL;DR
+
+You hit friction in a hook / skill / rule / MCP tool during normal work. File it:
+
+| Symptom | Board | Tool |
+|---|---|---|
+| Broken (wrong behavior, hard error) | **Bugs Queue** | `mcp__dev-tasks__createBug` |
+| Noisy but correct (UX, ergonomics, edge case) | **Retrospectives** (`Improve`) | `mcp__monday__create_item` |
+| Missing capability in MCP | **Tasks Backlog** (workflow-tooling epic) | `mcp__dev-tasks__createTask` |
+| Cross-cutting rule needing alignment | **Retrospectives** (`Discussion`) | `mcp__monday__create_item` |
+
+**File autonomously** (no user gating) when: observed this session + not a 5-line obvious fix + includes concrete reproduction (PR / turn / what triggered it).
+
+**Bug vs Retro heuristic:** *"if I left this alone, would the system produce wrong output for a real user?"* — Yes → **Bug**. No → **Retro**.
+
 ## When to apply
 
 Use this rule when **you, the agent, encounter friction in the workflow tooling itself** during normal task execution. Concretely:

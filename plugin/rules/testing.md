@@ -1,13 +1,16 @@
----
-globs:
-  - "__tests__/**"
-  - "e2e/**"
-  - "jest.config.js"
-  - "jest.setup.*"
-  - "playwright.config.ts"
----
-
 # Testing Rules
+
+## TL;DR
+
+Every feature or fix MUST include tests at ALL applicable tiers:
+
+- **Unit** (`__tests__/lib/`) — `pnpm test`. Validation, transforms, utils.
+- **Integration** (`__tests__/api/`) — `pnpm test`. API routes, DB ops. Use `skipIfDbUnavailable()` guard.
+- **E2E** (`e2e/`) — `pnpm playwright test`. UI flows, user-facing changes.
+
+**No human-test subtasks.** Human verification is the parent task's `Waiting for UAT` status + the auto-generated UAT doc on column `doc_mm3adfdg`. Test subtasks describe agent-written test code, not human verification.
+
+**Coverage:** happy path + realistic edge cases. Skip exhaustive permutations when core behavior is covered.
 
 ## Mandatory Test Tiers
 

@@ -1,5 +1,17 @@
 # Versioning Rules
 
+## TL;DR
+
+**Semver:** `v{major}.{minor}.{patch}` (e.g., `v0.9.0`).
+
+- **Major** ← breaking changes. Manual or v1.0-milestone trigger only.
+- **Minor** ← new features (Development-type tasks).
+- **Patch** ← fixes, refines, docs, PM-work. Hotfixes are always patch.
+
+**v1.0.0 is a HARD GATE.** Reserved for the moment **both** Beta version epic (#2833952138) AND Live version epic (#2738006659) hit `Done`. Agents must NOT auto-suggest `v1.0.0` while either is incomplete — fall through to the highest non-major bump and note the gate.
+
+**Always call the helper.** `lib/services/version-bump.ts` exports `computeBumpSuggestion(input)` — single source of truth with 46 unit tests covering every branch including the v1.0 gate. Never reimplement the algorithm in scripts or skill prose.
+
 ## Semver Convention
 
 Format: `v{major}.{minor}.{patch}` (e.g., `v0.9.0`)
