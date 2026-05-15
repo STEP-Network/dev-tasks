@@ -5,7 +5,8 @@ Claude Code plugin for Monday-driven task-first development. Ships:
 - **MCP server** — 37 stdio tools (Monday task/sprint/epic/bug/version/feedback management)
 - **Rules** — 8 universal lifecycle rules, auto-injected on Edit/Write via PreToolUse
 - **Skills** — 7 core lifecycle skills (Phase 2b.i): `pickup-task`, `create-task`, `refine-task`, `log-progress`, `self-review`, `ship-pr`, `release-version`. Invoked as `/monday-task-flow:<skill>`.
-- **project-config** — JSON schema for per-consumer config (no skills/hooks read it yet — Phase 2b.ii)
+- **Hooks** — 6 critical blocking hooks (Phase 2b.ii), all opt-in via `project-config.hooks.enabled[]`
+- **project-config** — JSON schema for per-consumer config (`hook_enabled` helper in `config-reader.sh` gates each hook)
 
 ## Requirements
 
@@ -58,9 +59,16 @@ plugin/
 │   ├── ship-pr/SKILL.md
 │   └── release-version/SKILL.md
 ├── hooks/
-│   ├── hooks.json                 # PreToolUse rule-autoload registration
-│   ├── rule-autoload.sh           # the hook script (fail-open, session-dedup)
-│   └── lib/config-reader.sh       # shared project-config reader for future hooks
+│   ├── hooks.json                 # registers all 7 hooks (rule-autoload + 6 critical)
+│   ├── rule-autoload.sh           # PreToolUse, always-on, fail-open, session-dedup
+│   ├── task-state-guard.sh        # PreToolUse Edit|Write — blocks edits without active-task.json (opt-in)
+│   ├── worktree-required.sh       # PreToolUse Edit|Write — blocks source edits outside a worktree (opt-in)
+│   ├── worktree-path-boundary.sh  # PreToolUse Edit|Write — blocks edits to main checkout from worktree session (opt-in)
+│   ├── bash-guard.sh              # PreToolUse Bash — gated on dangerous commands (opt-in)
+│   ├── stop-task-check.sh         # Stop — blocks session exit while pipeline incomplete (opt-in)
+│   ├── stop-ci-green-check.sh     # Stop — blocks session exit while CI not green (opt-in)
+│   ├── stop-task-logic.py         # python helper used by stop-task-check.sh
+│   └── lib/config-reader.sh       # read_project_config + hook_enabled helpers
 ├── schemas/
 │   └── project-config.schema.json # JSON Schema for consumer's .claude/project-config.json
 └── templates/
@@ -117,8 +125,39 @@ After editing **MCP code**, you must fully restart Claude Code — `/reload-plug
 
 **Known references to clean up (Phase 3 genericization):** `polads.eu`, `pnpm`, `staging` (branch), `PolAds` (product), `Neon`, `Drizzle`, `v0-politiske-annoncer`, `mcp__dev-tasks__*` (63 tool-name references — these break when the Next.js MCP route is deleted; rewrite to `mcp__plugin_monday-task-flow_monday-tasks__*` during cutover).
 
-## project-config (Phase 2a defines, Phase 2b.ii consumes)
+## Critical hooks (Phase 2b.ii) — opt-in only
 
-Consumers may add `.claude/project-config.json` validated against `schemas/project-config.schema.json`. The schema covers `git`, `i18n`, `ci`, `monday`, and `rules` fields. **Phase 2a ships only the schema** — no plugin code currently reads it. Phase 2b.ii's hooks (i18n parity, worktree-required, etc.) will use `hooks/lib/config-reader.sh` to load values.
+The plugin ships 6 lifecycle-enforcement hooks copied from PolAds. **All are opt-in**: each hook checks `project-config.hooks.enabled[]` at the top of its script and exits 0 silently if not listed. This keeps the plugin safe to install in projects that don't follow the Monday task-first workflow.
 
-A starter at `templates/starter-project-config.json` shows the minimum shape.
+| Hook | Event | Blocks when |
+|---|---|---|
+| `task-state-guard` | PreToolUse Edit/Write | no `.claude/active-task.json` with valid taskId+claimToken |
+| `worktree-required` | PreToolUse Edit/Write | source edit outside a git worktree |
+| `worktree-path-boundary` | PreToolUse Edit/Write | edit targets main checkout while session is in a worktree |
+| `bash-guard` | PreToolUse Bash (gated by `if` matcher on dangerous commands) | --no-verify / --force / rm -rf / git reset --hard / unguarded git operations |
+| `stop-task-check` | Stop | session has source changes but pipeline incomplete (no PR / preview URL / review) |
+| `stop-ci-green-check` | Stop | CI checks not green or failures unacknowledged |
+
+**Enable for your project:** add to `.claude/project-config.json`:
+
+```json
+{
+  "version": "1",
+  "hooks": {
+    "enabled": [
+      "task-state-guard",
+      "worktree-required",
+      "worktree-path-boundary",
+      "bash-guard",
+      "stop-task-check",
+      "stop-ci-green-check"
+    ]
+  }
+}
+```
+
+Omit a hook from the array to keep it inert. Without `project-config.json` at all, every hook is dormant — only `rule-autoload.sh` (always-on) runs.
+
+## project-config
+
+Consumers add `.claude/project-config.json` validated against `schemas/project-config.schema.json`. Covers `git`, `i18n`, `ci`, `monday`, `rules`, and `hooks.enabled[]` fields. A starter at `templates/starter-project-config.json` shows the minimum shape.

@@ -19,5 +19,15 @@
   },
   "rules": {
     "extraRules": []
+  },
+  "hooks": {
+    "enabled": [
+      "task-state-guard",
+      "worktree-required",
+      "worktree-path-boundary",
+      "bash-guard",
+      "stop-task-check",
+      "stop-ci-green-check"
+    ]
   }
 }

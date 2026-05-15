@@ -31,3 +31,19 @@ read_project_config() {
   [ ! -f "$path" ] && return 0
   jq -r "$jq_path // empty" "$path" 2>/dev/null || true
 }
+
+# hook_enabled <hook-name>
+# Returns 0 (true) if the hook is listed in project-config's hooks.enabled[] array.
+# Returns 1 (false) if no project-config exists or the hook isn't listed.
+# Use at the top of each blocking hook: `hook_enabled "task-state-guard" || exit 0`
+# Default behavior is OPT-IN — consumer projects must explicitly enable each hook
+# to avoid blocking edits in projects that don't follow this workflow.
+hook_enabled() {
+  local hook_name="$1"
+  local path
+  path="$(_project_config_path)"
+  [ ! -f "$path" ] && return 1
+  local result
+  result=$(jq -r --arg name "$hook_name" '(.hooks.enabled // []) | index($name) // empty' "$path" 2>/dev/null)
+  [ -n "$result" ]
+}

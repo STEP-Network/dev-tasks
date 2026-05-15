@@ -4,10 +4,28 @@
       {
         "matcher": "Edit|Write|MultiEdit|NotebookEdit",
         "hooks": [
+          { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/hooks/rule-autoload.sh" },
+          { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/hooks/task-state-guard.sh" },
+          { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/hooks/worktree-required.sh" },
+          { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/hooks/worktree-path-boundary.sh" }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/rule-autoload.sh"
+            "if": "Bash(* --no-verify *|*--force*|rm -rf *|git reset --hard *|git checkout .|git checkout -- *|git clean -f*|git branch -D*|git commit *|git push *)",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/bash-guard.sh"
           }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/hooks/stop-task-check.sh" },
+          { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/hooks/stop-ci-green-check.sh" }
         ]
       }
     ]

@@ -116,6 +116,29 @@
           "items": { "type": "string" }
         }
       }
+    },
+    "hooks": {
+      "description": "Per-project hook activation. Plugin hooks are OPT-IN — list each hook by name to enable it. Hooks not listed here are inert (exit 0 immediately).",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "description": "Names of plugin hooks active in this project.",
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "task-state-guard",
+              "worktree-required",
+              "worktree-path-boundary",
+              "bash-guard",
+              "stop-task-check",
+              "stop-ci-green-check"
+            ]
+          },
+          "uniqueItems": true
+        }
+      }
     }
   }
 }
