@@ -15,8 +15,11 @@ exec >&2
 #   (a) Block destructive commands
 #   (b) Block git commit without self-review (Fix 1)
 #   (c) SHA-scoped pre-push gate (Fix 5)
-#   (d) i18n locale parity — block commit if staged messages/*.json files have mismatched keys
-#   (e) i18n completeness — block commit if only a subset of 24 locale files are modified
+#   (d) i18n locale parity — block commit if staged default-locale file has NEW keys
+#       missing from other configured locale files. Active only when
+#       project-config.i18n.enabled = true.
+#   (e) i18n completeness — block commit when project-config.i18n.parityHookMode = "block"
+#       and the branch has modified some but not all configured locale files.
 # Input: JSON on stdin with tool_input.command
 
 # Read tool input from stdin (consumed once)
@@ -84,23 +87,37 @@ except Exception:
   # No state file = no active task enforcement on commit (task-state-guard handles edits)
 fi
 
-# (d) i18n locale parity: if committing and messages/en.json is staged with NEW keys,
-#     verify those keys exist in ALL other locale files (working tree).
+# Resolve i18n config once for sections (d) and (e). Both are dormant unless
+# project-config.i18n.enabled = true.
+I18N_ENABLED=$(read_project_config '.i18n.enabled')
+I18N_DEFAULT_LOCALE=$(read_project_config '.i18n.defaultLocale')
+[ -z "$I18N_DEFAULT_LOCALE" ] && I18N_DEFAULT_LOCALE="en"
+I18N_MESSAGES_GLOB=$(read_project_config '.i18n.messagesGlob')
+[ -z "$I18N_MESSAGES_GLOB" ] && I18N_MESSAGES_GLOB="messages/*.json"
+I18N_MESSAGES_DIR=$(dirname "$I18N_MESSAGES_GLOB")
+I18N_LOCALES_CSV=$(read_project_config '.i18n.locales | join(",")')
+I18N_PARITY_MODE=$(read_project_config '.i18n.parityHookMode')
+[ -z "$I18N_PARITY_MODE" ] && I18N_PARITY_MODE="block"
+
+# (d) i18n locale parity: if committing and the configured default-locale file is staged
+#     with NEW keys, verify those keys exist in ALL other configured locale files.
 #     Only checks newly added keys — pre-existing gaps don't block.
-if echo "$ACTUAL_CMD" | grep -q "git commit"; then
-  EN_STAGED=$(cd "$PROJECT_ROOT" && git diff --cached --name-only -- 'messages/en.json' 2>/dev/null)
+if echo "$ACTUAL_CMD" | grep -q "git commit" && [ "$I18N_ENABLED" = "true" ]; then
+  DEFAULT_FILE="${I18N_MESSAGES_DIR}/${I18N_DEFAULT_LOCALE}.json"
+  EN_STAGED=$(cd "$PROJECT_ROOT" && git diff --cached --name-only -- "$DEFAULT_FILE" 2>/dev/null)
   if [ -n "$EN_STAGED" ]; then
-    I18N_RESULT=$(cd "$PROJECT_ROOT" && python3 -c "
+    I18N_RESULT=$(cd "$PROJECT_ROOT" && I18N_MESSAGES_DIR="$I18N_MESSAGES_DIR" I18N_DEFAULT_LOCALE="$I18N_DEFAULT_LOCALE" python3 -c "
 import json, glob, os, sys, subprocess, re
 
-messages_dir = 'messages'
-en_path = os.path.join(messages_dir, 'en.json')
-if not os.path.exists(en_path):
+messages_dir = os.environ.get('I18N_MESSAGES_DIR', 'messages')
+default_locale = os.environ.get('I18N_DEFAULT_LOCALE', 'en')
+default_path = os.path.join(messages_dir, default_locale + '.json')
+if not os.path.exists(default_path):
     sys.exit(0)
 
-# Get the staged diff for en.json — extract added lines with key patterns
+# Get the staged diff for the default-locale file — extract added lines with key patterns
 diff = subprocess.run(
-    ['git', 'diff', '--cached', '-U0', '--', en_path],
+    ['git', 'diff', '--cached', '-U0', '--', default_path],
     capture_output=True, text=True
 ).stdout
 
@@ -109,7 +126,6 @@ diff = subprocess.run(
 added_keys = set()
 for line in diff.split('\n'):
     if line.startswith('+') and not line.startswith('+++'):
-        # Extract the key name from lines like:  +        \"deletionBlocked\": \"...\"
         match = re.search(r'\"([^\"]+)\"\s*:', line)
         if match:
             added_keys.add(match.group(1))
@@ -123,13 +139,12 @@ locale_files = sorted(glob.glob(os.path.join(messages_dir, '*.json')))
 missing = []
 for lf in locale_files:
     locale = os.path.basename(lf).replace('.json', '')
-    if locale == 'en':
+    if locale == default_locale:
         continue
     with open(lf) as f:
         content = f.read()
     locale_missing = []
     for key in sorted(added_keys):
-        # Simple check: does the key string appear in the file?
         if '\"' + key + '\"' not in content:
             locale_missing.append(key)
     if locale_missing:
@@ -143,42 +158,53 @@ else:
 " 2>/dev/null)
 
     if echo "$I18N_RESULT" | grep -q "MISSING_KEYS"; then
+      LOCALE_COUNT=$(read_project_config '.i18n.locales | length')
+      [ -z "$LOCALE_COUNT" ] && LOCALE_COUNT="all configured"
       echo "BLOCKED: i18n locale parity check failed."
       echo ""
-      echo "New keys added to messages/en.json are missing from other locale files:"
+      echo "New keys added to ${I18N_MESSAGES_DIR}/${I18N_DEFAULT_LOCALE}.json are missing from other locale files:"
       echo "$I18N_RESULT" | tail -n +2
       echo ""
-      echo "Every new i18n key MUST be added to ALL 24 locale files in messages/."
-      echo "Verify with: grep -r '\"keyName\"' messages/ | wc -l (must equal 24)"
+      echo "Every new i18n key MUST be added to ALL ${LOCALE_COUNT} locale files in ${I18N_MESSAGES_DIR}/."
+      echo "Verify with: grep -r '\"keyName\"' ${I18N_MESSAGES_DIR}/ | wc -l (must equal ${LOCALE_COUNT})"
       exit 2
     fi
   fi
 fi
 
-# (e) i18n completeness: if committing locale files, verify that ALL 24 locale
+# (e) i18n completeness: if committing locale files, verify that ALL configured locale
 #     files have been modified on this branch (staged + already committed).
-#     Uses branch diff against main to avoid false positives from multi-commit workflows.
-if echo "$ACTUAL_CMD" | grep -q "git commit"; then
-  I18N_STAGED=$(cd "$PROJECT_ROOT" && git diff --cached --name-only -- 'messages/*.json' 2>/dev/null)
+#     parityHookMode controls behavior: "block" exits 2, "warn" prints to stderr,
+#     "off" skips entirely. Default "block".
+if echo "$ACTUAL_CMD" | grep -q "git commit" && [ "$I18N_ENABLED" = "true" ] && [ "$I18N_PARITY_MODE" != "off" ]; then
+  I18N_STAGED=$(cd "$PROJECT_ROOT" && git diff --cached --name-only -- "$I18N_MESSAGES_GLOB" 2>/dev/null)
   if [ -n "$I18N_STAGED" ]; then
-    I18N_COMPLETENESS=$(cd "$PROJECT_ROOT" && python3 -c "
+    DEFAULT_BASE_BRANCH=$(read_project_config '.git.defaultBase')
+    [ -z "$DEFAULT_BASE_BRANCH" ] && DEFAULT_BASE_BRANCH="main"
+    I18N_COMPLETENESS=$(cd "$PROJECT_ROOT" && I18N_MESSAGES_DIR="$I18N_MESSAGES_DIR" I18N_LOCALES_CSV="$I18N_LOCALES_CSV" I18N_BASE_BRANCH="$DEFAULT_BASE_BRANCH" python3 -c "
 import subprocess, os, sys
 
-all_locales = sorted([
-    'bg','cs','da','de','el','en','es','et','fi','fr','ga','hr',
-    'hu','it','lt','lv','mt','nl','pl','pt','ro','sk','sl','sv'
-])
+messages_dir = os.environ.get('I18N_MESSAGES_DIR', 'messages')
+locales_csv = os.environ.get('I18N_LOCALES_CSV', '')
+base_branch = os.environ.get('I18N_BASE_BRANCH', 'main')
 
-# Check ALL locale files modified on this branch (committed + staged + unstaged)
-# Branch diff: committed changes since divergence from main
+if not locales_csv:
+    # No locales list in project-config — cannot verify completeness
+    print('OK')
+    sys.exit(0)
+
+all_locales = sorted([l.strip() for l in locales_csv.split(',') if l.strip()])
+expected = len(all_locales)
+
+# Branch diff: committed changes since divergence from base
 branch_diff = subprocess.run(
-    ['git', 'diff', '--name-only', 'main...HEAD', '--', 'messages/'],
+    ['git', 'diff', '--name-only', f'{base_branch}...HEAD', '--', messages_dir + '/'],
     capture_output=True, text=True
 ).stdout.strip().split('\n')
 
 # Staged changes (about to be committed)
 staged = subprocess.run(
-    ['git', 'diff', '--cached', '--name-only', '--', 'messages/'],
+    ['git', 'diff', '--cached', '--name-only', '--', messages_dir + '/'],
     capture_output=True, text=True
 ).stdout.strip().split('\n')
 
@@ -186,31 +212,39 @@ staged = subprocess.run(
 all_modified = set()
 for f in branch_diff + staged:
     f = f.strip()
-    if f and f.startswith('messages/') and f.endswith('.json'):
+    if f and f.startswith(messages_dir + '/') and f.endswith('.json'):
         locale = os.path.basename(f).replace('.json', '')
         if locale in all_locales:
             all_modified.add(locale)
 
-# If 0 or all 24, no problem
-if len(all_modified) == 0 or len(all_modified) >= 24:
+# 0 modified = nothing to validate; all modified = complete; in between = incomplete
+if len(all_modified) == 0 or len(all_modified) >= expected:
     print('OK')
     sys.exit(0)
 
 missing = sorted(set(all_locales) - all_modified)
 print('INCOMPLETE')
-print(f'Branch has {len(all_modified)}/24 locale files modified (committed + staged)')
-print(f'Modified: {', '.join(sorted(all_modified))}')
-print(f'Missing ({len(missing)}): {', '.join(missing)}')
+print(f'Branch has {len(all_modified)}/{expected} locale files modified (committed + staged)')
+print(f'Modified: {\", \".join(sorted(all_modified))}')
+print(f'Missing ({len(missing)}): {\", \".join(missing)}')
 " 2>/dev/null)
 
     if echo "$I18N_COMPLETENESS" | grep -q "INCOMPLETE"; then
-      echo "BLOCKED: i18n completeness check failed."
-      echo ""
-      echo "$I18N_COMPLETENESS" | tail -n +2
-      echo ""
-      echo "When modifying i18n keys, ALL 24 locale files must be updated."
-      echo "Update the missing locale files, then stage them with: git add messages/"
-      exit 2
+      if [ "$I18N_PARITY_MODE" = "block" ]; then
+        echo "BLOCKED: i18n completeness check failed."
+        echo ""
+        echo "$I18N_COMPLETENESS" | tail -n +2
+        echo ""
+        echo "When modifying i18n keys, ALL configured locale files must be updated."
+        echo "Update the missing locale files, then stage them with: git add ${I18N_MESSAGES_DIR}/"
+        exit 2
+      else
+        # warn mode
+        echo "WARNING: i18n completeness check — partial locale coverage."
+        echo "$I18N_COMPLETENESS" | tail -n +2
+        echo ""
+        echo "(parityHookMode = \"warn\" — proceeding without blocking; set to \"block\" to enforce)"
+      fi
     fi
   fi
 fi

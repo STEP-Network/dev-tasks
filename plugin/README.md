@@ -39,7 +39,13 @@ plugin/
 │   ├── monday-client.ts           # Monday GraphQL client (reads MONDAY_API_KEY)
 │   ├── constants.ts               # board / column / status maps
 │   ├── schemas.ts                 # Zod schemas for all 37 tools
-│   └── tools/                     # one file per tool, plus utils + index
+│   ├── tools/                     # one file per tool, plus utils + index
+│   └── services/
+│       ├── version-bump.ts        # pure semver bump-suggestion algorithm + 3-cat task classifier
+│       └── __tests__/             # 46 unit tests for version-bump (vitest)
+├── scripts/                       # universal helper scripts
+│   ├── find-worktree-for-task.sh  # given a Monday task ID, print its worktree path
+│   └── worktree-audit.sh          # audit all worktrees for stale / merged / abandoned ones
 ├── rules/                         # universal lifecycle rules (8 markdown files)
 │   ├── task-lifecycle.md
 │   ├── ship-readiness.md
@@ -134,7 +140,7 @@ The plugin ships 6 lifecycle-enforcement hooks copied from PolAds. **All are opt
 | `task-state-guard` | PreToolUse Edit/Write | no `.claude/active-task.json` with valid taskId+claimToken |
 | `worktree-required` | PreToolUse Edit/Write | source edit outside a git worktree |
 | `worktree-path-boundary` | PreToolUse Edit/Write | edit targets main checkout while session is in a worktree |
-| `bash-guard` | PreToolUse Bash (gated by `if` matcher on dangerous commands) | --no-verify / --force / rm -rf / git reset --hard / unguarded git operations |
+| `bash-guard` | PreToolUse Bash (gated by `if` matcher on dangerous commands) | --no-verify / --force / rm -rf / git reset --hard / unguarded git operations. Also runs i18n parity + completeness checks on `git commit` when `project-config.i18n.enabled = true` — reads `messagesGlob`, `defaultLocale`, `locales`, `parityHookMode` from config. |
 | `stop-task-check` | Stop | session has source changes but pipeline incomplete (no PR / preview URL / review) |
 | `stop-ci-green-check` | Stop | CI checks not green or failures unacknowledged |
 

@@ -158,7 +158,7 @@ UI changes, hotfix flow skips UAT doc + Waiting-for-UAT transition, etc.).
 
 Cross-references:
 
-- `.claude/rules/task-lifecycle.md` — full status/subtask/gate table.
+- `task-lifecycle.md` — full status/subtask/gate table.
 - `.claude/skills/ship-pr/SKILL.md` — Phase 4 + 4.5 + 6.5 + 10 mechanics.
 - `.claude/skills/pickup-task/SKILL.md` — Steps 1–14 + dependency soft warning.
 - `.claude/skills/release-version/SKILL.md` — release ceremony that sets `Done`.

@@ -29,7 +29,7 @@ user_invocable: true
 5. **Schema validation** (if migration files touched):
    - `pnpm validate-schema --env testing`
 6. **Migrations** (if migration files touched):
-   - **Do NOT auto-apply migrations to production from `/ship-pr`.** Under the staging-as-base flow (per `.claude/rules/release-flow.md` and `.claude/rules/database.md`), migrations follow this lifecycle:
+   - **Do NOT auto-apply migrations to production from `/ship-pr`.** Under the staging-as-base flow (per `release-flow.md` and `.claude/rules/database.md`), migrations follow this lifecycle:
      - Apply locally via `pnpm migrate:testing` during development.
      - Ship the migration on the same PR that references it (default base `staging`).
      - On PR open/sync, `.github/workflows/preview-staging-migrations.yml` automatically diffs `_drizzle_migrations` between staging and prod, finds the auto-created preview Neon branch, and applies any staging-pending migrations on top — so the preview has prod data + staging schema. **No manual agent action required**.
@@ -46,7 +46,7 @@ user_invocable: true
 ### Phase 3: PR Management
 8. **Check existing PR**: `gh pr view --json number,url` — determine if PR already exists, capture PR number and URL
 9. **Determine PR base branch**:
-   - **Default**: PR base = `staging` (per `.claude/rules/release-flow.md` — features integrate on staging first, promoted to main at release time).
+   - **Default**: PR base = `staging` (per `release-flow.md` — features integrate on staging first, promoted to main at release time).
    - **Hotfix exception**: if the branch was created from `main` (production-blocker bugfix), PR base = `main`. Detect by checking the merge-base: if `git merge-base origin/main HEAD == origin/main HEAD~N` and merge-base with staging is older, the branch was off main → use `--base main`.
 10. **If no PR exists**: Create with template (include version info for CI version-check + EXPLICIT base):
    ```
@@ -380,7 +380,7 @@ If Corridor MCP is unreachable (network error, project not yet onboarded, etc.),
 **Step 19: Triage review comments + Corridor findings — THE MOST IMPORTANT STEP**
 
 > The reviewer bot generates nits indefinitely. Fixing everything it finds leads to
-> 4+ round review loops with diminishing value. See `.claude/rules/ship-readiness.md`
+> 4+ round review loops with diminishing value. See `ship-readiness.md`
 > for the governing principle: **a PR is ship-ready when it's correct, safe, and tested —
 > not when it's polished to perfection.**
 

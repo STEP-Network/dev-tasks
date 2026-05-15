@@ -20,8 +20,8 @@ user_invocable: true
 
 **Semver Suggestion** (when version number is empty or creating new):
 
-> The bump algorithm lives in `lib/services/version-bump.ts` as
-> `computeBumpSuggestion(input)` — pure, fully unit-tested (46 tests), single
+> The bump algorithm lives in the plugin at `${CLAUDE_PLUGIN_ROOT}/src/services/version-bump.ts` (compiled to `dist/services/version-bump.js`) as
+> `computeBumpSuggestion(input)` — pure, fully unit-tested (46 tests in `src/services/__tests__/version-bump.test.ts`), single
 > source of truth. The steps below cover the data the agent gathers + how to
 > interpret the result. All gating (v1.0 milestone, breaking changes,
 > force-major) is encoded inside `computeBumpSuggestion`, so this skill stays
@@ -124,7 +124,7 @@ The canonical Release Summary JSON uses 3 categories (Feature / Improvement / Fi
 
 ### Step 6: Promote staging → main + create git tag
 
-> Under the new branching flow (per `.claude/rules/release-flow.md`), `staging` is the integration branch — features land there first via PR. A release is the act of **fast-forwarding `main` from `staging`**, applying production migrations, and tagging. The git tag is the single trigger for the rest of the automation: GitHub Release + Monday.com status update + ISR cache revalidation.
+> Under the new branching flow (per `release-flow.md`), `staging` is the integration branch — features land there first via PR. A release is the act of **fast-forwarding `main` from `staging`**, applying production migrations, and tagging. The git tag is the single trigger for the rest of the automation: GitHub Release + Monday.com status update + ISR cache revalidation.
 
 **Pre-flight verification** — refuse to release if any of these fail:
 
@@ -170,7 +170,7 @@ If any pre-flight fails: stop, report the failure to the user, do NOT proceed.
 
 > Goal: the roadmap page should always show what's coming next. After every release we proactively create a placeholder version so PRs landing on staging immediately have somewhere to attach (and `/ship-pr` Phase 8 doesn't HARD BLOCK on a missing version).
 
-> The placeholder algorithm lives in `lib/services/version-bump.ts` as
+> The placeholder algorithm lives in the plugin at `${CLAUDE_PLUGIN_ROOT}/src/services/version-bump.ts` as
 > `computeNextPlannedVersion(latestReleased, v1MilestoneReady)` — same v1.0
 > gate as `computeBumpSuggestion`, same testable surface.
 

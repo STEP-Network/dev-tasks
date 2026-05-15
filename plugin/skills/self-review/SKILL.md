@@ -34,7 +34,7 @@ The goal of self-review is to catch **real issues that would harm production, us
 - Missing required tests (per the tier rules below)
 - Stale user-facing docs after behavior change
 
-See `.claude/rules/ship-readiness.md` for the full principle.
+See `ship-readiness.md` for the full principle.
 
 ## Workflow (Iterative — repeat until clean)
 
@@ -55,7 +55,7 @@ See `.claude/rules/ship-readiness.md` for the full principle.
 **No hard iteration cap.** The loop terminates when the self-reviewer reports zero FAILs (i.e. no BLOCKERs remaining per the ship-readiness triage). A late iteration can legitimately catch a BLOCKER introduced by an earlier fix — we always want to fix that.
 
 **Each iteration must be critical, not mechanical.** When evaluating the self-reviewer's report:
-- Apply the BLOCKER / IMPROVEMENT / POLISH triage from `.claude/rules/ship-readiness.md`
+- Apply the BLOCKER / IMPROVEMENT / POLISH triage from `ship-readiness.md`
 - Mark as FAIL only genuine BLOCKERs (security, correctness, data integrity, missing tests/i18n/docs)
 - Non-blocker findings (style, speculative, premature optimization) are PASS with a note
 - If uncertain between BLOCKER and POLISH: lean BLOCKER when security/correctness is plausibly at stake; lean POLISH when the concern is aesthetic
@@ -91,7 +91,7 @@ Mark FAIL if ANY of these are violated:
 - New API route (`app/api/**/*.ts`) → MUST have unit test AND integration test in `__tests__/api/`
 - New hook (`lib/hooks/*.ts`) → MUST have test in `__tests__/hooks/`
 - New/changed UI flow → MUST have E2E test in `e2e/`
-- UI/email template changes → MUST have Playwright screenshot test that captures rendered output (see `.claude/rules/testing.md` Visual Validation section)
+- UI/email template changes → MUST have Playwright screenshot test that captures rendered output (see `testing.md` Visual Validation section)
 - Agent MUST read screenshot files (Read tool supports images) to visually validate rendered output before marking Tests as PASS — do NOT rely solely on string-matching unit tests for visual output
 - Bug fix → MUST have regression test covering the fixed behavior (at the appropriate tier)
 - Modified business logic (validation, data transforms, auth) → existing tests MUST be updated
@@ -102,7 +102,7 @@ Mark FAIL if ANY of these are violated:
 
 ### Check #11 — Corridor Findings (Detailed Rules)
 
-Corridor's static-analysis scanner posts security findings on every PR. They're a separate input from the self-reviewer agent — same triage framework applies (`.claude/rules/ship-readiness.md`):
+Corridor's static-analysis scanner posts security findings on every PR. They're a separate input from the self-reviewer agent — same triage framework applies (`ship-readiness.md`):
 
 - **BLOCKER (severity: critical/high; security/correctness)**: must fix before merge. Mark Check #11 as FAIL and apply the fix.
 - **IMPROVEMENT (severity: medium; small fix, real win)**: fix if cheap. Mark FAIL only if explicitly worth fixing in this PR.

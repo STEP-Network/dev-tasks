@@ -9,7 +9,7 @@ user_invocable: true
 > **Source-file edits for a claimed task must happen in a git worktree**, not
 > the main checkout. The `worktree-required.sh` PreToolUse hook hard-blocks
 > edits to non-`.claude/` paths when an active task exists outside a worktree.
-> See `.claude/rules/worktree-discipline.md` for the rationale.
+> See `worktree-discipline.md` for the rationale.
 >
 > Steps 1–4 below (fetch + validate) don't write any files — they're MCP-only,
 > so they're free to run in the main checkout. Step 4.5 is where the worktree
@@ -116,14 +116,14 @@ user_invocable: true
       Hotfix exception: if the task is a hotfix (Bugfix type tagged
       "production-blocker" or similar), branch from `main` instead and PR to `main`.
 
-10b. **Verify worktree-path ↔ branch convention** (traceability — see `.claude/rules/worktree-discipline.md`):
+10b. **Verify worktree-path ↔ branch convention** (traceability — see `worktree-discipline.md`):
     - Convention: `worktree_path = ".claude/worktrees/" + branch.replace("/", "-")`. The Monday Branch column (set by `/ship-pr` Phase 4) is the canonical link.
     - After the rename in step 10, verify: current worktree path basename equals the branch name with `/` → `-`.
       ```bash
       [ "$(basename "$PWD")" = "$(git branch --show-current | tr '/' '-')" ] && echo "convention OK" || echo "WARNING: worktree path does not match branch slug"
       ```
-    - If the check fails, fix one of: rename the worktree directory, or rename the branch. The convention must hold so `.claude/scripts/find-worktree-for-task.sh` and `worktree-audit.sh` can locate the worktree from the Monday task.
-    - Reverse direction: `bash .claude/scripts/find-worktree-for-task.sh <monday-task-id>` prints the worktree path for any task whose Branch column is populated.
+    - If the check fails, fix one of: rename the worktree directory, or rename the branch. The convention must hold so `${CLAUDE_PLUGIN_ROOT}/scripts/find-worktree-for-task.sh` and `worktree-audit.sh` can locate the worktree from the Monday task.
+    - Reverse direction: `bash ${CLAUDE_PLUGIN_ROOT}/scripts/find-worktree-for-task.sh <monday-task-id>` prints the worktree path for any task whose Branch column is populated.
 11. **Post TASK_CLAIMED event** (do this BEFORE creating state file — the response provides the `claimToken`):
     Use `mcp__plugin_monday-task-flow_monday-tasks__createUpdate` with structured format:
     ```
