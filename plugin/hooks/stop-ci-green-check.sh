@@ -6,6 +6,10 @@
 source "$(dirname "${BASH_SOURCE[0]}")/lib/config-reader.sh"
 hook_enabled "stop-ci-green-check" || exit 0
 
+# Redirect stdout to stderr so block messages (exit 2) reach Claude Code
+# correctly. Per Claude Code hooks spec, block reasons must be on stderr.
+exec >&2
+
 # Hook: Stop
 # HARD BLOCK: refuses session exit when a push happened in this session and CI
 # on the resulting PR is not yet green. Complements stop-task-check.sh, which

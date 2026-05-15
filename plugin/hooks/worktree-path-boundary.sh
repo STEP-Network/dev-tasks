@@ -6,6 +6,10 @@
 source "$(dirname "${BASH_SOURCE[0]}")/lib/config-reader.sh"
 hook_enabled "worktree-path-boundary" || exit 0
 
+# Redirect stdout to stderr so block messages (exit 2) reach Claude Code
+# correctly. Per Claude Code hooks spec, block reasons must be on stderr.
+exec >&2
+
 # Hook: PreToolUse (Edit|Write)
 # HARD BLOCK: when the session is in a worktree, edits to paths inside the
 # MAIN checkout (but outside this worktree) are almost always an absolute-path

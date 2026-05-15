@@ -6,6 +6,10 @@
 source "$(dirname "${BASH_SOURCE[0]}")/lib/config-reader.sh"
 hook_enabled "stop-task-check" || exit 0
 
+# Redirect stdout to stderr so block messages (exit 2) reach Claude Code
+# correctly. Per Claude Code hooks spec, block reasons must be on stderr.
+exec >&2
+
 # Hook: Stop
 # ENFORCED post-implementation pipeline — hard blocks (exit 2) when source files
 # changed but pipeline is incomplete. Allows stop for infrastructure-only sessions.

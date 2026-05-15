@@ -6,6 +6,10 @@
 source "$(dirname "${BASH_SOURCE[0]}")/lib/config-reader.sh"
 hook_enabled "worktree-required" || exit 0
 
+# Redirect stdout to stderr so block messages (exit 2) reach Claude Code
+# correctly. Per Claude Code hooks spec, block reasons must be on stderr.
+exec >&2
+
 # Hook: PreToolUse (Edit|Write)
 # HARD BLOCK: When a Monday task is claimed, edits MUST happen in a git worktree.
 #

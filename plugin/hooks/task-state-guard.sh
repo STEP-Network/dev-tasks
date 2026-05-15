@@ -6,6 +6,10 @@
 source "$(dirname "${BASH_SOURCE[0]}")/lib/config-reader.sh"
 hook_enabled "task-state-guard" || exit 0
 
+# Redirect stdout to stderr so block messages (exit 2) reach Claude Code
+# correctly. Per Claude Code hooks spec, block reasons must be on stderr.
+exec >&2
+
 # Hook: PreToolUse (Edit|Write)
 # HARD BLOCK: No edits allowed without an active Monday.com task
 # SIDE EFFECTS on source file edits (Fix 2 + Fix 3):
