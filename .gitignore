@@ -1,23 +1,14 @@
 # dependencies
 node_modules/
 
-# next.js
-.next/
-out/
-
-# production
-build/
+# build output
+plugin/dist/
+*.tsbuildinfo
 
 # env files
 .env
 .env.*
 !.env.example
 
-# vercel
-.vercel/
-
 # misc
 .DS_Store
-*.tsbuildinfo
-.vercel
-.env*.local
