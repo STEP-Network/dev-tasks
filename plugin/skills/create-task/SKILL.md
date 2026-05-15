@@ -6,7 +6,7 @@ user_invocable: true
 
 # /create-task — Create a New Task
 
-> The dev-tasks MCP enforces a server-side gate on every status transition. This skill
+> The Monday MCP enforces a server-side gate on every status transition. This skill
 > walks through the prerequisites for `Ready to Start` so a task lands ready for
 > `/pickup-task` without needing a separate refinement pass.
 
@@ -65,7 +65,7 @@ Before creating, search the backlog for:
 
 ## What the `Ready to Start` gate requires (server-side)
 
-The dev-tasks MCP rejects `Ready to Start` unless ALL of these are present on the task:
+The Monday MCP rejects `Ready to Start` unless ALL of these are present on the task:
 
 - `type` (`Feature`/`Fix`/`Improvement`/`To Do`)
 - `priority` (`Critical`/`High`/`Medium`/`Low`)
