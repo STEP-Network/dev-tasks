@@ -38,7 +38,7 @@ const AgentIdEnum = z.enum([
   "Claude Code CLI", "Claude Desktop Cloud", "Codex Local", "Claude Desktop Local", "Codex Cloud",
 ]);
 
-const SystemUserEnum = z.enum(["naref", "krmoj"]);
+const SystemUserEnum = z.enum(["nate", "naref", "krmoj"]);
 
 const EpicStatusEnum = z.enum([
   "Refining", "Done", "On Hold", "Planned", "Backlog", "In Progress", "Review",
@@ -273,6 +273,9 @@ export const CreateTaskSchema = z.object({
     branch: z.string().optional().describe("Git branch name"),
     owner: SystemUserEnum.optional().describe("Owner — use your system username (e.g. the output of `whoami`)"),
     subitems: z.array(SubitemSpec).optional().describe("Subtasks to create with the task"),
+    // NOTE: agentId is intentionally absent. Ownership transitions happen via claimTask
+    // (atomic: validates status + sprint + dependencies, sets Agent ID + Owner + Started Date).
+    // Setting agentId at create time pre-claimed the task and broke the claim flow.
   })).describe("Array of tasks to create"),
 });
 

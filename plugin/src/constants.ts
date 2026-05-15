@@ -384,6 +384,9 @@ export const AGENT_ID: Record<string, number> = {
 // =============================================================================
 
 export const PEOPLE: Record<string, number> = {
+  // Same Monday person ID — currently shows as "STEPhie" until Nate's individual
+  // Monday account is created. Both shell usernames map to the same person for now.
+  "nate": 48307552,
   "naref": 48307552,
   "krmoj": 38667531,
 };

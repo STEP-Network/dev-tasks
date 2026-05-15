@@ -94,6 +94,7 @@ Then edit:
       "task-state-guard",        // no edits without an active Monday task
       "worktree-required",       // source edits must be in a git worktree
       "worktree-path-boundary",  // can't edit main checkout from a worktree
+      "branch-task-match",       // current branch must equal active-task.json.branch
       "bash-guard",              // gates destructive commands + commits + pushes
       "stop-task-check",         // can't end session while pipeline incomplete
       "stop-ci-green-check"      // can't end session until CI is green or acked

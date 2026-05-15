@@ -7,7 +7,8 @@
           { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/hooks/rule-autoload.sh" },
           { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/hooks/task-state-guard.sh" },
           { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/hooks/worktree-required.sh" },
-          { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/hooks/worktree-path-boundary.sh" }
+          { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/hooks/worktree-path-boundary.sh" },
+          { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/hooks/branch-task-match.sh" }
         ]
       },
       {

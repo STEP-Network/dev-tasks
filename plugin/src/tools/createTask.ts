@@ -65,9 +65,9 @@ export async function createTask(args: CreateTaskInput): Promise<string> {
         columnValues[TASK_COLUMNS.targetVersion] = { item_ids: [task.versionId] };
       }
 
-      if (task.agentId) {
-        columnValues[TASK_COLUMNS.agentId] = { ids: [String(AGENT_ID[task.agentId])] };
-      }
+      // Note: agentId intentionally not handled here — pre-claiming via createTask
+      // broke the claim flow (see fix in claimTask.ts and schema note). Ownership
+      // transitions through claimTask, not createTask.
 
       if (task.planId) {
         columnValues[TASK_COLUMNS.planId] = task.planId;

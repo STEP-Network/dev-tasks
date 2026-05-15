@@ -86,26 +86,26 @@ user_invocable: true
          - If skip → continue
     - This is NON-BLOCKING: user can always skip
     - Store `versionId` and `versionName` in state file if linked
-6. **Claim the task**: Use `mcp__plugin_monday-task-flow_monday-tasks__claimTask` to assign it. The MCP validates server-side:
-    - Task status must be `Ready to Start` (step 4 already checked).
-    - Task must be in the active sprint (step 7 auto-assigns).
-    - All `dependencyIds` must be `Done` (step 4.6 already warned).
-    - No other agent currently owns the task.
-    - On rejection, `claimTask` returns a structured error naming the failing precondition — fix the named field via `updateTask`/`manageSubtasks` and retry.
-7. **Sprint auto-assignment** (MUST happen before setting status):
+6. **Sprint auto-assignment** (MUST run before claim — claimTask refuses tasks outside the active sprint):
     - Use `mcp__plugin_monday-task-flow_monday-tasks__getTask` to check if the task already has a Sprint linked (`task_sprint` field)
     - Get the active sprint via `mcp__plugin_monday-task-flow_monday-tasks__getSprint` (no args = active sprint)
     - **If the task has NO sprint assigned:**
       a. Assign the task to the active sprint: `mcp__plugin_monday-task-flow_monday-tasks__updateTask` with `sprintId: <active sprint ID>`
       b. Mark as unplanned: `mcp__plugin_monday-task-flow_monday-tasks__updateTask` with `unplanned: true`
-      c. Note in the TASK_CLAIMED event that this was an unplanned addition
+      c. Note in the TASK_CLAIMED event (step 11) that this was an unplanned addition
     - **If the task is already in the ACTIVE sprint:**
       a. Do nothing (planned work)
     - **If the task is in a DIFFERENT sprint (past or future):**
       a. Reassign to the active sprint: `mcp__plugin_monday-task-flow_monday-tasks__updateTask` with `sprintId: <active sprint ID>`
       b. Mark as unplanned: `mcp__plugin_monday-task-flow_monday-tasks__updateTask` with `unplanned: true`
-      c. Note in the TASK_CLAIMED event: "Moved from sprint X to active sprint Y (unplanned)"
-8. **Set status**: Use `mcp__plugin_monday-task-flow_monday-tasks__updateTask` to set status to "In Progress"
+      c. Note in the TASK_CLAIMED event (step 11): "Moved from sprint X to active sprint Y (unplanned)"
+7. **Claim the task**: Use `mcp__plugin_monday-task-flow_monday-tasks__claimTask` to assign it. The MCP validates server-side:
+    - Task status must be `Ready to Start` (step 4 already checked).
+    - Task must be in the active sprint (step 6 above just ensured this).
+    - All `dependencyIds` must be `Done` (step 4.6 already warned).
+    - No other agent currently owns the task.
+    - On rejection, `claimTask` returns a structured error naming the failing precondition — fix the named field via `updateTask`/`manageSubtasks` and retry.
+8. **Set status**: claimTask in step 7 already set status to `In Progress` — this step is only needed if you bypassed claimTask (e.g., agent-id mismatch retry).
 9. **Set first subtask to "In Progress"**: Use `mcp__plugin_monday-task-flow_monday-tasks__manageSubtasks` to start first subtask (this triggers `started_date` in Monday.com)
 10. **Rename the worktree branch to project convention**:
     - Step 4.5's `EnterWorktree` created branch `worktree-feat-<slug>`. Rename it

@@ -140,6 +140,7 @@ The plugin ships 6 lifecycle-enforcement hooks copied from PolAds. **All are opt
 | `task-state-guard` | PreToolUse Edit/Write | no `.claude/active-task.json` with valid taskId+claimToken |
 | `worktree-required` | PreToolUse Edit/Write | source edit outside a git worktree |
 | `worktree-path-boundary` | PreToolUse Edit/Write | edit targets main checkout while session is in a worktree |
+| `branch-task-match` | PreToolUse Edit/Write | current git branch doesn't match `active-task.json.branch` (closes the drift gap between Monday Branch column and actual working branch) |
 | `bash-guard` | PreToolUse Bash (gated by `if` matcher on dangerous commands) | --no-verify / --force / rm -rf / git reset --hard / unguarded git operations. Also runs i18n parity + completeness checks on `git commit` when `project-config.i18n.enabled = true` — reads `messagesGlob`, `defaultLocale`, `locales`, `parityHookMode` from config. |
 | `stop-task-check` | Stop | session has source changes but pipeline incomplete (no PR / preview URL / review) |
 | `stop-ci-green-check` | Stop | CI checks not green or failures unacknowledged |

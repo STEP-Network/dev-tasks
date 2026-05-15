@@ -131,6 +131,7 @@
               "task-state-guard",
               "worktree-required",
               "worktree-path-boundary",
+              "branch-task-match",
               "bash-guard",
               "stop-task-check",
               "stop-ci-green-check"
