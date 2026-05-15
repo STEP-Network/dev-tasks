@@ -1,0 +1,23 @@
+{
+  "$schema": "../../dev-tasks-mcp/plugin/schemas/project-config.schema.json",
+  "version": "1",
+  "git": {
+    "defaultBase": "main",
+    "hotfixBase": "main",
+    "branchConvention": "feat/<slug>",
+    "worktreeRoot": ".claude/worktrees",
+    "autoMergePolicy": {
+      "main": "never"
+    }
+  },
+  "i18n": {
+    "enabled": false
+  },
+  "ci": {
+    "provider": "github-actions",
+    "requiredChecks": ["build", "test", "lint"]
+  },
+  "rules": {
+    "extraRules": []
+  }
+}

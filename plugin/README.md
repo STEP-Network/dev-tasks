@@ -1,6 +1,10 @@
 # monday-task-flow plugin
 
-Claude Code plugin: stdio MCP server (37 tools) for Monday-driven task-first development.
+Claude Code plugin for Monday-driven task-first development. Ships:
+
+- **MCP server** — 37 stdio tools (Monday task/sprint/epic/bug/version/feedback management)
+- **Rules** — 8 universal lifecycle rules, auto-injected on Edit/Write via PreToolUse
+- **project-config** — JSON schema for per-consumer config (no skills/hooks read it yet — Phase 2b)
 
 ## Requirements
 
@@ -26,15 +30,53 @@ From any project where you want the tools available:
 plugin/
 ├── .claude-plugin/plugin.json     # plugin manifest
 ├── .mcp.json                      # registers the monday-tasks stdio server
-├── package.json                   # @modelcontextprotocol/sdk + zod + tsx
+├── package.json                   # @modelcontextprotocol/sdk + zod
 ├── tsconfig.json
-└── src/
-    ├── server.ts                  # stdio MCP entry — registers all 37 tools
-    ├── monday-client.ts           # Monday GraphQL client (reads MONDAY_API_KEY)
-    ├── constants.ts               # board / column / status maps
-    ├── schemas.ts                 # Zod schemas for all 37 tools
-    └── tools/                     # one file per tool, plus utils + index
+├── src/                           # MCP TypeScript source
+│   ├── server.ts                  # stdio MCP entry — registers all 37 tools
+│   ├── monday-client.ts           # Monday GraphQL client (reads MONDAY_API_KEY)
+│   ├── constants.ts               # board / column / status maps
+│   ├── schemas.ts                 # Zod schemas for all 37 tools
+│   └── tools/                     # one file per tool, plus utils + index
+├── rules/                         # universal lifecycle rules (8 markdown files)
+│   ├── task-lifecycle.md
+│   ├── ship-readiness.md
+│   ├── release-flow.md
+│   ├── versioning.md
+│   ├── worktree-discipline.md
+│   ├── agent-coordination.md
+│   ├── meta-workflow.md
+│   └── testing.md
+├── rules-routing.json             # file-glob → rule-file mapping for auto-load
+├── hooks/
+│   ├── hooks.json                 # PreToolUse rule-autoload registration
+│   ├── rule-autoload.sh           # the hook script (fail-open, session-dedup)
+│   └── lib/config-reader.sh       # shared project-config reader for future hooks
+├── schemas/
+│   └── project-config.schema.json # JSON Schema for consumer's .claude/project-config.json
+└── templates/
+    └── starter-project-config.json
 ```
+
+## Rules auto-loading (Phase 2a)
+
+The `rule-autoload.sh` PreToolUse hook fires on `Edit|Write|MultiEdit|NotebookEdit`. It reads the target file path from `tool_input`, matches it against `rules-routing.json` globs, and injects the matching rule markdown via `hookSpecificOutput.additionalContext`.
+
+**Session-scoped dedup:** each rule injects at most once per session per file-type match. The hook writes a marker file to `$TMPDIR/monday-task-flow/injected-<session_id>.list` listing already-injected rules. Subsequent edits matching the same rule skip re-injection — keeps context-token cost bounded.
+
+**Default routing (in `rules-routing.json`):**
+
+| Rule file | Triggers on |
+|---|---|
+| `task-lifecycle.md` | most source-code edits (.ts/.tsx/.js/.py/.sh/.sql/.css/.html/.md) |
+| `worktree-discipline.md` | source-code edits (same set minus .md) |
+| `testing.md` | test files (`*.test.*`, `*.spec.*`, `tests/**`, `__tests__/**`, `e2e/**`) |
+| `release-flow.md` | `CHANGELOG.md`, `package.json`, `version.txt` |
+| `versioning.md` | same as release-flow |
+
+The other 3 rules (`ship-readiness`, `agent-coordination`, `meta-workflow`) live in `rules/` but don't auto-inject — they're invoked via skill prose / agent references when contextually needed.
+
+**Fail-open:** any error in the hook (missing config, jq failure, unreadable file) → exits 0 with no output. The Edit/Write proceeds normally. Errors log to stderr.
 
 ## Dev
 
@@ -49,3 +91,9 @@ After editing **MCP code**, you must fully restart Claude Code — `/reload-plug
 ## Tools
 
 37 tools across these phases: Discovery, Context, Execution, Creation, Shipping, Communication, Epic Management, Feedback & Requests, Retrospectives, Public Roadmap, Structured Changelog, UAT Docs. See `src/server.ts` for the full registration list with descriptions.
+
+## project-config (Phase 2a defines, Phase 2b consumes)
+
+Consumers may add `.claude/project-config.json` validated against `schemas/project-config.schema.json`. The schema covers `git`, `i18n`, `ci`, `monday`, and `rules` fields. **Phase 2a ships only the schema** — no plugin code currently reads it. Phase 2b's hooks (i18n parity, worktree-required, etc.) will use `hooks/lib/config-reader.sh` to load values.
+
+A starter at `templates/starter-project-config.json` shows the minimum shape.

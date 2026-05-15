@@ -1,0 +1,121 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema",
+  "$id": "https://stepnetwork.dk/monday-task-flow/project-config.schema.json",
+  "title": "monday-task-flow project-config",
+  "description": "Per-project configuration consumed by monday-task-flow plugin hooks/skills. Lives at .claude/project-config.json in the consumer repo.",
+  "type": "object",
+  "required": ["version"],
+  "additionalProperties": false,
+  "properties": {
+    "version": {
+      "description": "Schema version. Bump when making breaking changes to this schema.",
+      "type": "string",
+      "enum": ["1"]
+    },
+    "git": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "defaultBase": {
+          "description": "Branch name PRs target by default (e.g., 'staging' or 'main').",
+          "type": "string",
+          "default": "main"
+        },
+        "hotfixBase": {
+          "description": "Branch hotfix PRs target. Usually 'main' even when defaultBase is 'staging'.",
+          "type": "string",
+          "default": "main"
+        },
+        "branchConvention": {
+          "description": "Template for new branch names. Use <slug> as placeholder.",
+          "type": "string",
+          "default": "feat/<slug>"
+        },
+        "worktreeRoot": {
+          "description": "Path (relative to repo root) where worktrees live.",
+          "type": "string",
+          "default": ".claude/worktrees"
+        },
+        "autoMergePolicy": {
+          "description": "Per-branch auto-merge policy. Keys are branch names, values are policies.",
+          "type": "object",
+          "additionalProperties": {
+            "type": "string",
+            "enum": ["never", "auto-after-checks-and-review", "manual-only"]
+          }
+        }
+      }
+    },
+    "i18n": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "description": "Whether i18n parity checks run on edit/commit.",
+          "type": "boolean",
+          "default": false
+        },
+        "locales": {
+          "description": "All supported locale codes (e.g., ['en','de','fr']).",
+          "type": "array",
+          "items": { "type": "string", "pattern": "^[a-z]{2}(-[A-Z]{2})?$" }
+        },
+        "defaultLocale": {
+          "description": "Source-of-truth locale (other locales must contain its keys).",
+          "type": "string",
+          "default": "en"
+        },
+        "messagesGlob": {
+          "description": "Glob for message catalogs (e.g., 'messages/*.json').",
+          "type": "string"
+        },
+        "parityHookMode": {
+          "description": "How the parity check behaves on missing keys.",
+          "type": "string",
+          "enum": ["block", "warn", "off"],
+          "default": "warn"
+        }
+      }
+    },
+    "ci": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "provider": {
+          "type": "string",
+          "enum": ["github-actions", "gitlab-ci", "circleci", "vercel", "other"]
+        },
+        "requiredChecks": {
+          "description": "CI check names that must be green before merge.",
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      }
+    },
+    "monday": {
+      "description": "Monday-specific configuration. Currently informational only; future versions may use board/column IDs to make the MCP per-project.",
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "workspaceUrl": {
+          "type": "string",
+          "format": "uri"
+        },
+        "productId": {
+          "type": "string"
+        }
+      }
+    },
+    "rules": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "extraRules": {
+          "description": "Additional project-specific rule files (in .claude/rules/) to surface. Plugin's universal rules auto-load per rules-routing.json.",
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      }
+    }
+  }
+}
