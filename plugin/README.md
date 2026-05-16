@@ -4,7 +4,9 @@ Claude Code plugin for Monday-driven task-first development. Ships:
 
 - **MCP server** — 38 stdio tools (Monday task/sprint/epic/bug/version/feedback management + version-timeline)
 - **Rules** — 9 universal lifecycle rules, auto-injected on Edit/Write via PreToolUse
-- **Skills** — 8 lifecycle skills: `pickup-task`, `create-task`, `refine-task`, `log-progress`, `self-review`, `ship-pr`, `release-version`, `audit-versions`. Invoked as `/monday-task-flow:<skill>`.
+- **Skills (13)** — lifecycle: `pickup-task`, `create-task`, `refine-task`, `log-progress`, `self-review`, `ship-pr`, `release-version`, `audit-versions`; universal posture: `holistic-thinking`, `production-quality-ownership`, `design-consistency`, `triage-feedback`; orchestration: `babysit-prs`. Invoked as `/monday-task-flow:<skill>`.
+- **Agents (4)** — `codebase-researcher`, `self-reviewer`, `doc-updater`, `e2e-tester`. Invoked via subagent spawn.
+- **Hooks (19)** — all opt-in via `project-config.hooks.enabled[]` (except `rule-autoload`, always-on). Cover task lifecycle gates, security, multi-agent orchestration, post-action nudges.
 - **Hooks** — 6 critical blocking hooks (Phase 2b.ii), all opt-in via `project-config.hooks.enabled[]`
 - **project-config** — JSON schema for per-consumer config (`hook_enabled` helper in `config-reader.sh` gates each hook)
 

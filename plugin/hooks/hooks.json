@@ -8,7 +8,18 @@
           { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/hooks/task-state-guard.sh" },
           { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/hooks/worktree-required.sh" },
           { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/hooks/worktree-path-boundary.sh" },
-          { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/hooks/branch-task-match.sh" }
+          { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/hooks/branch-task-match.sh" },
+          { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/hooks/subtask-reminder.sh" }
+        ]
+      },
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "if": "Edit(**/.env*)|Write(**/.env*)|Edit(**/.mcp.json)|Write(**/.mcp.json)|Edit(**/secrets/**)|Write(**/secrets/**)|Edit(**/credentials/**)|Write(**/credentials/**)|Edit(**/pnpm-lock.yaml)|Write(**/pnpm-lock.yaml)|Edit(**/package-lock.json)|Write(**/package-lock.json)",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/protect-sensitive-files.sh"
+          }
         ]
       },
       {
@@ -18,7 +29,45 @@
             "type": "command",
             "if": "Bash(* --no-verify *|*--force*|rm -rf *|git reset --hard *|git checkout .|git checkout -- *|git clean -f*|git branch -D*|git commit *|git push *)",
             "command": "${CLAUDE_PLUGIN_ROOT}/hooks/bash-guard.sh"
+          },
+          {
+            "type": "command",
+            "if": "Bash(git commit *)",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/pre-commit-secrets-scan.sh"
           }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "if": "Bash(git push *)",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/post-push-track.sh"
+          },
+          {
+            "type": "command",
+            "if": "Bash(git push *)",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/post-push-review-check.sh"
+          },
+          {
+            "type": "command",
+            "if": "Bash(gh pr merge *)",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/post-merge-postmortem.sh"
+          },
+          {
+            "type": "command",
+            "if": "Bash(*claude-ci-ack-*|*gh run rerun *--failed*|git revert *)",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/auto-file-followup-nudge.sh"
+          }
+        ]
+      },
+      {
+        "matcher": "Task",
+        "hooks": [
+          { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/hooks/post-self-review.sh" }
         ]
       }
     ],
@@ -27,6 +76,27 @@
         "hooks": [
           { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/hooks/stop-task-check.sh" },
           { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/hooks/stop-ci-green-check.sh" }
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "hooks": [
+          { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/hooks/pre-compact-task-snapshot.sh" }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/hooks/user-prompt-task-context.sh" }
+        ]
+      }
+    ],
+    "Notification": [
+      {
+        "hooks": [
+          { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/hooks/subprocess-failure.sh" }
         ]
       }
     ]
