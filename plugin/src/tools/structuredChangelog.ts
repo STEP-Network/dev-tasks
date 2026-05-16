@@ -6,6 +6,10 @@ import type {
   MigrateStructuredChangelogInput,
 } from "../schemas.ts";
 import { evaluatePublicVisibility, getColumnText, formatError } from "./utils.ts";
+import {
+  readStructuredFromVersionDoc,
+  writeUnifiedChangelogToVersion,
+} from "../services/changelog-doc.ts";
 
 // =============================================================================
 // Canonical shape
@@ -197,7 +201,31 @@ function normalizeEntry(raw: unknown): ChangelogEntry | undefined {
 // Storage helpers — read & write the JSON column
 // =============================================================================
 
+/**
+ * Read the structured changelog for a version.
+ *
+ * Canonical storage is the Versions board's `changelog` Doc column
+ * (`doc_mm0m764r`), which embeds a fenced JSON block between
+ * `structured-changelog:begin/end` markers. Long_text overflowed at ~2000 chars
+ * once versions hit ~30 tasks (Sprint 9 reality).
+ *
+ * Backward-compat: if no Doc-stored structured payload exists, fall back to
+ * the legacy long_text `releaseSummary` column. The next write will migrate
+ * the data into the Doc.
+ */
 async function readChangelog(versionId: number): Promise<{ raw: string; parsed: StructuredChangelog }> {
+  // 1. Prefer the canonical Doc-stored payload
+  try {
+    const docParsed = await readStructuredFromVersionDoc(versionId);
+    if (docParsed) {
+      return { raw: JSON.stringify(docParsed), parsed: migrateChangelog(docParsed) };
+    }
+  } catch {
+    // Fall through to long_text fallback. A Doc-side failure shouldn't
+    // hide legacy data still living in long_text.
+  }
+
+  // 2. Fallback — legacy long_text storage
   const query = `
     query {
       items(ids: [${versionId}]) {
@@ -214,9 +242,6 @@ async function readChangelog(versionId: number): Promise<{ raw: string; parsed: 
   const text = typeof cols[0]?.text === "string" ? cols[0].text : "";
   const value = typeof cols[0]?.value === "string" ? cols[0].value : "";
 
-  // Prefer the `text` field (canonical for long_text). Fall back to `value`,
-  // which for long_text writes via change_multiple_column_values may contain a
-  // {"text": "<inner>", "changed_at": "..."} wrapper instead of raw content.
   let raw = "";
   if (text.trim()) {
     raw = text;
@@ -237,28 +262,37 @@ async function readChangelog(versionId: number): Promise<{ raw: string; parsed: 
   return { raw, parsed: parsed ? migrateChangelog(parsed) : emptyChangelog() };
 }
 
-export async function writeChangelog(versionId: number, data: StructuredChangelog): Promise<void> {
-  // Serialize to bare-string entries (~3x smaller than {id,name,publicName}
-  // objects) so we stay under Monday's ~2000-char long_text cap. Monday silently
-  // truncates anything larger, producing unparseable JSON.
-  const json = JSON.stringify(serializeForStorage(data));
-  // change_simple_column_value populates both the `text` and `value` fields on
-  // long_text columns; change_multiple_column_values with `{"text": ...}` has
-  // historically left `text` null in this codebase, which broke downstream
-  // readers that default to the text field.
-  const mutation = `
-    mutation {
-      change_simple_column_value(
-        board_id: ${BOARDS.VERSIONS},
-        item_id: ${versionId},
-        column_id: "${VERSION_COLUMNS.releaseSummary}",
-        value: ${JSON.stringify(json)}
-      ) {
-        id
+/**
+ * Write the structured changelog to the version's Doc (canonical) and clear
+ * the legacy long_text column so stale data doesn't shadow the canonical view.
+ */
+export async function writeChangelog(
+  versionId: number,
+  data: StructuredChangelog,
+  opts?: { versionLabel?: string }
+): Promise<void> {
+  await writeUnifiedChangelogToVersion(versionId, data, opts);
+
+  // Clear the legacy long_text releaseSummary so old data doesn't linger.
+  // Fire-and-forget — failure here is non-critical (stale long_text is shadowed
+  // by Doc reads on the next getStructuredChangelog).
+  try {
+    const clearMutation = `
+      mutation {
+        change_simple_column_value(
+          board_id: ${BOARDS.VERSIONS},
+          item_id: ${versionId},
+          column_id: "${VERSION_COLUMNS.releaseSummary}",
+          value: ${JSON.stringify("")}
+        ) {
+          id
+        }
       }
-    }
-  `;
-  await executeMondayQuery<unknown>(mutation);
+    `;
+    await executeMondayQuery<unknown>(clearMutation);
+  } catch {
+    // ignore — non-critical cleanup
+  }
 }
 
 function isEmptyChangelog(c: StructuredChangelog): boolean {
