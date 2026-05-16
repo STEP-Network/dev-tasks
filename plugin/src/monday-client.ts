@@ -1,3 +1,5 @@
+import { mondayAuthContext } from "./auth-context.ts";
+
 const MONDAY_API_URL = "https://api.monday.com/v2";
 const DEFAULT_API_VERSION = "2024-10";
 
@@ -12,10 +14,15 @@ export async function executeMondayQuery<T>(
   variables?: Record<string, unknown>,
   options?: { apiVersion?: string },
 ): Promise<T> {
-  const apiKey = process.env.MONDAY_API_KEY;
+  // Per-request token wins (hosted HTTP transport sets it via AsyncLocalStorage).
+  // Fall back to env var for stdio + single-user/admin deployments.
+  const apiKey = mondayAuthContext.getStore()?.apiKey ?? process.env.MONDAY_API_KEY;
 
   if (!apiKey) {
-    throw new Error("MONDAY_API_KEY environment variable is not set");
+    throw new Error(
+      "No Monday auth: pass Authorization: Bearer <token> on the request, " +
+      "or set MONDAY_API_KEY in the environment."
+    );
   }
 
   const body: Record<string, unknown> = { query };
