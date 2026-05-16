@@ -1,5 +1,9 @@
 # Versioning Rules
 
+> Sibling rule: **[versions-lifecycle.md](versions-lifecycle.md)** explains
+> WHY versions are historical (not planned) and the per-product invariants.
+> This rule covers the semver math, bump gates, and v1.0 milestone gate.
+
 ## TL;DR
 
 **Semver:** `v{major}.{minor}.{patch}` (e.g., `v0.9.0`).

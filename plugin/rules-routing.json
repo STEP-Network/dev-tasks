@@ -21,6 +21,10 @@
     {
       "file": "versioning.md",
       "match": ["**/CHANGELOG.md", "**/package.json", "**/version.txt"]
+    },
+    {
+      "file": "versions-lifecycle.md",
+      "match": ["**/CHANGELOG.md", "**/package.json", "**/version.txt"]
     }
   ]
 }

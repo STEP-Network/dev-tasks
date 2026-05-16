@@ -166,27 +166,15 @@ If any pre-flight fails: stop, report the failure to the user, do NOT proceed.
    ✓ Changelog page will refresh within 5 minutes (or immediately if revalidation endpoint is configured)
    ```
 
-### Step 8: Auto-create the next "In Development" version
+### Step 8: (removed) — versions are now reactive, not pre-planned
 
-> Goal: the roadmap page should always show what's coming next. After every release we proactively create a placeholder version so PRs landing on staging immediately have somewhere to attach (and `/ship-pr` Phase 8 doesn't HARD BLOCK on a missing version).
+> **Previously**: this skill proactively created a placeholder version for "next release" so PRs landing on staging would have a target.
+>
+> **Now**: under the historical-versions model ([`versions-lifecycle.md`](../../rules/versions-lifecycle.md)), versions are **created on demand** by the auto-version side-effect when the first task hits `Waiting for UAT`. There's no need to pre-create — the next time a task crosses UAT, a fresh version auto-appears with the right semver bump.
+>
+> If you want the team to *see* what's planned next, point at epics + sprints (use `getPublicRoadmap` or `listEpics`). If you want to see what's recently shipped + currently shipping, use `getVersionTimeline`. Either way, no manual placeholder creation step is needed.
 
-> The placeholder algorithm lives in the plugin at `${CLAUDE_PLUGIN_ROOT}/src/services/version-bump.ts` as
-> `computeNextPlannedVersion(latestReleased, v1MilestoneReady)` — same v1.0
-> gate as `computeBumpSuggestion`, same testable surface.
-
-1. Compute the next placeholder via `computeNextPlannedVersion(justReleased, v1MilestoneReady)`. The function returns the suggested SemVer:
-   - X.Y.Z (Z > 0) just released → X.Y.(Z+1) placeholder (next patch).
-   - X.Y.0 (Y > 0) just released → X.(Y+1).0 placeholder (next minor).
-   - X.0.0 (X > 0) just released → (X+1).0.0 placeholder (next major).
-   - Cold start at 0.0.0 with `v1MilestoneReady=false` → 0.1.0 (NOT 1.0.0 — gate beats default).
-   - Cold start at 0.0.0 with `v1MilestoneReady=true` → 1.0.0.
-2. Check `mcp__plugin_monday-task-flow_monday-tasks__listVersions(group: "upcoming")` to see if a version with that number already exists. If yes → skip creation, just report.
-3. If not → call `mcp__plugin_monday-task-flow_monday-tasks__createVersion`:
-   - `name`: `v{X.Y.Z} — {placeholder}` (e.g., `v0.8.0 — Next Release`). User can rename later.
-   - `versionNumber`: `{X.Y.Z}`
-   - `productId`: same as the just-released version
-   - `status`: `In Development`
-4. Report: "Auto-created v{X.Y.Z} as the next In Development version. Rename it on Monday.com when scope is clearer."
+No action required at this step. Continue to post-conditions.
 
 ## Arguments
 
