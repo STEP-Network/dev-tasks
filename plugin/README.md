@@ -1,10 +1,10 @@
-# monday-task-flow plugin
+# dev-tasks plugin
 
 Claude Code plugin for Monday-driven task-first development. Ships:
 
 - **MCP server** — 38 stdio tools (Monday task/sprint/epic/bug/version/feedback management + version-timeline)
 - **Rules** — 9 universal lifecycle rules, auto-injected on Edit/Write via PreToolUse
-- **Skills (13)** — lifecycle: `pickup-task`, `create-task`, `refine-task`, `log-progress`, `self-review`, `ship-pr`, `release-version`, `audit-versions`; universal posture: `holistic-thinking`, `production-quality-ownership`, `design-consistency`, `triage-feedback`; orchestration: `babysit-prs`. Invoked as `/monday-task-flow:<skill>`.
+- **Skills (13)** — lifecycle: `pickup-task`, `create-task`, `refine-task`, `log-progress`, `self-review`, `ship-pr`, `release-version`, `audit-versions`; universal posture: `holistic-thinking`, `production-quality-ownership`, `design-consistency`, `triage-feedback`; orchestration: `babysit-prs`. Invoked as `/dev-tasks:<skill>`.
 - **Agents (4)** — `codebase-researcher`, `self-reviewer`, `doc-updater`, `e2e-tester`. Invoked via subagent spawn.
 - **Hooks (19)** — all opt-in via `project-config.hooks.enabled[]` (except `rule-autoload`, always-on). Cover task lifecycle gates, security, multi-agent orchestration, post-action nudges.
 - **Hooks** — 6 critical blocking hooks (Phase 2b.ii), all opt-in via `project-config.hooks.enabled[]`
@@ -24,7 +24,7 @@ From any project where you want the tools available:
 
 ```sh
 /plugin marketplace add /Users/nate/dev-tasks-mcp
-/plugin install monday-task-flow@monday-task-flow-marketplace
+/plugin install dev-tasks@dev-tasks-marketplace
 /reload-plugins
 ```
 
@@ -33,7 +33,7 @@ From any project where you want the tools available:
 ```
 plugin/
 ├── .claude-plugin/plugin.json     # plugin manifest
-├── .mcp.json                      # registers the monday-tasks stdio server
+├── .mcp.json                      # registers the dev-tasks stdio server
 ├── package.json                   # @modelcontextprotocol/sdk + zod
 ├── tsconfig.json
 ├── src/                           # MCP TypeScript source
@@ -87,7 +87,7 @@ plugin/
 
 The `rule-autoload.sh` PreToolUse hook fires on `Edit|Write|MultiEdit|NotebookEdit`. It reads the target file path from `tool_input`, matches it against `rules-routing.json` globs, and injects the matching rule markdown via `hookSpecificOutput.additionalContext`.
 
-**Session-scoped dedup:** each rule injects at most once per session per file-type match. The hook writes a marker file to `$TMPDIR/monday-task-flow/injected-<session_id>.list` listing already-injected rules. Subsequent edits matching the same rule skip re-injection — keeps context-token cost bounded.
+**Session-scoped dedup:** each rule injects at most once per session per file-type match. The hook writes a marker file to `$TMPDIR/dev-tasks/injected-<session_id>.list` listing already-injected rules. Subsequent edits matching the same rule skip re-injection — keeps context-token cost bounded.
 
 **Default routing (in `rules-routing.json`):**
 
@@ -119,7 +119,7 @@ After editing **MCP code**, you must fully restart Claude Code — `/reload-plug
 
 ## Skills (Phase 2b.i)
 
-7 core lifecycle skills, invoked as `/monday-task-flow:<name>`. Lifted from `v0-politiske-annoncer/.claude/skills/` as-is. Each skill carries PolAds-specific references (branch names, deploy URLs, package manager) that Phase 3 will genericize via project-config.
+7 core lifecycle skills, invoked as `/dev-tasks:<name>`. Lifted from `v0-politiske-annoncer/.claude/skills/` as-is. Each skill carries PolAds-specific references (branch names, deploy URLs, package manager) that Phase 3 will genericize via project-config.
 
 | Skill | Purpose |
 |---|---|
@@ -131,7 +131,7 @@ After editing **MCP code**, you must fully restart Claude Code — `/reload-plug
 | `ship-pr` | Build → lint → test → validate-schema → push → PR → preview URL → UAT doc → `Waiting for UAT` |
 | `release-version` | Cut a release: FF main from staging + apply prod migrations + tag |
 
-**Known references to clean up (Phase 3 genericization):** `polads.eu`, `pnpm`, `staging` (branch), `PolAds` (product), `Neon`, `Drizzle`, `v0-politiske-annoncer`, `mcp__dev-tasks__*` (63 tool-name references — these break when the Next.js MCP route is deleted; rewrite to `mcp__plugin_monday-task-flow_monday-tasks__*` during cutover).
+**Known references to clean up (Phase 3 genericization):** `polads.eu`, `pnpm`, `staging` (branch), `PolAds` (product), `Neon`, `Drizzle`, `v0-politiske-annoncer`, `mcp__dev-tasks__*` (63 tool-name references — these break when the Next.js MCP route is deleted; rewrite to `mcp__plugin_dev-tasks_dev-tasks__*` during cutover).
 
 ## Critical hooks (Phase 2b.ii) — opt-in only
 

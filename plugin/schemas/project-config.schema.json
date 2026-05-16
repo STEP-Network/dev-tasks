@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft-07/schema",
-  "$id": "https://stepnetwork.dk/monday-task-flow/project-config.schema.json",
-  "title": "monday-task-flow project-config",
-  "description": "Per-project configuration consumed by monday-task-flow plugin hooks/skills. Lives at .claude/project-config.json in the consumer repo.",
+  "$id": "https://stepnetwork.dk/dev-tasks/project-config.schema.json",
+  "title": "dev-tasks project-config",
+  "description": "Per-project configuration consumed by dev-tasks plugin hooks/skills. Lives at .claude/project-config.json in the consumer repo.",
   "type": "object",
   "required": ["version"],
   "additionalProperties": false,

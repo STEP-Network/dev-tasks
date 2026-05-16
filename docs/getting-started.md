@@ -1,13 +1,13 @@
-# Getting started with monday-task-flow
+# Getting started with dev-tasks
 
 A 10-minute walkthrough to install the plugin in a fresh project and verify it works.
 
 ## What this plugin does
 
-`monday-task-flow` packages a Monday-driven task-first development workflow as a Claude Code plugin. After install, your sessions get:
+`dev-tasks` packages a Monday-driven task-first development workflow as a Claude Code plugin. After install, your sessions get:
 
 - **37 MCP tools** for Monday.com: backlog, tasks, sprints, epics, bugs, versions, products, feedback, retros, changelogs, UAT docs
-- **7 lifecycle skills** invoked as `/monday-task-flow:<name>`: `pickup-task`, `create-task`, `refine-task`, `log-progress`, `self-review`, `ship-pr`, `release-version`
+- **7 lifecycle skills** invoked as `/dev-tasks:<name>`: `pickup-task`, `create-task`, `refine-task`, `log-progress`, `self-review`, `ship-pr`, `release-version`
 - **8 universal rules** auto-injected into context on Edit/Write when contextually relevant (task-lifecycle, ship-readiness, release-flow, etc.)
 - **6 opt-in blocking hooks** that enforce the task-first workflow: no edits without a claimed task, no commits without self-review, no pushes without validation, no session-exit while pipeline is incomplete
 
@@ -31,7 +31,7 @@ Marketplaces are user-global once added — you only do this once per machine.
 ## Step 2 — Install the plugin
 
 ```
-/plugin install monday-task-flow@monday-task-flow-marketplace
+/plugin install dev-tasks@dev-tasks-marketplace
 ```
 
 Pick the scope you want:
@@ -64,7 +64,7 @@ Ask Claude:
 
 You should see active sprint metadata returned from your Monday workspace. If you get an error mentioning `MONDAY_API_KEY`, the env var didn't propagate — check your shell setup.
 
-The tool name in the trace will be `mcp__plugin_monday-task-flow_monday-tasks__listSprints` — that's the plugin namespacing format.
+The tool name in the trace will be `mcp__plugin_dev-tasks_dev-tasks__listSprints` — that's the plugin namespacing format.
 
 ## Step 5 — Create project-config.json (optional — needed for hooks + i18n)
 
@@ -81,7 +81,7 @@ Then edit:
 
 ```jsonc
 {
-  "$schema": "https://stepnetwork.dk/monday-task-flow/project-config.schema.json",
+  "$schema": "https://stepnetwork.dk/dev-tasks/project-config.schema.json",
   "version": "1",
   "git": {
     "defaultBase": "main"        // or "staging" if you use staging-as-base flow
@@ -111,7 +111,7 @@ To opt **out** of a specific hook, remove its name from `hooks.enabled[]`. To di
 
 Ask Claude:
 
-> /monday-task-flow:pickup-task
+> /dev-tasks:pickup-task
 
 The skill walks the agent through:
 
@@ -123,9 +123,9 @@ The skill walks the agent through:
 
 After implementation, follow with:
 
-- `/monday-task-flow:log-progress` after each subtask
-- `/monday-task-flow:self-review` before commit
-- `/monday-task-flow:ship-pr` to push + open PR
+- `/dev-tasks:log-progress` after each subtask
+- `/dev-tasks:self-review` before commit
+- `/dev-tasks:ship-pr` to push + open PR
 
 ## Configuration reference
 
@@ -152,16 +152,16 @@ After implementation, follow with:
 
 **Hook blocks every edit, even harmless ones** — check `.claude/project-config.json` doesn't include the blocking hook you want disabled. To turn off all blocking hooks while keeping rule-autoload: `{"hooks": {"enabled": []}}`.
 
-**`mcp__plugin_monday-task-flow_monday-tasks__listSprints` returns "MONDAY_API_KEY environment variable is not set"** — the var isn't reaching the MCP child process. Make sure it's exported in the shell that launches Claude Code, then fully restart Claude Code (`/reload-plugins` doesn't re-spawn MCP processes — see also the related cache caveat above).
+**`mcp__plugin_dev-tasks_dev-tasks__listSprints` returns "MONDAY_API_KEY environment variable is not set"** — the var isn't reaching the MCP child process. Make sure it's exported in the shell that launches Claude Code, then fully restart Claude Code (`/reload-plugins` doesn't re-spawn MCP processes — see also the related cache caveat above).
 
 **`bash-guard` fires on a commit and complains about missing locale keys** — i18n parity check is active. Either add the missing keys, set `i18n.parityHookMode: "warn"` to convert blocks to warnings, or set `i18n.enabled: false` to skip the check entirely.
 
-**Rule injection is huge (>10KB) on every edit** — rules auto-inject once per session per rule file (marker in `$TMPDIR/monday-task-flow/`). If you see persistent re-injection, the session ID may be changing — check Claude Code's session handling or clear `$TMPDIR/monday-task-flow/` between sessions.
+**Rule injection is huge (>10KB) on every edit** — rules auto-inject once per session per rule file (marker in `$TMPDIR/dev-tasks/`). If you see persistent re-injection, the session ID may be changing — check Claude Code's session handling or clear `$TMPDIR/dev-tasks/` between sessions.
 
 ## Uninstall
 
 ```
-/plugin uninstall monday-task-flow
+/plugin uninstall dev-tasks
 ```
 
 Then optionally remove `.claude/project-config.json` from your project. The plugin owns nothing else in your repo.

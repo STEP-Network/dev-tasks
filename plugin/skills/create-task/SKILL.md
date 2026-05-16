@@ -12,11 +12,11 @@ user_invocable: true
 
 ## Workflow
 
-1. **Check for duplicates**: Use `mcp__plugin_monday-task-flow_monday-tasks__getBacklog` to search for similar/related tasks.
+1. **Check for duplicates**: Use `mcp__plugin_dev-tasks_dev-tasks__getBacklog` to search for similar/related tasks.
    - If similar keywords / overlapping scope: show the existing task and ask whether to update it or create new.
 
 2. **Epic assignment** (MANDATORY — no orphaned tasks):
-   - Call `mcp__plugin_monday-task-flow_monday-tasks__listEpics(product: "PolAds")` to get available epics.
+   - Call `mcp__plugin_dev-tasks_dev-tasks__listEpics(product: "PolAds")` to get available epics.
    - Try to auto-match based on task name/description keywords.
    - If confident: use that `epicId`.
    - If not confident: ask the user which epic this task belongs to.
@@ -40,7 +40,7 @@ user_invocable: true
 6. **Optional dependency declaration**:
    - If this task is blocked by another task: pass `dependencyIds: [<task-id>, ...]`. Stored in column `dependency_mm0pwbxn`. `claimTask` will refuse to start this task until those dependencies are `Done`.
 
-7. **Create task**: call `mcp__plugin_monday-task-flow_monday-tasks__createTask`. Recommended fields:
+7. **Create task**: call `mcp__plugin_dev-tasks_dev-tasks__createTask`. Recommended fields:
    - `status: "Ready to Start"` — the MCP rejects this if any prereq is missing; treat the rejection as a checklist of what's still missing.
    - `agentId: "Claude Code CLI"` (or whichever agent is creating).
    - `owner: <output of \`whoami\`>`.

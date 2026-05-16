@@ -10,17 +10,17 @@ user_invocable: true
 
 1. **Determine event type** from argument or context
 2. **Read state file**: Read `.claude/active-task.json` for active task/subtask context
-3. **Post structured update** to Monday.com via `mcp__plugin_monday-task-flow_monday-tasks__createUpdate`
+3. **Post structured update** to Monday.com via `mcp__plugin_dev-tasks_dev-tasks__createUpdate`
 4. **Manage subtask lifecycle** (if SUBTASK_COMPLETED):
    a. Find active subtask (status = "in_progress") in `.claude/active-task.json`.
       **If no subtask has status "in_progress"**: emit error "No in-progress subtask found. Check `.claude/active-task.json`. Did you already complete this subtask?" and ABORT the SUBTASK_COMPLETED flow.
-   b. Fetch subtask's `started_date` from Monday.com via `mcp__plugin_monday-task-flow_monday-tasks__getTask` (canonical source)
+   b. Fetch subtask's `started_date` from Monday.com via `mcp__plugin_dev-tasks_dev-tasks__getTask` (canonical source)
    c. Calculate `actualHours = (now - started_date)` in hours, rounded to 1 decimal
-   d. Update Monday.com subtask: set status "Done" + set actual hours via `mcp__plugin_monday-task-flow_monday-tasks__manageSubtasks`
+   d. Update Monday.com subtask: set status "Done" + set actual hours via `mcp__plugin_dev-tasks_dev-tasks__manageSubtasks`
    e. Update state file: set subtask `"status": "done"`, add `"completedAt"` and `"actualHours"`
-   f. Set NEXT subtask to "In Progress" on Monday.com via `mcp__plugin_monday-task-flow_monday-tasks__manageSubtasks` (triggers `started_date`)
+   f. Set NEXT subtask to "In Progress" on Monday.com via `mcp__plugin_dev-tasks_dev-tasks__manageSubtasks` (triggers `started_date`)
    g. Update state file: next subtask becomes `"status": "in_progress"` with `"mondayStartedDate"` from Monday.com
-   h. Post structured update via `mcp__plugin_monday-task-flow_monday-tasks__createUpdate` (this replaces step 3 for SUBTASK_COMPLETED — do NOT double-post)
+   h. Post structured update via `mcp__plugin_dev-tasks_dev-tasks__createUpdate` (this replaces step 3 for SUBTASK_COMPLETED — do NOT double-post)
 
 ## Event Types
 
@@ -73,8 +73,8 @@ When posting TASK_COMPLETED:
 
 1. Read `.claude/active-task.json` — verify all subtasks are `"done"` (warn if any still `"in_progress"` or `"pending"`).
 2. Summarize estimated vs actual hours per subtask from the state file.
-3. Include PR link, preview URL, and current task status (from `mcp__plugin_monday-task-flow_monday-tasks__getTask`) if available.
-4. Post summary via `mcp__plugin_monday-task-flow_monday-tasks__createUpdate` with full estimate/actual breakdown.
+3. Include PR link, preview URL, and current task status (from `mcp__plugin_dev-tasks_dev-tasks__getTask`) if available.
+4. Post summary via `mcp__plugin_dev-tasks_dev-tasks__createUpdate` with full estimate/actual breakdown.
 5. **Delete `.claude/active-task.json`** — cleanup for next task.
 
 `/ship-pr` Phase 10 also deletes the state file after merge — whichever runs first wins, the other is a no-op.

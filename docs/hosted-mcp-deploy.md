@@ -33,7 +33,7 @@ curl -X POST https://<your-project>.vercel.app/api/mcp \
   -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"curl","version":"1.0"}}}'
 ```
 
-You should get a JSON-RPC response with `result.serverInfo.name = "monday-tasks"` and `result.protocolVersion`.
+You should get a JSON-RPC response with `result.serverInfo.name = "dev-tasks"` and `result.protocolVersion`.
 
 A `tools/list` call should return 38 tools:
 
@@ -57,7 +57,7 @@ Copy the token. Treat it like a password.
 ### Step 2 — Configure the claude.ai integration
 
 1. claude.ai → **Settings → Integrations → Add MCP server**
-2. **Name**: `monday-tasks` (or similar)
+2. **Name**: `dev-tasks` (or similar)
 3. **URL**: `https://<your-project>.vercel.app/api/mcp`
 4. **Custom headers**: `Authorization: Bearer <your-monday-token>`
 

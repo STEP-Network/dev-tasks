@@ -20,7 +20,7 @@ window, or as part of a weekly hygiene routine.
 ## Inputs (interactive)
 
 If the user invokes `/audit-versions` without a product, list products
-first via `mcp__plugin_monday-task-flow_monday-tasks__listProducts` and ask
+first via `mcp__plugin_dev-tasks_dev-tasks__listProducts` and ask
 which one to audit (or "all" — loop).
 
 ## Workflow
@@ -30,7 +30,7 @@ which one to audit (or "all" — loop).
 For the target product:
 
 ```
-mcp__plugin_monday-task-flow_monday-tasks__getVersionTimeline({
+mcp__plugin_dev-tasks_dev-tasks__getVersionTimeline({
   productId: <id>,
   statusFilter: "open",
   expandTasks: true,
@@ -42,7 +42,7 @@ This returns Planned / In Development / Release Candidate versions with their fu
 Also fetch open Maintenance + workflow tasks that might be orphaned (at `Waiting for UAT` or later but with no version):
 
 ```
-mcp__plugin_monday-task-flow_monday-tasks__getBacklog({
+mcp__plugin_dev-tasks_dev-tasks__getBacklog({
   product: "<product-name>",
   statuses: ["Waiting for UAT", "Pending Deploy to Prod"],
   unclaimedOnly: false,
@@ -57,7 +57,7 @@ For each open version, compute:
 
 | Finding | Definition | Action |
 |---|---|---|
-| **Promote-ready** | All linked tasks at `Pending Deploy to Prod` or `Done`, status currently `Release Candidate` | Suggest `/monday-task-flow:release-version` |
+| **Promote-ready** | All linked tasks at `Pending Deploy to Prod` or `Done`, status currently `Release Candidate` | Suggest `/dev-tasks:release-version` |
 | **Should-be-RC** | All linked tasks at `Pending Deploy to Prod` or `Done`, but version status is still `In Development` | State machine missed a flip — apply via `updateVersion({status: "Release Candidate"})` |
 | **Should-be-InDev** | Has tasks at `Waiting for UAT` or earlier, but version status is `Planned` | Auto-version's "Planned → In Development" flip missed. Apply via `updateVersion({status: "In Development"})` |
 | **Stale Planned** | Status `Planned`, 0 linked tasks, created >7 days ago | Likely a phantom from a pre-auto-version era. Suggest deletion |
@@ -73,7 +73,7 @@ Emit a structured report:
 ## Audit — <Product Name>
 
 ### Promote-ready (N)
-- v0.11.0 (#xxx) — 7/7 at Pending Deploy. Run `/monday-task-flow:release-version v0.11.0`?
+- v0.11.0 (#xxx) — 7/7 at Pending Deploy. Run `/dev-tasks:release-version v0.11.0`?
 
 ### Should-be-RC (N)
 - v0.12.0 (#xxx) — 5/5 at Pending Deploy, but status is `In Development`. Apply RC?
@@ -111,4 +111,4 @@ There is no schedule. Run it:
 - `versions-lifecycle.md` — the rule explaining the historical-not-planned model
 - `versioning.md` — semver math + v1.0 gate
 - `release-flow.md` — the three release modes
-- `/monday-task-flow:release-version` — the actual release ceremony
+- `/dev-tasks:release-version` — the actual release ceremony

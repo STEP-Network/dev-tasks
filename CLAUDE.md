@@ -1,6 +1,6 @@
-# CLAUDE.md — monday-task-flow
+# CLAUDE.md — dev-tasks
 
-This repo is a Claude Code plugin marketplace + plugin source. The plugin (`monday-task-flow`) packages a Monday.com MCP server, lifecycle rules, skills, and hooks for autonomous coding agents driving development work from a Monday.com board ecosystem.
+This repo is a Claude Code plugin marketplace + plugin source. The plugin (`dev-tasks`) packages a Monday.com MCP server, lifecycle rules, skills, and hooks for autonomous coding agents driving development work from a Monday.com board ecosystem.
 
 ## Repo layout
 
@@ -46,7 +46,7 @@ Then in the Claude Code session:
 
 ```
 /plugin marketplace add /Users/nate/dev-tasks-mcp
-/plugin install monday-task-flow@monday-task-flow-marketplace
+/plugin install dev-tasks@dev-tasks-marketplace
 /reload-plugins
 ```
 
@@ -81,7 +81,7 @@ The plugin's MCP server registers 37 tools in `plugin/src/server.ts`. See that f
 | Shipping | `generateChangelog`, `migrateStructuredChangelog` |
 | Communication | `createUpdate` |
 
-After plugin install, tools are namespaced as `mcp__plugin_monday-task-flow_monday-tasks__<tool>`.
+After plugin install, tools are namespaced as `mcp__plugin_dev-tasks_dev-tasks__<tool>`.
 
 ## Agent workflow
 
@@ -97,7 +97,7 @@ After plugin install, tools are namespaced as `mcp__plugin_monday-task-flow_mond
 9. generateChangelog(versionId)         → auto-generate changelog doc
 ```
 
-The 7 plugin skills (`/monday-task-flow:pickup-task`, `create-task`, `refine-task`, `log-progress`, `self-review`, `ship-pr`, `release-version`) wrap most of this flow.
+The 7 plugin skills (`/dev-tasks:pickup-task`, `create-task`, `refine-task`, `log-progress`, `self-review`, `ship-pr`, `release-version`) wrap most of this flow.
 
 ## Claiming protocol
 
