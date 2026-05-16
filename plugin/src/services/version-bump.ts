@@ -2,7 +2,7 @@
  * Pure semver bump-suggestion algorithm + 3-category task classifier.
  *
  * **Why pure**: agents (`/ship-pr` Phase 8, `/release-version` Step 1) handle
- * Monday I/O directly via MCP tools (`mcp__dev-tasks__*`). The algorithm itself
+ * Monday I/O directly via MCP tools (`mcp__plugin_dev-tasks_dev-tasks__*`). The algorithm itself
  * — "given the task list and milestone state, what's the next version?" — is
  * load-bearing logic that needed a single source of truth + tests. Putting it
  * here lets:
@@ -16,10 +16,11 @@
  *   - 3-cat → bump: any feature → minor, only fix/improvement → patch,
  *     breaking change OR explicit major → major (subject to v1.0 gate)
  *
- * **v1.0 milestone gate** (HARD): refuse to auto-suggest `1.0.0` unless BOTH
- * `Beta version` (#2833952138) and `Live version` (#2738006659) epics are Done.
- * The caller passes `v1MilestoneReady` in — this module doesn't fetch from
- * Monday.
+ * **v1.0 milestone gate** (HARD): refuse to auto-suggest `1.0.0` unless ALL
+ * epics listed in `monday.v1MilestoneEpicIds[]` (from the consumer's
+ * `.claude/project-config.json`) have status `Done`. The caller passes
+ * `v1MilestoneReady` in — this module doesn't fetch from Monday. If the
+ * config array is empty, the caller should pass `true` (no gate configured).
  */
 
 export type VersionTaskCategory = 'feature' | 'improvement' | 'fix'
@@ -46,7 +47,8 @@ export interface BumpInput {
   tasks: BumpInputTask[]
   /**
    * Whether the v1.0 hard gate is satisfied. The caller computes this:
-   *   v1MilestoneReady = (betaEpicStatus === 'Done') && (liveEpicStatus === 'Done')
+   *   v1MilestoneReady = all epic IDs in `monday.v1MilestoneEpicIds[]`
+   *                      have status `Done` (or the array is empty).
    * If false, this algorithm refuses to auto-suggest a major bump that would
    * land on or beyond `1.0.0` — falls through to the highest non-major bump.
    */
@@ -125,7 +127,7 @@ export function formatSemVer(v: SemVer): string {
 }
 
 const V1_GATE_MESSAGE =
-  'v1.0.0 gated on Beta epic (#2833952138) AND Live epic (#2738006659) both Done'
+  'v1.0.0 gated on milestone epics configured in monday.v1MilestoneEpicIds (all must be Done)'
 
 /**
  * The canonical bump-suggestion algorithm.

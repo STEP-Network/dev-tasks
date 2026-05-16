@@ -1,5 +1,6 @@
 import { executeMondayQuery } from "../monday-client.ts";
-import { BOARDS, VERSION_COLUMNS, VERSION_STATUS, VERSION_GROUPS, PEOPLE } from "../constants.ts";
+import { BOARDS, VERSION_COLUMNS, VERSION_STATUS, VERSION_GROUPS } from "../constants.ts";
+import { getPersonByUsername } from "../services/people.ts";
 import type { UpdateVersionInput } from "../schemas.ts";
 import { buildColumnValues, formatError } from "./utils.ts";
 
@@ -61,11 +62,9 @@ export async function updateVersion(args: UpdateVersionInput): Promise<string> {
 
     // Owner
     if (args.owner) {
-      const ownerId = PEOPLE[args.owner];
-      if (ownerId) {
-        columnValues[VERSION_COLUMNS.owner] = { personsAndTeams: [{ id: ownerId, kind: "person" }] };
-        updates.push(`Owner → ${args.owner}`);
-      }
+      const ownerId = await getPersonByUsername(args.owner);
+      columnValues[VERSION_COLUMNS.owner] = { personsAndTeams: [{ id: ownerId, kind: "person" }] };
+      updates.push(`Owner → ${args.owner}`);
     }
 
     // Link tasks

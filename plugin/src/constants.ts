@@ -380,27 +380,6 @@ export const AGENT_ID: Record<string, number> = {
 };
 
 // =============================================================================
-// People (system username → Monday.com person ID)
-// =============================================================================
-
-export const PEOPLE: Record<string, number> = {
-  // Same Monday person ID — currently shows as "STEPhie" until Nate's individual
-  // Monday account is created. Both shell usernames map to the same person for now.
-  "nate": 48307552,
-  "naref": 48307552,
-  "krmoj": 38667531,
-};
-
-// =============================================================================
-// Products (name → Monday.com item ID on the Products board)
-// =============================================================================
-
-export const PRODUCT_IDS: Record<string, number> = {
-  "STEPhie": 2730518827,
-  "PolAds": 2723505568,
-};
-
-// =============================================================================
 // Board Groups
 // =============================================================================
 

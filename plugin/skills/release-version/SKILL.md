@@ -6,6 +6,17 @@ user_invocable: true
 
 # /release-version — Manage Releases & Changelogs
 
+> **Overlay**: if `.claude/skills/release-version/SKILL.md.local` exists in the consumer repo, read it and apply as additional project-specific instructions (extend-only — overlay can append checks/steps but cannot replace plugin behavior).
+
+## Project context (read FIRST)
+
+Read `.claude/project-config.json`. Extract:
+- `git.defaultBase` — integration branch (e.g. `staging`). Steps 6+ reference this.
+- `git.hotfixBase` — production branch (e.g. `main`). The release ceremony FFs $hotfixBase from $defaultBase.
+- `monday.v1MilestoneEpicIds` — epics gating v1.0 bumps. Step 1 reads all of these.
+
+If `$defaultBase === $hotfixBase` (project has no separate staging branch), the FF-promotion step in Step 6 becomes a no-op — skip the `git push $defaultBase:$hotfixBase` line and tag directly on $hotfixBase.
+
 ## Workflow
 
 ### Step 1: Identify Target Version + Semver Suggestion
@@ -30,7 +41,7 @@ user_invocable: true
 1. **Gather inputs:**
    - `latestReleased`: `mcp__plugin_dev-tasks_dev-tasks__listVersions(group: "released")` → sort by versionNumber → take highest → parse with `parseSemVer()`.
    - `tasks`: from Step 2's `mcp__plugin_dev-tasks_dev-tasks__getVersion(versionId)` — convert each task's `task_type` to the 3-cat via `classifyTaskType()`. Set `hasBreakingChanges: true` on any task whose description / metadata explicitly flags a breaking change.
-   - `v1MilestoneReady`: call `mcp__plugin_dev-tasks_dev-tasks__getEpic(2833952138)` (Beta) AND `mcp__plugin_dev-tasks_dev-tasks__getEpic(2738006659)` (Live). True iff BOTH have status `Done`.
+   - `v1MilestoneReady`: for each epic ID in `$v1MilestoneEpicIds`, call `mcp__plugin_dev-tasks_dev-tasks__getEpic(id)`. True iff ALL have status `Done`. (If `$v1MilestoneEpicIds` is empty, treat as `true` — no gate configured.)
    - `forceMajor` (optional): only when the user explicitly asked for a release-defining major moment.
 
 2. **Call `computeBumpSuggestion(input)`** — returns `{ next, bumpType, rationale, gatedByMilestone }`.
@@ -129,7 +140,7 @@ The canonical Release Summary JSON uses 3 categories (Feature / Improvement / Fi
 **Pre-flight verification** — refuse to release if any of these fail:
 
 1. Working tree clean: `git status --porcelain` returns empty.
-2. On `staging` branch with latest pull: `git checkout staging && git pull origin staging`.
+2. On `$defaultBase` branch with latest pull: `git checkout $defaultBase && git pull origin $defaultBase`.
 3. All linked Monday tasks are status=`Pending Deploy to Prod` with `actualHours` recorded (per Step 3). Tasks already at `Done` from a prior release pass count too. Under the staging-as-base lifecycle, `Done` is set by the tag-triggered GitHub Action — so tasks must still be at `Pending Deploy to Prod` when `/release-version` starts.
 4. CI on `staging` is green: `gh run list --branch staging --workflow ci.yml --limit 1` shows `success`.
 5. `main` is an ancestor of `staging` (FF will work): `git merge-base --is-ancestor origin/main origin/staging` succeeds.
@@ -140,7 +151,7 @@ If any pre-flight fails: stop, report the failure to the user, do NOT proceed.
 
 6. Verify tag doesn't exist: `git tag -l v{versionNumber}` returns empty.
 7. Fetch latest main: `git fetch origin main`.
-8. Fast-forward main from staging: `git push origin staging:main` (this is a remote-only FF — does NOT require a local checkout of main).
+8. Fast-forward $hotfixBase from $defaultBase: `git push origin $defaultBase:$hotfixBase` (remote-only FF — does NOT require a local checkout). If `$defaultBase === $hotfixBase` (project has no separate staging), skip this step.
    - **If this fails** with non-fast-forward error: main has diverged from staging (likely a hotfix landed on main that wasn't merged back to staging). Stop and ask user — DO NOT force-push.
 9. Apply migrations to **production** Neon: `pnpm migrate:prod` against `DATABASE_URL_UNPOOLED` set to the prod Neon connection string.
    - Use the env-aware migrate script that already handles "production" confirmation prompts (CI=true to auto-confirm in agentic flow, with explicit `--yes` flag if the script supports it).

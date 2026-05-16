@@ -38,7 +38,9 @@ const AgentIdEnum = z.enum([
   "Claude Code CLI", "Claude Desktop Cloud", "Codex Local", "Claude Desktop Local", "Codex Cloud",
 ]);
 
-const SystemUserEnum = z.enum(["nate", "naref", "krmoj"]);
+// `owner` accepts any whoami-style username (or numeric Monday person ID).
+// Resolved at call time by services/people.ts against the Monday *People board.
+const SystemUserSchema = z.string().min(1);
 
 const EpicStatusEnum = z.enum([
   "Refining", "Done", "On Hold", "Planned", "Backlog", "In Progress", "Review",
@@ -68,7 +70,13 @@ const FeedbackSourceEnum = z.enum(["User", "Internal", "Support", "Partner"]);
 
 const RetroTypeEnum = z.enum(["Discussion", "Keep", "Improve"]);
 
-const ProductEnum = z.enum(["STEPhie", "PolAds"]);
+// `productId` is the Monday Products-board item ID. Accept either a number or
+// a numeric string (project-config stores it as a string for JSON readability).
+// Regex `^[1-9]\d*$` rejects "0" and leading zeros — both invalid as item IDs.
+const ProductIdSchema = z.union([
+  z.number().int().positive(),
+  z.string().regex(/^[1-9]\d*$/).transform(Number),
+]);
 
 // Shared `format` enum for read tools that support both markdown (default,
 // LLM-friendly) and JSON (UI-friendly) outputs.
@@ -85,7 +93,7 @@ export const GetBacklogSchema = z.object({
   agentId: AgentIdEnum.optional().describe("Filter by agent currently working on the task."),
   epicIds: z.array(z.number()).optional().describe("Filter to one or more epic IDs (any_of). Use listEpics to discover IDs."),
   sprintIds: z.array(z.number()).optional().describe("Filter to one or more sprint IDs (any_of). Use listSprints to discover IDs."),
-  product: ProductEnum.optional().describe("Filter by product (STEPhie or PolAds). Resolves product → epics → tasks server-side."),
+  productId: ProductIdSchema.optional().describe("Filter by product item ID (Monday Products-board item ID). Resolves product → epics → tasks server-side. Use listProducts to discover IDs."),
   query: z.string().optional().describe("Server-side text search on task name (case-insensitive contains)."),
   cursor: z.string().optional().describe("Pagination cursor. Pass nextCursor from a previous response (any format) to fetch the next page. Note: Monday inherits the original filter set with the cursor — additional filter args are ignored when paginating."),
   limit: z.number().optional().default(25).describe("Max tasks per page (default 25). Monday caps at 500 per page."),
@@ -148,7 +156,7 @@ export const GetEpicSchema = z.object({
 // =============================================================================
 
 export const ListEpicsSchema = z.object({
-  product: ProductEnum.describe("Product to list epics for"),
+  productId: ProductIdSchema.describe("Product item ID (Monday Products-board item ID) to list epics for. Use listProducts to discover IDs."),
 });
 
 // =============================================================================
@@ -166,7 +174,7 @@ export const ListProductsSchema = z.object({
 export const ClaimTaskSchema = z.object({
   itemId: z.number().describe("Task ID to claim"),
   agentId: AgentIdEnum.describe("Your agent identity"),
-  owner: SystemUserEnum.describe("Your system username (e.g. the output of `whoami`)"),
+  owner: SystemUserSchema.describe("Your system username (e.g. the output of `whoami`)"),
   planId: z.string().optional().describe("Today's date + plan file name (format: YYYY-MM-DD_plan-name, e.g. 2026-02-18_enumerated-scribbling-rose). Found in ~/.claude/plans/"),
 });
 
@@ -271,7 +279,7 @@ export const CreateTaskSchema = z.object({
     acceptanceCriteria: z.string().optional().describe("Machine-readable acceptance criteria (definition of done)"),
     dependencyIds: z.array(z.number()).optional().describe("Blocked-by relationships: task IDs that must be Done before this one can start. Stored in column dependency_mm0pwbxn."),
     branch: z.string().optional().describe("Git branch name"),
-    owner: SystemUserEnum.optional().describe("Owner — use your system username (e.g. the output of `whoami`)"),
+    owner: SystemUserSchema.optional().describe("Owner — use your system username (e.g. the output of `whoami`)"),
     subitems: z.array(SubitemSpec).optional().describe("Subtasks to create with the task"),
     // NOTE: agentId is intentionally absent. Ownership transitions happen via claimTask
     // (atomic: validates status + sprint + dependencies, sets Agent ID + Owner + Started Date).
@@ -320,7 +328,7 @@ export const UpdateVersionSchema = z.object({
   expectedReleaseDate: z.string().optional().describe("Expected release date (YYYY-MM-DD)"),
   releaseDate: z.string().optional().describe("Actual release date (YYYY-MM-DD)"),
   releaseSummary: z.string().optional().describe("Release summary text"),
-  owner: SystemUserEnum.optional().describe("Owner — use your system username (e.g. the output of `whoami`)"),
+  owner: SystemUserSchema.optional().describe("Owner — use your system username (e.g. the output of `whoami`)"),
   groupId: z.enum(["upcoming", "released"]).optional().describe("Move version to a group. Note: setting status='Released' auto-moves to the released group; pass groupId only when you want to override that or move without changing status."),
   linkTaskIds: z.array(z.number()).optional().describe("Task IDs to link to this version"),
   linkBugIds: z.array(z.number()).optional().describe("Bug IDs to link as fixed in this version"),
@@ -339,7 +347,7 @@ export const CreateVersionSchema = z.object({
   expectedReleaseDate: z.string().optional().describe("Expected release date (YYYY-MM-DD)"),
   releaseDate: z.string().optional().describe("Actual release date (YYYY-MM-DD)"),
   releaseSummary: z.string().optional().describe("Release summary text"),
-  owner: SystemUserEnum.optional().describe("Owner — use your system username (e.g. the output of `whoami`)"),
+  owner: SystemUserSchema.optional().describe("Owner — use your system username (e.g. the output of `whoami`)"),
   linkTaskIds: z.array(z.number()).optional().describe("Task IDs to link to this version"),
   linkBugIds: z.array(z.number()).optional().describe("Bug IDs to link as fixed in this version"),
   linkEpicIds: z.array(z.number()).optional().describe("Epic IDs to link to this version"),
@@ -421,7 +429,7 @@ export const CreateEpicSchema = z.object({
   status: EpicStatusEnum.optional().describe("Initial status (default: Backlog)"),
   priority: EpicPriorityEnum.optional().describe("Epic priority"),
   description: z.string().optional().describe("Epic description"),
-  owner: SystemUserEnum.optional().describe("Owner — use your system username (e.g. the output of `whoami`)"),
+  owner: SystemUserSchema.optional().describe("Owner — use your system username (e.g. the output of `whoami`)"),
   deadline: z.string().optional().describe("Deadline date (YYYY-MM-DD)"),
   timelineStart: z.string().optional().describe("Timeline start date (YYYY-MM-DD) — must provide both start and end"),
   timelineEnd: z.string().optional().describe("Timeline end date (YYYY-MM-DD) — must provide both start and end"),
@@ -440,7 +448,7 @@ export const UpdateEpicSchema = z.object({
   status: EpicStatusEnum.optional().describe("New status"),
   priority: EpicPriorityEnum.optional().describe("New priority"),
   description: z.string().optional().describe("Updated description"),
-  owner: SystemUserEnum.optional().describe("Owner — use your system username (e.g. the output of `whoami`)"),
+  owner: SystemUserSchema.optional().describe("Owner — use your system username (e.g. the output of `whoami`)"),
   deadline: z.string().optional().describe("Deadline date (YYYY-MM-DD)"),
   timelineStart: z.string().optional().describe("Timeline start date (YYYY-MM-DD) — must provide both start and end"),
   timelineEnd: z.string().optional().describe("Timeline end date (YYYY-MM-DD) — must provide both start and end"),
@@ -563,7 +571,7 @@ export const SetPublicTaskNameSchema = z.object({
 // =============================================================================
 
 export const GetPublicRoadmapSchema = z.object({
-  product: z.enum(["STEPhie", "PolAds"]).describe("Product to fetch the roadmap for"),
+  productId: ProductIdSchema.describe("Product item ID (Monday Products-board item ID) to fetch the roadmap for. Use listProducts to discover IDs."),
   onlyInProgress: z.boolean().optional().default(false).describe("Filter to epics with status 'In Progress' only"),
 });
 

@@ -1,5 +1,5 @@
 import { executeMondayQuery } from "../monday-client.ts";
-import { AGENT_ID, BOARDS, EPIC_COLUMNS, PRODUCT_IDS, TASK_COLUMNS, TASK_STATUS, TASK_TYPE } from "../constants.ts";
+import { AGENT_ID, BOARDS, EPIC_COLUMNS, TASK_COLUMNS, TASK_STATUS, TASK_TYPE } from "../constants.ts";
 import type { GetBacklogInput } from "../schemas.ts";
 import { getColumnText, getLinkedItems, getMirrorDisplayValue, mondayItemUrl, formatError } from "./utils.ts";
 
@@ -97,7 +97,7 @@ export async function getBacklog(args: GetBacklogInput): Promise<string> {
       agentId,
       epicIds,
       sprintIds,
-      product,
+      productId,
       query,
       cursor,
       limit = 25,
@@ -128,11 +128,11 @@ export async function getBacklog(args: GetBacklogInput): Promise<string> {
 
     // Resolve product → epic IDs server-side (mirror columns aren't filterable).
     let productEpicIds: number[] | undefined;
-    if (product) {
-      const productItemId = PRODUCT_IDS[product];
-      productEpicIds = await resolveProductEpicIds(productItemId);
+    if (productId !== undefined) {
+      const numericProductId = typeof productId === "string" ? Number(productId) : productId;
+      productEpicIds = await resolveProductEpicIds(numericProductId);
       if (productEpicIds.length === 0) {
-        return renderResponse([], null, { product }, format, `No epics found for product ${product}.`);
+        return renderResponse([], null, { productId: numericProductId }, format, `No epics found for productId ${numericProductId}.`);
       }
     }
 
@@ -161,8 +161,8 @@ export async function getBacklog(args: GetBacklogInput): Promise<string> {
       const allowed = new Set(productEpicIds);
       effectiveEpicIds = epicIds.filter(id => allowed.has(id));
       if (effectiveEpicIds.length === 0) {
-        return renderResponse([], null, { epicIds, product }, format,
-          `None of the specified epicIds belong to product ${product}.`);
+        return renderResponse([], null, { epicIds, productId }, format,
+          `None of the specified epicIds belong to productId ${productId}.`);
       }
     } else if (epicIds) {
       effectiveEpicIds = epicIds;
@@ -208,7 +208,7 @@ export async function getBacklog(args: GetBacklogInput): Promise<string> {
       agentId,
       epicIds: epicIds?.length ? epicIds : undefined,
       sprintIds: sprintIds?.length ? sprintIds : undefined,
-      product,
+      productId,
       query: query?.trim() || undefined,
     };
 

@@ -1,12 +1,11 @@
 import { executeMondayQuery } from "../monday-client.ts";
-import { BOARDS, EPIC_COLUMNS, PRODUCT_IDS, TASK_COLUMNS } from "../constants.ts";
+import { BOARDS, EPIC_COLUMNS, TASK_COLUMNS } from "../constants.ts";
 import type { ListEpicsInput } from "../schemas.ts";
 import { getColumnText, getLinkedItems, resolveLinkedItems, formatError } from "./utils.ts";
 
 export async function listEpics(args: ListEpicsInput): Promise<string> {
   try {
-    const { product } = args;
-    const productId = PRODUCT_IDS[product];
+    const { productId } = args;
 
     const columnIds = [
       EPIC_COLUMNS.status,
@@ -46,7 +45,7 @@ export async function listEpics(args: ListEpicsInput): Promise<string> {
     });
 
     if (items.length === 0) {
-      return formatError(`No epics found for product ${product}.`);
+      return formatError(`No epics found for productId ${productId}.`);
     }
 
     // Resolve task counts for each epic (batch all task IDs)

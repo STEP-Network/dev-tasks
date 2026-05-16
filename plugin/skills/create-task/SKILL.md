@@ -6,6 +6,12 @@ user_invocable: true
 
 # /create-task — Create a New Task
 
+> **Overlay**: if `.claude/skills/create-task/SKILL.md.local` exists in the consumer repo, read it and apply as additional project-specific instructions (extend-only — overlay can append checks/steps but cannot replace plugin behavior).
+
+## Project context (read FIRST)
+
+Read `.claude/project-config.json`. Extract `monday.productId` — the Products-board item ID this task belongs to. If missing, STOP and tell the user to set it.
+
 > The Monday MCP enforces a server-side gate on every status transition. This skill
 > walks through the prerequisites for `Ready to Start` so a task lands ready for
 > `/pickup-task` without needing a separate refinement pass.
@@ -16,11 +22,11 @@ user_invocable: true
    - If similar keywords / overlapping scope: show the existing task and ask whether to update it or create new.
 
 2. **Epic assignment** (MANDATORY — no orphaned tasks):
-   - Call `mcp__plugin_dev-tasks_dev-tasks__listEpics(product: "PolAds")` to get available epics.
+   - Call `mcp__plugin_dev-tasks_dev-tasks__listEpics(productId: $productId)` to get available epics for this product.
    - Try to auto-match based on task name/description keywords.
    - If confident: use that `epicId`.
    - If not confident: ask the user which epic this task belongs to.
-   - For bugs/hotfixes: default to the product's Maintenance epic ("PolAds: Maintenance & Hotfixes" #2743409388).
+   - For bugs/hotfixes: pick the product's Maintenance epic — match by name containing "maintenance" (case-insensitive) in the `listEpics` result.
 
 3. **Decide on type & priority**:
    - `type`: `Feature` (new functionality) | `Fix` (bugfix) | `Improvement` (tech debt / refactor / small UX) | `To Do` (human task — used sparingly).

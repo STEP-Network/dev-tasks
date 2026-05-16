@@ -6,6 +6,8 @@ user_invocable: true
 
 # /design-consistency — Reuse-before-invent checklist
 
+> **Overlay**: if `.claude/skills/design-consistency/SKILL.md.local` exists in the consumer repo, read it and apply as additional project-specific instructions (extend-only — overlay can append checks/steps but cannot replace plugin behavior). Project-specific component names, design tokens, and directory conventions belong in the overlay.
+
 ## When to apply
 
 Invoke (or apply ambiently) before writing UI code in any of these situations:
@@ -13,13 +15,13 @@ Invoke (or apply ambiently) before writing UI code in any of these situations:
 - Adding a new form field, button, card, modal, toast, or layout block
 - Building a new page or admin tab
 - Composing a new email template
-- Touching anything under `components/`, `app/[locale]/**/page.tsx`, `lib/email/*-templates.tsx`
+- Touching anything under the project's UI directories (consult `.claude/rules/ui-design.md` for paths)
 
 The user can invoke `/design-consistency` for a deliberate pass on any UI-touching PR. The skill is also referenced from `/production-quality-ownership` Q6.
 
 ## Why this skill exists
 
-Visual drift accumulates one "small" deviation at a time. A new pattern invented on one page becomes the precedent the next page copies — until the design system has 3 ways to render a card and 2 toast styles. PolAds has a defined glass-morphism design language and shadcn primitives; **the existing system can express ~90% of what you need**. The work is finding the right piece, not building a new one.
+Visual drift accumulates one "small" deviation at a time. A new pattern invented on one page becomes the precedent the next page copies — until the design system has 3 ways to render a card and 2 toast styles. **The existing system can express most of what you need**. The work is finding the right piece, not building a new one.
 
 This skill is also a hedge against a real failure mode: an AI agent's training has thousands of "build a new card" patterns and few "find the existing card" patterns. Defaults bend toward invention. This skill bends them back.
 
@@ -29,64 +31,50 @@ For any visual element you're about to add, walk this list **top to bottom**. St
 
 ### 1. Domain-specific component
 
-Did someone already solve this exact problem on PolAds?
+Did someone already solve this exact problem in this codebase? Each project has its own component organization — consult the consumer's overlay or `.claude/rules/ui-design.md` for the canonical directories and naming patterns. Common patterns:
 
-- `components/registration/*` — for advertiser registration flows (steps, forms, summaries, in-kind contribution sections, sponsor blocks)
-- `components/admin/*` — for admin tables, partner management, complaint handling, deletion-request UIs
-- `components/sign-off/*` — for publisher sign-off review forms (lands when PR #86 merges; until then sign-off UI is on the `feat/publisher-sign-off-workflow` branch). <!-- TODO(post-PR-86): drop the merge hedge once PR #86 lands -->
-- `components/amendment/*` — for transparency notice amendments
-- `components/registration/AdvertisementCard`, `SponsorEntry`, `InKindContributionSection`, etc. — frequently the right re-use target
+- A `components/<domain>/` directory per feature area
+- Domain-specific list/card/form components that wrap lower-level primitives
 
 **Grep first**: `grep -r "ComponentName" components/` or search by behavior keyword. If a component exists for the *exact* concept, use it. If a close-but-not-quite component exists, extend it (add a prop) before forking it.
 
-### 2. Themed primitives
+### 2. Project's themed primitives
 
-PolAds-defined wrappers around shadcn that enforce the glass-morphism look:
+Most projects wrap lower-level primitives in themed components to enforce the design language consistently. If the project has them (consult overlay), use those instead of raw HTML:
 
-- **`<ThemedInput />`** — never raw `<input>`
-- **`<ThemedSelect />`** — never raw `<select>`
-- **`<Button />`** with the gradient variant for primary CTAs (`bg-gradient-to-r from-purple-600 to-pink-600`)
+- Themed `<Input />` / `<Select />` wrapper — never raw `<input>` / `<select>`
+- Project's `<Button />` with its canonical variants (primary CTA, ghost, destructive, etc.)
 
-If you're typing `<input` or `<select`, stop and check whether the themed version exists. The hook (`snapshot-guard.sh`) doesn't catch this; the code reviewer does.
+If you're typing `<input` or `<select`, stop and check whether a themed version exists in the project.
 
-(Note: `<Checkbox />` is the stock shadcn primitive from `components/ui/checkbox.tsx`, NOT a PolAds-defined themed wrapper — see Level 3 below. Don't try to invent a `<ThemedCheckbox />` if you can't find one; the existing shadcn `<Checkbox />` IS the canonical one.)
+### 3. Stock primitives (`components/ui/*`)
 
-### 3. shadcn primitives (`components/ui/*`)
+Lower-level building blocks: `Card`, `Dialog`, `Tooltip`, `Popover`, `DropdownMenu`, `Tabs`, `Accordion`, `Sheet`, `Toast`, `Badge`, `Progress`, `Skeleton`, `Alert`, `Separator`, `Checkbox`, etc.
 
-Lower-level building blocks: `Card`, `Dialog`, `Tooltip`, `Popover`, `DropdownMenu`, `Tabs`, `Accordion`, `Sheet`, `Toast`, `Badge`, `Progress`, `Skeleton`, `Alert`, `Separator`, **`Checkbox`** (over raw `<input type="checkbox">`), etc.
-
-If you're about to build something that resembles a "modal", "popover", "dropdown", "tabs", "accordion", "side panel" — there's a shadcn component for it. **Run `ls components/ui/` and read the file names** before writing one.
+If you're about to build something that resembles a "modal", "popover", "dropdown", "tabs", "accordion", "side panel" — there's almost certainly a primitive for it. **Run `ls components/ui/` and read the file names** before writing one.
 
 ### 4. Existing layout / spacing / color tokens
 
-Before inventing new visual atoms, copy from adjacent pages:
-
-- **Page wrapper**: `<main className="min-h-screen bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900 pt-20 pb-10">`
-- **Container**: `<div className="max-w-4xl mx-auto px-4">` (or `max-w-6xl` for admin)
-- **Card surface**: `bg-white/10 backdrop-blur-xl border border-white/20 rounded-xl`
-- **Tooltip surface**: `bg-gray-900/95 backdrop-blur-sm border-white/20 text-white`
-- **Primary CTA**: `bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-700 hover:to-pink-700`
-- **Form field spacing**: existing form-step components are the canonical pattern
-- **Top padding for nav clearance**: `pt-20` is the HARD rule per `.claude/rules/ui-design.md`
+Before inventing new visual atoms, copy from adjacent pages. The project's design tokens (page wrapper, container, card surface, primary CTA, form spacing, nav clearance, etc.) should be reused verbatim — not approximated. Consult the consumer's `.claude/rules/ui-design.md` for the canonical token list.
 
 ### 5. Typography + iconography
 
-- Typography is implicit from Tailwind defaults — don't override font-family or invent custom sizes per page.
-- Icons come from `lucide-react`. Pick names consistent with adjacent pages (e.g. if existing admin tabs use `<Trash2 />` for delete, don't introduce `<X />`).
-- Never embed inline SVG when a `lucide-react` icon exists.
+- Typography is usually implicit from Tailwind/framework defaults — don't override font-family or invent custom sizes per page.
+- Icons come from the project's icon library (typically `lucide-react`). Pick names consistent with adjacent pages.
+- Never embed inline SVG when an icon-library icon exists.
 
 ### 6. Toast / inline feedback / loading states
 
-- **Toast**: `useToast()` from `components/ui/use-toast.tsx`. Standard variants (default, destructive). Never `alert()`, never inline div.
-- **Loading state**: optimistic-update pattern (no spinners) per `.claude/rules/ui-design.md`. If a spinner *is* genuinely needed (e.g. a long-running export), use the `<Skeleton />` shadcn primitive.
+- **Toast**: use the project's toast hook (e.g. `useToast()`). Never `alert()`, never inline div.
+- **Loading state**: follow the project's pattern. Some prefer optimistic updates (no spinners); some use `<Skeleton />` for genuinely-async surfaces.
 - **Error state**: per-field inline message via the form library; page-level errors via toast.
-- **Empty state**: glass card with a centered illustration + CTA, mirroring existing `ListingsEmptyState` patterns.
+- **Empty state**: match the existing empty-state convention in the project.
 
 ### 7. Email visual atoms
 
-Emails have their own constraints (no `<style>` tags survive, inline CSS only, plain-text fallback). Reuse from `lib/email/email-template-utils.tsx` (`safeT()`, header/footer builders) and the existing template files (`partner-welcome-templates.tsx`, `advertiser-welcome-templates.tsx`).
+Emails have their own constraints (no `<style>` tags survive, inline CSS only, plain-text fallback). Reuse from the project's email template utilities and the existing template files.
 
-For new emails, **never copy the rules from a UI page** — emails follow different conventions (dark text on light backgrounds; no glass-morphism; max width ~600px; brand colors via inline style attributes). Survey existing templates first.
+For new emails, **never copy the rules from a UI page** — emails follow different conventions (dark text on light backgrounds; max width ~600px; brand colors via inline style attributes). Survey existing templates first.
 
 ## The grep-first rule
 
@@ -109,30 +97,29 @@ Sometimes the existing system genuinely doesn't have what you need. Indicators:
 - You've grep'd for the obvious keywords and read the candidates — none fit
 - The closest existing component requires gutting more than half its props to repurpose
 - The new pattern will be reused by ≥2 future surfaces (otherwise: inline it)
-- You've checked shadcn/ui upstream for a component that doesn't yet exist locally
+- You've checked the upstream component library for a component that doesn't yet exist locally
 
-If all four are true: invent, but do it as a properly-named reusable component in `components/ui/` or `components/<domain>/`, not inline in a page. And document the WHY in `docs/architecture-decisions.md` (planned via #92) so the next agent knows it was deliberate — or in the PR description as a fallback until that file exists.
+If all four are true: invent, but do it as a properly-named reusable component in `components/ui/` or `components/<domain>/`, not inline in a page. Document the WHY in the project's architecture-decisions doc (or in the PR description as a fallback).
 
 ## Output of a /design-consistency pass
 
-When invoked explicitly, produce a triage of the UI-touching diff:
+When invoked explicitly, produce a triage of the UI-touching diff. Concrete example structure:
 
 ```
 Design consistency pass — PR #N
 
 Components surveyed:
-  ✅ Existing `<AdvertisementCard />` reused for the new admin detail page — match
-  ✅ Existing `<ThemedInput />` reused for new field — match
-  ⚠️  New `<StatusPill />` added in components/admin/StatusPill.tsx — was an existing
-      `<Badge variant="outline">` already adequate? Check.
-  ❌ Inline `<input>` in components/admin/QuickFilter.tsx:42 — should be `<ThemedInput />`
+  ✅ Existing <DomainCard /> reused for new admin page — match
+  ✅ Existing themed input wrapper reused for new field — match
+  ⚠️  New <StatusPill /> added — was the existing <Badge /> already adequate? Check.
+  ❌ Inline <input> in path/to/file.tsx:42 — should use themed wrapper
 
 Layout surveyed:
-  ✅ Page wrapper matches existing pattern (pt-20 pb-10, max-w-4xl)
-  ✅ Card surface matches glass-morphism convention
+  ✅ Page wrapper matches existing pattern
+  ✅ Card surface matches design tokens
 
 Iconography:
-  ✅ All icons from lucide-react, consistent with adjacent admin tabs
+  ✅ All icons from project's icon library
 
 Verdict: 1 BLOCKER (raw input), 1 IMPROVEMENT (consider Badge over StatusPill).
 ```
@@ -141,17 +128,14 @@ Verdict: 1 BLOCKER (raw input), 1 IMPROVEMENT (consider Badge over StatusPill).
 
 - **NIH (not-invented-here)**: building because grepping felt like "wasted effort"
 - **Pattern fork**: copying an existing component file and tweaking inline rather than adding a prop
-- **Token drift**: `bg-white/15`, `bg-white/12`, `bg-white/10` all on different pages because nobody enforced the canonical 10
+- **Token drift**: `bg-white/15`, `bg-white/12`, `bg-white/10` all on different pages because nobody enforced the canonical value
 - **Stub-first**: building `<NewComponent />` as a stub "to fill in later" — it never gets reused, so it shouldn't exist
 - **One-off icon swap**: `<X />` here, `<Close />` there, `<XCircle />` somewhere else — the codebase already picked one
 - **Inline error UI**: rendering `<div className="text-red-500">{error}</div>` instead of using the form library's `<FormMessage />`
 
 ## Reference
 
-- `.claude/rules/ui-design.md` — themed components, glass-morphism patterns, page layout HARD rule (`pt-20`)
-- `.claude/rules/registration.md` — RegistrationForm + step component conventions
-- `.claude/rules/admin.md` — admin dashboard component conventions
-- `.claude/rules/emails.md` — email template architecture (separate visual world)
+- `.claude/rules/ui-design.md` — project's themed components, design tokens, page layout rules (in the consumer repo)
+- Project's component directories — grep there for behavior keywords before inventing
+- `components/ui/` — stock primitives (run `ls` here before inventing)
 - `.claude/skills/production-quality-ownership/SKILL.md` Q6 — short version of this check, run before declaring done
-- `components/ui/` — shadcn primitives (run `ls` here before inventing)
-- `components/registration/`, `components/admin/`, `components/amendment/` — domain-specific components on `main` (grep here for behavior keywords). Once PR #86 merges, also `components/sign-off/`. <!-- TODO(post-PR-86): include sign-off in the on-main list -->

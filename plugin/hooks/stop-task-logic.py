@@ -84,7 +84,7 @@ def main():
         err('BLOCKED: PR exists but preview URL has NOT been posted to Monday.com for task "{}".'.format(task_name))
         err("The pipeline requires a demo/preview URL before stopping:")
         err("  1. Fetch Vercel preview URL via mcp__vercel__list_deployments")
-        err("  2. Post to Monday.com via mcp__dev-tasks__updateTask with demoUrl field")
+        err("  2. Post to Monday.com via mcp__plugin_dev-tasks_dev-tasks__updateTask with demoUrl field")
         err("  3. Save previewUrl in .claude/active-task.json")
         err("")
         err("Run /ship-pr to complete the pipeline, or do these steps manually.")

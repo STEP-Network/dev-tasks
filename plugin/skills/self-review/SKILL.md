@@ -6,6 +6,8 @@ user_invocable: true
 
 # /self-review — Iterative Post-Implementation Code Review
 
+> **Overlay**: if `.claude/skills/self-review/SKILL.md.local` exists in the consumer repo, read it and apply as additional project-specific instructions (extend-only — overlay can append checks/steps but cannot replace plugin behavior).
+
 ## IMPORTANT: This skill MUST run automatically
 
 You MUST invoke `/self-review` automatically after finishing implementation work — do NOT wait for the user to ask. This is a mandatory gate before `/ship-pr`.
@@ -40,7 +42,7 @@ See `ship-readiness.md` for the full principle.
 
 0. **Reset review flag**: Read `.claude/active-task.json` and set `"selfReviewPassed": false` to clear any stale value from a prior pass.
 1. **Get diff**: Run BOTH:
-   - `git diff main...HEAD` — captures all branch changes (committed)
+   - `git diff $defaultBase...HEAD` — captures all branch changes (committed). For hotfix branches off `$hotfixBase`, use `git diff $hotfixBase...HEAD` instead.
    - `git diff HEAD` — captures uncommitted/unstaged changes
    Combine these for the full picture of what this branch introduces.
 2. **Fetch Corridor findings (external security scan)**: Call `mcp__corridor__getFindings({ cwd: "<project root>", state: "open", excludeAIFalsePositives: true })`. These are findings from Corridor's PR scanner / static analysis on this branch. Treat them as a parallel input to the self-reviewer agent — see Check #11 below for triage rules.
@@ -71,8 +73,8 @@ See `ship-readiness.md` for the full principle.
 | 3 | **Snapshots** | No mutations to Confirmed snapshots, proper two-stage creation |
 | 4 | **GDPR** | No PII exposure on public pages, gdpr-filter.ts used correctly |
 | 5 | **Optimistic Updates** | Proper onMutate/onError/onSettled, matching queryKeys |
-| 6 | **UI** | ThemedInput/ThemedSelect used, glass-morphism patterns, no raw inputs |
-| 7 | **i18n** | t()/t.rich() used, no hardcoded strings, ALL 24 locale files with PROPER NATIVE TRANSLATIONS (not English fallback — spot-check 3+ non-EN locales to verify native text) |
+| 6 | **UI** | Project's themed wrappers used over raw HTML primitives (`<input>`, `<select>`, `<button>`); see consumer's `.claude/rules/ui-design.md` for the canonical components |
+| 7 | **i18n** | If `project-config.i18n.enabled = true`: t()/t.rich() used, no hardcoded strings, ALL configured locales updated with PROPER NATIVE TRANSLATIONS (spot-check 3+ non-default locales to verify native text). If i18n is off, mark N/A. |
 | 8 | **Tests** | Concrete rules — mark FAIL if ANY violated (see details below) |
 | 9 | **Docs** | Concrete rules — mark FAIL if ANY violated (see details below) |
 | 10 | **Database** | Migration generated if schema changed, cascade deletes intact, indexes added |
@@ -123,17 +125,11 @@ Mark FAIL if ANY of these are violated:
 - **"N/A" only valid for**: internal refactors with no behavior change, test-only changes
 - If claiming "N/A", the reviewer MUST state WHY with the specific exemption category
 
-**MANDATORY — User Guides & RAG Knowledge Base** (NO exceptions, NO "N/A"):
+**User Guides & RAG Knowledge Base** (project-specific):
 
-Any change that affects user-facing behavior MUST update BOTH the docs version AND the RAG embedded copy:
+If the consumer maintains user-facing docs and/or a RAG knowledge base, the project should declare which files must be updated when user-facing behavior changes. List them in `.claude/skills/self-review/SKILL.md.local` (overlay) under a "User-facing docs mapping" section. The plugin enforces no specific paths — that's product-specific.
 
-| What changed | Update these files (BOTH copies) |
-|---|---|
-| Registration flow, form fields, submission process | `docs/BRUGER-GUIDE-REGISTRERING.md` + `rag/embedded/BRUGER-GUIDE-REGISTRERING.md` |
-| Admin dashboard, partner management, complaints | `docs/BRUGER-GUIDE-ADMIN-DASHBOARD.md` + `rag/embedded/BRUGER-GUIDE-ADMIN-DASHBOARD.md` |
-| Registration user guide (English) | `docs/USER-GUIDE-REGISTRATION.md` + `rag/embedded/BRUGER-GUIDE-REGISTRERING.md` |
-
-The `rag/embedded/` copies are what the chatbot embeds into its knowledge base. If these are stale, users get wrong answers from the chatbot. This is a **critical user experience issue** — mark FAIL if user-facing behavior changed but these files weren't updated.
+Generic rule: any change that affects user-facing behavior MUST update the matching user-facing documentation (and any embedded copies the project uses for chat/search). Mark FAIL if user-facing behavior changed but these files weren't updated.
 
 ## Output Format (per iteration)
 

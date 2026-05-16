@@ -6,6 +6,8 @@ user_invocable: true
 
 # /holistic-thinking — Three-level lens for non-trivial problems
 
+> **Overlay**: if `.claude/skills/holistic-thinking/SKILL.md.local` exists in the consumer repo, read it and apply as additional project-specific instructions (extend-only — overlay can append checks/steps but cannot replace plugin behavior).
+
 ## When to apply
 
 This is a **default posture**, not a command-only skill. Apply it ambiently when:

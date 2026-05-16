@@ -1,10 +1,8 @@
 #!/bin/bash
 
-# Opt-in gate: hook is inert unless this project's .claude/project-config.json
-# lists "stop-ci-green-check" in hooks.enabled[]. Keeps the plugin's blocking hooks dormant
-# in projects that don't follow the Monday task-first workflow.
-source "$(dirname "${BASH_SOURCE[0]}")/lib/config-reader.sh"
-hook_enabled "stop-ci-green-check" || exit 0
+# STEP-wide policy: CI must be green before session exit (no opt-out). This
+# hook is always-on regardless of project-config.hooks.enabled[]. The previous
+# opt-in gate was lifted as part of the multi-project alignment (Phase 3).
 
 # Redirect stdout to stderr so block messages (exit 2) reach Claude Code
 # correctly. Per Claude Code hooks spec, block reasons must be on stderr.

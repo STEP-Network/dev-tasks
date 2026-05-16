@@ -131,7 +131,7 @@ describe('computeBumpSuggestion — v1.0 milestone gate (HARD)', () => {
     })
     expect(s.bumpType).toBe('minor')
     expect(s.next).toEqual({ major: 0, minor: 8, patch: 0 })
-    expect(s.gatedByMilestone).toMatch(/Beta epic.*Live epic.*Done/)
+    expect(s.gatedByMilestone).toMatch(/milestone epics.*v1MilestoneEpicIds/)
     expect(s.rationale).toMatch(/Falling through/)
   })
 

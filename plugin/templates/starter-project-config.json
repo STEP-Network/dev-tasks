@@ -10,6 +10,13 @@
       "main": "never"
     }
   },
+  "monday": {
+    "productId": "REQUIRED — Monday Products-board item ID for this product",
+    "v1MilestoneEpicIds": []
+  },
+  "environments": {
+    "uat": { "url": "https://test.example.com" }
+  },
   "i18n": {
     "enabled": false
   },
@@ -26,9 +33,7 @@
       "worktree-required",
       "worktree-path-boundary",
       "branch-task-match",
-      "bash-guard",
       "stop-task-check",
-      "stop-ci-green-check",
       "protect-sensitive-files",
       "pre-commit-secrets-scan",
       "subtask-reminder",

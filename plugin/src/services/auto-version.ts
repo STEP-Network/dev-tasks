@@ -35,9 +35,9 @@ import {
   VERSION_COLUMNS,
   VERSION_STATUS,
   VERSION_GROUPS,
-  PRODUCT_IDS,
 } from "../constants.ts";
 import { refreshChangelogForVersion } from "./changelog-refresh.ts";
+import { getProductIdByName } from "./products.ts";
 import {
   getColumnText,
   getLinkedItems,
@@ -90,9 +90,11 @@ export async function autoAssignVersionForTask(taskId: number): Promise<string |
   if (!productName) {
     return "auto-version skipped: task has no product (no epic linked, or epic missing product mirror)";
   }
-  const productId = PRODUCT_IDS[productName.trim()];
-  if (!productId) {
-    return `auto-version skipped: unknown product "${productName}" (not in PRODUCT_IDS map — add to plugin/src/constants.ts)`;
+  let productId: number;
+  try {
+    productId = await getProductIdByName(productName);
+  } catch (err) {
+    return `auto-version skipped: ${err instanceof Error ? err.message : String(err)}`;
   }
 
   // 4. Detect hotfix path

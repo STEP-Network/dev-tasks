@@ -5,8 +5,8 @@ import {
   EPIC_STATUS,
   EPIC_PRIORITY,
   EPIC_GROUPS,
-  PEOPLE,
 } from "../constants.ts";
+import { getPersonByUsername } from "../services/people.ts";
 import type { CreateEpicInput } from "../schemas.ts";
 import { buildColumnValues, formatError } from "./utils.ts";
 
@@ -31,10 +31,8 @@ export async function createEpic(args: CreateEpicInput): Promise<string> {
 
     // Owner
     if (args.owner) {
-      const ownerId = PEOPLE[args.owner];
-      if (ownerId) {
-        columnValues[EPIC_COLUMNS.owner] = { personsAndTeams: [{ id: ownerId, kind: "person" }] };
-      }
+      const ownerId = await getPersonByUsername(args.owner);
+      columnValues[EPIC_COLUMNS.owner] = { personsAndTeams: [{ id: ownerId, kind: "person" }] };
     }
 
     // Deadline

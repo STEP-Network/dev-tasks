@@ -6,6 +6,8 @@ user_invocable: true
 
 # /refine-task — Break Task into Subtasks
 
+> **Overlay**: if `.claude/skills/refine-task/SKILL.md.local` exists in the consumer repo, read it and apply as additional project-specific instructions (extend-only — overlay can append checks/steps but cannot replace plugin behavior).
+
 > Use when a task is `Needs Refinement` and lacks the prerequisites for `Ready to Start`,
 > OR when an in-flight task needs new/replaced subtasks mid-implementation.
 

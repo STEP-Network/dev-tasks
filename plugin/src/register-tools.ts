@@ -98,7 +98,7 @@ export function registerAllTools(server: McpServer): void {
 
 server.tool(
   "getBacklog",
-  "Get the prioritized task queue. Default: Needs Refinement + Ready to Start tasks. Compound array filters: statuses, types, epicIds, sprintIds (each `any_of`). Single-value filters: agentId, unclaimedOnly, product ('STEPhie' | 'PolAds' — resolved server-side via the product's epics). Server-side name search: query (contains_text). Pagination: pass `cursor` (from a previous nextCursor) to fetch the next page; limit defaults to 25 (Monday caps at 500). Pass format='json' for { tasks, nextCursor, filters } — recommended for UIs and when paginating. Every task carries a Monday URL.",
+  "Get the prioritized task queue. Default: Needs Refinement + Ready to Start tasks. Compound array filters: statuses, types, epicIds, sprintIds (each `any_of`). Single-value filters: agentId, unclaimedOnly, productId (Monday Products-board item ID — resolved server-side via the product's epics; use listProducts to discover IDs). Server-side name search: query (contains_text). Pagination: pass `cursor` (from a previous nextCursor) to fetch the next page; limit defaults to 25 (Monday caps at 500). Pass format='json' for { tasks, nextCursor, filters } — recommended for UIs and when paginating. Every task carries a Monday URL.",
   GetBacklogSchema.shape,
   async (args) => {
     const result = await getBacklog(args);
@@ -162,7 +162,7 @@ server.tool(
 
 server.tool(
   "listEpics",
-  "List all epics for a product with status, progress, owner, and deadline. Use this to discover epic IDs before assigning tasks to epics via createTask or updateTask. Required: product ('STEPhie' or 'PolAds').",
+  "List all epics for a product with status, progress, owner, and deadline. Use this to discover epic IDs before assigning tasks to epics via createTask or updateTask. Required: productId (Monday Products-board item ID; use listProducts to discover IDs).",
   ListEpicsSchema.shape,
   async (args) => {
     const result = await listEpics(args);
@@ -464,7 +464,7 @@ server.tool(
 
 server.tool(
   "getPublicRoadmap",
-  "Get a public-facing roadmap for a product as Epic → Sprint → Task markdown. A task only appears when ALL THREE conditions hold: (1) publicTaskName is set, (2) it's linked to an epic, (3) it's assigned to a sprint. Tasks missing any of these are private and excluded. Required: product ('STEPhie' or 'PolAds'). Optional: onlyInProgress to limit to in-progress epics.",
+  "Get a public-facing roadmap for a product as Epic → Sprint → Task markdown. A task only appears when ALL THREE conditions hold: (1) publicTaskName is set, (2) it's linked to an epic, (3) it's assigned to a sprint. Tasks missing any of these are private and excluded. Required: productId (Monday Products-board item ID; use listProducts to discover IDs). Optional: onlyInProgress to limit to in-progress epics.",
   GetPublicRoadmapSchema.shape,
   async (args) => {
     const result = await getPublicRoadmap(args);

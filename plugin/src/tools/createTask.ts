@@ -9,8 +9,8 @@ import {
   SUBTASK_STATUS,
   SUBTASK_TYPE,
   AGENT_ID,
-  PEOPLE,
 } from "../constants.ts";
+import { getPersonByUsername } from "../services/people.ts";
 import type { CreateTaskInput } from "../schemas.ts";
 import { buildColumnValues, formatError, validateReadyToStart } from "./utils.ts";
 
@@ -77,12 +77,10 @@ export async function createTask(args: CreateTaskInput): Promise<string> {
         columnValues[TASK_COLUMNS.unplanned] = { checked: task.unplanned ? "true" : "false" };
       }
 
-      // Owner — map system username to Monday.com person ID
+      // Owner — resolve username via the *People board
       if (task.owner) {
-        const ownerId = PEOPLE[task.owner];
-        if (ownerId) {
-          columnValues[TASK_COLUMNS.owner] = { personsAndTeams: [{ id: ownerId, kind: "person" }] };
-        }
+        const ownerId = await getPersonByUsername(task.owner);
+        columnValues[TASK_COLUMNS.owner] = { personsAndTeams: [{ id: ownerId, kind: "person" }] };
       }
 
       // Acceptance criteria
