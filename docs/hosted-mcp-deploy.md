@@ -6,7 +6,7 @@ Both transports share the same 38 tools via `plugin/src/register-tools.ts`. No d
 
 ## Prerequisites
 
-- Vercel account + the `step-network/dev-tasks-mcp` repo connected
+- Vercel account + the `step-network/dev-tasks` repo connected
 - A `MONDAY_API_KEY` with read+write access to your Monday workspace
 
 ## One-time setup
