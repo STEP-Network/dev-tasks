@@ -23,7 +23,7 @@ Claude Code plugin for Monday-driven task-first development. Ships:
 From any project where you want the tools available:
 
 ```sh
-/plugin marketplace add /Users/nate/dev-tasks-mcp
+/plugin marketplace add /Users/nate/dev-tasks
 /plugin install dev-tasks@dev-tasks-marketplace
 /reload-plugins
 ```

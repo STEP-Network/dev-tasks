@@ -23,7 +23,7 @@ A 10-minute walkthrough to install the plugin in a fresh project and verify it w
 In any Claude Code session:
 
 ```
-/plugin marketplace add /Users/nate/dev-tasks-mcp
+/plugin marketplace add /Users/nate/dev-tasks
 ```
 
 Marketplaces are user-global once added — you only do this once per machine.

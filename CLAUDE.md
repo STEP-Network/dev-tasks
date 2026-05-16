@@ -45,7 +45,7 @@ claude
 Then in the Claude Code session:
 
 ```
-/plugin marketplace add /Users/nate/dev-tasks-mcp
+/plugin marketplace add /Users/nate/dev-tasks
 /plugin install dev-tasks@dev-tasks-marketplace
 /reload-plugins
 ```
