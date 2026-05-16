@@ -366,6 +366,22 @@ export const GetVersionSchema = z.object({
 });
 
 // =============================================================================
+// Tool 38: getVersionTimeline
+// =============================================================================
+
+export const GetVersionTimelineSchema = z.object({
+  productId: z.number().describe("Product item ID — use listProducts to find the ID"),
+  statusFilter: z.enum(["all", "released", "open", "hotfix"]).optional().default("all")
+    .describe("'released' = shipped versions only · 'open' = In Development + Release Candidate · 'hotfix' = Hotfix only · 'all' = everything (default)"),
+  format: z.enum(["markdown", "json"]).optional().default("markdown")
+    .describe("Output format. Markdown is the chronological human-readable timeline; JSON returns a structured array suitable for UIs."),
+  expandTasks: z.boolean().optional().default(false)
+    .describe("Include the full task list per version (Feature/Fix/Improvement). Default: counts only."),
+  limit: z.number().optional().default(25)
+    .describe("Max versions to return, sorted newest-first by semver (default: 25)."),
+});
+
+// =============================================================================
 // Tool 22: generateChangelog
 // =============================================================================
 
@@ -646,6 +662,7 @@ export type UpdateVersionInput = z.infer<typeof UpdateVersionSchema>;
 export type CreateVersionInput = z.infer<typeof CreateVersionSchema>;
 export type ListVersionsInput = z.input<typeof ListVersionsSchema>;
 export type GetVersionInput = z.infer<typeof GetVersionSchema>;
+export type GetVersionTimelineInput = z.infer<typeof GetVersionTimelineSchema>;
 export type GenerateChangelogInput = z.infer<typeof GenerateChangelogSchema>;
 export type GetUpdatesInput = z.input<typeof GetUpdatesSchema>;
 export type CreateUpdateInput = z.infer<typeof CreateUpdateSchema>;

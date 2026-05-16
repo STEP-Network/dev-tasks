@@ -20,6 +20,7 @@ import {
   CreateVersionSchema,
   ListVersionsSchema,
   GetVersionSchema,
+  GetVersionTimelineSchema,
   GenerateChangelogSchema,
   GetUpdatesSchema,
   CreateUpdateSchema,
@@ -82,6 +83,7 @@ import {
   getTaskUatDoc,
   createTaskUatDoc,
   updateTaskUatDoc,
+  getVersionTimeline,
 } from "./tools/index.ts";
 
 const server = new McpServer({
@@ -285,6 +287,16 @@ server.tool(
   GetVersionSchema.shape,
   async (args) => {
     const result = await getVersion(args);
+    return { content: [{ type: "text", text: result }] };
+  }
+);
+
+server.tool(
+  "getVersionTimeline",
+  "Get a product's versions in chronological order (newest first). Versions are HISTORICAL — what shipped + what's about to ship. For future planning, use getPublicRoadmap (epic-based). Sections: 'Shipping now' (Planned/In Development/Release Candidate), 'Hotfixes', 'Released'. Per version: number, name, status, release date, task counts (Feature/Fix/Improvement/Other). Options: statusFilter ('all'|'released'|'open'|'hotfix'), format ('markdown'|'json'), expandTasks (include full task list per version), limit. Required: productId — use listProducts to find the ID.",
+  GetVersionTimelineSchema.shape,
+  async (args) => {
+    const result = await getVersionTimeline(args);
     return { content: [{ type: "text", text: result }] };
   }
 );

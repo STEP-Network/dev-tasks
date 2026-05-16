@@ -33,3 +33,4 @@ export { setPublicTaskName } from "./setPublicTaskName.ts";
 export { getPublicRoadmap } from "./getPublicRoadmap.ts";
 export { getStructuredChangelog, updateStructuredChangelog, migrateStructuredChangelog } from "./structuredChangelog.ts";
 export { getTaskUatDoc, createTaskUatDoc, updateTaskUatDoc } from "./taskDoc.ts";
+export { getVersionTimeline } from "./getVersionTimeline.ts";
