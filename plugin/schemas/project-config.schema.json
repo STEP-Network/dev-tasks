@@ -106,7 +106,7 @@
         "productId": {
           "description": "Monday Products-board item ID for this product (numeric string, e.g. \"2723505568\"). Used by skills to scope listEpics/getBacklog calls. Required.",
           "type": "string",
-          "pattern": "^[0-9]+$"
+          "pattern": "^[1-9][0-9]*$"
         },
         "v1MilestoneEpicIds": {
           "description": "Epic IDs that must be Done before version-bump.ts allows v1.0+ patch increments. Replaces the hardcoded PolAds Beta/Live gate.",

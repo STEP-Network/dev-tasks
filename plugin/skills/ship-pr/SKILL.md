@@ -135,7 +135,7 @@ Wherever this skill references `staging` / `main` as PR bases or git refs, subst
 14b. **Gather UAT inputs**:
     - Read task `name`, `description`, `acceptanceCriteria` from `mcp__plugin_dev-tasks_dev-tasks__getTask`.
     - Read subtask list (names + types + status) from `.claude/active-task.json`.
-    - Compute git diff summary: `git diff staging...HEAD --stat` and `git log staging..HEAD --oneline`.
+    - Compute git diff summary: `git diff $defaultBase...HEAD --stat` and `git log $defaultBase..HEAD --oneline`.
     - Note the preview URL from step 12.
 
 14c. **Build UAT doc markdown**: structure as follows. Keep it regulator-readable — the

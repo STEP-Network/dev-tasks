@@ -127,6 +127,15 @@ describe("getPersonByUsername", () => {
     expect(queryArg).toContain("boards(ids: [999999])");
   });
 
+  it("scopes the cache per boardId (different boards → different cache entries)", async () => {
+    await getPersonByUsername("naref", { boardId: 1111 });
+    await getPersonByUsername("naref", { boardId: 2222 });
+    expect(executeMondayQueryMock).toHaveBeenCalledTimes(2);
+
+    await getPersonByUsername("naref", { boardId: 1111 });
+    expect(executeMondayQueryMock).toHaveBeenCalledTimes(2);
+  });
+
   it("propagates Monday API failures (no swallowed errors)", async () => {
     executeMondayQueryMock.mockRejectedValueOnce(new Error("Monday API error: 503 Service Unavailable"));
     await expect(getPersonByUsername("naref")).rejects.toThrow(/Service Unavailable/);

@@ -42,7 +42,7 @@ See `ship-readiness.md` for the full principle.
 
 0. **Reset review flag**: Read `.claude/active-task.json` and set `"selfReviewPassed": false` to clear any stale value from a prior pass.
 1. **Get diff**: Run BOTH:
-   - `git diff main...HEAD` — captures all branch changes (committed)
+   - `git diff $defaultBase...HEAD` — captures all branch changes (committed). For hotfix branches off `$hotfixBase`, use `git diff $hotfixBase...HEAD` instead.
    - `git diff HEAD` — captures uncommitted/unstaged changes
    Combine these for the full picture of what this branch introduces.
 2. **Fetch Corridor findings (external security scan)**: Call `mcp__corridor__getFindings({ cwd: "<project root>", state: "open", excludeAIFalsePositives: true })`. These are findings from Corridor's PR scanner / static analysis on this branch. Treat them as a parallel input to the self-reviewer agent — see Check #11 below for triage rules.

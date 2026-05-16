@@ -72,9 +72,10 @@ const RetroTypeEnum = z.enum(["Discussion", "Keep", "Improve"]);
 
 // `productId` is the Monday Products-board item ID. Accept either a number or
 // a numeric string (project-config stores it as a string for JSON readability).
+// Regex `^[1-9]\d*$` rejects "0" and leading zeros — both invalid as item IDs.
 const ProductIdSchema = z.union([
   z.number().int().positive(),
-  z.string().regex(/^\d+$/).transform(Number),
+  z.string().regex(/^[1-9]\d*$/).transform(Number),
 ]);
 
 // Shared `format` enum for read tools that support both markdown (default,

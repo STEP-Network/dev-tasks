@@ -45,11 +45,13 @@ Also fetch open Maintenance + workflow tasks that might be orphaned (at `Waiting
 
 ```
 mcp__plugin_dev-tasks_dev-tasks__getBacklog({
-  product: "<product-name>",
+  productId: <id>,
   statuses: ["Waiting for UAT", "Pending Deploy to Prod"],
   unclaimedOnly: false,
 })
 ```
+
+(Same product item ID as Step 1's `getVersionTimeline` call. Use `listProducts` to resolve a name → ID if you don't have it yet.)
 
 Cross-reference: a task in `getBacklog` whose `versionId` is empty AND status is `Waiting for UAT`+ is an **orphan**.
 
