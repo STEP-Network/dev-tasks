@@ -58,7 +58,7 @@ Wherever this skill references `staging` / `main` as PR bases or git refs, subst
 ### Phase 3: PR Management
 8. **Check existing PR**: `gh pr view --json number,url` — determine if PR already exists, capture PR number and URL
 9. **Determine PR base branch**:
-   - **Default**: PR base = `staging` (per `release-flow.md` — features integrate on staging first, promoted to main at release time).
+   - **Default**: PR base = `$defaultBase` (per `release-flow.md` — features integrate on the integration branch first, promoted to `$hotfixBase` at release time if the project has a separate staging branch).
    - **Hotfix exception**: if the branch was created from `$hotfixBase` (production-blocker bugfix), PR base = `$hotfixBase`. Detect by checking the merge-base: if the branch's merge-base with `origin/$hotfixBase` is more recent than its merge-base with `origin/$defaultBase`, it was branched off the hotfix base → use `--base $hotfixBase`.
 10. **If no PR exists**: Create with template (include version info for CI version-check + EXPLICIT base):
    ```
@@ -524,7 +524,7 @@ fine to continue; detect the anti-pattern where fixes actively create new proble
 > merge. Phase 10 then sets `Done` directly. Hotfixes have no UAT step because they're
 > verified on production after merge.
 
-20a. **Decide flow type**: if PR base is `main` → skip to Phase 7 (hotfix). If PR base is `staging` → continue.
+20a. **Decide flow type**: if PR base is `$hotfixBase` → skip to Phase 7 (hotfix). If PR base is `$defaultBase` → continue.
 
 20b. **Verify gate prereqs** (the MCP enforces these server-side; this is early validation for clearer errors):
     - All subtasks in `.claude/active-task.json` have `"status": "done"` and `"actualHours"` set.
@@ -563,7 +563,7 @@ fine to continue; detect the anti-pattern where fixes actively create new proble
 > eyes on the merge button.
 
 20d. **Verify base + CI green** (informational, not gating):
-    - Base must be `staging` (read via `gh pr view {PR} --json baseRefName --jq .baseRefName`).
+    - Base must be `$defaultBase` (read via `gh pr view {PR} --json baseRefName --jq .baseRefName`).
     - All CI checks at terminal state per Step 17 disposition.
 
 20e. **DO NOT call `gh pr merge`.** Removed. The orchestrator owns merging.
