@@ -1,9 +1,7 @@
-import { DOC_API_VERSION, executeMondayQuery } from "../monday-client.ts";
-
-const DOC_OPTS = { apiVersion: DOC_API_VERSION };
+import { executeMondayQuery } from "../monday-client.ts";
 import { VERSION_COLUMNS, TASK_COLUMNS, BUG_COLUMNS } from "../constants.ts";
 import type { GenerateChangelogInput } from "../schemas.ts";
-import { evaluatePublicVisibility, getColumnText, getColumnValue, getLinkedItems, resolveLinkedItems, todayDate, formatError } from "./utils.ts";
+import { evaluatePublicVisibility, getColumnText, getLinkedItems, resolveLinkedItems, formatError } from "./utils.ts";
 import { categoryForTaskType, emptyChangelog, writeChangelog, type StructuredChangelog } from "./structuredChangelog.ts";
 
 export async function generateChangelog(args: GenerateChangelogInput): Promise<string> {
@@ -15,7 +13,6 @@ export async function generateChangelog(args: GenerateChangelogInput): Promise<s
       VERSION_COLUMNS.versionNumber,
       VERSION_COLUMNS.connectedTasks,
       VERSION_COLUMNS.fixedBugs,
-      VERSION_COLUMNS.changelog,
     ].map(c => `"${c}"`).join(", ");
 
     const query = `
@@ -99,178 +96,17 @@ export async function generateChangelog(args: GenerateChangelogInput): Promise<s
       });
     }
 
-    // Step 4: Build changelog markdown
-    const mdLines: string[] = [];
-    mdLines.push(`# Changelog — v${versionNumber}`);
-    mdLines.push("");
-
-    // Highlights (from param)
-    if (highlights && highlights.length > 0) {
-      mdLines.push("## Highlights");
-      for (const h of highlights) {
-        mdLines.push(`- ${h}`);
-      }
-      mdLines.push("");
-    }
-
-    // Auto-generated sections (only if they have content)
-    const sectionOrder = ["Feature", "Fix", "Improvement"] as const;
-    const sectionTitle = { Feature: "New Features", Fix: "Fixes", Improvement: "Improvements" } as const;
-    for (const section of sectionOrder) {
-      const entries = structured.tasks[section];
-      if (entries.length > 0) {
-        mdLines.push(`## ${sectionTitle[section]}`);
-        for (const entry of entries) {
-          const display = entry.publicName || entry.name;
-          mdLines.push(entry.id ? `- ${display} (#${entry.id})` : `- ${display}`);
-        }
-        mdLines.push("");
-      }
-    }
-
-    // Breaking Changes (from param)
-    if (breakingChanges && breakingChanges.length > 0) {
-      mdLines.push("## Breaking Changes");
-      for (const bc of breakingChanges) {
-        mdLines.push(`- ${bc}`);
-      }
-      mdLines.push("");
-    }
-
-    // Known Issues (from param)
-    if (knownIssues && knownIssues.length > 0) {
-      mdLines.push("## Known Issues");
-      for (const ki of knownIssues) {
-        mdLines.push(`- ${ki}`);
-      }
-      mdLines.push("");
-    }
-
-    mdLines.push("---");
-    mdLines.push(`Generated on ${todayDate()}`);
-
-    const markdown = mdLines.join("\n");
-
-    // Step 5: Write to Monday Doc
-    // Monday's doc column stores `{ files: [{ fileId: "<uuid>", objectId: <object id> }] }`.
-    // The objectId is the per-item linkage id, but `add_content_to_doc_from_markdown(docId: ...)`
-    // and `export_markdown_from_doc(docId: ...)` need the doc's primary `id` instead.
-    // Resolve via `docs(object_ids: [objectId]) { id }`.
-    const docValue = getColumnValue(colMap, VERSION_COLUMNS.changelog);
-    let docId: number | undefined;
-    let docObjectId: number | undefined;
-
-    if (docValue && typeof docValue === "object") {
-      const obj = docValue as Record<string, unknown>;
-      const files = obj.files as Array<Record<string, unknown>> | undefined;
-      if (files && files.length > 0) {
-        const oid = files[0].objectId;
-        if (typeof oid === "number") docObjectId = oid;
-        else if (typeof oid === "string" && /^\d+$/.test(oid)) docObjectId = Number(oid);
-      }
-      if (!docObjectId) {
-        const idMatch = JSON.stringify(obj).match(/"(?:objectId|object_id)"\s*:\s*(\d+)/);
-        if (idMatch) docObjectId = Number(idMatch[1]);
-      }
-    }
-
-    if (docObjectId) {
-      const resolveQuery = `
-        query {
-          docs(object_ids: [${docObjectId}]) { id }
-        }
-      `;
-      const resolveResponse = await executeMondayQuery<any>(resolveQuery, undefined, DOC_OPTS);
-      const rawId = resolveResponse.docs?.[0]?.id;
-      if (typeof rawId === "number") docId = rawId;
-      else if (typeof rawId === "string" && /^\d+$/.test(rawId)) docId = Number(rawId);
-    }
-
-    if (docId) {
-      // 2025-10 dropped the `overwrite` flag — content is always appended.
-      // To emulate overwrite, drain every existing block first. Monday paginates
-      // blocks at ~25 per query, so loop until the doc is empty (capped to keep
-      // a buggy response from looping forever).
-      try {
-        for (let pass = 0; pass < 50; pass++) {
-          const blocksQuery = `
-            query {
-              docs(ids: [${docId}]) {
-                blocks { id }
-              }
-            }
-          `;
-          const blocksResponse = await executeMondayQuery<any>(blocksQuery, undefined, DOC_OPTS);
-          const blocks: Array<{ id: string }> = blocksResponse.docs?.[0]?.blocks || [];
-          if (blocks.length === 0) break;
-          for (const block of blocks) {
-            if (!block.id) continue;
-            const delMutation = `
-              mutation {
-                delete_doc_block(block_id: ${JSON.stringify(block.id)}) { id }
-              }
-            `;
-            await executeMondayQuery<unknown>(delMutation, undefined, DOC_OPTS);
-          }
-        }
-
-        const writeQuery = `
-          mutation {
-            add_content_to_doc_from_markdown(
-              docId: ${docId},
-              markdown: ${JSON.stringify(markdown)}
-            ) {
-              success
-            }
-          }
-        `;
-        await executeMondayQuery<any>(writeQuery, undefined, DOC_OPTS);
-      } catch (docErr) {
-        return formatError(`Changelog generated but failed to write to doc: ${docErr instanceof Error ? docErr.message : String(docErr)}`);
-      }
-    } else {
-      // Create new doc attached to the version item
-      try {
-        const createDocQuery = `
-          mutation {
-            create_doc(
-              location: { board: { item_id: ${versionId}, column_id: "${VERSION_COLUMNS.changelog}" } }
-            ) {
-              id
-            }
-          }
-        `;
-        const createDocResponse = await executeMondayQuery<any>(createDocQuery, undefined, DOC_OPTS);
-        const newDocId = createDocResponse.create_doc?.id;
-
-        if (newDocId) {
-          const writeQuery = `
-            mutation {
-              add_content_to_doc_from_markdown(
-                docId: ${newDocId},
-                markdown: ${JSON.stringify(markdown)}
-              ) {
-                success
-              }
-            }
-          `;
-          await executeMondayQuery<any>(writeQuery, undefined, DOC_OPTS);
-          docId = newDocId;
-        }
-      } catch (createErr) {
-        return formatError(`Changelog generated but failed to create doc: ${createErr instanceof Error ? createErr.message : String(createErr)}`);
-      }
-    }
-
-    // Step 6: Persist canonical structured JSON to releaseSummary
-    const summaryParts: string[] = [];
+    // Step 4: Merge user-provided overrides into the structured changelog.
+    // The unified writeChangelog (services/changelog-doc.ts) renders both the
+    // human view (markdown) and the machine view (fenced JSON block) from this
+    // single object — no separate markdown-build step needed.
     const featureCount = structured.tasks.Feature.length;
     const fixCount = structured.tasks.Fix.length;
     const improvementCount = structured.tasks.Improvement.length;
+    const summaryParts: string[] = [];
     if (featureCount > 0) summaryParts.push(`${featureCount} new feature${featureCount > 1 ? "s" : ""}`);
     if (fixCount > 0) summaryParts.push(`${fixCount} fix${fixCount > 1 ? "es" : ""}`);
     if (improvementCount > 0) summaryParts.push(`${improvementCount} improvement${improvementCount > 1 ? "s" : ""}`);
-
     const totalItems = featureCount + fixCount + improvementCount;
     const condensedSummary = `v${versionNumber}: ${summaryParts.join(", ")} (${totalItems} items total)`;
 
@@ -279,18 +115,21 @@ export async function generateChangelog(args: GenerateChangelogInput): Promise<s
     if (breakingChanges?.length) structured.breakingChanges = breakingChanges;
     if (knownIssues?.length) structured.knownIssues = knownIssues;
 
+    // Step 5: Write the unified Doc (single drain + write, both views co-located)
+    const versionLabel = `v${versionNumber}${item.name && item.name !== `v${versionNumber}` ? ` — ${item.name}` : ""}`;
     try {
-      await writeChangelog(versionId, structured);
-    } catch {
-      // Non-critical — changelog markdown was still written to the doc
+      await writeChangelog(versionId, structured, { versionLabel });
+    } catch (writeErr) {
+      return formatError(`Failed to write changelog Doc: ${writeErr instanceof Error ? writeErr.message : String(writeErr)}`);
     }
 
-    // Step 7: Return confirmation
+    // Step 6: Return confirmation
+    const sectionTitle = { Feature: "New Features", Fix: "Fixes", Improvement: "Improvements" } as const;
+    const sectionOrder = ["Feature", "Fix", "Improvement"] as const;
     const outputLines: string[] = [
       `# Changelog Generated`,
       ``,
       `**Version:** ${item.name} (v${versionNumber})`,
-      `**Doc ID:** ${docId || "N/A"}`,
       ``,
       `## Item Counts`,
     ];
