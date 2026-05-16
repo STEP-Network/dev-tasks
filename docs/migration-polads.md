@@ -40,7 +40,7 @@ Replace the file's content with:
   "i18n": {
     "enabled": true,
     "defaultLocale": "en",
-    "locales": ["en", "da", "de", "fr", "es", "it", "nl", "pt", "pl", "cs", "sk", "hu", "ro", "bg", "el", "sv", "da", "no", "fi", "et", "lv", "lt", "sl", "hr"],
+    "locales": ["en", "da", "de", "fr", "es", "it", "nl", "pt", "pl", "cs", "sk", "hu", "ro", "bg", "el", "sv", "no", "fi", "et", "lv", "lt", "sl", "hr", "mt"],
     "messagesGlob": "messages/*.json",
     "parityHookMode": "block"
   },
@@ -76,7 +76,7 @@ Replace the file's content with:
 
 Note: `bash-guard` and `stop-ci-green-check` are removed from `hooks.enabled[]` because they're now STEP-wide policy hooks — always-on, can't be opted out.
 
-Verify the locales array matches your actual `messages/*.json` files. Trim duplicates if any (the example above has "da" twice — fix to your real list).
+Verify the locales array matches your actual `messages/*.json` files — replace this 24-code example with your project's real list.
 
 ## Step 2 — Delete obsolete PolAds-local skill/rule/hook copies
 

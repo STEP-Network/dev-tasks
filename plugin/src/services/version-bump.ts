@@ -16,10 +16,11 @@
  *   - 3-cat → bump: any feature → minor, only fix/improvement → patch,
  *     breaking change OR explicit major → major (subject to v1.0 gate)
  *
- * **v1.0 milestone gate** (HARD): refuse to auto-suggest `1.0.0` unless BOTH
- * `Beta version` (#2833952138) and `Live version` (#2738006659) epics are Done.
- * The caller passes `v1MilestoneReady` in — this module doesn't fetch from
- * Monday.
+ * **v1.0 milestone gate** (HARD): refuse to auto-suggest `1.0.0` unless ALL
+ * epics listed in `monday.v1MilestoneEpicIds[]` (from the consumer's
+ * `.claude/project-config.json`) have status `Done`. The caller passes
+ * `v1MilestoneReady` in — this module doesn't fetch from Monday. If the
+ * config array is empty, the caller should pass `true` (no gate configured).
  */
 
 export type VersionTaskCategory = 'feature' | 'improvement' | 'fix'
@@ -46,7 +47,8 @@ export interface BumpInput {
   tasks: BumpInputTask[]
   /**
    * Whether the v1.0 hard gate is satisfied. The caller computes this:
-   *   v1MilestoneReady = (betaEpicStatus === 'Done') && (liveEpicStatus === 'Done')
+   *   v1MilestoneReady = all epic IDs in `monday.v1MilestoneEpicIds[]`
+   *                      have status `Done` (or the array is empty).
    * If false, this algorithm refuses to auto-suggest a major bump that would
    * land on or beyond `1.0.0` — falls through to the highest non-major bump.
    */

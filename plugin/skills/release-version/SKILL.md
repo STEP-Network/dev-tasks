@@ -140,7 +140,7 @@ The canonical Release Summary JSON uses 3 categories (Feature / Improvement / Fi
 **Pre-flight verification** — refuse to release if any of these fail:
 
 1. Working tree clean: `git status --porcelain` returns empty.
-2. On `staging` branch with latest pull: `git checkout staging && git pull origin staging`.
+2. On `$defaultBase` branch with latest pull: `git checkout $defaultBase && git pull origin $defaultBase`.
 3. All linked Monday tasks are status=`Pending Deploy to Prod` with `actualHours` recorded (per Step 3). Tasks already at `Done` from a prior release pass count too. Under the staging-as-base lifecycle, `Done` is set by the tag-triggered GitHub Action — so tasks must still be at `Pending Deploy to Prod` when `/release-version` starts.
 4. CI on `staging` is green: `gh run list --branch staging --workflow ci.yml --limit 1` shows `success`.
 5. `main` is an ancestor of `staging` (FF will work): `git merge-base --is-ancestor origin/main origin/staging` succeeds.
@@ -151,7 +151,7 @@ If any pre-flight fails: stop, report the failure to the user, do NOT proceed.
 
 6. Verify tag doesn't exist: `git tag -l v{versionNumber}` returns empty.
 7. Fetch latest main: `git fetch origin main`.
-8. Fast-forward main from staging: `git push origin staging:main` (this is a remote-only FF — does NOT require a local checkout of main).
+8. Fast-forward $hotfixBase from $defaultBase: `git push origin $defaultBase:$hotfixBase` (remote-only FF — does NOT require a local checkout). If `$defaultBase === $hotfixBase` (project has no separate staging), skip this step.
    - **If this fails** with non-fast-forward error: main has diverged from staging (likely a hotfix landed on main that wasn't merged back to staging). Stop and ask user — DO NOT force-push.
 9. Apply migrations to **production** Neon: `pnpm migrate:prod` against `DATABASE_URL_UNPOOLED` set to the prod Neon connection string.
    - Use the env-aware migrate script that already handles "production" confirmation prompts (CI=true to auto-confirm in agentic flow, with explicit `--yes` flag if the script supports it).

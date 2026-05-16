@@ -27,7 +27,7 @@ you have ≥1 subagent with an open PR awaiting merge.
 
 - After spawning subagents that will produce PRs (run it once they've reported back with PR URLs)
 - Periodically during a multi-agent fan-out to keep the merge queue moving
-- When you notice `gh pr list --base staging --state open` is non-empty
+- When you notice `gh pr list --base $defaultBase --state open` is non-empty
 
 ## When NOT to invoke
 
@@ -38,7 +38,7 @@ you have ≥1 subagent with an open PR awaiting merge.
 
 ### Phase 1: Survey
 
-1. `gh pr list --base staging --state open --json number,title,headRefName,updatedAt,mergeStateStatus` — get all open PRs to staging
+1. `gh pr list --base $defaultBase --state open --json number,title,headRefName,updatedAt,mergeStateStatus` — get all open PRs to $defaultBase
 2. For each PR, classify:
    - `state=MERGED` → already merged (skip)
    - `state=OPEN` + `mergeStateStatus=CLEAN` → ready to merge

@@ -1,4 +1,5 @@
 import { executeMondayQuery } from "../monday-client.ts";
+import { mondayAuthContext } from "../auth-context.ts";
 
 /**
  * Username → Monday person ID resolution via the STEP Network *People board.
@@ -17,6 +18,11 @@ import { executeMondayQuery } from "../monday-client.ts";
  *   3. `name` column first word       — "Nathaniel"
  *
  * Records with status `Past` are excluded.
+ *
+ * Caching: keyed by `(boardId, apiKey)` so a long-lived process (HTTP transport
+ * serving multiple users on warm starts, or stdio with env-fallback) doesn't
+ * leak one user's directory view to another. The apiKey suffix scopes per
+ * Monday auth token; same key → cache hit, different key → cache miss.
  */
 
 const DEFAULT_PEOPLE_BOARD_ID = 1612664689;
@@ -31,16 +37,15 @@ interface PersonRecord {
   status: string;
 }
 
-interface PeopleCache {
-  boardId: number;
+interface PeopleCacheEntry {
   records: PersonRecord[];
   fetchedAt: number;
 }
 
-let cache: PeopleCache | null = null;
+const cache = new Map<string, PeopleCacheEntry>();
 
 export function clearPeopleCache(): void {
-  cache = null;
+  cache.clear();
 }
 
 export async function getPersonByUsername(
@@ -67,13 +72,13 @@ export async function getPersonByUsername(
     }
   }
   for (const r of records) {
-    if (r.displayName.toLowerCase() === lower) {
+    if (r.displayName && r.displayName.toLowerCase() === lower) {
       return r.personId;
     }
   }
   for (const r of records) {
     const firstWord = r.fullName.split(/\s+/)[0]?.toLowerCase();
-    if (firstWord === lower) {
+    if (firstWord && firstWord === lower) {
       return r.personId;
     }
   }
@@ -84,9 +89,17 @@ export async function getPersonByUsername(
   );
 }
 
+function getCacheKey(boardId: number): string {
+  // Per-request token (HTTP transport via ALS) wins; env fallback for stdio.
+  const apiKey = mondayAuthContext.getStore()?.apiKey ?? process.env.MONDAY_API_KEY ?? "";
+  return `${boardId}:${apiKey}`;
+}
+
 async function loadPeople(boardId: number): Promise<PersonRecord[]> {
-  if (cache && cache.boardId === boardId && Date.now() - cache.fetchedAt < CACHE_TTL_MS) {
-    return cache.records;
+  const key = getCacheKey(boardId);
+  const cached = cache.get(key);
+  if (cached && Date.now() - cached.fetchedAt < CACHE_TTL_MS) {
+    return cached.records;
   }
 
   const query = `
@@ -130,6 +143,6 @@ async function loadPeople(boardId: number): Promise<PersonRecord[]> {
     });
   }
 
-  cache = { boardId, records, fetchedAt: Date.now() };
+  cache.set(key, { records, fetchedAt: Date.now() });
   return records;
 }

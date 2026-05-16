@@ -70,7 +70,12 @@ const FeedbackSourceEnum = z.enum(["User", "Internal", "Support", "Partner"]);
 
 const RetroTypeEnum = z.enum(["Discussion", "Keep", "Improve"]);
 
-const ProductEnum = z.enum(["STEPhie", "PolAds"]);
+// `productId` is the Monday Products-board item ID. Accept either a number or
+// a numeric string (project-config stores it as a string for JSON readability).
+const ProductIdSchema = z.union([
+  z.number().int().positive(),
+  z.string().regex(/^\d+$/).transform(Number),
+]);
 
 // Shared `format` enum for read tools that support both markdown (default,
 // LLM-friendly) and JSON (UI-friendly) outputs.
@@ -87,7 +92,7 @@ export const GetBacklogSchema = z.object({
   agentId: AgentIdEnum.optional().describe("Filter by agent currently working on the task."),
   epicIds: z.array(z.number()).optional().describe("Filter to one or more epic IDs (any_of). Use listEpics to discover IDs."),
   sprintIds: z.array(z.number()).optional().describe("Filter to one or more sprint IDs (any_of). Use listSprints to discover IDs."),
-  product: ProductEnum.optional().describe("Filter by product (STEPhie or PolAds). Resolves product → epics → tasks server-side."),
+  productId: ProductIdSchema.optional().describe("Filter by product item ID (Monday Products-board item ID). Resolves product → epics → tasks server-side. Use listProducts to discover IDs."),
   query: z.string().optional().describe("Server-side text search on task name (case-insensitive contains)."),
   cursor: z.string().optional().describe("Pagination cursor. Pass nextCursor from a previous response (any format) to fetch the next page. Note: Monday inherits the original filter set with the cursor — additional filter args are ignored when paginating."),
   limit: z.number().optional().default(25).describe("Max tasks per page (default 25). Monday caps at 500 per page."),
@@ -150,7 +155,7 @@ export const GetEpicSchema = z.object({
 // =============================================================================
 
 export const ListEpicsSchema = z.object({
-  product: ProductEnum.describe("Product to list epics for"),
+  productId: ProductIdSchema.describe("Product item ID (Monday Products-board item ID) to list epics for. Use listProducts to discover IDs."),
 });
 
 // =============================================================================
@@ -565,7 +570,7 @@ export const SetPublicTaskNameSchema = z.object({
 // =============================================================================
 
 export const GetPublicRoadmapSchema = z.object({
-  product: z.enum(["STEPhie", "PolAds"]).describe("Product to fetch the roadmap for"),
+  productId: ProductIdSchema.describe("Product item ID (Monday Products-board item ID) to fetch the roadmap for. Use listProducts to discover IDs."),
   onlyInProgress: z.boolean().optional().default(false).describe("Filter to epics with status 'In Progress' only"),
 });
 

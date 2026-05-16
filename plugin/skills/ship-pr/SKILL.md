@@ -59,10 +59,10 @@ Wherever this skill references `staging` / `main` as PR bases or git refs, subst
 8. **Check existing PR**: `gh pr view --json number,url` — determine if PR already exists, capture PR number and URL
 9. **Determine PR base branch**:
    - **Default**: PR base = `staging` (per `release-flow.md` — features integrate on staging first, promoted to main at release time).
-   - **Hotfix exception**: if the branch was created from `main` (production-blocker bugfix), PR base = `main`. Detect by checking the merge-base: if `git merge-base origin/main HEAD == origin/main HEAD~N` and merge-base with staging is older, the branch was off main → use `--base main`.
+   - **Hotfix exception**: if the branch was created from `$hotfixBase` (production-blocker bugfix), PR base = `$hotfixBase`. Detect by checking the merge-base: if the branch's merge-base with `origin/$hotfixBase` is more recent than its merge-base with `origin/$defaultBase`, it was branched off the hotfix base → use `--base $hotfixBase`.
 10. **If no PR exists**: Create with template (include version info for CI version-check + EXPLICIT base):
    ```
-   gh pr create --base {staging|main} --title "{title}" --body "$(cat <<'EOF'
+   gh pr create --base $defaultBase --title "{title}" --body "$(cat <<'EOF'
    ## Summary
    {bullet points from git log}
 
@@ -86,7 +86,7 @@ Wherever this skill references `staging` / `main` as PR bases or git refs, subst
    ```
    **IMPORTANT**: The `Monday.com Task: #{taskId}` line enables the CI version-check job
    to verify Task → Epic → Version linkage before merge. Always include the task ID.
-   **IMPORTANT**: `--base` MUST be explicit. Default `staging` (the new branching flow). Pass `--base main` ONLY for hotfixes branched from main directly.
+   **IMPORTANT**: `--base` MUST be explicit. Default `$defaultBase`. Pass `--base $hotfixBase` ONLY for hotfixes branched from the hotfix base directly.
 11. **If PR exists** (re-push after review feedback):
     - Reset `selfReviewPassed: false` in `.claude/active-task.json` — changes made since last review must be re-reviewed
     - Run `/self-review` again (iterative until clean) before pushing
@@ -130,7 +130,7 @@ Wherever this skill references `staging` / `main` as PR bases or git refs, subst
 > **Hotfix exception**: PRs targeting `main` skip this phase. Hotfixes verify on production
 > after merge, not on a UAT staging environment.
 
-14a. **Decide flow type**: read the PR base from step 9. If `--base main` → skip to Phase 5. If `--base staging` → continue.
+14a. **Decide flow type**: read the PR base from step 9. If `baseRefName == $hotfixBase` → skip to Phase 5 (hotfix flow). If `baseRefName == $defaultBase` → continue (default flow).
 
 14b. **Gather UAT inputs**:
     - Read task `name`, `description`, `acceptanceCriteria` from `mcp__plugin_dev-tasks_dev-tasks__getTask`.
@@ -706,7 +706,7 @@ fine to continue; detect the anti-pattern where fixes actively create new proble
 
 30. **After `gh pr merge` succeeds** (or when the agent detects the PR state is "MERGED"):
     - **Determine flow type**: read the PR base. `gh pr view --json baseRefName --jq .baseRefName`.
-    - **Default flow (`baseRefName == "staging"`)**:
+    - **Default flow (`baseRefName == $defaultBase`)**:
       a. Leave the task at `Waiting for UAT` (Phase 6.5 already set it). Do **NOT** call `updateTask({status: "Done"})`.
       b. Post final update:
         ```

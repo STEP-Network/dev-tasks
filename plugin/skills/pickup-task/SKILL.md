@@ -45,7 +45,7 @@ If `git.defaultBase` or `monday.productId` is missing, STOP and tell the user to
     - **Epic check**:
       - **If task has an epic**: note the `epicId` and `epicName`, continue to step 4.5.
       - **If task has NO epic**: HARD BLOCK — do NOT claim until resolved:
-        a. Call `mcp__plugin_dev-tasks_dev-tasks__listEpics(product: $productId)` to show available epics for this product.
+        a. Call `mcp__plugin_dev-tasks_dev-tasks__listEpics(productId: $productId)` to show available epics for this product.
         b. Try to match by task name/description keywords to an epic.
         c. If confident (>80% match): suggest the epic to user, proceed if confirmed.
         d. If not confident: ask user "This task has no epic. Which epic should it belong to?"

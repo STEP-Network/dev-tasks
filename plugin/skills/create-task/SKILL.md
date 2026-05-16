@@ -22,7 +22,7 @@ Read `.claude/project-config.json`. Extract `monday.productId` — the Products-
    - If similar keywords / overlapping scope: show the existing task and ask whether to update it or create new.
 
 2. **Epic assignment** (MANDATORY — no orphaned tasks):
-   - Call `mcp__plugin_dev-tasks_dev-tasks__listEpics(product: $productId)` to get available epics for this product.
+   - Call `mcp__plugin_dev-tasks_dev-tasks__listEpics(productId: $productId)` to get available epics for this product.
    - Try to auto-match based on task name/description keywords.
    - If confident: use that `epicId`.
    - If not confident: ask the user which epic this task belongs to.

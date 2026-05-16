@@ -57,7 +57,7 @@ Agent flow (in `/release-version` Step 1, `/ship-pr` Phase 8 step 25b):
 
 1. Get latest released version: `listVersions(group: "released")` → sort → take highest. Parse with `parseSemVer()`.
 2. Convert each linked task's `task_type` via `classifyTaskType()`.
-3. Determine `v1MilestoneReady`: getEpic(2833952138).status === 'Done' AND getEpic(2738006659).status === 'Done'.
+3. Determine `v1MilestoneReady`: read `monday.v1MilestoneEpicIds` from `.claude/project-config.json`. Call `getEpic(id)` for each entry. `v1MilestoneReady = true` iff all statuses are `Done`. If the array is empty, pass `true` (no gate configured).
 4. Call `computeBumpSuggestion({ latestReleased, tasks, v1MilestoneReady, forceMajor? })`. Read `next`, `bumpType`, `rationale`, `gatedByMilestone`.
 5. Agent suggests; user confirms or overrides.
 

@@ -55,10 +55,12 @@ For each of these fields, check it's set to a non-default sentinel value:
 
 ### 6. `whoami` resolves on the People board
 
-- `whoami` → username
-- Use the `getPersonByUsername(username)` flow conceptually: search the People board for the username (this skill doesn't have direct service access, so simulate via `listProducts`-style call — or simply tell the user the lookup path and let them verify)
-- If we can call `claimTask` with a no-op task ID just to provoke the resolver: simpler — just attempt a no-op `mcp__plugin_dev-tasks_dev-tasks__updateEpic(epicId: <real epic>, owner: <whoami>)` with the user's confirmation. If the call succeeds without "No Monday user found" error: PASS.
-- Cleanest: read the People board (1612664689 or `monday.peopleBoardId`) directly and look for a record whose email local-part / person display / first-name matches `whoami`. Tell the user the matched person ID.
+This skill is **read-only** — never invoke a mutating MCP tool (`updateTask`, `updateEpic`, `claimTask`, etc.) as a "test". Verify via reads only.
+
+- Get `whoami` from the shell
+- Read the People board: there is no direct MCP read tool for arbitrary boards, so this check is best-effort:
+  - If `mcp__claude_ai_monday_com__get_board_items_page` is available in the session, call it on `monday.peopleBoardId` (default `1612664689`) with `columnIds: ["person", "email__1", "text6__1", "status"]` and search the response for a record whose email local-part / `person` display value / `name` first-word matches `whoami`. Report the matched person ID.
+  - Otherwise, tell the user the lookup path: "match `whoami` against the People board (`1612664689`) — your record should have a non-empty `text6__1` (People ID) and status != Past." Have them eyeball it on the board.
 
 ### 7. Policy hooks always-on
 

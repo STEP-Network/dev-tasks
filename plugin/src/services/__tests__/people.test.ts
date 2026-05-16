@@ -6,6 +6,7 @@ vi.mock("../../monday-client.ts", () => ({
 }));
 
 import { clearPeopleCache, getPersonByUsername } from "../people.ts";
+import { mondayAuthContext } from "../../auth-context.ts";
 
 const FIXTURE = {
   boards: [
@@ -124,5 +125,52 @@ describe("getPersonByUsername", () => {
     await getPersonByUsername("naref", { boardId: 999999 });
     const queryArg = executeMondayQueryMock.mock.calls[0][0];
     expect(queryArg).toContain("boards(ids: [999999])");
+  });
+
+  it("propagates Monday API failures (no swallowed errors)", async () => {
+    executeMondayQueryMock.mockRejectedValueOnce(new Error("Monday API error: 503 Service Unavailable"));
+    await expect(getPersonByUsername("naref")).rejects.toThrow(/Service Unavailable/);
+    // Failed fetch must not poison the cache — next call retries
+    executeMondayQueryMock.mockResolvedValueOnce(FIXTURE);
+    await expect(getPersonByUsername("naref")).resolves.toBe(103752074);
+    expect(executeMondayQueryMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("scopes the cache per Monday auth token (no cross-tenant leak)", async () => {
+    await mondayAuthContext.run({ apiKey: "tokenA" }, async () => {
+      await getPersonByUsername("naref");
+    });
+    await mondayAuthContext.run({ apiKey: "tokenB" }, async () => {
+      await getPersonByUsername("naref");
+    });
+    // Different tokens → separate cache entries → two fetches
+    expect(executeMondayQueryMock).toHaveBeenCalledTimes(2);
+
+    // Same token → cache hit on the second call
+    await mondayAuthContext.run({ apiKey: "tokenA" }, async () => {
+      await getPersonByUsername("nate");
+    });
+    expect(executeMondayQueryMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("re-fetches after the 5-minute TTL expires", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-01-01T00:00:00Z"));
+      await getPersonByUsername("naref");
+      expect(executeMondayQueryMock).toHaveBeenCalledTimes(1);
+
+      // 4 minutes later — still cached
+      vi.setSystemTime(new Date("2026-01-01T00:04:00Z"));
+      await getPersonByUsername("naref");
+      expect(executeMondayQueryMock).toHaveBeenCalledTimes(1);
+
+      // 6 minutes later — TTL expired, re-fetch
+      vi.setSystemTime(new Date("2026-01-01T00:06:00Z"));
+      await getPersonByUsername("naref");
+      expect(executeMondayQueryMock).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

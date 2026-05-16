@@ -1,12 +1,11 @@
 import { executeMondayQuery } from "../monday-client.ts";
-import { BOARDS, EPIC_COLUMNS, PRODUCT_IDS, TASK_COLUMNS } from "../constants.ts";
+import { BOARDS, EPIC_COLUMNS, TASK_COLUMNS } from "../constants.ts";
 import type { GetPublicRoadmapInput } from "../schemas.ts";
 import { evaluatePublicVisibility, getColumnText, getLinkedItems, resolveLinkedItems, formatError } from "./utils.ts";
 
 export async function getPublicRoadmap(args: GetPublicRoadmapInput): Promise<string> {
   try {
-    const { product, onlyInProgress = false } = args;
-    const productId = PRODUCT_IDS[product];
+    const { productId, onlyInProgress = false } = args;
 
     // Step 1: Fetch epics for this product
     const epicColumnIds = [
@@ -54,7 +53,7 @@ export async function getPublicRoadmap(args: GetPublicRoadmapInput): Promise<str
     }
 
     if (epics.length === 0) {
-      return formatError(`No epics found for ${product}${onlyInProgress ? " with status 'In Progress'" : ""}.`);
+      return formatError(`No epics found for productId ${productId}${onlyInProgress ? " with status 'In Progress'" : ""}.`);
     }
 
     // Step 2: Collect every task ID across all epics, then resolve in one batch
@@ -96,7 +95,7 @@ export async function getPublicRoadmap(args: GetPublicRoadmapInput): Promise<str
 
     // Step 3: Build markdown — Epic → Sprint → Task
     const lines: string[] = [];
-    lines.push(`# ${product} Roadmap${onlyInProgress ? " — In Progress" : ""}`);
+    lines.push(`# Product #${productId} Roadmap${onlyInProgress ? " — In Progress" : ""}`);
     lines.push("");
 
     for (const epic of epics) {
