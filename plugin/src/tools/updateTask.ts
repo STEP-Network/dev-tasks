@@ -8,6 +8,7 @@ import {
   AGENT_ID,
 } from "../constants.ts";
 import type { UpdateTaskInput } from "../schemas.ts";
+import { autoAssignVersionForTask } from "../services/auto-version.ts";
 import {
   buildColumnValues,
   formatError,
@@ -275,6 +276,20 @@ export async function updateTask(args: UpdateTaskInput): Promise<string> {
         }
       `;
       await executeMondayQuery<any>(mutation);
+    }
+
+    // Auto-assign a version when the task transitions to "Waiting for UAT".
+    // See plugin/src/services/auto-version.ts. Failure is non-fatal — we surface
+    // as a warning so the underlying updateTask still succeeds.
+    if (args.status === "Waiting for UAT") {
+      try {
+        const action = await autoAssignVersionForTask(itemId);
+        if (action) changes.push(action);
+      } catch (e) {
+        warnings.push(
+          `Auto-version assignment failed: ${e instanceof Error ? e.message : String(e)}`
+        );
+      }
     }
 
     // Handle name update separately (uses a different mutation field)

@@ -57,6 +57,15 @@ export interface BumpInput {
    * breaking-API release). Always logged in the rationale.
    */
   forceMajor?: boolean
+  /**
+   * Auto-assign path override — always picks a patch bump regardless of task
+   * categories or breaking-change flags. Used by `updateTask`'s auto-version
+   * helper when a task transitions to "Waiting for UAT": every task is a
+   * patch by default; minor/major elevations are human decisions (rename the
+   * open version's `versionNumber` before promoting). Takes precedence over
+   * `forceMajor` if both are set (which shouldn't happen by design).
+   */
+  forcePatch?: boolean
 }
 
 export interface BumpSuggestion {
@@ -135,15 +144,19 @@ const V1_GATE_MESSAGE =
  * This is the conservative default — no work content, no semver weight.
  */
 export function computeBumpSuggestion(input: BumpInput): BumpSuggestion {
-  const { latestReleased, tasks, v1MilestoneReady, forceMajor } = input
+  const { latestReleased, tasks, v1MilestoneReady, forceMajor, forcePatch } = input
   const featureCount = tasks.filter(t => t.category === 'feature').length
   const fixCount = tasks.filter(t => t.category === 'fix').length
   const improvementCount = tasks.filter(t => t.category === 'improvement').length
   const breakingCount = tasks.filter(t => t.hasBreakingChanges === true).length
 
-  // Determine intended bump type purely from the diff
+  // Determine intended bump type purely from the diff.
+  // Order matters: forcePatch overrides everything (auto-assign default),
+  // then forceMajor / breaking-change, then feature → minor, else patch.
   let intended: BumpType
-  if (forceMajor || breakingCount > 0) {
+  if (forcePatch) {
+    intended = 'patch'
+  } else if (forceMajor || breakingCount > 0) {
     intended = 'major'
   } else if (featureCount > 0) {
     intended = 'minor'
@@ -173,6 +186,7 @@ export function computeBumpSuggestion(input: BumpInput): BumpSuggestion {
     improvementCount,
     breakingCount,
     forceMajor,
+    forcePatch,
     gatedByMilestone,
     next,
   })
@@ -194,6 +208,7 @@ interface RationaleInput {
   improvementCount: number
   breakingCount: number
   forceMajor: boolean | undefined
+  forcePatch: boolean | undefined
   gatedByMilestone: string | null
   next: SemVer
 }
@@ -207,7 +222,9 @@ function buildRationale(r: RationaleInput): string {
   if (r.breakingCount > 0) pieces.push(`${r.breakingCount} breaking change${r.breakingCount === 1 ? '' : 's'}`)
   const taskSummary = pieces.length > 0 ? pieces.join(', ') : 'no linked tasks'
 
-  if (r.forceMajor) {
+  if (r.forcePatch) {
+    parts.push(`forcePatch=true → patch bump (auto-assign default; minor/major elevation is human-only).`)
+  } else if (r.forceMajor) {
     parts.push(`forceMajor=true → ${r.intended} bump.`)
   } else if (r.intended === 'major' && r.breakingCount > 0) {
     parts.push(`${r.breakingCount} breaking change(s) detected → would bump major.`)

@@ -1,0 +1,292 @@
+/**
+ * Auto-version assignment — fires when a task transitions to "Waiting for UAT".
+ *
+ * Algorithm:
+ *   1. If task already has a `versionId`  → no-op
+ *   2. Resolve product via task's product mirror column
+ *   3. Read task's `branch` column → detect `hotfix/*`
+ *   4. HOTFIX path: always create a fresh patch-bump version (status: Hotfix)
+ *   5. NON-HOTFIX path: find lowest open version (Planned or In Development)
+ *      for this product. Link task; if Planned, flip to In Development.
+ *   6. If no open version exists, create one with patch bump from latest
+ *      Released for this product (status: In Development).
+ *
+ * Conventions:
+ *   - Version name and versionNumber column both formatted `v{semver}` (e.g., `v0.9.1`)
+ *   - "Patch bump" via computeBumpSuggestion with forcePatch=true — every task
+ *     defaults to patch; minor/major elevations are human-only (rename the open
+ *     version before promoting).
+ *
+ * Caller (`updateTask.ts`) wraps this in try/catch and surfaces errors as
+ * warnings — auto-version failure must not fail the underlying updateTask.
+ */
+
+import { executeMondayQuery } from "../monday-client.ts";
+import {
+  BOARDS,
+  TASK_COLUMNS,
+  VERSION_COLUMNS,
+  VERSION_STATUS,
+  VERSION_GROUPS,
+  PRODUCT_IDS,
+} from "../constants.ts";
+import {
+  getColumnText,
+  getLinkedItems,
+  getMirrorDisplayValue,
+  buildColumnValues,
+} from "../tools/utils.ts";
+import {
+  computeBumpSuggestion,
+  parseSemVer,
+  formatSemVer,
+  compareSemVer,
+  type SemVer,
+} from "./version-bump.ts";
+
+const COLD_START: SemVer = { major: 0, minor: 0, patch: 0 };
+
+/**
+ * Main entry. Returns:
+ *   - action description string (auto-version action taken)
+ *   - null if task already has a version (no-op)
+ *   - "skipped: …" string if we couldn't determine product
+ *
+ * Throws on any Monday API error. Caller catches and surfaces as warning.
+ */
+export async function autoAssignVersionForTask(taskId: number): Promise<string | null> {
+  // 1. Read the task's relevant columns
+  const taskQuery = `
+    query {
+      items(ids: [${taskId}]) {
+        column_values(ids: ["${TASK_COLUMNS.targetVersion}", "${TASK_COLUMNS.product}", "${TASK_COLUMNS.branch}"]) {
+          id
+          text
+          value
+          ... on BoardRelationValue { linked_items { id name } }
+          ... on MirrorValue { display_value }
+        }
+      }
+    }
+  `;
+  const taskRes = await executeMondayQuery<any>(taskQuery);
+  const taskCols = taskRes.items?.[0]?.column_values || [];
+  const taskColMap = new Map<string, any>(taskCols.map((c: any) => [c.id, c]));
+
+  // 2. No-op if already linked
+  const currentVersion = getLinkedItems(taskColMap, TASK_COLUMNS.targetVersion);
+  if (currentVersion.length > 0) return null;
+
+  // 3. Resolve product
+  const productName = getMirrorDisplayValue(taskColMap, TASK_COLUMNS.product);
+  if (!productName) {
+    return "auto-version skipped: task has no product (no epic linked, or epic missing product mirror)";
+  }
+  const productId = PRODUCT_IDS[productName.trim()];
+  if (!productId) {
+    return `auto-version skipped: unknown product "${productName}" (not in PRODUCT_IDS map — add to plugin/src/constants.ts)`;
+  }
+
+  // 4. Detect hotfix path
+  const branchText = (getColumnText(taskColMap, TASK_COLUMNS.branch) || "").trim();
+  const isHotfix = branchText.startsWith("hotfix/");
+
+  // 5. Compute patch bump seed (latest released for product, else cold start)
+  const latestReleased = await findLatestReleasedForProduct(productId);
+
+  // 6. HOTFIX path — fresh dedicated version with Hotfix status
+  if (isHotfix) {
+    const bump = computeBumpSuggestion({
+      latestReleased,
+      tasks: [],
+      v1MilestoneReady: false, // forcePatch never crosses v1.0
+      forcePatch: true,
+    });
+    const versionName = `v${formatSemVer(bump.next)}`;
+    const created = await createVersionItem(versionName, versionName, productId, "Hotfix");
+    await linkTaskToVersion(taskId, created.id);
+    return `Auto-version (hotfix): created ${created.name} (#${created.id}), linked task`;
+  }
+
+  // 7. NON-HOTFIX path — find or create open version
+  const openVersion = await findLowestOpenVersionForProduct(productId);
+  if (openVersion) {
+    await linkTaskToVersion(taskId, openVersion.id);
+    if (openVersion.status === "Planned") {
+      await updateVersionStatus(openVersion.id, "In Development");
+      return `Auto-version: linked to ${openVersion.name} (#${openVersion.id}); flipped Planned → In Development`;
+    }
+    return `Auto-version: linked to ${openVersion.name} (#${openVersion.id}) (already In Development)`;
+  }
+
+  // 8. Cold-create the next version
+  const bump = computeBumpSuggestion({
+    latestReleased,
+    tasks: [],
+    v1MilestoneReady: false,
+    forcePatch: true,
+  });
+  const versionName = `v${formatSemVer(bump.next)}`;
+  const created = await createVersionItem(versionName, versionName, productId, "In Development");
+  await linkTaskToVersion(taskId, created.id);
+  return `Auto-version: created ${created.name} (#${created.id}) (no open version existed), linked task`;
+}
+
+// ---------------------------------------------------------------------------
+// Internal helpers
+// ---------------------------------------------------------------------------
+
+async function findLatestReleasedForProduct(productId: number): Promise<SemVer> {
+  const releasedStatusIdx = VERSION_STATUS["Released"];
+  const query = `
+    query {
+      boards(ids: [${BOARDS.VERSIONS}]) {
+        items_page(limit: 200, query_params: {
+          rules: [
+            { column_id: "${VERSION_COLUMNS.status}", compare_value: [${releasedStatusIdx}], operator: any_of }
+          ],
+          operator: and
+        }) {
+          items {
+            id
+            name
+            column_values(ids: ["${VERSION_COLUMNS.versionNumber}", "${VERSION_COLUMNS.product}"]) {
+              id
+              text
+              value
+              ... on BoardRelationValue { linked_items { id name } }
+            }
+          }
+        }
+      }
+    }
+  `;
+  const res = await executeMondayQuery<any>(query);
+  const items = res.boards?.[0]?.items_page?.items || [];
+  let highest: SemVer = COLD_START;
+  for (const item of items) {
+    const colMap = new Map<string, any>(item.column_values.map((c: any) => [c.id, c]));
+    const linkedProducts = getLinkedItems(colMap, VERSION_COLUMNS.product);
+    if (!linkedProducts.some(p => Number(p.id) === productId)) continue;
+    const verText = getColumnText(colMap, VERSION_COLUMNS.versionNumber) || "";
+    const semver = parseSemVer(verText);
+    if (!semver) continue;
+    if (compareSemVer(semver, highest) > 0) highest = semver;
+  }
+  return highest;
+}
+
+async function findLowestOpenVersionForProduct(
+  productId: number
+): Promise<{ id: number; name: string; status: string } | null> {
+  const plannedIdx = VERSION_STATUS["Planned"];
+  const inDevIdx = VERSION_STATUS["In Development"];
+  const query = `
+    query {
+      boards(ids: [${BOARDS.VERSIONS}]) {
+        items_page(limit: 200, query_params: {
+          rules: [
+            { column_id: "${VERSION_COLUMNS.status}", compare_value: [${plannedIdx}, ${inDevIdx}], operator: any_of }
+          ],
+          operator: and
+        }) {
+          items {
+            id
+            name
+            column_values(ids: ["${VERSION_COLUMNS.status}", "${VERSION_COLUMNS.versionNumber}", "${VERSION_COLUMNS.product}"]) {
+              id
+              text
+              value
+              ... on BoardRelationValue { linked_items { id name } }
+            }
+          }
+        }
+      }
+    }
+  `;
+  const res = await executeMondayQuery<any>(query);
+  const items = res.boards?.[0]?.items_page?.items || [];
+  const candidates: Array<{ id: number; name: string; status: string; semver: SemVer }> = [];
+  for (const item of items) {
+    const colMap = new Map<string, any>(item.column_values.map((c: any) => [c.id, c]));
+    const linkedProducts = getLinkedItems(colMap, VERSION_COLUMNS.product);
+    if (!linkedProducts.some(p => Number(p.id) === productId)) continue;
+    const verText = getColumnText(colMap, VERSION_COLUMNS.versionNumber) || "";
+    const semver = parseSemVer(verText);
+    if (!semver) continue;
+    const status = getColumnText(colMap, VERSION_COLUMNS.status) || "";
+    candidates.push({ id: Number(item.id), name: item.name, status, semver });
+  }
+  if (candidates.length === 0) return null;
+  candidates.sort((a, b) => compareSemVer(a.semver, b.semver));
+  return { id: candidates[0].id, name: candidates[0].name, status: candidates[0].status };
+}
+
+async function createVersionItem(
+  name: string,
+  versionNumber: string,
+  productId: number,
+  status: "In Development" | "Hotfix"
+): Promise<{ id: number; name: string }> {
+  const statusIdx = VERSION_STATUS[status];
+  const columnValues: Record<string, unknown> = {
+    [VERSION_COLUMNS.status]: { index: statusIdx },
+    [VERSION_COLUMNS.versionNumber]: versionNumber,
+    [VERSION_COLUMNS.product]: { item_ids: [productId] },
+  };
+  const mutation = `
+    mutation {
+      create_item(
+        board_id: ${BOARDS.VERSIONS},
+        group_id: "${VERSION_GROUPS.UPCOMING}",
+        item_name: ${JSON.stringify(name)},
+        column_values: ${buildColumnValues(columnValues)}
+      ) {
+        id
+        name
+      }
+    }
+  `;
+  const res = await executeMondayQuery<any>(mutation);
+  const created = res.create_item;
+  if (!created) throw new Error(`Failed to create version "${name}"`);
+  return { id: Number(created.id), name: created.name };
+}
+
+async function linkTaskToVersion(taskId: number, versionId: number): Promise<void> {
+  const columnValues = {
+    [TASK_COLUMNS.targetVersion]: { item_ids: [versionId] },
+  };
+  const mutation = `
+    mutation {
+      change_multiple_column_values(
+        item_id: ${taskId},
+        board_id: ${BOARDS.TASKS},
+        column_values: ${buildColumnValues(columnValues)}
+      ) {
+        id
+      }
+    }
+  `;
+  await executeMondayQuery<any>(mutation);
+}
+
+async function updateVersionStatus(versionId: number, status: string): Promise<void> {
+  const statusIdx = VERSION_STATUS[status];
+  if (statusIdx === undefined) return;
+  const columnValues = {
+    [VERSION_COLUMNS.status]: { index: statusIdx },
+  };
+  const mutation = `
+    mutation {
+      change_multiple_column_values(
+        item_id: ${versionId},
+        board_id: ${BOARDS.VERSIONS},
+        column_values: ${buildColumnValues(columnValues)}
+      ) {
+        id
+      }
+    }
+  `;
+  await executeMondayQuery<any>(mutation);
+}

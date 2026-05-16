@@ -266,3 +266,67 @@ describe('computeNextPlannedVersion', () => {
     })
   })
 })
+
+describe("computeBumpSuggestion — forcePatch (auto-assign path)", () => {
+  it("forcePatch + Feature task → still patch", () => {
+    const result = computeBumpSuggestion({
+      latestReleased: { major: 0, minor: 9, patch: 0 },
+      tasks: [{ category: "feature" }],
+      v1MilestoneReady: false,
+      forcePatch: true,
+    })
+    expect(result.bumpType).toBe("patch")
+    expect(result.next).toEqual({ major: 0, minor: 9, patch: 1 })
+    expect(result.rationale).toContain("forcePatch=true")
+  })
+
+  it("forcePatch + breaking change → still patch (overrides everything)", () => {
+    const result = computeBumpSuggestion({
+      latestReleased: { major: 0, minor: 9, patch: 5 },
+      tasks: [{ category: "feature", hasBreakingChanges: true }],
+      v1MilestoneReady: true,
+      forcePatch: true,
+    })
+    expect(result.bumpType).toBe("patch")
+    expect(result.next).toEqual({ major: 0, minor: 9, patch: 6 })
+    expect(result.gatedByMilestone).toBeNull()
+  })
+
+  it("forcePatch from cold start (0.0.0) → 0.0.1", () => {
+    const result = computeBumpSuggestion({
+      latestReleased: { major: 0, minor: 0, patch: 0 },
+      tasks: [{ category: "fix" }],
+      v1MilestoneReady: false,
+      forcePatch: true,
+    })
+    expect(result.bumpType).toBe("patch")
+    expect(result.next).toEqual({ major: 0, minor: 0, patch: 1 })
+  })
+
+  it("forcePatch + mixed task types → still patch", () => {
+    const result = computeBumpSuggestion({
+      latestReleased: { major: 1, minor: 2, patch: 3 },
+      tasks: [
+        { category: "feature" },
+        { category: "fix" },
+        { category: "improvement" },
+        { category: "feature", hasBreakingChanges: true },
+      ],
+      v1MilestoneReady: true,
+      forcePatch: true,
+    })
+    expect(result.bumpType).toBe("patch")
+    expect(result.next).toEqual({ major: 1, minor: 2, patch: 4 })
+  })
+
+  it("forcePatch + empty tasks → still patch", () => {
+    const result = computeBumpSuggestion({
+      latestReleased: { major: 0, minor: 5, patch: 0 },
+      tasks: [],
+      v1MilestoneReady: false,
+      forcePatch: true,
+    })
+    expect(result.bumpType).toBe("patch")
+    expect(result.next).toEqual({ major: 0, minor: 5, patch: 1 })
+  })
+})

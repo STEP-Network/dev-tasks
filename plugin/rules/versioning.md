@@ -4,13 +4,15 @@
 
 **Semver:** `v{major}.{minor}.{patch}` (e.g., `v0.9.0`).
 
-- **Major** ← breaking changes. Manual or v1.0-milestone trigger only.
-- **Minor** ← new features (Development-type tasks).
-- **Patch** ← fixes, refines, docs, PM-work. Hotfixes are always patch.
+- **Patch (auto)** ← every task lands on a patch by default. Auto-assigned at the `Waiting for UAT` transition. Fix, Improvement, AND Feature all become patches in the auto path.
+- **Minor / Major (human)** ← agents do NOT auto-bump beyond patch. Humans elevate a patch version to minor or major by renaming the open version's `versionNumber` (e.g., `v0.9.5` → `v0.10.0`) **before** running `/release-version`.
+- **Hotfixes** ← always a fresh patch-bump version with status `Hotfix`, created automatically when the task's branch matches `hotfix/*`.
 
-**v1.0.0 is a HARD GATE.** Reserved for the moment **both** Beta version epic (#2833952138) AND Live version epic (#2738006659) hit `Done`. Agents must NOT auto-suggest `v1.0.0` while either is incomplete — fall through to the highest non-major bump and note the gate.
+**Auto-assignment fires inside `updateTask`** when status transitions to `Waiting for UAT`: resolves product → finds the lowest open version (Planned or In Development) → links the task. If no open version exists, creates one (patch-bump from latest Released). Service: `plugin/src/services/auto-version.ts`.
 
-**Always call the helper.** `lib/services/version-bump.ts` exports `computeBumpSuggestion(input)` — single source of truth with 46 unit tests covering every branch including the v1.0 gate. Never reimplement the algorithm in scripts or skill prose.
+**v1.0.0 is a HARD GATE.** Reserved for the moment **both** Beta version epic (#2833952138) AND Live version epic (#2738006659) hit `Done`. Agents must NOT auto-suggest `v1.0.0` while either is incomplete — fall through to the highest non-major bump and note the gate. (Auto-patch path never crosses v1.0 from 0.x.y so the gate is effectively inert there.)
+
+**Always call the helper.** `${CLAUDE_PLUGIN_ROOT}/src/services/version-bump.ts` exports `computeBumpSuggestion(input)` — single source of truth with 51 unit tests including the `forcePatch` auto-path. Never reimplement the algorithm in scripts or skill prose.
 
 ## Semver Convention
 
