@@ -396,13 +396,8 @@ export const PEOPLE: Record<string, number> = {
 // =============================================================================
 
 export const PRODUCT_IDS: Record<string, number> = {
-  // Keys must include Monday's actual display name on the Products board, since
-  // the Task's product mirror column returns that display string. Aliases (the
-  // shorter friendly names) point at the same ID so agent-supplied product
-  // filters (ProductEnum) still resolve.
-  "STEPhie": 2730518827,         // TODO: verify against Monday display — may need a ".dk" or similar alias
-  "PolAds.eu": 2723505568,       // Monday display name (confirmed via getTask + listVersions)
-  "PolAds": 2723505568,          // legacy alias — kept so ProductEnum input still resolves
+  "STEPhie": 2730518827,
+  "PolAds": 2723505568,
 };
 
 // =============================================================================

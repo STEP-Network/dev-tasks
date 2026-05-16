@@ -1,15 +1,22 @@
 /**
  * Auto-version assignment — fires when a task transitions to "Waiting for UAT".
  *
- * Algorithm:
- *   1. If task already has a `versionId`  → no-op
- *   2. Resolve product via task's product mirror column
- *   3. Read task's `branch` column → detect `hotfix/*`
- *   4. HOTFIX path: always create a fresh patch-bump version (status: Hotfix)
- *   5. NON-HOTFIX path: find lowest open version (Planned or In Development)
- *      for this product. Link task; if Planned, flip to In Development.
- *   6. If no open version exists, create one with patch bump from latest
- *      Released for this product (status: In Development).
+ * Selection precedence (most specific first):
+ *   1. If task already has a `versionId`                  → no-op
+ *   2. If task's branch matches `hotfix/*`                → create a fresh
+ *      dedicated patch-bump version (status: Hotfix)
+ *   3. Else: find an open version for the product
+ *      3a. In Development (lowest semver) wins over Planned
+ *      3b. If a Planned version is picked, flip it to In Development
+ *          (correctness — Planned shouldn't host tasks at UAT)
+ *   4. No open version exists                             → cold-create with
+ *      patch bump from latest Released (status: In Development)
+ *
+ * **Versions are time-based**: assignment is purely "which container is
+ * currently shipping for this product?" — not "which epic plans this task
+ * for which version." The Epic→Target Version link is intentionally NOT
+ * consulted here: concurrent epics shouldn't bump version both up and down,
+ * and a 24/7 Maintenance epic has no meaningful target version.
  *
  * Conventions:
  *   - Version name and versionNumber column both formatted `v{semver}` (e.g., `v0.9.1`)
@@ -108,15 +115,16 @@ export async function autoAssignVersionForTask(taskId: number): Promise<string |
     return `Auto-version (hotfix): created ${created.name} (#${created.id}), linked task`;
   }
 
-  // 7. NON-HOTFIX path — find or create open version
-  const openVersion = await findLowestOpenVersionForProduct(productId);
+  // 7. NON-HOTFIX path — find or create open version.
+  //    Preference: In Development (lowest semver) before Planned (lowest semver).
+  const openVersion = await findBestOpenVersionForProduct(productId);
   if (openVersion) {
     await linkTaskToVersion(taskId, openVersion.id);
     if (openVersion.status === "Planned") {
       await updateVersionStatus(openVersion.id, "In Development");
-      return `Auto-version: linked to ${openVersion.name} (#${openVersion.id}); flipped Planned → In Development`;
+      return `Auto-version: linked to ${openVersion.name} (#${openVersion.id}); auto-corrected status Planned → In Development (a version hosting UAT-stage tasks shouldn't stay Planned)`;
     }
-    return `Auto-version: linked to ${openVersion.name} (#${openVersion.id}) (already In Development)`;
+    return `Auto-version: linked to ${openVersion.name} (#${openVersion.id}) (status: In Development)`;
   }
 
   // 8. Cold-create the next version
@@ -176,7 +184,13 @@ async function findLatestReleasedForProduct(productId: number): Promise<SemVer> 
   return highest;
 }
 
-async function findLowestOpenVersionForProduct(
+/**
+ * Find the best open version for a product.
+ * Priority: In Development (lowest semver) before Planned (lowest semver).
+ * Rationale: an In-Development version is already shipping; a Planned version
+ * is cooling/scheduled. New UAT-stage tasks belong in what's shipping.
+ */
+async function findBestOpenVersionForProduct(
   productId: number
 ): Promise<{ id: number; name: string; status: string } | null> {
   const plannedIdx = VERSION_STATUS["Planned"];
@@ -218,7 +232,14 @@ async function findLowestOpenVersionForProduct(
     candidates.push({ id: Number(item.id), name: item.name, status, semver });
   }
   if (candidates.length === 0) return null;
-  candidates.sort((a, b) => compareSemVer(a.semver, b.semver));
+  // Sort: In Development first (priority 1), then Planned (priority 0);
+  // within each tier, lowest semver wins.
+  candidates.sort((a, b) => {
+    const aPri = a.status === "In Development" ? 1 : 0;
+    const bPri = b.status === "In Development" ? 1 : 0;
+    if (aPri !== bPri) return bPri - aPri;
+    return compareSemVer(a.semver, b.semver);
+  });
   return { id: candidates[0].id, name: candidates[0].name, status: candidates[0].status };
 }
 
