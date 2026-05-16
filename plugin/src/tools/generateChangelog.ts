@@ -117,8 +117,9 @@ export async function generateChangelog(args: GenerateChangelogInput): Promise<s
 
     // Step 5: Write the unified Doc (single drain + write, both views co-located)
     const versionLabel = `v${versionNumber}${item.name && item.name !== `v${versionNumber}` ? ` — ${item.name}` : ""}`;
+    let docId: number;
     try {
-      await writeChangelog(versionId, structured, { versionLabel });
+      docId = await writeChangelog(versionId, structured, { versionLabel });
     } catch (writeErr) {
       return formatError(`Failed to write changelog Doc: ${writeErr instanceof Error ? writeErr.message : String(writeErr)}`);
     }
@@ -130,6 +131,7 @@ export async function generateChangelog(args: GenerateChangelogInput): Promise<s
       `# Changelog Generated`,
       ``,
       `**Version:** ${item.name} (v${versionNumber})`,
+      `**Doc ID:** ${docId}`,
       ``,
       `## Item Counts`,
     ];

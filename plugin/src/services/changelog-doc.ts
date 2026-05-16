@@ -295,12 +295,15 @@ export function renderUnifiedChangelog(
 /**
  * Write the unified changelog to the version's Doc. Creates the Doc if missing,
  * drains all existing blocks, then appends the rendered content.
+ *
+ * Returns the docId so callers (e.g. generateChangelog) can echo it in their
+ * response for traceability.
  */
 export async function writeUnifiedChangelogToVersion(
   versionId: number,
   c: StructuredChangelog,
   opts?: { versionLabel?: string }
-): Promise<void> {
+): Promise<number> {
   const docId = await ensureDocForVersion(versionId);
   const markdown = renderUnifiedChangelog(c, opts);
 
@@ -338,4 +341,5 @@ export async function writeUnifiedChangelogToVersion(
     }
   `;
   await executeMondayQuery<unknown>(writeMutation, undefined, DOC_OPTS);
+  return docId;
 }

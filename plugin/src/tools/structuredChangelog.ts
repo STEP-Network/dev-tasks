@@ -270,8 +270,8 @@ export async function writeChangelog(
   versionId: number,
   data: StructuredChangelog,
   opts?: { versionLabel?: string }
-): Promise<void> {
-  await writeUnifiedChangelogToVersion(versionId, data, opts);
+): Promise<number> {
+  const docId = await writeUnifiedChangelogToVersion(versionId, data, opts);
 
   // Clear the legacy long_text releaseSummary so old data doesn't linger.
   // Fire-and-forget — failure here is non-critical (stale long_text is shadowed
@@ -293,6 +293,8 @@ export async function writeChangelog(
   } catch {
     // ignore — non-critical cleanup
   }
+
+  return docId;
 }
 
 function isEmptyChangelog(c: StructuredChangelog): boolean {
