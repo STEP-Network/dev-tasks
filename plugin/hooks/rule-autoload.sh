@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# monday-task-flow plugin — PreToolUse rule-autoload hook
+# dev-tasks plugin — PreToolUse rule-autoload hook
 #
 # Fires on Edit|Write|MultiEdit|NotebookEdit. Reads the target file path from
 # tool_input, matches it against rules-routing.json globs, and injects the
@@ -38,7 +38,7 @@ RULES_DIR="$PLUGIN_ROOT/rules"
 # --- session-scoped dedup setup ----------------------------------------------
 MARKER_FILE=""
 if [ -n "$SESSION_ID" ]; then
-  MARKER_DIR="${TMPDIR:-/tmp}/monday-task-flow"
+  MARKER_DIR="${TMPDIR:-/tmp}/dev-tasks"
   MARKER_FILE="$MARKER_DIR/injected-${SESSION_ID}.list"
   mkdir -p "$MARKER_DIR" 2>/dev/null || MARKER_FILE=""
 fi

@@ -10,11 +10,11 @@ user_invocable: true
 
 ### Step 1: Identify Target Version + Semver Suggestion
 
-1. Call `mcp__plugin_monday-task-flow_monday-tasks__listVersions(group: "upcoming")` to show upcoming versions
+1. Call `mcp__plugin_dev-tasks_dev-tasks__listVersions(group: "upcoming")` to show upcoming versions
 2. Display: version name, version number, status, linked item counts
 3. Ask user which version to work with:
    - **Existing version** → proceed with that versionId
-   - **New version** → call `mcp__plugin_monday-task-flow_monday-tasks__createVersion(name, productId, versionNumber, status: "Planned")`
+   - **New version** → call `mcp__plugin_dev-tasks_dev-tasks__createVersion(name, productId, versionNumber, status: "Planned")`
      - Ask for: name, version number, expected release date
      - Optional: release summary, linked epics/tasks
 
@@ -28,9 +28,9 @@ user_invocable: true
 > a thin orchestration layer.
 
 1. **Gather inputs:**
-   - `latestReleased`: `mcp__plugin_monday-task-flow_monday-tasks__listVersions(group: "released")` → sort by versionNumber → take highest → parse with `parseSemVer()`.
-   - `tasks`: from Step 2's `mcp__plugin_monday-task-flow_monday-tasks__getVersion(versionId)` — convert each task's `task_type` to the 3-cat via `classifyTaskType()`. Set `hasBreakingChanges: true` on any task whose description / metadata explicitly flags a breaking change.
-   - `v1MilestoneReady`: call `mcp__plugin_monday-task-flow_monday-tasks__getEpic(2833952138)` (Beta) AND `mcp__plugin_monday-task-flow_monday-tasks__getEpic(2738006659)` (Live). True iff BOTH have status `Done`.
+   - `latestReleased`: `mcp__plugin_dev-tasks_dev-tasks__listVersions(group: "released")` → sort by versionNumber → take highest → parse with `parseSemVer()`.
+   - `tasks`: from Step 2's `mcp__plugin_dev-tasks_dev-tasks__getVersion(versionId)` — convert each task's `task_type` to the 3-cat via `classifyTaskType()`. Set `hasBreakingChanges: true` on any task whose description / metadata explicitly flags a breaking change.
+   - `v1MilestoneReady`: call `mcp__plugin_dev-tasks_dev-tasks__getEpic(2833952138)` (Beta) AND `mcp__plugin_dev-tasks_dev-tasks__getEpic(2738006659)` (Live). True iff BOTH have status `Done`.
    - `forceMajor` (optional): only when the user explicitly asked for a release-defining major moment.
 
 2. **Call `computeBumpSuggestion(input)`** — returns `{ next, bumpType, rationale, gatedByMilestone }`.
@@ -44,7 +44,7 @@ user_invocable: true
 
 ### Step 2: Review Version Contents
 
-1. Call `mcp__plugin_monday-task-flow_monday-tasks__getVersion(versionId)` to get full details:
+1. Call `mcp__plugin_dev-tasks_dev-tasks__getVersion(versionId)` to get full details:
    - Linked tasks (with status and type)
    - Linked epics (with status)
    - Fixed bugs (with status)
@@ -77,7 +77,7 @@ Before generating changelog, verify:
    - `highlights`: key features to emphasize (array of strings)
    - `breakingChanges`: any breaking changes (array of strings)
    - `knownIssues`: known issues to document (array of strings)
-2. Call `mcp__plugin_monday-task-flow_monday-tasks__generateChangelog(versionId)` with optional params
+2. Call `mcp__plugin_dev-tasks_dev-tasks__generateChangelog(versionId)` with optional params
 3. The tool auto-categorizes linked items into a Monday Doc:
    - Development tasks → **Added**
    - Bugfix tasks → **Fixed**
@@ -111,7 +111,7 @@ The canonical Release Summary JSON uses 3 categories (Feature / Improvement / Fi
    }
    <!-- /STRUCTURED_CHANGELOG_V1 -->
    ```
-6. Write to Release Summary: `mcp__plugin_monday-task-flow_monday-tasks__updateVersion(versionId, releaseSummary: structuredContent)`.
+6. Write to Release Summary: `mcp__plugin_dev-tasks_dev-tasks__updateVersion(versionId, releaseSummary: structuredContent)`.
 
 ### Step 5: Confirm Release (User Decision)
 

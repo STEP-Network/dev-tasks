@@ -60,7 +60,7 @@ export default async function handler(
   //    query inside this request uses the per-request token.
   await mondayAuthContext.run({ apiKey }, async () => {
     const server = new McpServer({
-      name: "monday-tasks",
+      name: "dev-tasks",
       version: "0.6.0",
     });
     registerAllTools(server);

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# monday-task-flow plugin — project-config reader helper
+# dev-tasks plugin — project-config reader helper
 #
 # Source this from any plugin hook that needs to read project-config.json.
 # Provides:
