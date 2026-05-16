@@ -28,9 +28,10 @@ export async function updateVersion(args: UpdateVersionInput): Promise<string> {
     const columnValues: Record<string, unknown> = {};
     const updates: string[] = [];
 
-    // Status
+    // Status — use {label} not {index} (workspace indices drift; see
+    // services/version-state-machine.ts setVersionStatus comment)
     if (args.status) {
-      columnValues[VERSION_COLUMNS.status] = { index: VERSION_STATUS[args.status] };
+      columnValues[VERSION_COLUMNS.status] = { label: args.status };
       updates.push(`Status → ${args.status}`);
     }
 

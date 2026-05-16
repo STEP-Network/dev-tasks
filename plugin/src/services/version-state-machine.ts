@@ -231,10 +231,12 @@ export async function recomputeVersionStatus(versionId: number): Promise<string 
 }
 
 async function setVersionStatus(versionId: number, status: string): Promise<void> {
-  const idx = VERSION_STATUS[status];
-  if (idx === undefined) return;
+  // Use `{label: "..."}` not `{index: N}` — workspace label indices have
+  // drifted from the constants (e.g., Release Candidate's 102 returns
+  // "missingLabel" in the polads workspace). Label is self-documenting
+  // and immune to drift.
   const columnValues = {
-    [VERSION_COLUMNS.status]: { index: idx },
+    [VERSION_COLUMNS.status]: { label: status },
   };
   const mutation = `
     mutation {

@@ -273,9 +273,10 @@ async function createVersionItem(
   productId: number,
   status: "In Development" | "Hotfix"
 ): Promise<{ id: number; name: string }> {
-  const statusIdx = VERSION_STATUS[status];
+  // Use `{label: "..."}` for status — see version-state-machine.ts comment;
+  // label-by-name is immune to workspace label-index drift.
   const columnValues: Record<string, unknown> = {
-    [VERSION_COLUMNS.status]: { index: statusIdx },
+    [VERSION_COLUMNS.status]: { label: status },
     [VERSION_COLUMNS.versionNumber]: versionNumber,
     [VERSION_COLUMNS.product]: { item_ids: [productId] },
   };
@@ -317,10 +318,10 @@ async function linkTaskToVersion(taskId: number, versionId: number): Promise<voi
 }
 
 async function updateVersionStatus(versionId: number, status: string): Promise<void> {
-  const statusIdx = VERSION_STATUS[status];
-  if (statusIdx === undefined) return;
+  // Use `{label: "..."}` not `{index: N}` — workspace label indices drift;
+  // see version-state-machine.ts setVersionStatus comment.
   const columnValues = {
-    [VERSION_COLUMNS.status]: { index: statusIdx },
+    [VERSION_COLUMNS.status]: { label: status },
   };
   const mutation = `
     mutation {

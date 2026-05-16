@@ -134,26 +134,61 @@ export async function ensureDocForVersion(versionId: number): Promise<number> {
 
 /**
  * Extract the structured JSON block from a markdown doc.
- * Returns null when no marker pair found OR the captured block can't be parsed.
+ *
+ * Two strategies — fast path (markers) and fallback (last shape-matching
+ * fenced block). Monday's `add_content_to_doc_from_markdown` →
+ * `export_markdown_from_doc` round-trip turned out to strip HTML comments
+ * in some cases, so we can't rely on the markers always surviving.
+ *
+ * Returns null only when both strategies fail.
  */
 export function extractStructuredFromMarkdown(markdown: string): unknown | null {
   if (!markdown) return null;
+
+  // Fast path: marker pair present → JSON block lives between them.
   const beginIdx = markdown.indexOf(MARKER_BEGIN);
   const endIdx = markdown.indexOf(MARKER_END);
-  if (beginIdx === -1 || endIdx === -1 || endIdx < beginIdx) return null;
-  const between = markdown.slice(beginIdx + MARKER_BEGIN.length, endIdx);
-
-  // Strip fenced code block delimiters (```json ... ```)
-  const stripped = between
-    .replace(/```\s*json\s*/gi, "")
-    .replace(/```/g, "")
-    .trim();
-  if (!stripped) return null;
-  try {
-    return JSON.parse(stripped);
-  } catch {
-    return null;
+  if (beginIdx !== -1 && endIdx !== -1 && endIdx > beginIdx) {
+    const between = markdown.slice(beginIdx + MARKER_BEGIN.length, endIdx);
+    const stripped = between
+      .replace(/```\s*json\s*/gi, "")
+      .replace(/```/g, "")
+      .trim();
+    if (stripped) {
+      try {
+        return JSON.parse(stripped);
+      } catch {
+        // Fall through to the fenced-block fallback
+      }
+    }
   }
+
+  // Fallback: scan all fenced code blocks (regardless of language tag),
+  // try to parse each as JSON, accept the last one that LOOKS like a
+  // structured changelog (object with a `tasks` key). Monday preserves
+  // fenced code blocks as first-class doc blocks even when it loses HTML
+  // comments — so this path survives marker stripping.
+  const codeBlockRegex = /```[^\n]*\n?([\s\S]*?)```/g;
+  const matches = Array.from(markdown.matchAll(codeBlockRegex));
+  for (let i = matches.length - 1; i >= 0; i--) {
+    const content = (matches[i][1] || "").trim();
+    if (!content) continue;
+    try {
+      const parsed = JSON.parse(content);
+      if (
+        parsed &&
+        typeof parsed === "object" &&
+        !Array.isArray(parsed) &&
+        "tasks" in (parsed as Record<string, unknown>)
+      ) {
+        return parsed;
+      }
+    } catch {
+      // try the next earlier block
+    }
+  }
+
+  return null;
 }
 
 /**

@@ -13,9 +13,10 @@ export async function createVersion(args: CreateVersionInput): Promise<string> {
   try {
     const columnValues: Record<string, unknown> = {};
 
-    // Status (default: Planned)
+    // Status (default: Planned). Use {label} not {index} — workspace label
+    // indices drifted in production (e.g. "Release Candidate" → missingLabel).
     columnValues[VERSION_COLUMNS.status] = {
-      index: VERSION_STATUS[args.status || "Planned"],
+      label: args.status || "Planned",
     };
 
     // Product link (required)
