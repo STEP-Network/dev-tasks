@@ -208,8 +208,10 @@ export async function recomputeVersionStatus(versionId: number): Promise<string 
     return { id: t.id, status: getColumnText(colMap, TASK_COLUMNS.status) || "" };
   });
 
-  const allReleaseReady = tasks.every(t => RELEASE_COMPLETED_STATUSES.has(t.status));
+  const readyCount = tasks.filter(t => RELEASE_COMPLETED_STATUSES.has(t.status)).length;
+  const aggregate = `${readyCount}/${tasks.length} tasks at Pending Deploy / Done`;
 
+  const allReleaseReady = readyCount === tasks.length;
   let target: "Release Candidate" | "In Development" | null = null;
   if (allReleaseReady && currentStatus !== "Release Candidate") {
     target = "Release Candidate";
@@ -218,10 +220,14 @@ export async function recomputeVersionStatus(versionId: number): Promise<string 
     target = "In Development";
   }
 
-  if (!target) return null;
+  if (!target) {
+    // No flip needed — emit a visible trace so callers can tell the state
+    // machine ran and decided not to change status.
+    return `Version state: ${versionItem.name} (#${versionId}) stays ${currentStatus} (aggregate: ${aggregate})`;
+  }
 
   await setVersionStatus(versionId, target);
-  return `Version state: ${versionItem.name} (#${versionId}) ${currentStatus} → ${target} (aggregate: ${tasks.filter(t => RELEASE_COMPLETED_STATUSES.has(t.status)).length}/${tasks.length} tasks at Pending Deploy / Done)`;
+  return `Version state: ${versionItem.name} (#${versionId}) ${currentStatus} → ${target} (aggregate: ${aggregate})`;
 }
 
 async function setVersionStatus(versionId: number, status: string): Promise<void> {
