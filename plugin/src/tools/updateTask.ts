@@ -10,6 +10,10 @@ import {
 import type { UpdateTaskInput } from "../schemas.ts";
 import { autoAssignVersionForTask } from "../services/auto-version.ts";
 import {
+  maybeHandleBounceback,
+  recomputeAggregateForTaskVersion,
+} from "../services/version-state-machine.ts";
+import {
   buildColumnValues,
   formatError,
   formatSubtask,
@@ -278,17 +282,41 @@ export async function updateTask(args: UpdateTaskInput): Promise<string> {
       await executeMondayQuery<any>(mutation);
     }
 
-    // Auto-assign a version when the task transitions to "Waiting for UAT".
-    // See plugin/src/services/auto-version.ts. Failure is non-fatal — we surface
-    // as a warning so the underlying updateTask still succeeds.
-    if (args.status === "Waiting for UAT") {
+    // Version-side automation after a status change. Three steps run in order
+    // — each is fail-soft so a Monday API hiccup doesn't fail the underlying
+    // updateTask. See plugin/src/services/{auto-version,version-state-machine}.ts.
+    if (args.status !== undefined) {
+      // 1. Bounceback: if the task moved backward (away from Pending Deploy /
+      //    Done) AND its current version is Released, unlink. Auto-version
+      //    will reassign on the next UAT transition.
       try {
-        const action = await autoAssignVersionForTask(itemId);
-        if (action) changes.push(action);
+        const note = await maybeHandleBounceback(itemId, args.status);
+        if (note) changes.push(note);
       } catch (e) {
-        warnings.push(
-          `Auto-version assignment failed: ${e instanceof Error ? e.message : String(e)}`
-        );
+        warnings.push(`Bounceback check failed: ${e instanceof Error ? e.message : String(e)}`);
+      }
+
+      // 2. Auto-version: on Waiting for UAT, ensure the task is linked to a
+      //    version. See plugin/src/services/auto-version.ts.
+      if (args.status === "Waiting for UAT") {
+        try {
+          const action = await autoAssignVersionForTask(itemId);
+          if (action) changes.push(action);
+        } catch (e) {
+          warnings.push(
+            `Auto-version assignment failed: ${e instanceof Error ? e.message : String(e)}`
+          );
+        }
+      }
+
+      // 3. Aggregate recompute: the task's current version may need a status
+      //    update based on the aggregate of all linked tasks (In Development ↔
+      //    Release Candidate). Skips Released and Hotfix versions.
+      try {
+        const note = await recomputeAggregateForTaskVersion(itemId);
+        if (note) changes.push(note);
+      } catch (e) {
+        warnings.push(`Version aggregate recompute failed: ${e instanceof Error ? e.message : String(e)}`);
       }
     }
 

@@ -1,0 +1,245 @@
+/**
+ * Version aggregate state machine.
+ *
+ * Fires from `updateTask` after a task's status changes. Two responsibilities:
+ *
+ * 1. **Bounceback handling** — if the task moves *backward* (away from
+ *    Pending Deploy to Prod / Done) AND its current version is Released,
+ *    the task unlinks from the released version. Released stays Released;
+ *    the bounced task re-enters the open version's pool on its next UAT
+ *    transition (auto-version handles the re-link).
+ *
+ * 2. **Aggregate state recompute** — Planned ↔ In Development ↔ Release
+ *    Candidate, derived from the linked tasks' statuses. Never touches
+ *    Released or Hotfix (those are terminal/manual states).
+ *
+ *    - All linked tasks at "Pending Deploy to Prod" or "Done" → Release Candidate
+ *    - Otherwise (some task still in progress / UAT) → In Development
+ *      (or Planned, if no task has reached UAT yet — that case is auto-version's
+ *      domain, not this one)
+ *
+ * Trigger from `updateTask.ts`. Both steps fail-soft — errors surface as
+ * warnings on the user-visible response but don't fail the updateTask.
+ */
+
+import { executeMondayQuery } from "../monday-client.ts";
+import {
+  BOARDS,
+  TASK_COLUMNS,
+  VERSION_COLUMNS,
+  VERSION_STATUS,
+} from "../constants.ts";
+import {
+  buildColumnValues,
+  getColumnText,
+  getLinkedItems,
+} from "../tools/utils.ts";
+
+// Statuses that count as "release-completed" for the aggregate calculation.
+// A version becomes Release Candidate when ALL linked tasks are in one of these.
+const RELEASE_COMPLETED_STATUSES = new Set(["Pending Deploy to Prod", "Done"]);
+
+// Terminal version statuses the state machine never touches.
+const TERMINAL_VERSION_STATUSES = new Set(["Released", "Hotfix"]);
+
+// =============================================================================
+// Bounceback handling
+// =============================================================================
+
+/**
+ * If the task is linked to a Released version AND its new status is BEFORE the
+ * release-completed point (i.e., a regression), unlink the task from the released
+ * version. Auto-version will reassign on the next UAT transition.
+ *
+ * Returns a user-facing note string (or null if no action).
+ */
+export async function maybeHandleBounceback(
+  taskId: number,
+  newStatus: string
+): Promise<string | null> {
+  // Only meaningful for backward moves
+  if (RELEASE_COMPLETED_STATUSES.has(newStatus)) return null;
+
+  // Fetch task's current version
+  const taskQuery = `
+    query {
+      items(ids: [${taskId}]) {
+        column_values(ids: ["${TASK_COLUMNS.targetVersion}"]) {
+          id
+          ... on BoardRelationValue { linked_items { id name } }
+        }
+      }
+    }
+  `;
+  const taskRes = await executeMondayQuery<any>(taskQuery);
+  const taskCols = taskRes.items?.[0]?.column_values || [];
+  const taskColMap = new Map<string, any>(taskCols.map((c: any) => [c.id, c]));
+  const linkedVersions = getLinkedItems(taskColMap, TASK_COLUMNS.targetVersion);
+  if (linkedVersions.length === 0) return null;
+  const versionId = Number(linkedVersions[0].id);
+  const versionName = linkedVersions[0].name;
+
+  // Read the version's status
+  const verQuery = `
+    query {
+      items(ids: [${versionId}]) {
+        column_values(ids: ["${VERSION_COLUMNS.status}"]) {
+          id
+          text
+        }
+      }
+    }
+  `;
+  const verRes = await executeMondayQuery<any>(verQuery);
+  const verCols = verRes.items?.[0]?.column_values || [];
+  const verColMap = new Map<string, any>(verCols.map((c: any) => [c.id, c]));
+  const versionStatus = getColumnText(verColMap, VERSION_COLUMNS.status) || "";
+
+  if (versionStatus !== "Released") return null;
+
+  // Bounceback: unlink the task from the released version
+  await unlinkTaskFromVersion(taskId);
+  return `Bounceback: unlinked from ${versionName} (#${versionId}) (Released; task regressed to "${newStatus}" — will reassign on next UAT transition)`;
+}
+
+async function unlinkTaskFromVersion(taskId: number): Promise<void> {
+  const columnValues = {
+    [TASK_COLUMNS.targetVersion]: { item_ids: [] },
+  };
+  const mutation = `
+    mutation {
+      change_multiple_column_values(
+        item_id: ${taskId},
+        board_id: ${BOARDS.TASKS},
+        column_values: ${buildColumnValues(columnValues)}
+      ) {
+        id
+      }
+    }
+  `;
+  await executeMondayQuery<unknown>(mutation);
+}
+
+// =============================================================================
+// Aggregate state recompute
+// =============================================================================
+
+/**
+ * Read the task's current version (post-mutation, post-auto-version) and
+ * recompute that version's aggregate status.
+ *
+ * Returns a user-facing note string (or null if no change).
+ */
+export async function recomputeAggregateForTaskVersion(
+  taskId: number
+): Promise<string | null> {
+  // Fetch task's current version
+  const taskQuery = `
+    query {
+      items(ids: [${taskId}]) {
+        column_values(ids: ["${TASK_COLUMNS.targetVersion}"]) {
+          id
+          ... on BoardRelationValue { linked_items { id name } }
+        }
+      }
+    }
+  `;
+  const taskRes = await executeMondayQuery<any>(taskQuery);
+  const taskCols = taskRes.items?.[0]?.column_values || [];
+  const taskColMap = new Map<string, any>(taskCols.map((c: any) => [c.id, c]));
+  const linkedVersions = getLinkedItems(taskColMap, TASK_COLUMNS.targetVersion);
+  if (linkedVersions.length === 0) return null;
+  const versionId = Number(linkedVersions[0].id);
+
+  return await recomputeVersionStatus(versionId);
+}
+
+/**
+ * Compute the version's aggregate status from its linked tasks; apply if
+ * different from current. Returns a note string (or null if no change).
+ *
+ * Skips Released and Hotfix versions (terminal/manual states).
+ */
+export async function recomputeVersionStatus(versionId: number): Promise<string | null> {
+  // Read version status + linked tasks
+  const versionQuery = `
+    query {
+      items(ids: [${versionId}]) {
+        id
+        name
+        column_values(ids: ["${VERSION_COLUMNS.status}", "${VERSION_COLUMNS.connectedTasks}"]) {
+          id
+          text
+          ... on BoardRelationValue { linked_items { id name } }
+        }
+      }
+    }
+  `;
+  const versionRes = await executeMondayQuery<any>(versionQuery);
+  const versionItem = versionRes.items?.[0];
+  if (!versionItem) return null;
+  const versionColMap = new Map<string, any>(
+    versionItem.column_values?.map((c: any) => [c.id, c]) || []
+  );
+  const currentStatus = getColumnText(versionColMap, VERSION_COLUMNS.status) || "";
+
+  // Terminal — never auto-modify
+  if (TERMINAL_VERSION_STATUSES.has(currentStatus)) return null;
+
+  const linkedTasks = getLinkedItems(versionColMap, VERSION_COLUMNS.connectedTasks);
+  if (linkedTasks.length === 0) return null; // empty version, no change
+
+  // Read all linked tasks' statuses in one query
+  const taskIds = linkedTasks.map(t => Number(t.id));
+  const tasksQuery = `
+    query {
+      items(ids: [${taskIds.join(", ")}]) {
+        id
+        column_values(ids: ["${TASK_COLUMNS.status}"]) {
+          id
+          text
+        }
+      }
+    }
+  `;
+  const tasksRes = await executeMondayQuery<any>(tasksQuery);
+  const tasks: Array<{ id: string; status: string }> = (tasksRes.items || []).map((t: any) => {
+    const colMap = new Map<string, any>(t.column_values?.map((c: any) => [c.id, c]) || []);
+    return { id: t.id, status: getColumnText(colMap, TASK_COLUMNS.status) || "" };
+  });
+
+  const allReleaseReady = tasks.every(t => RELEASE_COMPLETED_STATUSES.has(t.status));
+
+  let target: "Release Candidate" | "In Development" | null = null;
+  if (allReleaseReady && currentStatus !== "Release Candidate") {
+    target = "Release Candidate";
+  } else if (!allReleaseReady && currentStatus === "Release Candidate") {
+    // Backward: drop RC back to In Development
+    target = "In Development";
+  }
+
+  if (!target) return null;
+
+  await setVersionStatus(versionId, target);
+  return `Version state: ${versionItem.name} (#${versionId}) ${currentStatus} → ${target} (aggregate: ${tasks.filter(t => RELEASE_COMPLETED_STATUSES.has(t.status)).length}/${tasks.length} tasks at Pending Deploy / Done)`;
+}
+
+async function setVersionStatus(versionId: number, status: string): Promise<void> {
+  const idx = VERSION_STATUS[status];
+  if (idx === undefined) return;
+  const columnValues = {
+    [VERSION_COLUMNS.status]: { index: idx },
+  };
+  const mutation = `
+    mutation {
+      change_multiple_column_values(
+        item_id: ${versionId},
+        board_id: ${BOARDS.VERSIONS},
+        column_values: ${buildColumnValues(columnValues)}
+      ) {
+        id
+      }
+    }
+  `;
+  await executeMondayQuery<unknown>(mutation);
+}

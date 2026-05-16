@@ -8,7 +8,14 @@
 - **Minor / Major (human)** ← agents do NOT auto-bump beyond patch. Humans elevate a patch version to minor or major by renaming the open version's `versionNumber` (e.g., `v0.9.5` → `v0.10.0`) **before** running `/release-version`.
 - **Hotfixes** ← always a fresh patch-bump version with status `Hotfix`, created automatically when the task's branch matches `hotfix/*`.
 
-**Auto-assignment fires inside `updateTask`** when status transitions to `Waiting for UAT`: resolves product → finds the lowest open version (Planned or In Development) → links the task. If no open version exists, creates one (patch-bump from latest Released). Service: `plugin/src/services/auto-version.ts`.
+**Auto-assignment fires inside `updateTask`** when status transitions to `Waiting for UAT`: resolves product → finds the best open version (In Development beats Planned; lowest semver within each tier) → links the task. If no open version exists, creates one (patch-bump from latest Released). The structured changelog auto-refreshes on link. Service: `plugin/src/services/auto-version.ts`.
+
+**Aggregate state machine** runs after every status change. The version's status auto-flips based on its linked tasks:
+- All tasks at `Pending Deploy to Prod` or `Done` → version → `Release Candidate`
+- Backward move from RC (any task drops below Pending Deploy) → version → `In Development`
+- `Released` and `Hotfix` are terminal — never auto-modified
+
+**Bounceback** (rare): if a task moves backward AND its version is `Released`, the task unlinks. Released stays Released (the released content is historically frozen). The bounced task re-enters the open-version pool on its next UAT transition. By design, your team's "fix forward" preference is supported via separate tasks; the bounceback path is the safety net for the rare direct-regression case.
 
 **v1.0.0 is a HARD GATE.** Reserved for the moment **both** Beta version epic (#2833952138) AND Live version epic (#2738006659) hit `Done`. Agents must NOT auto-suggest `v1.0.0` while either is incomplete — fall through to the highest non-major bump and note the gate. (Auto-patch path never crosses v1.0 from 0.x.y so the gate is effectively inert there.)
 
