@@ -2,7 +2,7 @@
  * Pure semver bump-suggestion algorithm + 3-category task classifier.
  *
  * **Why pure**: agents (`/ship-pr` Phase 8, `/release-version` Step 1) handle
- * Monday I/O directly via MCP tools (`mcp__dev-tasks__*`). The algorithm itself
+ * Monday I/O directly via MCP tools (`mcp__plugin_dev-tasks_dev-tasks__*`). The algorithm itself
  * — "given the task list and milestone state, what's the next version?" — is
  * load-bearing logic that needed a single source of truth + tests. Putting it
  * here lets:
@@ -125,7 +125,7 @@ export function formatSemVer(v: SemVer): string {
 }
 
 const V1_GATE_MESSAGE =
-  'v1.0.0 gated on Beta epic (#2833952138) AND Live epic (#2738006659) both Done'
+  'v1.0.0 gated on milestone epics configured in monday.v1MilestoneEpicIds (all must be Done)'
 
 /**
  * The canonical bump-suggestion algorithm.

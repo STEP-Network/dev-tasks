@@ -11,9 +11,9 @@ You hit friction in a hook / skill / rule / MCP tool during normal work. File it
 
 | Symptom | Board | Tool |
 |---|---|---|
-| Broken (wrong behavior, hard error) | **Bugs Queue** | `mcp__dev-tasks__createBug` |
+| Broken (wrong behavior, hard error) | **Bugs Queue** | `mcp__plugin_dev-tasks_dev-tasks__createBug` |
 | Noisy but correct (UX, ergonomics, edge case) | **Retrospectives** (`Improve`) | `mcp__monday__create_item` |
-| Missing capability in MCP | **Tasks Backlog** (workflow-tooling epic) | `mcp__dev-tasks__createTask` |
+| Missing capability in MCP | **Tasks Backlog** (workflow-tooling epic) | `mcp__plugin_dev-tasks_dev-tasks__createTask` |
 | Cross-cutting rule needing alignment | **Retrospectives** (`Discussion`) | `mcp__monday__create_item` |
 
 **File autonomously** (no user gating) when: observed this session + not a 5-line obvious fix + includes concrete reproduction (PR / turn / what triggered it).
@@ -37,7 +37,7 @@ Do **not** apply this rule for product bugs (those go in the Bugs Queue board) o
 
 | Friction type | Board | Why |
 |---|---|---|
-| Hook / skill / rule **broken** (wrong behaviour, hard error) | **Bugs Queue** (5091706353) — `mcp__dev-tasks__createBug` with `productId` for "Internal tooling" | Bug semantics: it does the wrong thing |
+| Hook / skill / rule **broken** (wrong behaviour, hard error) | **Bugs Queue** (5091706353) — `mcp__plugin_dev-tasks_dev-tasks__createBug` with `productId` for "Internal tooling" | Bug semantics: it does the wrong thing |
 | Hook / skill / rule **noisy or rough but correct** (UX improvement, ergonomics, edge-case polish) | **Retrospectives** (5091706350) — `mcp__monday__create_item` with `status: 'Improve'` and `check: 'true'` if the issue keeps recurring | Retro semantics: it works, but could be better |
 | MCP tool **missing capability** that would unlock further automation | **Tasks Backlog** (existing pipeline) under the workflow-tooling epic | Feature work |
 | Cross-cutting workflow rule that needs team alignment | **Retrospectives** as `Discussion` type | Needs vote / discussion |
@@ -54,9 +54,9 @@ The agent **may file these autonomously** without asking the user, as long as:
 
 Ask: *if I left this alone, would the system produce wrong output for a real user?*
 
-- **Yes** → Bug (file via `mcp__dev-tasks__createBug`)
-- **No, but it makes the agent or user's work harder** → Retrospective (`mcp__dev-tasks__createRetro`)
-- **No, but it's a missing capability** → Task (`mcp__dev-tasks__createTask`)
+- **Yes** → Bug (file via `mcp__plugin_dev-tasks_dev-tasks__createBug`)
+- **No, but it makes the agent or user's work harder** → Retrospective (`mcp__plugin_dev-tasks_dev-tasks__createRetro`)
+- **No, but it's a missing capability** → Task (`mcp__plugin_dev-tasks_dev-tasks__createTask`)
 
 ## Specific triggers (file immediately when these happen)
 

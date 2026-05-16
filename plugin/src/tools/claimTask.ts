@@ -1,5 +1,6 @@
 import { executeMondayQuery } from "../monday-client.ts";
-import { BOARDS, TASK_COLUMNS, TASK_STATUS, AGENT_ID, PEOPLE } from "../constants.ts";
+import { BOARDS, TASK_COLUMNS, TASK_STATUS, AGENT_ID } from "../constants.ts";
+import { getPersonByUsername } from "../services/people.ts";
 import type { ClaimTaskInput } from "../schemas.ts";
 import {
   getColumnText,
@@ -107,11 +108,12 @@ export async function claimTask(args: ClaimTaskInput): Promise<string> {
     }
 
     // Step 3: Perform atomic claim mutation
+    const ownerId = await getPersonByUsername(owner);
     const columnValues: Record<string, unknown> = {
       [TASK_COLUMNS.status]: { index: TASK_STATUS["In Progress"] },
       [TASK_COLUMNS.agentId]: { ids: [String(AGENT_ID[agentId])] },
       [TASK_COLUMNS.startedDate]: { date: todayDate() },
-      [TASK_COLUMNS.owner]: { personsAndTeams: [{ id: PEOPLE[owner], kind: "person" }] },
+      [TASK_COLUMNS.owner]: { personsAndTeams: [{ id: ownerId, kind: "person" }] },
     };
 
     if (planId) {

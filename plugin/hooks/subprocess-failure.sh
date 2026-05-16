@@ -31,7 +31,7 @@ if echo "$MESSAGE" | grep -qiE "fail|error|crash"; then
     if [ "$RECENT_COUNT" -ge 3 ]; then
       echo "WARNING: $RECENT_COUNT subprocess failures detected."
       echo "Suggestion: Consider escalating — use /log-progress TASK_STUCK"
-      echo "Or file a bug via mcp__dev-tasks__createBug"
+      echo "Or file a bug via mcp__plugin_dev-tasks_dev-tasks__createBug"
       # Reset counter
       rm -f "$FAILURE_LOG"
     fi

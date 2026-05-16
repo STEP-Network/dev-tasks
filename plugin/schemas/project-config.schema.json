@@ -93,16 +93,59 @@
       }
     },
     "monday": {
-      "description": "Monday-specific configuration. Currently informational only; future versions may use board/column IDs to make the MCP per-project.",
+      "description": "Monday-specific configuration for this product.",
       "type": "object",
-      "additionalProperties": true,
+      "additionalProperties": false,
+      "required": ["productId"],
       "properties": {
         "workspaceUrl": {
+          "description": "Monday workspace URL (informational).",
           "type": "string",
           "format": "uri"
         },
         "productId": {
+          "description": "Monday Products-board item ID for this product. Used by skills to scope listEpics/getBacklog calls. Required.",
           "type": "string"
+        },
+        "v1MilestoneEpicIds": {
+          "description": "Epic IDs that must be Done before version-bump.ts allows v1.0+ patch increments. Replaces the hardcoded PolAds Beta/Live gate.",
+          "type": "array",
+          "items": { "type": "string" },
+          "default": []
+        },
+        "peopleBoardId": {
+          "description": "Monday board for the people directory. Username → person ID lookup uses this board. Defaults to STEP Network's *People board (1612664689).",
+          "type": "number",
+          "default": 1612664689
+        }
+      }
+    },
+    "environments": {
+      "description": "Where this product is deployed. Used by skills to surface UAT URLs in Monday updates and self-review prompts.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "uat": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "url": {
+              "description": "UAT environment URL (e.g., 'https://test.example.com'). Surfaced in log-progress, ship-pr Phase 6.5.",
+              "type": "string",
+              "format": "uri"
+            }
+          }
+        },
+        "prod": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "url": {
+              "description": "Production environment URL.",
+              "type": "string",
+              "format": "uri"
+            }
+          }
         }
       }
     },
@@ -118,12 +161,12 @@
       }
     },
     "hooks": {
-      "description": "Per-project hook activation. Plugin hooks are OPT-IN — list each hook by name to enable it. Hooks not listed here are inert (exit 0 immediately).",
+      "description": "Per-project hook activation for non-policy hooks. Policy hooks (bash-guard, stop-ci-green-check) are STEP-wide and always-on regardless of this list. List a non-policy hook by name to enable it; hooks not listed are inert (exit 0 immediately).",
       "type": "object",
       "additionalProperties": false,
       "properties": {
         "enabled": {
-          "description": "Names of plugin hooks active in this project.",
+          "description": "Names of opt-in plugin hooks active in this project. Policy hooks are not listed here — they always run.",
           "type": "array",
           "items": {
             "type": "string",
@@ -132,9 +175,7 @@
               "worktree-required",
               "worktree-path-boundary",
               "branch-task-match",
-              "bash-guard",
               "stop-task-check",
-              "stop-ci-green-check",
               "protect-sensitive-files",
               "pre-commit-secrets-scan",
               "subtask-reminder",

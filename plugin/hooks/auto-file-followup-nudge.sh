@@ -27,18 +27,18 @@ NUDGE=""
 
 # Trigger 1: CI ack file written → underlying flake should be filed as Bug
 if echo "$ACTUAL_CMD" | grep -qE '/tmp/\.claude-ci-ack-[^[:space:]]+' ; then
-  NUDGE="${NUDGE}AUTO-FILE NUDGE: CI ack file written. If you haven't already, file the underlying flake as a Bug via mcp__dev-tasks__createBug — include suite name + error excerpt + hypothesized root cause. Acking without filing leaves the issue invisible to future maintainers.\n"
+  NUDGE="${NUDGE}AUTO-FILE NUDGE: CI ack file written. If you haven't already, file the underlying flake as a Bug via mcp__plugin_dev-tasks_dev-tasks__createBug — include suite name + error excerpt + hypothesized root cause. Acking without filing leaves the issue invisible to future maintainers.\n"
 fi
 
 # Trigger 2: gh run rerun --failed → confirmed-repeating flake, file Bug if not already
 if echo "$ACTUAL_CMD" | grep -qE 'gh run rerun.*--failed' ; then
-  NUDGE="${NUDGE}AUTO-FILE NUDGE: re-running a failed CI job. If this is the second+ rerun for the same suite, the flake is confirmed repeating — file a Bug if you haven't (mcp__dev-tasks__createBug) so the root cause gets tracked even if the rerun passes.\n"
+  NUDGE="${NUDGE}AUTO-FILE NUDGE: re-running a failed CI job. If this is the second+ rerun for the same suite, the flake is confirmed repeating — file a Bug if you haven't (mcp__plugin_dev-tasks_dev-tasks__createBug) so the root cause gets tracked even if the rerun passes.\n"
 fi
 
 # Trigger 3: `git revert` or `git push --force` on a published commit → file Retro
 # describing what went wrong (not the revert itself — the underlying class of mistake)
 if echo "$ACTUAL_CMD" | grep -qE '^git revert ' ; then
-  NUDGE="${NUDGE}AUTO-FILE NUDGE: git revert applied. If this is reverting a published commit, file a Retro (mcp__dev-tasks__createRetro, type: Improve) describing the class of mistake — not the revert itself, but what process gap allowed the bad commit through (review, gate, test missing?).\n"
+  NUDGE="${NUDGE}AUTO-FILE NUDGE: git revert applied. If this is reverting a published commit, file a Retro (mcp__plugin_dev-tasks_dev-tasks__createRetro, type: Improve) describing the class of mistake — not the revert itself, but what process gap allowed the bad commit through (review, gate, test missing?).\n"
 fi
 
 # Trigger 4: writing a TODO comment via Edit/Write is not visible here (different

@@ -6,6 +6,19 @@ user_invocable: true
 
 # /ship-pr — Ship Changes (Pre-Push + PR)
 
+> **Overlay**: if `.claude/skills/ship-pr/SKILL.md.local` exists in the consumer repo, read it and apply as additional project-specific instructions (extend-only — overlay can append checks/steps but cannot replace plugin behavior).
+
+## Project context (read FIRST)
+
+Read `.claude/project-config.json`. Extract:
+- `git.defaultBase` — PR base for feature branches (e.g. `staging` or `main`). Used wherever this skill writes `staging` in `--base` flags.
+- `git.hotfixBase` — PR base for hotfix branches (usually `main`).
+- `monday.productId` — product item ID for `listEpics` lookups.
+- `monday.v1MilestoneEpicIds` — epic IDs gating the v1.0 bump suggestion (Phase 8).
+- `environments.uat.url` — UAT URL surfaced in Phase 6.5 updates.
+
+Wherever this skill references `staging` / `main` as PR bases or git refs, substitute `$defaultBase` / `$hotfixBase`. Projects without a separate staging branch set `$defaultBase` and `$hotfixBase` to the same branch (typically `main`); the FF-promotion-to-main logic in `/release-version` becomes a no-op for them.
+
 ## Workflow
 
 ### Phase 0: Task & Review Verification
@@ -28,14 +41,13 @@ user_invocable: true
 4. **E2E**: `pnpm playwright test` — must pass (if UI/flow changes were made)
 5. **Schema validation** (if migration files touched):
    - `pnpm validate-schema --env testing`
-6. **Migrations** (if migration files touched):
-   - **Do NOT auto-apply migrations to production from `/ship-pr`.** Under the staging-as-base flow (per `release-flow.md` and `.claude/rules/database.md`), migrations follow this lifecycle:
-     - Apply locally via `pnpm migrate:testing` during development.
-     - Ship the migration on the same PR that references it (default base `staging`).
-     - On PR open/sync, `.github/workflows/preview-staging-migrations.yml` automatically diffs `_drizzle_migrations` between staging and prod, finds the auto-created preview Neon branch, and applies any staging-pending migrations on top — so the preview has prod data + staging schema. **No manual agent action required**.
-     - On PR merge to staging, `staging-migrate.yml` applies migrations to the staging Neon branch.
-     - At release time, `/release-version` applies migrations to production Neon as part of the FF + tag ceremony.
-   - The old "auto-apply additive migrations to prod first" workaround is **retired** — the per-PR preview-layering mechanism replaces it.
+6. **Migrations** (if migration files touched — project-specific, see consumer's database rule):
+   - **Do NOT auto-apply migrations to production from `/ship-pr`.** Migration workflows are project-specific — consult the consumer's `.claude/rules/database.md` (or equivalent) for the exact lifecycle. The generic pattern under staging-as-base:
+     - Apply locally to the dev/test environment during development.
+     - Ship the migration on the same PR that references it (PR base = `$defaultBase`).
+     - CI/CD applies the migration to staging on merge to `$defaultBase`.
+     - At release time, `/release-version` applies migrations to production as part of the promotion + tag ceremony.
+   - Project specifics (Drizzle/Neon branch preview, etc.) live in the consumer's rules and overlay files.
 
 ### Phase 2: Push Gate
 5. **Set pre-push marker**: `touch /tmp/.claude-prepush-$(git rev-parse --abbrev-ref HEAD | tr '/' '-')`
@@ -95,14 +107,14 @@ user_invocable: true
     - `demoUrl`: the Vercel preview URL (column `link_mm0mtyf4`)
     - `prLink`: the PR URL from step 9/10 (column `link_mm0m817p`)
     - `branch`: the current git branch (column `text_mm0pvs3n`)
-    - `githubLink`: the GitHub branch URL `https://github.com/STEP-Network/v0-politiske-annoncer/tree/<branch>` (column `link`)
+    - `githubLink`: the GitHub branch URL — derive via `git remote get-url origin`, strip `.git`, append `/tree/<branch>` (column `link`)
     These four fields are inspected by the `Waiting for UAT` gate (Phase 6.5) — the gate warns but doesn't block if any are missing. Setting them all at Phase 4 keeps the gate quiet.
 
 14. **Persist to state file**: Update `.claude/active-task.json` to include:
     ```json
     {
       "previewUrl": "https://{project}-git-{branch}-{team}.vercel.app",
-      "prUrl": "https://github.com/STEP-Network/v0-politiske-annoncer/pull/{N}"
+      "prUrl": "<repo URL>/pull/{N}"
     }
     ```
     **The stop hook checks for `previewUrl` — if missing, the session CANNOT end.**
@@ -577,7 +589,7 @@ fine to continue; detect the anti-pattern where fixes actively create new proble
     Details:
       UAT doc: posted on column doc_mm3adfdg
       Preview URL: {previewUrl}
-      Test on: {previewUrl} now, then test.polads.eu after PR merges to staging
+      Test on: {previewUrl} now, then $uatUrl after PR merges to $defaultBase
     Ready for human UAT.
     ```
 
@@ -602,19 +614,14 @@ fine to continue; detect the anti-pattern where fixes actively create new proble
 
 24. **Post pipeline complete**: `/log-progress PIPELINE_COMPLETE`
 
-### Phase 8: Version Linkage Check (HARD BLOCK)
+### Phase 8: Version Linkage Check (informational)
 
-25. **Check version linkage**:
-    - Read `epicId` from `.claude/active-task.json`
-    - Call `mcp__plugin_dev-tasks_dev-tasks__getEpic(epicId)` to check if epic is already linked to a version
-    - **If linked**: log "Task's epic ({epicName}) is linked to version {name}" — done
-    - **If NOT linked**: HARD BLOCK — do NOT complete the pipeline until resolved:
-      a. Call `mcp__plugin_dev-tasks_dev-tasks__listVersions(status: "Planned", group: "upcoming")` to show upcoming versions
-      b. Ask user: "This task's epic ({epicName}) is not linked to any version. Which version should it belong to?"
-      c. Present version list with IDs
-      d. If user selects a version → call `mcp__plugin_dev-tasks_dev-tasks__updateVersion(versionId, linkEpicIds: [epicId])`
-      e. If no upcoming versions exist → ask user if they want to create one via `mcp__plugin_dev-tasks_dev-tasks__createVersion`
-    - **Every shipped task must trace to a version. No orphaned work.**
+25. **Check task's target version** (informational — auto-version handles the actual write):
+    - Read `taskId` from `.claude/active-task.json`
+    - Call `mcp__plugin_dev-tasks_dev-tasks__getTask(itemId)` and inspect its `targetVersion` field
+    - **If task has a version**: log "Task linked to version {name}" — done
+    - **If task has no version yet**: this is expected before the Waiting-for-UAT transition. `auto-version.ts` runs server-side on that transition and writes `task → version` (best open version for the product, or a fresh patch if none open). No action needed here — the task will pick up a version when status flips to `Waiting for UAT`.
+    - **Per `versions-lifecycle.md`: versions are historical (what shipped), not planned. The task joins the open version at UAT — not at PR-open time.**
 
 25b. **Update structured Release Summary** (after version is confirmed linked):
     - Read `versionId` from state file (set in step 25a or from `/pickup-task`)
@@ -641,7 +648,7 @@ fine to continue; detect the anti-pattern where fixes actively create new proble
 
     **Auto-bump check** (NON-BLOCKING — informational suggestion only):
     - If the version's `versionNumber` is empty AND the version has at least 1 task:
-      a. Gather inputs (latest released, linked tasks classified via `classifyTaskType()`, `v1MilestoneReady` from getEpic(2833952138)+getEpic(2738006659)).
+      a. Gather inputs (latest released, linked tasks classified via `classifyTaskType()`, `v1MilestoneReady` = all `$v1MilestoneEpicIds` epics have status `Done` — call `getEpic(id)` for each).
       b. Call `computeBumpSuggestion(input)` from `lib/services/version-bump.ts` — handles breaking-change detection, v1.0 milestone gating, and rationale generation in one call.
       c. Log `result.next` + `result.rationale` (and `result.gatedByMilestone` if non-null) in the task's update — actual version-number assignment happens at `/release-version` time, not at PR ship time.
     - This ensures the roadmap page always shows up-to-date progress after each PR ships, and the structured Release Summary stays canonical (3-cat) going forward.
@@ -705,7 +712,7 @@ fine to continue; detect the anti-pattern where fixes actively create new proble
         ```
         [TASK_COMPLETED] Agent Progress Update
         Time: {ISO 8601} | Branch: {branch}
-        Event: PR merged to staging. Task remains at Waiting for UAT; human UATs on test.polads.eu.
+        Event: PR merged to $defaultBase. Task remains at Waiting for UAT; human UATs on $uatUrl.
         Next status transitions:
           Waiting for UAT → Pending Deploy to Prod  (human, after UAT signoff)
           Pending Deploy to Prod → Done             (/release-version → tag → GitHub Action)
@@ -758,7 +765,7 @@ fine to continue; detect the anti-pattern where fixes actively create new proble
 - **`previewUrl` persisted in `.claude/active-task.json`** — **HARD-ENFORCED by stop hook**
 - **GitHub review addressed** — **HARD-ENFORCED by stop hook**
 - **`reviewAddressed` persisted in `.claude/active-task.json`** — **HARD-ENFORCED by stop hook**
-- **Task's epic linked to a version** — **HARD BLOCK in Phase 8**
+- **Task → version is informational**: auto-version writes `task.targetVersion` at the Waiting-for-UAT transition; Phase 8 only logs the current state (no block)
 - CI checks at terminal state (pass / pre-existing flake / documented skip)
 - Review comments addressed (if any)
 - Monday.com updated with PR URL + Vercel preview link

@@ -6,6 +6,14 @@ user_invocable: true
 
 # /log-progress — Post Structured Progress Update
 
+> **Overlay**: if `.claude/skills/log-progress/SKILL.md.local` exists in the consumer repo, read it and apply as additional project-specific instructions (extend-only — overlay can append checks/steps but cannot replace plugin behavior).
+
+## Project context (read FIRST)
+
+Read `.claude/project-config.json`. Extract:
+- `environments.uat.url` — UAT environment URL (used in "Test on" lines below). If missing, omit UAT URL from updates.
+- `git.defaultBase` — used in "next step" descriptions.
+
 ## Workflow
 
 1. **Determine event type** from argument or context
@@ -149,12 +157,12 @@ UI changes, hotfix flow skips UAT doc + Waiting-for-UAT transition, etc.).
 8. **Review comments fixed** (if review iteration runs) → `/log-progress REVIEW_FEEDBACK_FIXED`.
 9. **Review loop terminates** → `/ship-pr` Phase 6.5 transitions task to `Waiting for UAT` (default flow only — hotfix stays `In Progress` through merge). Posts `TASK_WAITING_FOR_UAT`.
 10. **PR merged**:
-    - Default flow: human takes over UAT on `test.polads.eu`; task stays at `Waiting for UAT`.
+    - Default flow: human takes over UAT on `$uatUrl`; task stays at `Waiting for UAT`.
     - Hotfix flow: `/ship-pr` Phase 10 sets `Done` directly.
 11. **TASK_COMPLETED** → `/log-progress TASK_COMPLETED` posts est vs actual summary + deletes `.claude/active-task.json`. Does NOT touch parent task status (handled by `/ship-pr` / `/release-version` per the flow above).
 12. **Stuck** (3 consecutive failures) → `/log-progress TASK_STUCK` + `createBug` for the underlying defect.
 13. **Version linked** → task's epic linked to target version via `updateVersion` (`/pickup-task` Step 5 suggests; `/ship-pr` Phase 8 hard-blocks if missing).
-14. **Release** → `/release-version` does FF main from staging + `pnpm migrate:prod` + tag → GitHub Action flips linked tasks `Pending Deploy to Prod` → `Done`.
+14. **Release** → `/release-version` does FF $hotfixBase from $defaultBase + `pnpm migrate:prod` + tag → GitHub Action flips linked tasks `Pending Deploy to Prod` → `Done`. (For projects without a staging branch, $defaultBase = $hotfixBase and the "FF" step is a no-op.)
 
 Cross-references:
 

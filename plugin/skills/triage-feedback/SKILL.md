@@ -6,11 +6,13 @@ user_invocable: true
 
 # /triage-feedback — Triage Feedback & Requests
 
+> **Overlay**: if `.claude/skills/triage-feedback/SKILL.md.local` exists in the consumer repo, read it and apply as additional project-specific instructions (extend-only — overlay can append checks/steps but cannot replace plugin behavior).
+
 ## Workflow
 
 ### Step 1: List Pending Feedback
 
-1. Call `mcp__dev-tasks__listFeedback()` to get all feedback items
+1. Call `mcp__plugin_dev-tasks_dev-tasks__listFeedback()` to get all feedback items
 2. Display summary table:
    ```
    ID       | Title                    | Status    | Submitter  | Date
@@ -24,7 +26,7 @@ user_invocable: true
 
 For each item the user wants to review:
 
-1. Call `mcp__dev-tasks__getFeedback(feedbackId)` for full details
+1. Call `mcp__plugin_dev-tasks_dev-tasks__getFeedback(feedbackId)` for full details
 2. Show:
    - Title and description
    - Submitter info
@@ -43,12 +45,12 @@ For each item the user wants to review:
    - Task name (confirm or modify)
    - Priority (default: Medium)
    - Epic assignment:
-     a. Call `mcp__dev-tasks__listEpics()` to show available epics
+     a. Call `mcp__plugin_dev-tasks_dev-tasks__listEpics()` to show available epics
      b. Try to auto-match based on feedback content
      c. If confident: suggest the epic
      d. If not confident: ask user to pick
      e. For generic feedback: suggest product's Maintenance epic
-3. Call `mcp__dev-tasks__convertFeedbackToTask(feedbackId, taskName, priority, epicId)`
+3. Call `mcp__plugin_dev-tasks_dev-tasks__convertFeedbackToTask(feedbackId, taskName, priority, epicId)`
    - Auto-links feedback → task
    - Sets feedback status to "Converted"
    - If no epicId given: auto-assigns product's Maintenance epic
@@ -62,7 +64,7 @@ For each item the user wants to review:
    - Priority (Critical / High / Medium / Low)
    - Severity (Blocker / Major / Minor / Cosmetic)
    - Epic (optional — auto-assigns Maintenance epic if omitted)
-3. Call `mcp__dev-tasks__createBug(name, description, priority, severity, epicId)`
+3. Call `mcp__plugin_dev-tasks_dev-tasks__createBug(name, description, priority, severity, epicId)`
    - If no epicId: auto-assigns product's Maintenance epic
 4. Show created bug ID and link
 

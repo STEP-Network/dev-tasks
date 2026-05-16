@@ -6,6 +6,19 @@ user_invocable: true
 
 # /pickup-task — Claim and Start a Task
 
+> **Overlay**: if `.claude/skills/pickup-task/SKILL.md.local` exists in the consumer repo, read it and apply as additional project-specific instructions (extend-only — overlay can append checks/steps but cannot replace plugin behavior).
+
+## Project context (read FIRST)
+
+Read `.claude/project-config.json` at the consumer repo root before doing anything else. Extract:
+
+- `git.defaultBase` — base branch for feature PRs (e.g. `staging` or `main`)
+- `git.hotfixBase` — base branch for hotfix PRs (usually `main`)
+- `monday.productId` — Monday Products-board item ID for this product, passed to `listEpics`
+- `monday.v1MilestoneEpicIds` — epic IDs that gate v1.0+ patch bumps (passed to `computeBumpSuggestion`)
+
+If `git.defaultBase` or `monday.productId` is missing, STOP and tell the user to add them to `.claude/project-config.json` before continuing. The fields below reference these as `$defaultBase`, `$productId`, `$v1MilestoneEpicIds`.
+
 > **Source-file edits for a claimed task must happen in a git worktree**, not
 > the main checkout. The `worktree-required.sh` PreToolUse hook hard-blocks
 > edits to non-`.claude/` paths when an active task exists outside a worktree.
@@ -32,7 +45,7 @@ user_invocable: true
     - **Epic check**:
       - **If task has an epic**: note the `epicId` and `epicName`, continue to step 4.5.
       - **If task has NO epic**: HARD BLOCK — do NOT claim until resolved:
-        a. Call `mcp__plugin_dev-tasks_dev-tasks__listEpics(product: "PolAds")` to show available epics.
+        a. Call `mcp__plugin_dev-tasks_dev-tasks__listEpics(product: $productId)` to show available epics for this product.
         b. Try to match by task name/description keywords to an epic.
         c. If confident (>80% match): suggest the epic to user, proceed if confirmed.
         d. If not confident: ask user "This task has no epic. Which epic should it belong to?"
@@ -47,9 +60,9 @@ user_invocable: true
       already in a worktree) skip this step.
     - Derive a slug from the task name: terse, hyphen-separated, max ~30 chars.
       e.g. task name "Add publisher sign-off workflow" → slug `publisher-signoff`.
-    - Make sure the main checkout HEAD is on the right base (`staging` for
-      default flow; `main` for hotfixes). If not, get on it: `git checkout staging
-      && git pull --ff-only`.
+    - Make sure the main checkout HEAD is on the right base (`$defaultBase` for
+      default flow; `$hotfixBase` for hotfixes). If not, get on it:
+      `git checkout $defaultBase && git pull --ff-only`.
     - Call `EnterWorktree({ name: "feat-<slug>" })` (or `hotfix-<slug>` for
       hotfixes). The worktree lands at `.claude/worktrees/feat-<slug>/` on
       branch `worktree-feat-<slug>` based off the current HEAD.
@@ -69,23 +82,10 @@ user_invocable: true
       - If the user wants to pick a different task: `ExitWorktree({ action: "remove" })` to clean up the worktree from step 4.5, then loop back to step 1.
     - This is a soft warning so a determined agent can override if context warrants. The MCP's `claimTask` is the hard gate.
 
-5. **Version Suggestion** (proactive, NON-BLOCKING):
-    - Call `mcp__plugin_dev-tasks_dev-tasks__getEpic(epicId)` — check if epic has a Target Version
-    - **If linked to a version**: note `versionId` and `versionName`, continue
-    - **If NOT linked**:
-      a. Call `mcp__plugin_dev-tasks_dev-tasks__listVersions(group: "upcoming")` to find suitable versions
-      b. Prefer "In Development" status, then nearest `expectedReleaseDate`
-      c. If a suitable version exists:
-         Ask user: "Epic '{epicName}' has no target version. Suggest: {versionName}. Link? (y/n/skip)"
-         - If yes → `mcp__plugin_dev-tasks_dev-tasks__updateVersion(versionId, linkEpicIds: [epicId])`
-         - If skip → continue (Phase 8 of `/ship-pr` catches this later)
-      d. If NO upcoming versions exist:
-         - Compute the suggested next version via `computeBumpSuggestion` from `lib/services/version-bump.ts` (canonical implementation — handles the v1.0 milestone gate). Inputs: latest released (`listVersions(group: "released")` → highest, parsed via `parseSemVer`), the task list classified via `classifyTaskType()`, and `v1MilestoneReady` from `getEpic(2833952138)` + `getEpic(2738006659)`.
-         - Ask: "No upcoming versions. Create v{result.next}? ({result.rationale}) (y/n/skip)"
-         - If yes → `mcp__plugin_dev-tasks_dev-tasks__createVersion(name, versionNumber, productId)` + link epic
-         - If skip → continue
-    - This is NON-BLOCKING: user can always skip
-    - Store `versionId` and `versionName` in state file if linked
+5. **Version context** (informational only — versions are historical):
+    - Per `versions-lifecycle.md`, **tasks join the open version at the Waiting-for-UAT transition** (server-side via `auto-version.ts`). Versions are historical containers (what shipped), not planning artifacts. Epics — not versions — plan futures.
+    - Optional: call `mcp__plugin_dev-tasks_dev-tasks__listVersions(status: "In Development", productId: $productId)` to surface what's currently open for this product. This is for the agent's awareness, not for linking. **Do not** link the epic to a version here; that contradicts the task-level model and gets overwritten by `auto-version.ts`.
+    - If no open version exists yet for the product, `auto-version.ts` will cold-create a fresh patch version when the task hits Waiting for UAT. No action needed at pickup time.
 6. **Sprint auto-assignment** (MUST run before claim — claimTask refuses tasks outside the active sprint):
     - Use `mcp__plugin_dev-tasks_dev-tasks__getTask` to check if the task already has a Sprint linked (`task_sprint` field)
     - Get the active sprint via `mcp__plugin_dev-tasks_dev-tasks__getSprint` (no args = active sprint)
@@ -112,9 +112,9 @@ user_invocable: true
       to the canonical `feat/<task-slug>` (or `hotfix/<slug>` for hotfixes — see
       Step 4.5's branching note): `git branch -M feat/<task-slug>`.
     - **If you skipped Step 4.5** (legacy / opt-out flow): `git fetch origin &&
-      git checkout staging && git pull origin staging && git checkout -b feat/<task-slug>`.
+      git checkout $defaultBase && git pull origin $defaultBase && git checkout -b feat/<task-slug>`.
       Hotfix exception: if the task is a hotfix (Bugfix type tagged
-      "production-blocker" or similar), branch from `main` instead and PR to `main`.
+      "production-blocker" or similar), branch from `$hotfixBase` instead and PR to `$hotfixBase`.
 
 10b. **Verify worktree-path ↔ branch convention** (traceability — see `worktree-discipline.md`):
     - Convention: `worktree_path = ".claude/worktrees/" + branch.replace("/", "-")`. The Monday Branch column (set by `/ship-pr` Phase 4) is the canonical link.

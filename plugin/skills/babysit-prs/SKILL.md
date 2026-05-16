@@ -6,6 +6,12 @@ user_invocable: true
 
 # /babysit-prs — Orchestrator PR Merge Loop
 
+> **Overlay**: if `.claude/skills/babysit-prs/SKILL.md.local` exists in the consumer repo, read it and apply as additional project-specific instructions (extend-only — overlay can append checks/steps but cannot replace plugin behavior).
+
+## Project context (read FIRST)
+
+Read `.claude/project-config.json`. Extract `git.defaultBase` (integration branch; this skill polls PRs targeting it) and `git.hotfixBase` (production branch; hotfix PRs go there and require human merge). Wherever this skill says `staging` in `gh pr list --base`, substitute `$defaultBase`.
+
 ## Why this skill exists
 
 Effective 2026-05-15, agents NEVER call `gh pr merge` (see `/ship-pr` Phase 6.6).
@@ -102,9 +108,9 @@ After the fixup pushes, re-arm the Phase 6 Monitor for the round-N+1 review. Loo
 
 ### Phase 3: Monday reconciliation
 
-For each freshly-merged PR (if `mcp__claude_ai_Dev_Tasks__*` MCP is up):
+For each freshly-merged PR (if `mcp__plugin_dev-tasks_dev-tasks__*` MCP is up):
 
-1. `mcp__claude_ai_Dev_Tasks__getTask({ itemId: taskId, format: "json" })` — read current state
+1. `mcp__plugin_dev-tasks_dev-tasks__getTask({ itemId: taskId, format: "json" })` — read current state
 2. If `sprints` doesn't include the active sprint, move it: `updateTask({ itemId, sprintId: <active> })` (use `listSprints({ activeOnly: true })` to discover)
 3. Set links: `updateTask({ itemId, prLink, branch, githubLink, demoUrl })` if any are missing
 4. If parent status is not `Waiting for UAT`:

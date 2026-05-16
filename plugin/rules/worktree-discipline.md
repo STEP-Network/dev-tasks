@@ -160,7 +160,7 @@ worktree_path=".claude/worktrees/$(echo "$branch" | tr '/' '-')"
 
 Used by:
 
-- `.claude/scripts/find-worktree-for-task.sh` — give it a Monday task ID, get the worktree path. Reads the task's Branch column via `mcp__dev-tasks__getTask` (or `gh api` against Monday), derives the path, exits.
+- `.claude/scripts/find-worktree-for-task.sh` — give it a Monday task ID, get the worktree path. Reads the task's Branch column via `mcp__plugin_dev-tasks_dev-tasks__getTask` (or `gh api` against Monday), derives the path, exits.
 - `.claude/scripts/worktree-audit.sh` — already cross-references via `.claude/active-task.json`; falls back to branch-name derivation when active-task.json is absent.
 - `/pickup-task` Phase 10 — verifies the renamed worktree branch matches the worktree path slug.
 - `/ship-pr` Phase 4 — sets the Branch column to the actual branch; downstream tooling derives the path.

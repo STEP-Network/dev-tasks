@@ -6,6 +6,17 @@ user_invocable: true
 
 # /release-version — Manage Releases & Changelogs
 
+> **Overlay**: if `.claude/skills/release-version/SKILL.md.local` exists in the consumer repo, read it and apply as additional project-specific instructions (extend-only — overlay can append checks/steps but cannot replace plugin behavior).
+
+## Project context (read FIRST)
+
+Read `.claude/project-config.json`. Extract:
+- `git.defaultBase` — integration branch (e.g. `staging`). Steps 6+ reference this.
+- `git.hotfixBase` — production branch (e.g. `main`). The release ceremony FFs $hotfixBase from $defaultBase.
+- `monday.v1MilestoneEpicIds` — epics gating v1.0 bumps. Step 1 reads all of these.
+
+If `$defaultBase === $hotfixBase` (project has no separate staging branch), the FF-promotion step in Step 6 becomes a no-op — skip the `git push $defaultBase:$hotfixBase` line and tag directly on $hotfixBase.
+
 ## Workflow
 
 ### Step 1: Identify Target Version + Semver Suggestion
@@ -30,7 +41,7 @@ user_invocable: true
 1. **Gather inputs:**
    - `latestReleased`: `mcp__plugin_dev-tasks_dev-tasks__listVersions(group: "released")` → sort by versionNumber → take highest → parse with `parseSemVer()`.
    - `tasks`: from Step 2's `mcp__plugin_dev-tasks_dev-tasks__getVersion(versionId)` — convert each task's `task_type` to the 3-cat via `classifyTaskType()`. Set `hasBreakingChanges: true` on any task whose description / metadata explicitly flags a breaking change.
-   - `v1MilestoneReady`: call `mcp__plugin_dev-tasks_dev-tasks__getEpic(2833952138)` (Beta) AND `mcp__plugin_dev-tasks_dev-tasks__getEpic(2738006659)` (Live). True iff BOTH have status `Done`.
+   - `v1MilestoneReady`: for each epic ID in `$v1MilestoneEpicIds`, call `mcp__plugin_dev-tasks_dev-tasks__getEpic(id)`. True iff ALL have status `Done`. (If `$v1MilestoneEpicIds` is empty, treat as `true` — no gate configured.)
    - `forceMajor` (optional): only when the user explicitly asked for a release-defining major moment.
 
 2. **Call `computeBumpSuggestion(input)`** — returns `{ next, bumpType, rationale, gatedByMilestone }`.

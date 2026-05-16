@@ -47,7 +47,7 @@ if [ ! -f "$STATE_FILE" ]; then
 fi
 
 # Validate the state file has required fields AND a claimToken from /pickup-task
-# The claimToken is the Monday.com update ID returned by mcp__dev-tasks__createUpdate
+# The claimToken is the Monday.com update ID returned by mcp__plugin_dev-tasks_dev-tasks__createUpdate
 # when posting the TASK_CLAIMED event. This prevents agents from bypassing /pickup-task
 # by writing active-task.json directly (the token requires an actual MCP call).
 VALIDATION_RESULT=$(STATE_FILE_PATH="$STATE_FILE" python3 -c "

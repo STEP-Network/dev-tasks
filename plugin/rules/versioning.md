@@ -21,7 +21,7 @@
 
 **Bounceback** (rare): if a task moves backward AND its version is `Released`, the task unlinks. Released stays Released (the released content is historically frozen). The bounced task re-enters the open-version pool on its next UAT transition. By design, your team's "fix forward" preference is supported via separate tasks; the bounceback path is the safety net for the rare direct-regression case.
 
-**v1.0.0 is a HARD GATE.** Reserved for the moment **both** Beta version epic (#2833952138) AND Live version epic (#2738006659) hit `Done`. Agents must NOT auto-suggest `v1.0.0` while either is incomplete — fall through to the highest non-major bump and note the gate. (Auto-patch path never crosses v1.0 from 0.x.y so the gate is effectively inert there.)
+**v1.0.0 is a HARD GATE.** Reserved for the moment **all** epic IDs in `monday.v1MilestoneEpicIds[]` (from `.claude/project-config.json`) hit `Done`. Agents must NOT auto-suggest `v1.0.0` while any is incomplete — fall through to the highest non-major bump and note the gate. If the array is empty, the gate is disabled (effectively `true`). Auto-patch never crosses v1.0 from 0.x.y, so the gate is inert on the patch path.
 
 **Always call the helper.** `${CLAUDE_PLUGIN_ROOT}/src/services/version-bump.ts` exports `computeBumpSuggestion(input)` — single source of truth with 51 unit tests including the `forcePatch` auto-path. Never reimplement the algorithm in scripts or skill prose.
 
@@ -37,13 +37,11 @@ Format: `v{major}.{minor}.{patch}` (e.g., `v0.9.0`)
 
 ### v1.0 Milestone (HARD GATE)
 
-`v1.0.0` is reserved for the moment **both** of the following Monday epics reach status `Done`:
-- **Beta version** epic (#2833952138)
-- **Live version** epic (#2738006659)
+`v1.0.0` is reserved for the moment **all** epic IDs listed in `monday.v1MilestoneEpicIds[]` (in the consumer's `.claude/project-config.json`) reach status `Done`. Each product chooses which epics define its v1.0. If the array is empty, the gate is disabled.
 
-While either is incomplete, agents **must not** auto-suggest `v1.0.0` even when the diff would otherwise warrant a major. Fall through to the highest non-major bump and explicitly note "v1.0.0 still gated on Beta+Live epics" in the suggestion. The user can still force `major` for a release-defining moment, but the agent should not propose it unprompted.
+While any configured milestone epic is incomplete, agents **must not** auto-suggest `v1.0.0` even when the diff would otherwise warrant a major. Fall through to the highest non-major bump and explicitly note "v1.0.0 still gated on milestone epics" in the suggestion. The user can still force `major` for a release-defining moment, but the agent should not propose it unprompted.
 
-When both epics flip to Done, surface this proactively in `/release-version` Step 1 as a celebratory option: "🎉 Beta + Live epics complete — recommend v1.0.0 (first stable release)."
+When the last gate epic flips to Done, surface this proactively in `/release-version` Step 1 as a celebratory option: "Milestone epics complete — recommend v1.0.0 (first stable release)."
 
 ### Decision Algorithm
 
@@ -93,7 +91,7 @@ release ceremony for `Done`.
 
 This coupling is enforced by:
 
-- `mcp__dev-tasks__updateTask`'s server-side gate (rejects ill-formed transitions).
+- `mcp__plugin_dev-tasks_dev-tasks__updateTask`'s server-side gate (rejects ill-formed transitions).
 - `.claude/hooks/dev-tasks-update-guard.sh` (PreToolUse — early-warns on agent attempts to set `Done` outside hotfix mode).
 - `/log-progress` TASK_COMPLETED — emits the summary + cleans the state file but does NOT touch status (legacy step removed 2026-05-13).
 
@@ -129,16 +127,13 @@ Use the task's **Public Task Name** (`text_mm349ah6` on Tasks board 5091706356) 
 
 **Never write the legacy shape.** All new structured Release Summaries must use the 3-cat shape; migration is read-only.
 
-## Auto-Suggestion Triggers
+## Task → Version linkage (task-level, automatic)
 
-### At `/pickup-task` (Step 4.5 — non-blocking)
-- If epic has no Target Version → suggest linking to an upcoming version
-- Prefer "In Development" status, then nearest expected release date
-- If no upcoming versions exist → suggest creating one with semver bump
+**Tasks** (not epics) link to versions, and the link is written **automatically** by `services/auto-version.ts` when a task transitions to `Waiting for UAT`. Resolution order: best open "In Development" version for the product → best open "Planned" version → cold-create a fresh patch. See `versions-lifecycle.md` for the rationale.
 
-### At `/ship-pr` (Phase 8 — hard block)
-- If epic has no version → hard block until resolved
-- After version confirmed → update structured Release Summary progressively
+- `/pickup-task` Step 5 is informational only — don't link epics to versions there.
+- `/ship-pr` Phase 8 logs the current `task.targetVersion` (set by `auto-version`); it does not hard-block.
+- Epic → version was the old model and is deprecated. Don't use `updateEpic(versionId)` or `updateVersion(linkEpicIds)` to drive the lifecycle.
 
 ## Git Tags
 

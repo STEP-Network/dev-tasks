@@ -6,6 +6,8 @@ user_invocable: true
 
 # /audit-versions — proactive version state sweep
 
+> **Overlay**: if `.claude/skills/audit-versions/SKILL.md.local` exists in the consumer repo, read it and apply as additional project-specific instructions (extend-only — overlay can append checks/steps but cannot replace plugin behavior).
+
 ## Why this exists
 
 Versions are **historical, not planned**. They get created on-demand when a

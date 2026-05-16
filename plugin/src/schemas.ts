@@ -38,7 +38,9 @@ const AgentIdEnum = z.enum([
   "Claude Code CLI", "Claude Desktop Cloud", "Codex Local", "Claude Desktop Local", "Codex Cloud",
 ]);
 
-const SystemUserEnum = z.enum(["nate", "naref", "krmoj"]);
+// `owner` accepts any whoami-style username (or numeric Monday person ID).
+// Resolved at call time by services/people.ts against the Monday *People board.
+const SystemUserSchema = z.string().min(1);
 
 const EpicStatusEnum = z.enum([
   "Refining", "Done", "On Hold", "Planned", "Backlog", "In Progress", "Review",
@@ -166,7 +168,7 @@ export const ListProductsSchema = z.object({
 export const ClaimTaskSchema = z.object({
   itemId: z.number().describe("Task ID to claim"),
   agentId: AgentIdEnum.describe("Your agent identity"),
-  owner: SystemUserEnum.describe("Your system username (e.g. the output of `whoami`)"),
+  owner: SystemUserSchema.describe("Your system username (e.g. the output of `whoami`)"),
   planId: z.string().optional().describe("Today's date + plan file name (format: YYYY-MM-DD_plan-name, e.g. 2026-02-18_enumerated-scribbling-rose). Found in ~/.claude/plans/"),
 });
 
@@ -271,7 +273,7 @@ export const CreateTaskSchema = z.object({
     acceptanceCriteria: z.string().optional().describe("Machine-readable acceptance criteria (definition of done)"),
     dependencyIds: z.array(z.number()).optional().describe("Blocked-by relationships: task IDs that must be Done before this one can start. Stored in column dependency_mm0pwbxn."),
     branch: z.string().optional().describe("Git branch name"),
-    owner: SystemUserEnum.optional().describe("Owner — use your system username (e.g. the output of `whoami`)"),
+    owner: SystemUserSchema.optional().describe("Owner — use your system username (e.g. the output of `whoami`)"),
     subitems: z.array(SubitemSpec).optional().describe("Subtasks to create with the task"),
     // NOTE: agentId is intentionally absent. Ownership transitions happen via claimTask
     // (atomic: validates status + sprint + dependencies, sets Agent ID + Owner + Started Date).
@@ -320,7 +322,7 @@ export const UpdateVersionSchema = z.object({
   expectedReleaseDate: z.string().optional().describe("Expected release date (YYYY-MM-DD)"),
   releaseDate: z.string().optional().describe("Actual release date (YYYY-MM-DD)"),
   releaseSummary: z.string().optional().describe("Release summary text"),
-  owner: SystemUserEnum.optional().describe("Owner — use your system username (e.g. the output of `whoami`)"),
+  owner: SystemUserSchema.optional().describe("Owner — use your system username (e.g. the output of `whoami`)"),
   groupId: z.enum(["upcoming", "released"]).optional().describe("Move version to a group. Note: setting status='Released' auto-moves to the released group; pass groupId only when you want to override that or move without changing status."),
   linkTaskIds: z.array(z.number()).optional().describe("Task IDs to link to this version"),
   linkBugIds: z.array(z.number()).optional().describe("Bug IDs to link as fixed in this version"),
@@ -339,7 +341,7 @@ export const CreateVersionSchema = z.object({
   expectedReleaseDate: z.string().optional().describe("Expected release date (YYYY-MM-DD)"),
   releaseDate: z.string().optional().describe("Actual release date (YYYY-MM-DD)"),
   releaseSummary: z.string().optional().describe("Release summary text"),
-  owner: SystemUserEnum.optional().describe("Owner — use your system username (e.g. the output of `whoami`)"),
+  owner: SystemUserSchema.optional().describe("Owner — use your system username (e.g. the output of `whoami`)"),
   linkTaskIds: z.array(z.number()).optional().describe("Task IDs to link to this version"),
   linkBugIds: z.array(z.number()).optional().describe("Bug IDs to link as fixed in this version"),
   linkEpicIds: z.array(z.number()).optional().describe("Epic IDs to link to this version"),
@@ -421,7 +423,7 @@ export const CreateEpicSchema = z.object({
   status: EpicStatusEnum.optional().describe("Initial status (default: Backlog)"),
   priority: EpicPriorityEnum.optional().describe("Epic priority"),
   description: z.string().optional().describe("Epic description"),
-  owner: SystemUserEnum.optional().describe("Owner — use your system username (e.g. the output of `whoami`)"),
+  owner: SystemUserSchema.optional().describe("Owner — use your system username (e.g. the output of `whoami`)"),
   deadline: z.string().optional().describe("Deadline date (YYYY-MM-DD)"),
   timelineStart: z.string().optional().describe("Timeline start date (YYYY-MM-DD) — must provide both start and end"),
   timelineEnd: z.string().optional().describe("Timeline end date (YYYY-MM-DD) — must provide both start and end"),
@@ -440,7 +442,7 @@ export const UpdateEpicSchema = z.object({
   status: EpicStatusEnum.optional().describe("New status"),
   priority: EpicPriorityEnum.optional().describe("New priority"),
   description: z.string().optional().describe("Updated description"),
-  owner: SystemUserEnum.optional().describe("Owner — use your system username (e.g. the output of `whoami`)"),
+  owner: SystemUserSchema.optional().describe("Owner — use your system username (e.g. the output of `whoami`)"),
   deadline: z.string().optional().describe("Deadline date (YYYY-MM-DD)"),
   timelineStart: z.string().optional().describe("Timeline start date (YYYY-MM-DD) — must provide both start and end"),
   timelineEnd: z.string().optional().describe("Timeline end date (YYYY-MM-DD) — must provide both start and end"),
