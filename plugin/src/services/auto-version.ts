@@ -37,6 +37,7 @@ import {
   VERSION_GROUPS,
   PRODUCT_IDS,
 } from "../constants.ts";
+import { refreshChangelogForVersion } from "./changelog-refresh.ts";
 import {
   getColumnText,
   getLinkedItems,
@@ -112,7 +113,8 @@ export async function autoAssignVersionForTask(taskId: number): Promise<string |
     const versionName = `v${formatSemVer(bump.next)}`;
     const created = await createVersionItem(versionName, versionName, productId, "Hotfix");
     await linkTaskToVersion(taskId, created.id);
-    return `Auto-version (hotfix): created ${created.name} (#${created.id}), linked task`;
+    const refreshNote = await refreshChangelogAndDescribe(created.id);
+    return `Auto-version (hotfix): created ${created.name} (#${created.id}), linked task${refreshNote}`;
   }
 
   // 7. NON-HOTFIX path — find or create open version.
@@ -120,11 +122,15 @@ export async function autoAssignVersionForTask(taskId: number): Promise<string |
   const openVersion = await findBestOpenVersionForProduct(productId);
   if (openVersion) {
     await linkTaskToVersion(taskId, openVersion.id);
+    let statusNote = "";
     if (openVersion.status === "Planned") {
       await updateVersionStatus(openVersion.id, "In Development");
-      return `Auto-version: linked to ${openVersion.name} (#${openVersion.id}); auto-corrected status Planned → In Development (a version hosting UAT-stage tasks shouldn't stay Planned)`;
+      statusNote = "; auto-corrected status Planned → In Development (a version hosting UAT-stage tasks shouldn't stay Planned)";
+    } else {
+      statusNote = " (status: In Development)";
     }
-    return `Auto-version: linked to ${openVersion.name} (#${openVersion.id}) (status: In Development)`;
+    const refreshNote = await refreshChangelogAndDescribe(openVersion.id);
+    return `Auto-version: linked to ${openVersion.name} (#${openVersion.id})${statusNote}${refreshNote}`;
   }
 
   // 8. Cold-create the next version
@@ -137,7 +143,25 @@ export async function autoAssignVersionForTask(taskId: number): Promise<string |
   const versionName = `v${formatSemVer(bump.next)}`;
   const created = await createVersionItem(versionName, versionName, productId, "In Development");
   await linkTaskToVersion(taskId, created.id);
-  return `Auto-version: created ${created.name} (#${created.id}) (no open version existed), linked task`;
+  const refreshNote = await refreshChangelogAndDescribe(created.id);
+  return `Auto-version: created ${created.name} (#${created.id}) (no open version existed), linked task${refreshNote}`;
+}
+
+/**
+ * Trigger a changelog refresh and produce a short note for the user-facing
+ * return message. Fail-soft — refresh errors degrade to "refresh skipped: …"
+ * so they don't fail the link operation that already succeeded.
+ */
+async function refreshChangelogAndDescribe(versionId: number): Promise<string> {
+  try {
+    const r = await refreshChangelogForVersion(versionId);
+    const parts: string[] = [`${r.taskCount} public task${r.taskCount === 1 ? "" : "s"}`];
+    if (r.bugCount > 0) parts.push(`${r.bugCount} bug${r.bugCount === 1 ? "" : "s"}`);
+    if (r.skippedPrivate > 0) parts.push(`${r.skippedPrivate} private skipped`);
+    return `; changelog refreshed (${parts.join(", ")})`;
+  } catch (e) {
+    return `; changelog refresh skipped (${e instanceof Error ? e.message : String(e)})`;
+  }
 }
 
 // ---------------------------------------------------------------------------
