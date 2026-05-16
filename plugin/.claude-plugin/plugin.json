@@ -1,0 +1,5 @@
+{
+  "name": "monday-task-flow",
+  "version": "0.2.2",
+  "description": "Monday-driven task-first development lifecycle for autonomous coding agents: backlog, tasks, sprints, epics, bugs, versions, products, feedback. Bundles a local stdio MCP server (37 tools) — no claude.ai-hosted MCP dependency."
+}

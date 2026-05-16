@@ -1,21 +1,58 @@
-# CLAUDE.md — Dev Tasks MCP Server
+# CLAUDE.md — monday-task-flow
 
-## Overview
+This repo is a Claude Code plugin marketplace + plugin source. The plugin (`monday-task-flow`) packages a Monday.com MCP server, lifecycle rules, skills, and hooks for autonomous coding agents driving development work from a Monday.com board ecosystem.
 
-MCP server for autonomous coding agents managing development work across a Monday.com board ecosystem: Tasks, Sprints, Epics, Bugs, Versions, Products, and Feedback.
+## Repo layout
+
+```
+.
+├── .claude-plugin/marketplace.json   # marketplace registry → ./plugin
+├── plugin/                           # the plugin itself (see plugin/README.md for full layout)
+│   ├── .claude-plugin/plugin.json    # plugin manifest
+│   ├── .mcp.json                     # registers the stdio MCP server
+│   ├── package.json + tsconfig.json  # plugin deps (@modelcontextprotocol/sdk + zod) + TS build
+│   ├── src/                          # MCP TypeScript source (37 tools)
+│   ├── dist/                         # tsc output (gitignored)
+│   ├── rules/                        # 8 universal lifecycle rules
+│   ├── rules-routing.json
+│   ├── skills/                       # 7 core lifecycle skills
+│   ├── hooks/                        # 7 hooks (rule-autoload + 6 critical, opt-in)
+│   ├── schemas/                      # project-config.schema.json
+│   └── templates/                    # starter-project-config.json
+├── .claude/                          # project-local Claude Code config (currently just neon-postgres skill)
+├── CLAUDE.md                         # this file
+└── .env.example                      # MONDAY_API_KEY example
+```
 
 ## Commands
 
 ```bash
-npm run dev          # Start dev server with Turbopack
-npm run build        # Production build
-npm run lint         # ESLint check
-npm run test         # Run integration tests
+cd plugin
+npm install          # also runs `tsc` via prepare hook → produces dist/
+npm run build        # rebuild dist/
+npm run typecheck    # tsc --noEmit
+npm start            # run the stdio MCP server (responds on stdin/stdout)
 ```
 
-## Architecture
+## Install the plugin in a consumer project
 
-### Board Ecosystem
+```sh
+export MONDAY_API_KEY="..."  # add to ~/.zshrc; .mcp.json doesn't interpolate
+cd <consumer-project>
+claude
+```
+
+Then in the Claude Code session:
+
+```
+/plugin marketplace add /Users/nate/dev-tasks-mcp
+/plugin install monday-task-flow@monday-task-flow-marketplace
+/reload-plugins
+```
+
+To activate the blocking hooks (task-state-guard, worktree-required, worktree-path-boundary, bash-guard, stop-task-check, stop-ci-green-check), copy `plugin/templates/starter-project-config.json` to `<consumer-project>/.claude/project-config.json` and trim it to what you want enabled. Without that file, only `rule-autoload` runs; all blocking hooks are dormant.
+
+## Board ecosystem (what the MCP wraps)
 
 ```
 Products (5091839409) [read-only]
@@ -29,68 +66,40 @@ Products (5091839409) [read-only]
 
 **Mirror columns:** Tasks has a Product mirror column (`lookup_mm0vsq7f`) mirrored through the Epic relation (`task_epic`). Mirror columns are read-only and cannot be filtered server-side — `getBacklog` resolves product → epics → tasks instead.
 
-Subtasks board: 5091706366 (linked from Tasks)
+Subtasks board: 5091706366 (linked from Tasks).
 
-### MCP Server Entry Point
-- `app/api/mcp/route.ts` — Registers all 27 tools
+## Tools (37)
 
-### Core Library
-- `lib/constants.ts` — Board IDs, column IDs, status/type/priority mappings, default owner ID
-- `lib/monday-client.ts` — GraphQL executor
-- `lib/schemas.ts` — Zod schemas for all 26 tools
-- `lib/tools/utils.ts` — Shared helpers
+The plugin's MCP server registers 37 tools in `plugin/src/server.ts`. See that file for current names, descriptions, and Zod schemas. High-level phases:
 
-### Tools (table excerpt — list may lag the actual server)
+| Phase | Tools |
+|---|---|
+| Discovery | `getBacklog`, `getBugs`, `listFeedback` |
+| Context | `getTask`, `getSprint`, `listSprints`, `getEpic`, `listEpics`, `listProducts`, `getFeedback`, `listVersions`, `getVersion`, `getUpdates`, `getTaskUatDoc`, `getStructuredChangelog`, `getPublicRoadmap`, `listRetros` |
+| Execution | `claimTask`, `updateTask`, `manageSubtasks`, `updateEpic`, `updateFeedback`, `updateVersion`, `updateRetro`, `setPublicTaskName`, `updateStructuredChangelog`, `createTaskUatDoc`, `updateTaskUatDoc` |
+| Creation | `createTask`, `convertBugToTask`, `createBug`, `createEpic`, `createFeedback`, `convertFeedbackToTask`, `createRetro`, `createVersion` |
+| Shipping | `generateChangelog`, `migrateStructuredChangelog` |
+| Communication | `createUpdate` |
 
-| # | Tool | Phase | Purpose |
-|---|------|-------|---------|
-| 1 | `getBacklog` | Discovery | Prioritized task queue with filters |
-| 2 | `getBugs` | Discovery | Bug queue with filters |
-| 3 | `getTask` | Context | Full task details with subtasks/context |
-| 4 | `getSprint` | Context | Sprint overview with progress stats |
-| 5 | `listSprints` | Context | List/search sprints to discover sprint IDs |
-| 6 | `getEpic` | Context | Epic details with task progress |
-| 7 | `listEpics` | Context | List/search epics to discover epic IDs |
-| 8 | `listProducts` | Context | List products to discover product IDs |
-| 9 | `claimTask` | Execution | Atomically claim a task (auto-assigns owner) |
-| 10 | `updateTask` | Execution | Update any task field |
-| 11 | `manageSubtasks` | Execution | Create/update/delete subtasks |
-| 12 | `createTask` | Creation | Create tasks with acceptance criteria, dependencies, subtasks |
-| 13 | `convertBugToTask` | Creation | Bug → Fix task conversion |
-| 14 | `createBug` | Creation | File new bugs |
-| 15 | `updateVersion` | Shipping | Update version fields, link items, delete, group moves |
-| 16 | `createVersion` | Shipping | Create versions with product link, status, dates |
-| 17 | `listVersions` | Context | List/search versions with group/status/product filters |
-| 18 | `getVersion` | Context | Full version details with linked items and changelog |
-| 19 | `generateChangelog` | Shipping | Auto-generate structured changelog as Monday Doc |
-| 20 | `getUpdates` | Communication | Read item updates/comments |
-| 21 | `createUpdate` | Communication | Post updates/comments on items |
-| 22 | `createEpic` | Creation | Create epics with status, priority, timeline, product link |
-| 23 | `updateEpic` | Execution | Update any epic field or delete an epic |
-| 24 | `listFeedback` | Discovery | List/filter requests and feedback items |
-| 25 | `getFeedback` | Context | Full feedback details with connected tasks |
-| 26 | `createFeedback` | Creation | File new requests or feedback |
-| 27 | `updateFeedback` | Execution | Update any feedback field or delete |
-| 28 | `convertFeedbackToTask` | Creation | Convert feedback → task with auto-linking |
-| 29 | `getTaskUatDoc` | Context | Read a task's UAT testing doc as markdown |
-| 30 | `createTaskUatDoc` | Execution | Create a task's UAT testing doc (required before "Waiting for UAT") |
-| 31 | `updateTaskUatDoc` | Execution | Overwrite or append to a task's UAT testing doc |
+After plugin install, tools are namespaced as `mcp__plugin_monday-task-flow_monday-tasks__<tool>`.
 
-## Agent Workflow
+## Agent workflow
 
 ```
-1. getBacklog(unclaimedOnly: true)     → Find available work
-2. getTask(itemId)                      → Read full context
-3. listEpics()                          → Find epic to assign (if needed)
-4. claimTask(itemId, agentId, planId)   → Claim it (auto-assigns owner)
-5. manageSubtasks(parentItemId, ops)    → Create/update subtasks as you work
-6. updateTask(itemId, prLink, status)   → Set PR link, update status
-7. listVersions()                       → Find or create target version
-8. updateVersion(versionId, linkTaskIds) → Link to release version
-9. generateChangelog(versionId)         → Auto-generate changelog doc
+1. getBacklog(unclaimedOnly: true)     → find available work
+2. getTask(itemId)                      → read full context
+3. listEpics()                          → find epic to assign (if needed)
+4. claimTask(itemId, agentId, planId)   → claim it (auto-assigns owner)
+5. manageSubtasks(parentItemId, ops)    → create/update subtasks as you work
+6. updateTask(itemId, prLink, status)   → set PR link, update status
+7. listVersions()                       → find or create target version
+8. updateVersion(versionId, linkTaskIds) → link to release version
+9. generateChangelog(versionId)         → auto-generate changelog doc
 ```
 
-## Claiming Protocol
+The 7 plugin skills (`/monday-task-flow:pickup-task`, `create-task`, `refine-task`, `log-progress`, `self-review`, `ship-pr`, `release-version`) wrap most of this flow.
+
+## Claiming protocol
 
 - Agent calls `claimTask` → server validates:
   - Status is "Ready to Start" (tasks in "Needs Refinement" must be refined and sprint-assigned first)
@@ -100,21 +109,18 @@ Subtasks board: 5091706366 (linked from Tasks)
 - Success → sets In Progress + Agent ID + Plan ID + Started Date + Owner (auto-assigned)
 - Conflict → returns error with current owner
 
-## Owner Assignment
+## Owner assignment
 
 Pass your system username (`whoami`) as the `owner` field. The server maps usernames to Monday.com person IDs:
+
 - `naref` → 48307552
 - `krmoj` → 38667531
 
-Used in:
-- `claimTask` — required, assigns you as owner when claiming
-- `createTask` — optional, assigns owner at creation time
-- `createEpic` — optional, assigns owner at creation time
-- `updateEpic` — optional, changes owner
-- `createVersion` — optional, assigns owner at creation time
-- `updateVersion` — optional, changes owner
+Used in `claimTask` (required), `createTask`, `createEpic`, `updateEpic`, `createVersion`, `updateVersion` (all optional).
 
-## Key Status Mappings
+> Phase 3b TODO: lift this mapping out of `plugin/src/constants.ts` into per-project `project-config.json` so other STEP Network projects can use the plugin without forking constants.
+
+## Key status mappings
 
 **Task Status:** Needs Refinement → Ready to Start → In Progress → Waiting for UAT → Pending Deploy to Prod → Done (+ Stuck)
 **Task Priority:** Critical, High, Medium, Low, Missing
@@ -130,62 +136,67 @@ Used in:
 **Feedback Source:** User, Internal, Support, Partner
 **Agent ID:** Claude Code CLI, Claude Desktop Cloud, Codex Local, Claude Desktop Local, Codex Cloud
 
-## Status Transition Gates
+## Status transition gates
 
 `updateTask` enforces preconditions before letting status advance:
 
-- **Ready to Start** requires the task to be fully specified:
+- **Ready to Start** requires:
   - `type` is set (not "Not Set")
   - `priority` is set (not "Missing")
   - linked to an epic
   - `description` is non-empty
   - acceptance criteria (`long_text_mm0pqaxy`) is non-empty
-  - at least one subtask with name, description, type (not "Missing Status"), and a positive estimate
+  - ≥1 subtask with name, description, type (not "Missing Status"), positive estimate
 
-  Same-call args count: `updateTask({ acceptanceCriteria, description, status: "Ready to Start" })` succeeds if those fields complete the spec. `createTask` honors the same gate — if you pass `status: "Ready to Start"`, the task is created at Needs Refinement and promoted to Ready to Start after subitems exist, only if the gate passes.
+  Same-call args count. `createTask` honors the same gate — if you pass `status: "Ready to Start"`, the task is created at Needs Refinement and promoted to Ready to Start after subitems exist, only if the gate passes.
 
 - **Waiting for UAT** hard-blocks unless:
   - all subtasks are Done
-  - the UAT testing doc column (`doc_mm3adfdg`) is set (use `createTaskUatDoc` first)
+  - UAT testing doc column (`doc_mm3adfdg`) is set (use `createTaskUatDoc` first)
 
   …and warns (but doesn't block) when missing GitHub link, branch (`text_mm0pvs3n`), demo URL, or PR link.
 
-- **In Progress** requires the task to be in the active sprint (existing behavior).
+- **In Progress** requires the task to be in the active sprint.
 
 Subtasks should describe work-on-code, not human verification (testing belongs in the UAT doc) — otherwise the "all subtasks Done" gate can't ever be satisfied.
 
-## UAT Doc Tools
+## UAT doc tools
 
-`text_mm3adfdg` *(doc_mm3adfdg)* is a Monday Doc on each task that describes what a human should verify. Three tools manage it:
+`text_mm3adfdg` *(`doc_mm3adfdg`)* is a Monday Doc on each task that describes what a human should verify. Three tools manage it:
 
 - `getTaskUatDoc(taskId)` — returns the doc's markdown (via `export_markdown_from_doc`)
 - `createTaskUatDoc(taskId, markdown)` — creates a fresh doc (refuses if one already exists)
 - `updateTaskUatDoc(taskId, markdown, overwrite?)` — overwrite (default) or append to an existing doc
 
-## Task Dependencies
+## Task dependencies
 
 Tasks can declare blocked-by relationships via the `dependency_mm0pwbxn` column. Pass `dependencyIds: number[]` to `createTask` or `updateTask` (empty array clears). `claimTask` refuses to start a task whose dependencies are not all Done.
 
-## Maintenance Epics
+## Maintenance epics
 
 Every product should have a permanent "Maintenance & Hotfixes" epic (Status: In Progress, no deadline). This ensures all tasks have an epic — and therefore Product context via the Task mirror column.
 
-- `createBug`, `convertBugToTask`, and `convertFeedbackToTask` auto-assign the maintenance epic when no explicit epicId is provided
+- `createBug`, `convertBugToTask`, and `convertFeedbackToTask` auto-assign the maintenance epic when no explicit `epicId` is provided
 - The resolver matches epics whose name contains "maintenance" (case-insensitive)
 - Convention: name the epic "{Product Name} — Maintenance & Hotfixes"
 - Hotfix tasks, tech debt, and miscellaneous work go here
 
-## Product Inheritance
+## Product inheritance
 
 Product flows through the hierarchy: **Product → Epic → Task** (mirror column). Bugs, Feedback, and Versions keep direct Product connections because they exist at different lifecycle stages (intake/output) before tasks or epics are assigned.
 
-## Task Completion
+## Task completion
 
 Monday.com automation auto-completes the parent task when all subtasks are Done:
-- Do NOT set task status to Done directly
-- Instead, mark all subtasks as Done
-- Delete unwanted subtasks first (automation triggers when last subtask is marked Done)
 
-## Environment Variables
+- Do NOT set task status to `Done` directly
+- Mark all subtasks `Done` instead (automation triggers when the last subtask flips Done)
+- Delete unwanted subtasks before marking the last one Done
 
-- `MONDAY_API_KEY` — Monday.com API key (required)
+## Environment variables
+
+- `MONDAY_API_KEY` — Monday.com API key (required). Must be exported in the parent shell that launches Claude Code; `.mcp.json` does not interpolate env values.
+
+## Migration history (Phase 1–3a, May 2026)
+
+This repo was previously a Next.js app exposing the MCP as an HTTP route (`app/api/mcp/route.ts`). Phase 1 migrated all 37 tools to a stdio MCP inside the plugin; Phases 2a/2b lifted universal rules, lifecycle skills, and the 6 critical blocking hooks from `v0-politiske-annoncer/.claude/`. Phase 3a (this commit) deleted the Next.js scaffolding — the repo is plugin-only now. Branch: `feat/plugin-migration`. Phase 3b/3c open: see tasks #7/#8.

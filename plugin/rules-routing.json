@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema",
+  "comment": "Maps file path globs to rule files in plugin/rules/. The rule-autoload PreToolUse hook reads this on every Edit|Write, matches the file against each rule's globs, and injects matching rules via additionalContext. Patterns use bash globstar (** matches any path segments). Rules inject at most once per session (per rule file) — subsequent Edit|Write of files matching the same rules skip re-injection.",
+  "rules": [
+    {
+      "file": "task-lifecycle.md",
+      "match": ["**/*.ts", "**/*.tsx", "**/*.js", "**/*.jsx", "**/*.py", "**/*.sh", "**/*.sql", "**/*.css", "**/*.scss", "**/*.html", "**/*.md"]
+    },
+    {
+      "file": "worktree-discipline.md",
+      "match": ["**/*.ts", "**/*.tsx", "**/*.js", "**/*.jsx", "**/*.py", "**/*.sh", "**/*.sql", "**/*.css", "**/*.scss", "**/*.html"]
+    },
+    {
+      "file": "testing.md",
+      "match": ["**/*.test.*", "**/*.spec.*", "**/tests/**", "**/__tests__/**", "**/e2e/**"]
+    },
+    {
+      "file": "release-flow.md",
+      "match": ["**/CHANGELOG.md", "**/package.json", "**/version.txt"]
+    },
+    {
+      "file": "versioning.md",
+      "match": ["**/CHANGELOG.md", "**/package.json", "**/version.txt"]
+    }
+  ]
+}
