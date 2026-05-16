@@ -46,30 +46,61 @@ curl -X POST https://<your-project>.vercel.app/api/mcp \
 
 ## Connect from claude.ai (or other cloud Claudes)
 
-1. **Settings → Integrations → Add MCP server**
+Each user needs their own Monday personal API token. The token is sent on every MCP request as a Bearer header — the server uses it to authenticate to Monday, so every change in Monday is attributed to **that specific user**, not a shared service account.
+
+### Step 1 — Generate a Monday personal token
+
+In Monday: **Profile (top-right) → Developers → API → My access tokens → Generate**
+
+Copy the token. Treat it like a password.
+
+### Step 2 — Configure the claude.ai integration
+
+1. claude.ai → **Settings → Integrations → Add MCP server**
 2. **Name**: `monday-tasks` (or similar)
 3. **URL**: `https://<your-project>.vercel.app/api/mcp`
-4. **Authentication**: none (MONDAY_API_KEY is server-side; clients have full access through it)
+4. **Custom headers**: `Authorization: Bearer <your-monday-token>`
 
-Claude.ai will probe the URL, list the tools, and surface them as `mcp__claude_ai_<integration-name>__<tool>` in chats.
+claude.ai will probe the URL with that header, list the tools, and surface them as `mcp__claude_ai_<integration-name>__<tool>` in chats. From that point: every action through these tools is attributed to **your** Monday account.
 
-## Auth model — important
+### Verify with curl
 
-This endpoint is **unauthenticated from the client side**. Anyone who knows the URL can call the tools with full MONDAY_API_KEY-scope permissions. This is fine for:
-
-- Personal use (don't share the URL)
-- Internal use behind a private claude.ai workspace
-
-This is **not** fine for public exposure. If you need per-user auth, add a bearer-token check in `plugin/api/mcp.ts`:
-
-```ts
-const auth = request.headers.get("authorization");
-if (auth !== `Bearer ${process.env.MCP_BEARER_TOKEN}`) {
-  return new Response("Unauthorized", { status: 401 });
-}
+```sh
+curl -X POST https://<your-project>.vercel.app/api/mcp \
+  -H "Content-Type: application/json" \
+  -H "Accept: application/json, text/event-stream" \
+  -H "Authorization: Bearer <your-monday-token>" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"curl","version":"1.0"}}}'
 ```
 
-…and add `MCP_BEARER_TOKEN` to the Vercel env vars + your claude.ai integration config.
+A request **without** the `Authorization` header returns a `401` JSON-RPC error unless `MONDAY_API_KEY` is set server-side (fallback for single-user/admin deployments — see below).
+
+## Auth model
+
+The hosted endpoint uses **per-request Bearer tokens** with a server-side **env-var fallback**.
+
+| Request | Behavior |
+|---|---|
+| `Authorization: Bearer <token>` | Token is the Monday API key for THIS request only. Monday attributes all changes to the token's owner. The token is never logged, never stored. |
+| no header, `MONDAY_API_KEY` set on Vercel | Falls back to the shared env-var key. Useful for single-user deployments or an "admin" shared key. All actions attributed to the env-var key's owner. |
+| no header, no env var | Returns 401 JSON-RPC error. |
+
+### Why per-user is better than shared
+
+- Monday's audit trail shows the real actor (not a single service account)
+- Tokens can be revoked per-user without affecting others
+- Token compromise has bounded blast radius (one user's permissions, not "everyone")
+- No central token rotation ceremony — each user manages their own
+
+### Implementation
+
+Server-side per-request isolation via `AsyncLocalStorage`:
+
+1. `plugin/api/mcp.ts` parses the Bearer header, calls `mondayAuthContext.run({ apiKey }, ...)` for the rest of the request
+2. `plugin/src/monday-client.ts` reads `mondayAuthContext.getStore()?.apiKey ?? process.env.MONDAY_API_KEY` on every Monday API call
+3. Tools never see the token directly — no risk of accidental logging
+
+Concurrent requests get separate ALS frames, so no cross-request token leakage.
 
 ## Architecture
 
