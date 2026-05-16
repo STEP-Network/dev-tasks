@@ -28,7 +28,18 @@
       "branch-task-match",
       "bash-guard",
       "stop-task-check",
-      "stop-ci-green-check"
+      "stop-ci-green-check",
+      "protect-sensitive-files",
+      "pre-commit-secrets-scan",
+      "subtask-reminder",
+      "auto-file-followup-nudge",
+      "post-merge-postmortem",
+      "post-push-track",
+      "post-push-review-check",
+      "post-self-review",
+      "pre-compact-task-snapshot",
+      "user-prompt-task-context",
+      "subprocess-failure"
     ]
   }
 }
