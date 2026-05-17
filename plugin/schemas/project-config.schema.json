@@ -189,7 +189,10 @@
               "post-self-review",
               "pre-compact-task-snapshot",
               "user-prompt-task-context",
-              "subprocess-failure"
+              "subprocess-failure",
+              "dev-tasks-update-guard",
+              "build-failure-advisor",
+              "pipeline-reminder"
             ]
           },
           "uniqueItems": true

@@ -1,0 +1,42 @@
+# Overlay example: self-review
+
+Drop this file at `<consumer>/.claude/skills/self-review/SKILL.md.local`.
+It is APPENDED to the plugin's SKILL.md at runtime (extend-only — never replaces plugin behavior).
+
+The plugin's generic skill covers the 10-point checklist with generic descriptions of UI (Check #6), i18n (Check #7), and Docs (Check #9). This overlay names the project-specific files and patterns those checks should verify.
+
+---
+
+## <product> user-facing docs mapping (Check #9)
+
+Any change that affects user-facing behavior MUST update both the docs copy AND any embedded copies the project uses (e.g. RAG / chatbot knowledge base):
+
+| What changed | Update these files (BOTH copies if applicable) |
+|---|---|
+| <Feature A flow> | `docs/<file-A>.md` + `<embedded-path>/<file-A>.md` |
+| <Feature B flow> | `docs/<file-B>.md` + `<embedded-path>/<file-B>.md` |
+| <Admin flow>     | `docs/<admin-file>.md` |
+
+(Replace these examples with your project's actual user-facing doc paths.)
+
+## <product> UI checks (Check #6)
+
+Beyond the generic "themed wrappers over raw HTML" rule, this project also requires:
+
+- (Project-specific pattern 1 — e.g. "all forms use `<FormProvider>` from react-hook-form")
+- (Project-specific pattern 2 — e.g. "modals use the standard `<DialogWithBackdrop>` wrapper, not raw `<Dialog>`")
+- (Visual-regression baselines: which directory holds them, and when to update)
+
+## <product> i18n specifics (Check #7)
+
+- Configured locales: read from `project-config.i18n.locales[]` (the bash-guard parity check enforces completeness)
+- Translation source-of-truth language: <usually `en`>
+- Catalogue location: <e.g. `messages/*.json`>
+- Forbidden patterns: hard-coded strings outside the t() helper, English fallback when target locale exists, etc.
+
+## <product> regression test mapping
+
+When fixing a bug in <surface>, the canonical regression-test location is:
+
+- `<surface>` → `__tests__/<surface>.test.ts` + `e2e/<surface>.spec.ts`
+- (List the dominant surfaces and their expected test files)

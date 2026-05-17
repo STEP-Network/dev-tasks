@@ -104,7 +104,25 @@ Plus the session-level expectation (not hook-enforced): always run Corridor `ana
 
 ## Skill overlay convention
 
-Each plugin skill ends with a directive to read `<consumer>/.claude/skills/<name>/SKILL.md.local` (if present) and append its content as additional project-specific instructions. **Extend-only** — overlay can append checks/steps but cannot replace plugin behavior. See `docs/migration-polads.md` for example overlays.
+Each plugin skill ends with a directive to read `<consumer>/.claude/skills/<name>/SKILL.md.local` (if present) and append its content as additional project-specific instructions. **Extend-only** — overlay can append checks/steps but cannot replace plugin behavior.
+
+### How it works
+
+1. The plugin skill (e.g. `plugin/skills/production-quality-ownership/SKILL.md`) describes the generic framework.
+2. When the skill is invoked, the directive at the top instructs the LLM: "If `<consumer-cwd>/.claude/skills/<name>/SKILL.md.local` exists, read it and apply its content as additional instructions."
+3. The consumer's overlay file injects project-specific examples (component names, doc paths, regulatory citations) without modifying the plugin.
+
+### Templates
+
+Three commonly-overlaid skills have starter templates under `plugin/templates/`:
+
+- `skill-overlay-production-quality-ownership.md.example` — cross-coupling map, regulatory context, stakeholder voice
+- `skill-overlay-design-consistency.md.example` — themed primitives, design tokens, domain component dirs
+- `skill-overlay-self-review.md.example` — user-facing docs mapping, UI/i18n project-specific checks, regression test mapping
+
+Copy whichever you need into your consumer repo, strip the `.example` suffix, and fill in the placeholders. Skills without a `.local` overlay use the plugin's generic behavior unchanged — overlays are strictly opt-in.
+
+See `docs/migration-polads.md` for a complete worked example (PolAds overlays for all three).
 
 ## People resolution
 

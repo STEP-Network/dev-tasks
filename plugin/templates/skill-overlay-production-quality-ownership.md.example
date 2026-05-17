@@ -1,0 +1,42 @@
+# Overlay example: production-quality-ownership
+
+Drop this file at `<consumer>/.claude/skills/production-quality-ownership/SKILL.md.local`.
+It is APPENDED to the plugin's SKILL.md at runtime (extend-only — never replaces plugin behavior).
+
+The plugin's generic skill covers the 7-question framework. This overlay injects the product-specific surfaces that Q5 ("every system surface this could affect") needs to be useful. Replace the example below with your product's actual cross-coupling map.
+
+---
+
+## <product> cross-coupling map
+
+When a new field lands on the primary form, the typical surfaces are:
+
+1. `lib/validation/<schema>.ts` — validation schema (Zod / equivalent)
+2. `lib/db/<schema>.ts` — DB column (Drizzle / Prisma / SQL migration)
+3. `<snapshot>` JSONB shape — captured at submission
+4. Backfill SQL for unconfirmed rows (confirmed rows are usually immutable)
+5. Each role's view page that displays this data
+6. Each notification recipient's email template (HTML + plaintext + all configured locales)
+7. Public-API serializer (pass through the privacy/GDPR filter if applicable)
+8. i18n keys for every configured locale
+9. User-facing docs (`docs/...md`)
+10. RAG / chatbot knowledge base copies (if your project maintains them)
+11. Review-summary component on the submission page
+12. Integration test + E2E spec
+13. Architecture / decisions doc (if the change is interpretive)
+
+## Regulatory context
+
+If the product is in a regulated domain (e.g. EU Reg 2024/900 + 2025/1410, GDPR, HIPAA, financial), document the rule citations the agent must trace decisions back to:
+
+- Rule citation + URL
+- Where in the codebase the rule is enforced
+- Where "exception" decisions live (e.g. `docs/founder-decisions.md`)
+
+## Stakeholder-facing voice
+
+Q7 ("a regulator/auditor reads this commit + PR description") needs project-specific stakeholders named:
+
+- Who reads commit messages? (legal team, board, regulators, external partners)
+- What's the audit cadence (quarterly review, on-demand subpoena, etc.)?
+- Where does the "why" trail live when not in the commit message?
