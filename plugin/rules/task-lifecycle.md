@@ -152,12 +152,12 @@ When a task's full completion requires a human-only action that no agent can per
    - **Name** starting with `[HUMAN]` prefix — scannable on the board, no need to read every task description.
    - **Status** = `Ready to Start` (user can act now) OR `Stuck` (blocked on an external precondition like vendor support response).
    - **Description** = brief WHY + expected outcome + block reason (if Stuck). Keep it short — the user shouldn't read a paragraph to know what this task is about.
-   - **Step-by-step goes in a Monday Update on the subtask** (via `mcp__monday__create_update({ itemId: <subtask_id> })`). **Use HTML formatting** — Monday strips markdown but renders a subset of HTML (`<p>`, `<ol>`, `<ul>`, `<li>`, `<strong>`, `<em>`, `<code>`, `<h3>`, `<a href="...">`). Numbered `<ol>` list with `<strong>` on key actions and `<code>` on URLs/secrets/event names; sub-bullets via nested `<ul>`. Write for an "intern who's never seen this UI" — link to the relevant `.claude/rules/*.md` section if the steps are documented there.
+   - **Step-by-step goes in a Monday Update on the subtask** (via `mcp__plugin_dev-tasks_dev-tasks__createUpdate({ itemId: <subtask_id> })`). **Use HTML formatting** — Monday strips markdown but renders a subset of HTML (`<p>`, `<ol>`, `<ul>`, `<li>`, `<strong>`, `<em>`, `<code>`, `<h3>`, `<a href="...">`). Numbered `<ol>` list with `<strong>` on key actions and `<code>` on URLs/secrets/event names; sub-bullets via nested `<ul>`. Write for an "intern who's never seen this UI" — link to the relevant `.claude/rules/*.md` section if the steps are documented there.
    - **estimatedHours** = realistic (most should be ≤ 0.5h).
 
 2. **Set parent task status to `Stuck`** — the task is not fully functional until the human acts; the release ceremony MUST NOT promote a partially-functional task to `Pending Deploy to Prod`.
 
-3. **Post a Monday update on the parent** via `mcp__monday__create_update` listing every `[HUMAN]` subtask + WHY stuck. Captures the agent's reasoning for audit; the user has one place to scan instead of multiple subtasks.
+3. **Post a Monday update on the parent** via `mcp__plugin_dev-tasks_dev-tasks__createUpdate` listing every `[HUMAN]` subtask + WHY stuck. Captures the agent's reasoning for audit; the user has one place to scan instead of multiple subtasks.
 
 4. **Unblocking**: when the human completes a `[HUMAN]` subtask, they mark it Done. Once ALL `[HUMAN]` subtasks on a task are Done, the parent task flips back to `Waiting for UAT` (default flow). Either the user or the next agent picking up the task does this transition.
 

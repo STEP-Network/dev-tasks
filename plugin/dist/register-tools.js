@@ -149,7 +149,7 @@ export function registerAllTools(server) {
     // =========================================================================
     // Retrospectives
     // =========================================================================
-    server.tool("createRetro", "Create a retrospective item on the Retrospectives board. Required: name, type ('Discussion' | 'Keep' | 'Improve'). Optional: description (long_text — reasoning, examples, links, next steps), repeating (carries over between sprints), submitter / owner person IDs, sprintId (sprint this retro was registered or implemented for — use listSprints to discover the ID). File retros first-class instead of dropping into raw mcp__monday__create_item.", CreateRetroSchema.shape, async (args) => {
+    server.tool("createRetro", "Create a retrospective item on the Retrospectives board. Required: name, type ('Discussion' | 'Keep' | 'Improve'). Optional: description (long_text — reasoning, examples, links, next steps), repeating (carries over between sprints), submitter / owner person IDs, sprintId (sprint this retro was registered or implemented for — use listSprints to discover the ID).", CreateRetroSchema.shape, async (args) => {
         const result = await createRetro(args);
         return { content: [{ type: "text", text: result }] };
     });

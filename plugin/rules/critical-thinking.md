@@ -80,6 +80,6 @@ The discipline applies to your own first drafts too:
 
 ## Reference
 
-- `.claude/rules/holistic-thinking.md` — L1/L2/L3 lens for depth. This rule (critical-thinking) is breadth: consider alternatives. Holistic-thinking is depth: look beneath the symptom.
+- `.claude/skills/holistic-thinking/SKILL.md` — L1/L2/L3 lens for depth. This rule (critical-thinking) is breadth: consider alternatives. Holistic-thinking is depth: look beneath the symptom.
 - `.claude/rules/ship-readiness.md` — BLOCKER/IMPROVEMENT/POLISH triage. Critical thinking determines which bucket; ship-readiness defines what to do per bucket.
 - `.claude/skills/self-review/SKILL.md` — the iterative loop where critical thinking is most concretely exercised.

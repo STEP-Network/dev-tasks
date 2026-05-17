@@ -569,7 +569,7 @@ fine to continue; detect the anti-pattern where fixes actively create new proble
 
 20h. **Continue to Phase 10** (post-merge cleanup).
 
-20h. **Log progress**: `/log-progress TASK_WAITING_FOR_UAT` with:
+20i. **Log progress**: `/log-progress TASK_WAITING_FOR_UAT` with:
     ```
     [TASK_WAITING_FOR_UAT] Agent Progress Update
     Time: {ISO 8601} | Branch: {branch}
@@ -784,8 +784,8 @@ The default posture is keep going. Stopping mid-queue without finishing it is a 
 - **UAT doc generated** — `createTaskUatDoc`/`updateTaskUatDoc` called for default-flow PRs; column `doc_mm3adfdg` populated
 - **Task transitioned to `Waiting for UAT`** — Phase 6.5 default-flow only; hotfix-flow keeps `In Progress` through merge
 - **Autonomous merge completed** — Phase 6.6 `gh pr merge --admin --squash` after CI green + reviews addressed (default flow). Hotfix PRs still require human merge.
-- **State file cleaned up** — `.claude/active-task.json` deleted after handoff
-- **Worktree removed** — `ExitWorktree({ action: "remove" })` called after handoff if the session was started in a worktree (Phase 0). Orchestrator's `/babysit-prs` will merge the PR and reconcile Monday post-merge.
+- **State file cleaned up** — `.claude/active-task.json` deleted after the merge completes (or after handoff, in the subagent flow)
+- **Worktree removed** — `ExitWorktree({ action: "remove" })` called after the merge completes (or after handoff). In the subagent flow, the main session's `/babysit-prs` picks up the open PR and runs the merge loop.
 
 ## Stop Hook Enforcement
 

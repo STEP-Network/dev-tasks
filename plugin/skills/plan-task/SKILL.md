@@ -146,5 +146,5 @@ The agent now has a current-codebase-grounded plan. Proceed with subtask 1.
 - `.claude/skills/pickup-task/SKILL.md` — what runs BEFORE this skill (claim + worktree + initial context read)
 - `.claude/skills/refine-task/SKILL.md` — where the original plan came from
 - `.claude/rules/critical-thinking.md` — the posture this skill instantiates at claim time (consider alternatives, push back when drift suggests the task itself needs re-refinement)
-- `.claude/rules/holistic-thinking.md` — depth lens for when the drift hints at a deeper root cause
+- `.claude/skills/holistic-thinking/SKILL.md` — depth lens for when the drift hints at a deeper root cause
 - `EnterPlanMode` / `ExitPlanMode` — Claude Code's built-in plan mode (user-approval gated)
