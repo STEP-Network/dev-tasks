@@ -1,0 +1,76 @@
+import { executeMondayQuery } from "../monday-client.js";
+import { BOARDS, VERSION_COLUMNS, VERSION_GROUPS, } from "../constants.js";
+import { getPersonByUsername } from "../services/people.js";
+import { buildColumnValues, formatError } from "./utils.js";
+export async function createVersion(args) {
+    try {
+        const columnValues = {};
+        // Status (default: Planned). Use {label} not {index} — workspace label
+        // indices drifted in production (e.g. "Release Candidate" → missingLabel).
+        columnValues[VERSION_COLUMNS.status] = {
+            label: args.status || "Planned",
+        };
+        // Product link (required)
+        columnValues[VERSION_COLUMNS.product] = { item_ids: [args.productId] };
+        // Version number
+        if (args.versionNumber) {
+            columnValues[VERSION_COLUMNS.versionNumber] = args.versionNumber;
+        }
+        // Expected release date
+        if (args.expectedReleaseDate) {
+            columnValues[VERSION_COLUMNS.expectedReleaseDate] = { date: args.expectedReleaseDate };
+        }
+        // Release date
+        if (args.releaseDate) {
+            columnValues[VERSION_COLUMNS.releaseDate] = { date: args.releaseDate };
+        }
+        // Release summary
+        if (args.releaseSummary) {
+            columnValues[VERSION_COLUMNS.releaseSummary] = { text: args.releaseSummary };
+        }
+        // Owner
+        if (args.owner) {
+            const ownerId = await getPersonByUsername(args.owner);
+            columnValues[VERSION_COLUMNS.owner] = { personsAndTeams: [{ id: ownerId, kind: "person" }] };
+        }
+        // Link tasks
+        if (args.linkTaskIds && args.linkTaskIds.length > 0) {
+            columnValues[VERSION_COLUMNS.connectedTasks] = { item_ids: args.linkTaskIds };
+        }
+        // Link bugs
+        if (args.linkBugIds && args.linkBugIds.length > 0) {
+            columnValues[VERSION_COLUMNS.fixedBugs] = { item_ids: args.linkBugIds };
+        }
+        // Link epics
+        if (args.linkEpicIds && args.linkEpicIds.length > 0) {
+            columnValues[VERSION_COLUMNS.connectedEpics] = { item_ids: args.linkEpicIds };
+        }
+        const createQuery = `
+      mutation {
+        create_item(
+          board_id: ${BOARDS.VERSIONS},
+          group_id: "${VERSION_GROUPS.UPCOMING}",
+          item_name: ${JSON.stringify(args.name)},
+          column_values: ${buildColumnValues(columnValues)}
+        ) {
+          id
+          name
+        }
+      }
+    `;
+        const response = await executeMondayQuery(createQuery);
+        const createdItem = response.create_item;
+        if (!createdItem) {
+            throw new Error(`Failed to create version "${args.name}"`);
+        }
+        const lines = [
+            `# Version Created`,
+            ``,
+            `- **${createdItem.name}** (#${createdItem.id})`,
+        ];
+        return lines.join("\n").trim();
+    }
+    catch (error) {
+        return formatError(`Failed to create version: ${error instanceof Error ? error.message : String(error)}`);
+    }
+}
