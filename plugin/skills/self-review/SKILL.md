@@ -69,11 +69,11 @@ See `ship-readiness.md` for the full principle.
 | # | Category | Check |
 |---|----------|-------|
 | 1 | **Types** | No `any` types, proper TypeScript annotations |
-| 2 | **Security** | Auth checks on API routes, no exposed secrets, input validation |
+| 2 | **Security + Visual** | Auth checks on API routes, no exposed secrets, input validation. **For UI/UX changes**: before/after visual verification — see Check #2 detailed rules below + `.claude/rules/testing.md` Visual Validation section. Mark FAIL on any UI diff that wasn't visually verified end-to-end. |
 | 3 | **Snapshots** | No mutations to Confirmed snapshots, proper two-stage creation |
 | 4 | **GDPR** | No PII exposure on public pages, gdpr-filter.ts used correctly |
 | 5 | **Optimistic Updates** | Proper onMutate/onError/onSettled, matching queryKeys |
-| 6 | **UI** | Project's themed wrappers used over raw HTML primitives (`<input>`, `<select>`, `<button>`); see consumer's `.claude/rules/ui-design.md` for the canonical components |
+| 6 | **UI** | Themed wrappers used over raw HTML primitives. **No variable names as user-facing labels** — every button text, heading, placeholder, error message, and link label is human-readable language, NOT a programming identifier. See Check #6 detailed rules below. |
 | 7 | **i18n** | If `project-config.i18n.enabled = true`: t()/t.rich() used, no hardcoded strings, ALL configured locales updated with PROPER NATIVE TRANSLATIONS (spot-check 3+ non-default locales to verify native text). If i18n is off, mark N/A. |
 | 8 | **Tests** | Concrete rules — mark FAIL if ANY violated (see details below) |
 | 9 | **Docs** | Concrete rules — mark FAIL if ANY violated (see details below) |
@@ -101,6 +101,77 @@ Mark FAIL if ANY of these are violated:
 - Claude-in-Chrome MCP testing (optional but recommended) for complex UI interactions: multi-step forms, modals, drag-and-drop, hover states
 - **"N/A" only valid for**: pure CSS/styling, i18n-only (locale file additions), config/infra changes (`.claude/`, `CLAUDE.md`), documentation-only
 - If claiming "N/A", the reviewer MUST state WHY with the specific exemption category
+
+### Check #2 — Visual Verification (Detailed Rules)
+
+For any UI/UX diff (changes under `components/**`, `app/**/page.tsx`, `app/**/layout.tsx`, `lib/email/*-templates.tsx`, or any styling file):
+
+1. **Before snapshot**: capture the affected page/component in its current state. Use whichever is available, in this order of preference:
+   - `mcp__claude-in-chrome__*` browser MCP — open the page, take a screenshot
+   - Vercel preview URL from the PREVIOUS PR / staging deploy — `gh pr view {prev} --json …` or hit the public staging URL directly
+   - Playwright via Bash against a local dev server (if one is running)
+   - Skip with documented reason if none reachable
+
+2. **Apply the change** (your edits already in the diff)
+
+3. **After snapshot**: capture the same page/component, same viewport, same login state. Same tooling as step 1.
+
+4. **Read both screenshots with the `Read` tool** (it supports images natively). Compare them in plain language:
+   - **Intended changes present?** — every acceptance-criterion bullet that has a visual component must be visible in the After.
+   - **Unintended changes?** — anything that changed visually that the diff doesn't justify (e.g. spacing on adjacent components, padding regressions, text overflow, color drift). These are regressions in scope and MUST be addressed.
+
+5. **For multi-state surfaces** (forms with empty/filled/error states, modals with open/closed, lists with empty/populated): capture each state, not just the happy path.
+
+6. **For multi-viewport / multi-theme** (mobile/desktop, dark/light): if the change touches viewport-conditional or theme-conditional code, verify at least 2 viewport widths AND both themes.
+
+Mark FAIL if:
+- The diff touches UI files AND no visual verification was performed
+- The After shows the intended changes but ALSO shows unintended visual deltas in surrounding components
+- The Before couldn't be captured (e.g. no reachable preview / dev server) AND the agent didn't document why
+
+Mark PASS with note if visual verification was skipped for documented reasons (e.g. "build-time-only change — no rendered surface affected").
+
+The `/dev-tasks:visual-diff` skill (v0.8.11+) orchestrates this workflow if you want to invoke it explicitly.
+
+### Check #6 — UI (Detailed Rules)
+
+Two distinct sub-checks:
+
+**6a. Themed wrappers over raw HTML primitives.** Project's themed component (per `.claude/rules/ui-design.md`) used over raw `<input>` / `<select>` / `<button>` / etc. Grep the diff:
+
+```bash
+git diff $defaultBase...HEAD -- '*.tsx' '*.jsx' | grep -nE '<(input|select|textarea)[^>]'
+```
+
+Each hit is a candidate raw-HTML primitive — the project's themed wrapper (e.g. `<ThemedInput />`) should be used unless documented exception applies.
+
+**6b. NO VARIABLE NAMES AS USER-FACING LABELS.** This is a recurring failure mode worth its own subcheck. Every button text, heading, placeholder, error message, link label, tooltip, and modal title must be HUMAN-READABLE LANGUAGE, not a programming identifier.
+
+Mark FAIL on any of these patterns:
+
+| Anti-pattern | Why it's wrong | Fix |
+|---|---|---|
+| `<button>submitForm</button>` | camelCase variable name | `<button>Submit</button>` or `t('common.submit')` |
+| `<label>first_name</label>` | snake_case schema key | `<label>First name</label>` or `t('registration.firstName')` |
+| `<h1>user-profile-page</h1>` | kebab-case route name | `<h1>Your profile</h1>` or `t('profile.title')` |
+| `placeholder="userEmail"` | camelCase as placeholder | `placeholder="you@example.com"` |
+| `<Toast>{errorCode}</Toast>` | raw error-code constant | localized error message via t() with the code as context |
+| `{user.email_verified ? 'true' : 'false'}` | raw boolean as user text | `{user.email_verified ? 'Verified' : 'Not verified'}` (or via t()) |
+| `aria-label="btn-submit"` | identifier in a11y label | `aria-label="Submit form"` (still localized if i18n on) |
+
+Triage when found:
+- If i18n is enabled (`project-config.i18n.enabled = true`): the label should be `t('namespace.key')` with the human translation in `messages/{locale}.json`. Adding the hardcoded English is acceptable as a SCAFFOLD only if the locale keys are added in the SAME commit.
+- If i18n is off: the label is a string literal, but it MUST read as natural human text — capitalized appropriately, no underscores/camelCase, full words.
+
+Grep helper:
+
+```bash
+# Find suspicious labels — quoted strings inside JSX tags or label props
+git diff $defaultBase...HEAD -- '*.tsx' '*.jsx' | grep -nE '(label|placeholder|title|aria-label)=["\047][a-z]+([_-][a-z]+|[A-Z][a-z]+)+["\047]'
+git diff $defaultBase...HEAD -- '*.tsx' '*.jsx' | grep -nE '>[a-z]+[A-Z][a-z]+<'
+```
+
+The greps catch most cases. Visual verification in Check #2 catches the rest (the strings render as gibberish in the screenshot, immediately visible).
 
 ### Check #11 — Corridor Findings (Detailed Rules)
 
@@ -157,6 +228,21 @@ Self-Review PASSED (iteration N):
 After self-review passes and REVIEW_COMPLETED is posted, **automatically invoke `/ship-pr`**.
 Do NOT wait for user instruction. The enforced pipeline is: self-review → ship-pr → review loop.
 This is MANDATORY for any session with source file changes.
+
+## After PASS — conditional ownership pass
+
+If ANY of these criteria match the diff, invoke `/dev-tasks:production-quality-ownership` as a second-pass ownership check BEFORE setting `selfReviewPassed: true`:
+
+- Diff touches ≥3 system surfaces (e.g. component + API + schema + email template + locale keys)
+- Schema migration is included (any file under `lib/db/**` schema, `drizzle/**`, `prisma/**`, or equivalent)
+- Multi-role UI change (the same data is shown to ≥2 audience roles — admin/user/public/partner — and any of those views was edited)
+- Multi-locale email template change
+- The task is the Nth attempt at the same surface (recurring class — look at git log + Monday history)
+- Acceptance criteria mention "ensure", "all", "every", or list ≥5 bullets
+
+Otherwise (small, single-surface, mechanical diffs): skip the ownership pass — running it adds ~500 tokens for marginal value on a Bugfix that touched one file.
+
+The ownership pass is a 7-question checklist. Its purpose is catching "compiles but incomplete" — work that passes the 10-point review but missed a cross-surface or stakeholder-readability dimension. Run only when those dimensions are actually at risk.
 
 ## Post-Conditions
 
