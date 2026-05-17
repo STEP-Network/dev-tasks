@@ -54,7 +54,8 @@ For each PR at CLEAN (or UNSTABLE-but-actually-ready per the round-N Claude revi
 
 1. **Verify review state** — `gh pr view {N} --json comments` and check the latest `claude` author comment. Expect "ship-ready" or "no BLOCKERs" verdict. If round-N surfaced new BLOCKERs, see **Phase 2b** below (handling BLOCKER findings).
 2. **Read PR body for Monday task ID** — `gh pr view {N} --json body | grep "Monday\.com Task"`. Extract task ID.
-3. **Merge**: `gh pr merge {N} --admin --squash` (omit `--delete-branch` from main checkout — branch deletion will hit "branch in use" if any worktree still has it checked out; instead delete worktree first via Phase 4, or let the auto-worktree-cleanup handle it later).
+3. **Merge**: `gh pr merge {N} --admin --squash` (NEVER pass `--delete-branch`). Reason: `gh` deletes the remote branch first, then tries to delete the local tracking branch by switching the cwd's checkout to `$defaultBase` — which fails with `fatal: '$defaultBase' is already used by worktree` if any worktree in this repo has `$defaultBase` checked out (it almost always does — the main checkout sits there). The remote merge succeeds but the cleanup step crashes and `gh` exits non-zero. Worse, in a worktree session, `gh` may try to switch the worktree's own branch and corrupt the active task's branch state.
+4. **Local cleanup** (after the remote merge): `git fetch --prune origin`. Drops the local tracking ref to the now-deleted remote branch. Safe from any worktree. Local feature branch can be deleted separately via `git -C <main-checkout> branch -d <branch>` if it was a local-only branch — usually not needed since the PR branch lived on the remote.
 4. **Capture merge SHA**: `gh pr view {N} --json mergeCommit --jq .mergeCommit.oid`.
 
 ### Phase 2b: Handling BLOCKER findings (review iteration)
@@ -213,7 +214,7 @@ Both bugs bit the orchestrator on PRs #286 + #288 (2026-05-15) — anti-pattern 
 ### When agent reports "PR opened, awaiting CI"
 - The agent already did all the work it can. Don't ping them again.
 - Arm the Monitor pattern above (or just check `gh pr view {N} --json comments` directly after ~3-5 min for CI + Claude review to settle).
-- Inspect the latest Claude review body. If "ship-ready" / "no BLOCKERs" → merge with `gh pr merge {N} --admin --squash`. If new BLOCKER → fix inline OR SendMessage agent (if alive) OR spawn a small fixup subagent.
+- Inspect the latest Claude review body. If "ship-ready" / "no BLOCKERs" → merge with `gh pr merge {N} --admin --squash` (NEVER `--delete-branch`; see Phase 2 step 3 for why), then `git fetch --prune origin`. If new BLOCKER → fix inline OR SendMessage agent (if alive) OR spawn a small fixup subagent.
 
 ## Anti-patterns
 

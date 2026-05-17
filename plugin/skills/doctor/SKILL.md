@@ -80,6 +80,18 @@ Verify `project-config.json` does NOT list `bash-guard` or `stop-ci-green-check`
 - Read `${CLAUDE_PLUGIN_ROOT}/.claude-plugin/plugin.json` — extract `version`
 - Tell the user the installed version. If they expected a different version, suggest `/plugin uninstall` + `/plugin install`.
 
+### 10. GitHub PAT has required scopes
+
+The `gh` CLI needs `checks:read` (or fine-grained `Checks: Read`) to query CI status via `gh pr checks` / `gh pr view --json statusCheckRollup`. Without it, every `babysit-prs` poll falls back to raw `gh api .../actions/runs` queries — slower and prone to scope errors. Also needs `workflow` (classic) or `Workflows: Read` (fine-grained) for run reruns.
+
+- Run `gh auth status --show-token` (don't dump the token; just check scopes). Look for `Token scopes:` line.
+- PASS: `checks:read` (or `Checks: Read`) is present.
+- FAIL: it's missing — instruct the user to regenerate the PAT:
+  - **Fine-grained**: GitHub → Settings → Developer settings → Fine-grained tokens → edit → Repository permissions → set **Checks: Read** and **Actions: Read**. Save.
+  - **Classic**: Settings → Developer settings → Personal access tokens (classic) → edit → enable `repo` and `workflow` scopes (`workflow` includes checks).
+  - After regen: `gh auth refresh -s checks:read,workflow` or re-login via `gh auth login --web`.
+- If `gh auth status` errors entirely (`not logged in`): WARN — the user can use the plugin without `gh`, but `/babysit-prs` and `/ship-pr` Phase 6 won't work.
+
 ## Output format
 
 ```
@@ -96,9 +108,10 @@ Plugin version: <X.Y.Z>
 6. ✅ whoami 'nate' resolves to person 103752074 (Nathaniel Refslund)
 7. ✅ bash-guard.sh + stop-ci-green-check.sh policy gates lifted (always-on)
 8. ✅ hooks.enabled[] doesn't list policy hooks
-9. ✅ Plugin version 0.8.0
+9. ✅ Plugin version 0.8.2
+10. ✅ gh PAT scopes include checks:read (or fine-grained Checks: Read)
 
-Summary: 8 PASS, 1 WARN, 0 FAIL. Setup is good.
+Summary: 9 PASS, 1 WARN, 0 FAIL. Setup is good.
 ```
 
 If anything is FAIL: list the concrete remediation step for each.

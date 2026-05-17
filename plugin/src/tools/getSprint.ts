@@ -191,6 +191,24 @@ export async function getSprint(args: GetSprintInput): Promise<string> {
       tasks,
     };
 
+    if (format === "summary") {
+      // Compact JSON — drop the task array, goal, capacity, URLs. The intended
+      // caller is "find the active sprint ID" / "is this sprint over capacity?",
+      // not "list every task". Full responses can exceed tool-result token limits.
+      return JSON.stringify({
+        id: detail.id,
+        name: detail.name,
+        active: detail.active,
+        startDate: detail.startDate,
+        endDate: detail.endDate,
+        completion: detail.completion,
+        totalsByStatus: detail.progress.byStatus,
+        taskCount: detail.progress.total,
+        estimatedHours: detail.progress.estimatedHours,
+        actualHours: detail.progress.actualHours,
+      }, null, 2);
+    }
+
     if (format === "json") {
       return JSON.stringify(detail, null, 2);
     }

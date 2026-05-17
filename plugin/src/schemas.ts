@@ -128,7 +128,7 @@ export const GetTaskSchema = z.object({
 
 export const GetSprintSchema = z.object({
   sprintId: z.number().optional().describe("Specific sprint ID. If omitted, returns the active sprint. Use listSprints to discover sprint IDs"),
-  format: FormatEnum.optional().default("markdown").describe("Output format. 'markdown' (default) is LLM-friendly; 'json' returns a structured response."),
+  format: z.enum(["markdown", "json", "summary"]).optional().default("markdown").describe("Output format. 'markdown' (default) is LLM-friendly. 'json' returns the full structured response with every task. 'summary' returns a compact JSON `{id, name, active, completion, totalsByStatus, taskCount, estimatedHours, actualHours}` — no task list — for cheap active-sprint-id lookups when you don't need the full task array (the full version can exceed tool-result token limits)."),
 });
 
 // =============================================================================
