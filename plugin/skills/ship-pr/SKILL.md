@@ -705,6 +705,13 @@ fine to continue; detect the anti-pattern where fixes actively create new proble
 > - **Hotfix flow (PR merged to `main`)**: parent task is still `In Progress` (Phase 6.5 was skipped). Phase 10 sets `Done` directly because hotfixes ship to prod at merge time.
 
 30. **After `gh pr merge` succeeds** (or when the agent detects the PR state is "MERGED"):
+    - **CRITICAL — order matters for `allowMainCheckout: true` sessions**: `gh pr merge` switches the local checkout back to `$defaultBase` AND deletes the local feature branch. `.claude/active-task.json` still names the (now-deleted) branch. Any Edit/Write between the merge and the state-file deletion will trip `branch-task-match` against a stale branch ref. Sequence:
+      1. Mark any remaining subtasks Done via `mcp__plugin_dev-tasks_dev-tasks__manageSubtasks` (MCP call — no Edit/Write hook).
+      2. `gh pr merge --admin --squash` (do NOT pass `--delete-branch` from a worktree; for `allowMainCheckout: true` it's safe but the local-branch-delete still happens).
+      3. **Immediately** `rm .claude/active-task.json` — BEFORE any Edit/Write.
+      4. Post final updates via `createUpdate` (MCP call — safe post-rm).
+    - In worktree sessions this sequence is implicit: `ExitWorktree({ action: "remove" })` in step 31 deletes the entire worktree including the state file. No window for stale-state friction.
+    - As of v0.8.7 `branch-task-match` fails open when the claimed branch no longer exists locally, so this is a soft requirement rather than a hard friction trap — but still the right ordering.
     - **Determine flow type**: read the PR base. `gh pr view --json baseRefName --jq .baseRefName`.
     - **Default flow (`baseRefName == $defaultBase`)**:
       a. Leave the task at `Waiting for UAT` (Phase 6.5 already set it). Do **NOT** call `updateTask({status: "Done"})`.

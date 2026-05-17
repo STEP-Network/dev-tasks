@@ -40,6 +40,18 @@ CURRENT_BRANCH=$(git -C "$PROJECT_ROOT" branch --show-current 2>/dev/null)
 # Allow exact match.
 [ "$CURRENT_BRANCH" = "$CLAIMED_BRANCH" ] && exit 0
 
+# Fail-open if the claimed branch no longer exists locally — this is the
+# post-merge state under `allowMainCheckout: true`. `gh pr merge --squash`
+# deletes the local feature branch and switches the checkout back to the
+# default base. active-task.json still names the deleted branch, but there's
+# no drift to guard against anymore — the work shipped, the branch is gone,
+# the state file is about to be cleaned up by ship-pr Phase 10. Worktree
+# sessions don't hit this path (state file lives inside the worktree, gets
+# removed with it).
+if ! git -C "$PROJECT_ROOT" show-ref --quiet "refs/heads/$CLAIMED_BRANCH"; then
+  exit 0
+fi
+
 # Read input to pull out the file path for a more useful error message
 INPUT=$(cat)
 FILE_PATH=$(printf '%s' "$INPUT" | jq -r '.tool_input.file_path // .tool_input.notebook_path // ""' 2>/dev/null || printf '')
