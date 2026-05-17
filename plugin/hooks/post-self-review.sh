@@ -52,10 +52,28 @@ if [ -z "$PARSED_ROW" ]; then
   exit 0
 fi
 
-# Append via the TS validator. The validator exits non-zero on schema failure;
-# we capture that and warn but DO NOT block.
-APPEND_OUTPUT=$(cd "$PROJECT_ROOT" && echo "$PARSED_ROW" | pnpm tsx scripts/append-review-memory.ts 2>&1)
-APPEND_EXIT=$?
+# Append via the plugin's TS validator. The validator exits non-zero on
+# schema failure; we capture that and warn but DO NOT block.
+#
+# We invoke the plugin's local `tsx` binary directly (not `pnpm tsx`). pnpm
+# would call `runDepsStatusCheck` → `pnpm install` → potentially fail on
+# ERR_PNPM_IGNORED_BUILDS in the consumer repo. The plugin's own
+# node_modules ships with tsx pre-installed (declared as a runtime dep in
+# plugin/package.json as of v0.9.0).
+TSX_BIN="$SCRIPT_DIR/../node_modules/.bin/tsx"
+APPEND_SCRIPT="$SCRIPT_DIR/append-review-memory.ts"
+
+if [ -x "$TSX_BIN" ]; then
+  APPEND_OUTPUT=$(CLAUDE_PROJECT_DIR="$PROJECT_ROOT" "$TSX_BIN" "$APPEND_SCRIPT" 2>&1 <<< "$PARSED_ROW")
+  APPEND_EXIT=$?
+else
+  # No fallback: tsx is a runtime dep in plugin/package.json, and the plugin's
+  # `npm install` at install time populates node_modules/.bin/tsx. If we got
+  # here, something is wrong with the install — fail loudly rather than silently
+  # masking with an npx download path.
+  APPEND_OUTPUT="post-self-review: tsx binary missing at $TSX_BIN — plugin install is incomplete"
+  APPEND_EXIT=1
+fi
 
 if [ "$APPEND_EXIT" -ne 0 ]; then
   echo "post-self-review: append failed (non-blocking)" >&2
