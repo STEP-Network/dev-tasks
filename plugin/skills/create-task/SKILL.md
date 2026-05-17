@@ -18,8 +18,23 @@ Read `.claude/project-config.json`. Extract `monday.productId` — the Products-
 
 ## Workflow
 
-1. **Check for duplicates**: Use `mcp__plugin_dev-tasks_dev-tasks__getBacklog` to search for similar/related tasks.
-   - If similar keywords / overlapping scope: show the existing task and ask whether to update it or create new.
+1. **Dedupe — REQUIRED** (per `.claude/rules/meta-workflow.md` "Dedupe before create"):
+
+   Search BEFORE creating. Don't skip — duplicate tasks split owner attention, dilute sprint capacity signals, and clog the backlog.
+
+   a. **Active backlog search** — call `mcp__plugin_dev-tasks_dev-tasks__getBacklog({ query: "<2–3 keywords from your draft>", productId: $productId })`. Inspect every result for:
+      - **Exact-name match** → stop. Update the existing task (`updateTask`) to add context, or — if it's already at `Done`/`Pending Deploy` — surface it to the user as "this was already shipped, do you want a follow-up?"
+      - **>50% keyword overlap AND same epic** → near-duplicate. Present both to the user; default to enriching the existing unless the angle is genuinely different.
+      - **No match** → continue.
+
+   b. **Cross-surface check** — same idea could be in the wrong queue. Before calling `createTask`, ask:
+      - "Would this produce wrong output for a real user?" — if YES, file via `createBug` instead.
+      - "Is this workflow/tooling friction without a user-visible bug?" — file a Retro via `/dev-tasks:file-retro`.
+      - "Is this stakeholder feedback rather than a planned change?" — file via `createFeedback` and let `/triage-feedback` route it.
+
+   c. **Recently-shipped check** — search the Versions board for the keywords too (`mcp__plugin_dev-tasks_dev-tasks__listVersions({ search: ... })`). A "new" task that recreates work shipped in v0.7.x last week is the most common duplicate class.
+
+   If after a-b-c there are no matches: continue to Step 2.
 
 2. **Epic assignment** (MANDATORY — no orphaned tasks):
    - Call `mcp__plugin_dev-tasks_dev-tasks__listEpics(productId: $productId)` to get available epics for this product.
