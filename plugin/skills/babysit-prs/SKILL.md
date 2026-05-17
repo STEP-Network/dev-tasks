@@ -1,10 +1,10 @@
 ---
 name: babysit-prs
-description: Orchestrator-side merge-polling loop for multi-agent fan-out — used when a parent session has spawned ≥2 parallel sub-agents each producing a PR. Not the default flow as of v0.8.9; single-agent end-to-end work uses /ship-pr Phase 6.6 autonomous merge instead.
+description: Orchestrator-side merge-polling loop for any PR the main session didn't push itself — subagent-produced PRs (most common), multi-agent fan-out (parallel subagents), or recovery from a prior session. Single-agent main-session work uses /ship-pr Phase 6.6 autonomous merge instead.
 user_invocable: true
 ---
 
-# /babysit-prs — Orchestrator PR Merge Loop (multi-agent fan-out)
+# /babysit-prs — Orchestrator PR Merge Loop
 
 > **Overlay**: if `.claude/skills/babysit-prs/SKILL.md.local` exists in the consumer repo, read it and apply as additional project-specific instructions (extend-only — overlay can append checks/steps but cannot replace plugin behavior).
 
@@ -12,21 +12,27 @@ user_invocable: true
 
 Read `.claude/project-config.json`. Extract `git.defaultBase` (integration branch; this skill polls PRs targeting it) and `git.hotfixBase` (production branch; hotfix PRs go there and require human merge). Wherever this skill says `staging` in `gh pr list --base`, substitute `$defaultBase`.
 
-## Why this skill exists (and when it's no longer the default)
+## Why this skill exists
 
-The 2026-05-15 "agents never merge" policy made this skill the default orchestrator. As of v0.8.9, that policy is reversed for single-agent end-to-end work — `/ship-pr` Phase 6.6 now merges autonomously, see `.claude/rules/agent-autonomy.md`.
+Subagents (Task-spawned) can't poll CI — they're one-shot processes without `Monitor` or persistent loops. So when a subagent does `/ship-pr` and pushes a PR, **someone else has to handle the merge.** That's this skill, run by the main session.
 
-**This skill is preserved for the multi-agent fan-out case**: a parent session spawning N parallel sub-agents that each produce a PR. Centralized merge polling makes sense there — one polling loop watches all N PRs, instead of each sub-agent running its own CI poll.
+Three concrete use cases per `.claude/rules/agent-autonomy.md` "When the orchestrator pattern still applies":
+
+1. **Subagent-produced PRs (most common)**: main session spawned a Task() subagent → subagent did `/ship-pr` → handed off via SendMessage. Main session runs `/babysit-prs` to poll CI + merge.
+2. **Multi-agent fan-out**: parent session spawning N parallel subagents, each producing a PR. One polling loop watches all N PRs from the main session.
+3. **Recovery from prior session**: previous main-session run ended before its push reached merge state. Rare under v0.8.9 (`stop-ci-green-check.sh` blocks the early Stop) but possible if force-killed.
+
+For single-agent main-session end-to-end work, `/ship-pr` Phase 6.6 merges autonomously — no need to invoke `/babysit-prs` separately.
 
 ## When to invoke
 
-- After spawning **≥2 parallel sub-agents** that will produce PRs (run it once they've reported back with PR URLs)
+- After spawning a subagent (or N subagents) that ran `/ship-pr` and handed off — `gh pr list --base $defaultBase --state open --json number,title,headRefName` shows their PRs
 - Periodically during a multi-agent fan-out to keep the merge queue moving
-- When you notice `gh pr list --base $defaultBase --state open` is non-empty AND >1 PR belongs to in-flight sub-agents
+- When you notice in-flight subagent PRs that haven't merged yet
 
 ## When NOT to invoke
 
-- **For single-agent end-to-end work** — that flow uses `/ship-pr` Phase 6.6 autonomous merge. Invoking `/babysit-prs` there is redundant.
+- **For single-agent main-session work** — that flow uses `/ship-pr` Phase 6.6 autonomous merge. Invoking `/babysit-prs` is redundant.
 - For hotfix PRs targeting `$hotfixBase` — those require human merge per `.claude/rules/release-flow.md`
 - If you're about to end the session — leave open PRs for the next orchestrator session to pick up
 

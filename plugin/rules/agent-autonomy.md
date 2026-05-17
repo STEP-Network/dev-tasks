@@ -1,14 +1,36 @@
 # Agent Autonomy
 
-> **STEP-wide policy.** Codifies what an agent does autonomously vs. when it must stop and ask. Supersedes the 2026-05-15 "agents never merge" handoff policy in `ship-pr.md` (preserved as a non-default escape hatch for multi-agent fan-out).
+> **STEP-wide policy.** Codifies what an agent does autonomously vs. when it must stop and ask. The policy branches on execution context — main-session vs subagent — because the two have fundamentally different tool surfaces.
 
-## TL;DR
+## Execution context — the load-bearing distinction
 
-The agent owns the FULL lifecycle of a claimed task — from `/pickup-task` through merge to `$defaultBase`. The agent polls CI, fixes failures inline, addresses reviews, merges when clean, claims the next planned task (or ends if none planned).
+**Identify which context you're in BEFORE applying any policy below.**
 
-**The only valid early exit is "Stuck"** — and only for genuinely unforeseen, irreversible decisions the agent has no authority to make. CI failures, review BLOCKERs, broken tests, missing config — none of these are Stuck. They are problems the agent is expected to diagnose and resolve.
+| Context | What it is | Tool surface | Can it poll CI? |
+|---|---|---|---|
+| **Main Claude Code session** | The persistent `claude` CLI process the operator launched. | All tools, including `Monitor`, `run_in_background`, `ScheduleWakeup`. Receives notifications across turns. | **Yes** — autonomous merge per this rule. |
+| **General-purpose subagent** | Spawned via `Task(subagent_type: "general-purpose")`. | `*` (all tools). Single-turn execution. | Limited — single-turn means no cross-turn polling. Default to handoff unless the subagent's prompt explicitly authorizes inline polling. |
+| **Specialized subagent** | Spawned via `Task(subagent_type: "<name>")` for any other type (codebase-researcher, self-reviewer, doc-updater, etc.). | Constrained per the agent's tool list — most lack `Monitor`, `run_in_background`. | **No** — must hand off to main session for any post-push work. |
 
-## What the agent always does autonomously
+**Quick self-check**: if `Monitor` is not in your available tools, you are a specialized subagent. Use the handoff pattern. If `Monitor` is available AND you're a persistent session (not a Task() invocation), use autonomous merge.
+
+## TL;DR by context
+
+**Main session** (the default operator workflow):
+
+The agent owns the FULL lifecycle of a claimed task — from `/pickup-task` through merge to `$defaultBase`. Polls CI, fixes failures inline, addresses reviews, merges when clean, claims the next planned task (or ends if none planned).
+
+**Specialized subagent** (Task-spawned, no Monitor):
+
+The subagent does work up to "PR open + pushed" (`/ship-pr` Phases 0–5). It then SendMessages the main session with the PR URL and ends. Main session handles all CI polling, review triage, and merging — either inline (autonomous merge per main-session policy) or via `/babysit-prs` if multiple subagents have open PRs.
+
+**General-purpose subagent**:
+
+Treat as main-session-like only if the parent's prompt explicitly authorized inline polling AND the subagent doesn't actually need `Monitor` (e.g., short CI windows). Otherwise default to the handoff pattern.
+
+**The only valid early exit is "Stuck"** — applies to BOTH contexts. Reserved for genuinely unforeseen, irreversible decisions the agent has no authority to make. CI failures, review BLOCKERs, broken tests, missing config — none of these are Stuck. They are problems the agent is expected to diagnose and resolve. (For subagents that hit Stuck post-push, post the Stuck update + SendMessage main session with context; do not attempt to fix CI inline.)
+
+## What the main session always does autonomously
 
 | Phase | Default action |
 |---|---|
@@ -66,11 +88,44 @@ Two things changed since:
 
 The handoff pattern has real costs: context switch to a separate session, manual scheduling by the operator, state lost between sessions, multiple Monday updates that read as "in flight" until the orchestrator finishes. Removing those costs is worth more than the safety of "always have a second pair of human eyes on the merge button."
 
-## When the orchestrator pattern still applies
+## Main session as orchestrator — be diligent with subagents
 
-`/babysit-prs` (the orchestrator skill) is preserved as a non-default escape hatch for **multi-agent fan-out**: a parent session spawning N parallel sub-agents that each produce a PR. Centralized merge polling makes sense there (one polling loop watches all N PRs).
+The main session isn't just "the one that merges." It's the **orchestrator** — the entity with persistent state, `Monitor`, `Task` spawn, and the full tool surface. Use it. Don't grind through work serially when subagent delegation is the right shape.
 
-For single-agent end-to-end work, default to autonomous merge per this rule.
+Default heuristic: **if a piece of work would flood your context with intermediate results or could plausibly run in parallel with other pieces, spawn a subagent for it.** Specific patterns:
+
+| Work shape | Spawn subagent? | Which one |
+|---|---|---|
+| Codebase exploration (mapping data flow, finding all usages, "where is X handled") | YES — context-flood guard | `dev-tasks:codebase-researcher` or `general-purpose` |
+| Self-review of a diff | YES — explicit anti-anchoring | `dev-tasks:self-reviewer` (via `/self-review` skill) |
+| Doc updates triggered by diff | YES — focused, isolated | `dev-tasks:doc-updater` |
+| Running Playwright E2E suites | YES — isolated test surface | `dev-tasks:e2e-tester` |
+| N independent feature slices that share no state | YES, in parallel | One subagent per slice — main session orchestrates merge order |
+| Bulk refactor across N files where each file is independent | YES, in parallel | N subagents, one per file/area |
+| Cross-cutting refactor where slices share state (contract changes propagating to consumers) | Consider Agent Teams (see `agent-coordination.md`) | TeamCreate + lead + N teammates |
+| Quick single-file edit | NO — just do it inline | — |
+| Plan-mode brainstorm | NO — main session decides | Use `Plan` mode or `EnterPlanMode` if available |
+| Anything requiring tools the subagent doesn't have (e.g. Monitor for CI) | NO — main session does it | — |
+
+**Concurrency**: when spawning multiple subagents that are genuinely independent, **send all `Agent` tool calls in a single message** (the harness runs them concurrently). Sequential spawning serializes work that could be parallel.
+
+**Worktree discipline**: every subagent doing source edits gets its own worktree. Either explicit (`git worktree add` in the brief), or `Agent({ isolation: "worktree" })`, or an Agent Team where coordination is explicit. Don't let two subagents race on the same `.claude/active-task.json`.
+
+**When in doubt, read `agent-coordination.md`** — it has the subagents-vs-Agent-Teams decision matrix + sizing guidance + anti-patterns (e.g., don't spawn a Team for tightly-coupled work that would collide on the same files).
+
+**Cost discipline**: subagents are not free. Each is a full Claude instance (or Haiku-routed for cheap delegation). Default to subagents for context-flood and parallelism, not for trivial work you could do inline in 2 tool calls.
+
+**End-to-end ownership stays with the main session**: subagents push PRs and hand off; the main session merges (autonomously per `/ship-pr` Phase 6.6, or via `/babysit-prs` when multiple subagent PRs are in flight).
+
+## When the orchestrator pattern (`/babysit-prs`) still applies
+
+`/babysit-prs` is the canonical merge-polling loop for **anything the main session didn't push itself**:
+
+1. **Subagent-produced PRs**: any time the main session spawned a Task(...) subagent that did `/ship-pr` and handed off. The subagent can't poll CI; main session runs `/babysit-prs` to merge once clean.
+2. **Multi-agent fan-out**: parent session spawning N parallel subagents, each producing a PR. One polling loop watches all N PRs from the main session.
+3. **Recovery from prior session**: if a previous main-session run ended before its push reached merge state (rare under v0.8.9 policy — `stop-ci-green-check.sh` blocks the early Stop — but possible if the operator force-killed).
+
+For single-agent main-session end-to-end work, default to autonomous merge per `/ship-pr` Phase 6.6. No need to invoke `/babysit-prs` separately.
 
 ## Interaction with other gates
 
