@@ -256,7 +256,7 @@ Keep status lines short. The user runs Opus 4.7 with max thinking — they don't
 
 ## Cross-references
 
-- `/ship-pr` Phase 6.6 — the agent-side counterpart (push + handoff, NO merge)
+- `/ship-pr` Phase 6.6 — main-session autonomous merge (default) OR subagent handoff (when no `Monitor`). This skill is the orchestrator's merge loop for the latter case.
 - `.claude/rules/release-flow.md` — branching + merge policy (staging-as-base, hotfix exception)
 - `.claude/rules/task-lifecycle.md` — Monday status transitions (Waiting for UAT requires UAT doc + all subtasks Done)
 - `.claude/scripts/worktree-audit.sh` — batch worktree cleanup helper
