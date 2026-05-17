@@ -31,6 +31,15 @@ user_invocable: true
 7. **Promote status** (if appropriate): if the task was `Needs Refinement` and now satisfies all gate prereqs, call `mcp__plugin_dev-tasks_dev-tasks__updateTask` with `status: "Ready to Start"`. The MCP validates; on rejection it lists what's still missing.
 8. **Post PLAN_CREATED event**: `mcp__plugin_dev-tasks_dev-tasks__createUpdate` with the subtask list + total estimate.
 
+9. **Conditional plan depth-check** — if ANY of these criteria match the plan, invoke `/dev-tasks:holistic-thinking` to apply the L1 / L2 / L3 lens BEFORE the task is claimed:
+    - The plan touches ≥2 unrelated subsystems (e.g. registration form AND admin dashboard AND email templates)
+    - This is the Nth attempt at the same class of issue (check `listRetros` + `getBacklog` for prior tasks with overlapping keywords)
+    - The plan addresses a symptom and you're not sure if there's a deeper root cause (e.g. fixing one off-by-one but suspecting the pattern repeats elsewhere)
+    - Acceptance criteria mention "ensure", "all", "every", or list ≥5 bullets (high coupling surface)
+    - The first-draft plan feels off but you can't articulate why
+
+    Otherwise: skip. Don't run holistic-thinking on a mechanical 30-min refactor — performative depth-checking is noise. Run it when the plan's shape genuinely warrants reflection.
+
 ## Arguments
 
 - `<task-id>`: Monday.com task ID to refine.

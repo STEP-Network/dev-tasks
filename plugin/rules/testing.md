@@ -50,15 +50,30 @@ pnpm playwright test   # Playwright E2E tests
 
 ## Visual Validation (Screenshots & Rendered Output)
 
-**Do NOT rely solely on string-matching unit tests for visual output. Always validate rendered HTML visually.**
+**Do NOT rely solely on string-matching unit tests for visual output. Always validate rendered HTML visually — with a BEFORE-and-AFTER pair when the change is incremental.**
+
+### Why before-and-after, not just after
+
+A single "after" screenshot tells you what the page looks like. It does NOT tell you what changed. The most common UI failure mode isn't "the new thing looks wrong" — it's "the new thing looks right but something adjacent broke." Spacing collapsed, a sibling moved, a font fell back, an unrelated section's padding regressed. A bare after-only check misses every one of those.
+
+Capture a Before (current behavior), apply the diff, capture an After. Then read both with the Read tool (images supported natively) and compare in plain language:
+
+- **Intended changes present?** — every visual acceptance-criterion bullet is observable in the After.
+- **Unintended deltas?** — anything else that changed visually in the After must trace to a diff hunk. If it doesn't, it's a regression in scope; fix it before declaring done.
 
 ### When Visual Validation Is Required
 
 | Change Type | Required Action |
 |-------------|----------------|
-| **Email template changes** | Playwright test navigates to `/dev/email-preview`, takes screenshot, agent reads screenshot via Read tool |
-| **UI/UX component changes** | Playwright test renders the page/component, takes screenshot, agent reads and inspects the image |
-| **Layout or styling changes** | Screenshot before/after comparison where feasible |
+| **Email template changes** | Capture rendered email at `/dev/email-preview` (or equivalent) BEFORE + AFTER the diff. Read both, compare. |
+| **UI/UX component changes** | Capture the page/component BEFORE + AFTER the diff. Same viewport, same login state, same data. Read both, compare. |
+| **Layout or styling changes** | BEFORE + AFTER mandatory — these are the highest-risk-of-unintended-regression class. |
+| **Multi-state surfaces** (form empty/filled/error, modal open/closed, list empty/populated) | Capture EACH state, BEFORE + AFTER for each. Not just the happy path. |
+| **Viewport / theme conditional changes** | At least 2 viewport widths AND both themes (if the project has dark/light). |
+
+### The `/dev-tasks:visual-diff` skill
+
+The plugin ships a skill that orchestrates this workflow — call `/dev-tasks:visual-diff <page-url>` and it walks the Before → apply diff → After → Read both → compare → flag deltas. Use it as the canonical invocation. Manual capture (steps below) is for cases where the skill doesn't fit.
 
 ### Playwright Screenshot Pattern
 
@@ -84,9 +99,15 @@ test('component renders correctly', async ({ page }) => {
 ### Agent Visual Inspection
 
 After Playwright captures screenshots, the agent MUST:
-1. Use the **Read tool** to open the screenshot file (Read supports images natively)
-2. Visually inspect the rendered output for layout issues, missing elements, broken styling
-3. Only mark the visual validation as PASS if the rendered output looks correct
+1. Use the **Read tool** to open BOTH the before.png AND the after.png screenshot files (Read supports images natively)
+2. Compare in plain language:
+   - List each intended change. Verify each is observable in After but not Before.
+   - List anything else that's different between Before and After. For each delta, trace it to a diff hunk. If you can't, it's an unintended regression.
+3. Only mark visual validation PASS if:
+   - All intended changes are present
+   - No unintended visual deltas remain
+   - Layout / spacing / color / typography unchanged in unmodified regions
+4. On FAIL, name the specific regression and fix before re-running.
 
 ### Claude-in-Chrome MCP (Optional but Recommended)
 
