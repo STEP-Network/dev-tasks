@@ -14,10 +14,11 @@ Read `.claude/project-config.json` at the consumer repo root before doing anythi
 
 - `git.defaultBase` — base branch for feature PRs (e.g. `staging` or `main`)
 - `git.hotfixBase` — base branch for hotfix PRs (usually `main`)
+- `git.branchConvention` — template for new branch names (default `feat/<slug>`). Used in step 4.5 to derive both the branch name and the worktree directory name.
 - `monday.productId` — Monday Products-board item ID for this product, passed to `listEpics`
 - `monday.v1MilestoneEpicIds` — epic IDs that gate v1.0+ patch bumps (passed to `computeBumpSuggestion`)
 
-If `git.defaultBase` or `monday.productId` is missing, STOP and tell the user to add them to `.claude/project-config.json` before continuing. The fields below reference these as `$defaultBase`, `$productId`, `$v1MilestoneEpicIds`.
+If `git.defaultBase` or `monday.productId` is missing, STOP and tell the user to add them to `.claude/project-config.json` before continuing. The fields below reference these as `$defaultBase`, `$productId`, `$v1MilestoneEpicIds`, `$branchConvention`.
 
 > **Source-file edits for a claimed task must happen in a git worktree**, not
 > the main checkout. The `worktree-required.sh` PreToolUse hook hard-blocks
@@ -60,17 +61,33 @@ If `git.defaultBase` or `monday.productId` is missing, STOP and tell the user to
       already in a worktree) skip this step.
     - Derive a slug from the task name: terse, hyphen-separated, max ~30 chars.
       e.g. task name "Add publisher sign-off workflow" → slug `publisher-signoff`.
+    - Compute branch + worktree name from `$branchConvention` (read in step 0):
+      ```
+      branch        = $branchConvention.replace("<slug>", slug)   // e.g. "feat/publisher-signoff"
+      worktreeName  = branch.replace("/", "-")                    // e.g. "feat-publisher-signoff"
+      ```
+      For hotfixes, swap `feat/` for `hotfix/` (or whatever the project's hotfix
+      convention is — typically the same template with a different prefix).
     - Make sure the main checkout HEAD is on the right base (`$defaultBase` for
       default flow; `$hotfixBase` for hotfixes). If not, get on it:
       `git checkout $defaultBase && git pull --ff-only`.
-    - Call `EnterWorktree({ name: "feat-<slug>" })` (or `hotfix-<slug>` for
-      hotfixes). The worktree lands at `.claude/worktrees/feat-<slug>/` on
-      branch `worktree-feat-<slug>` based off the current HEAD.
+    - Call `EnterWorktree({ name: worktreeName })`. The worktree lands at
+      `.claude/worktrees/$worktreeName/` on branch `worktree-$worktreeName`
+      based off the current HEAD. (Step 10 renames the branch to the canonical
+      `$branch` form afterward.)
     - Verify with `pwd` — you should now be working under
-      `.claude/worktrees/feat-<slug>/`.
+      `.claude/worktrees/$worktreeName/`.
     - **Skip ONLY if** you're already in a worktree, or the user authorized
       `"allowMainCheckout": true` for an emergency (document the reason in the
       task body).
+    - **Post-EnterWorktree node_modules** (optional but recommended): fresh
+      worktrees have no `node_modules`, so ship-pr's Phase 1 validation
+      (`pnpm build`/`lint`/`test`) will trigger an implicit install that often
+      hits pnpm's interactive `approve-builds` prompt and fails silently. Pre-empt
+      with `pnpm install --offline --ignore-scripts` — uses the pnpm store cache,
+      skips lifecycle scripts, no interactive prompts. If it fails (store miss
+      for some dep), fall back to "CI is the gate; local pnpm is best-effort"
+      and proceed.
 
 4.6. **Dependency soft warning** (NON-BLOCKING — claimTask is the actual gate):
     - From the `getTask` response in step 4, read `dependencyIds` (column `dependency_mm0pwbxn`).
