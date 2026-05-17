@@ -1,0 +1,178 @@
+{
+  "$ref": "#/definitions/ReviewMemoryRow",
+  "definitions": {
+    "ReviewMemoryRow": {
+      "type": "object",
+      "properties": {
+        "ts": {
+          "type": "string",
+          "format": "date-time",
+          "description": "ISO 8601 UTC timestamp of when the review completed."
+        },
+        "source": {
+          "type": "string",
+          "enum": [
+            "self-review",
+            "bot-review"
+          ],
+          "description": "Which capture path produced this row. self-review = local /self-review skill via PostToolUse hook. bot-review = GitHub Claude bot via review-memory-sync.yml."
+        },
+        "pr": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "GitHub PR number, or null for local-only reviews (e.g. agent ran self-review before opening a PR)."
+        },
+        "branch": {
+          "type": "string",
+          "description": "Git branch name when the review ran."
+        },
+        "commit_sha": {
+          "type": "string",
+          "description": "Short SHA of HEAD when the review ran. Lets us trace findings back to specific commits."
+        },
+        "round": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "1-indexed iteration. Round 1 = first review on a PR. Round 2+ = re-reviews after fixes."
+        },
+        "reviewer_prompt_version": {
+          "type": "string",
+          "description": "Version tag of the reviewer prompt that produced these findings. Bumped when .claude/skills/self-review/SKILL.md changes substantively."
+        },
+        "diff_summary": {
+          "type": "object",
+          "properties": {
+            "files": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "lines_added": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "lines_removed": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "languages": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "File extensions touched. Lets pattern extraction filter by .ts vs .tsx vs .md etc."
+            }
+          },
+          "additionalProperties": false
+        },
+        "findings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "description": "PR-round-index. e.g. '116-r1-1' = first finding of round 1 on PR #116. Stable across re-runs."
+              },
+              "severity": {
+                "type": "string",
+                "enum": [
+                  "BLOCKER",
+                  "IMPROVEMENT",
+                  "POLISH",
+                  "PASS",
+                  "NA"
+                ],
+                "description": "Triage tier per .claude/rules/ship-readiness.md. PASS/NA are recorded for completeness but don't drive pattern extraction."
+              },
+              "category": {
+                "type": "string",
+                "description": "Free-text-but-stable signature for grouping (e.g. 'broken_path_reference', 'missing_i18n_key', 'snapshot_mutation_risk'). Pattern extractor groups by this."
+              },
+              "file": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "Path of the file the finding refers to, relative to repo root. null for whole-PR findings."
+              },
+              "line": {
+                "anyOf": [
+                  {
+                    "type": "integer",
+                    "minimum": 1
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "Line number, or null for file-level findings."
+              },
+              "outcome": {
+                "type": "string",
+                "enum": [
+                  "fixed",
+                  "declined",
+                  "dismissed",
+                  "pending"
+                ],
+                "description": "What the agent did with the finding. fixed = changed code. declined = posted decline comment per ship-readiness budget. dismissed = ignored as N/A. pending = not yet decided (gets backfilled in next round or on merge)."
+              },
+              "message": {
+                "type": "string",
+                "maxLength": 1000,
+                "description": "Truncated, redacted finding text. Truncated to 1000 chars to keep rows compact. Pattern extractor doesn't need full text — the (category, file) tuple is the primary signal."
+              },
+              "raw_text_sha256": {
+                "type": "string",
+                "pattern": "^[a-f0-9]{16}$",
+                "description": "SHA-256 of (file:line:message) truncated to 16 hex chars. Used by GAP-K to dedup identical findings across rounds — same hash means same finding, regardless of which round captured it."
+              }
+            },
+            "required": [
+              "id",
+              "severity",
+              "category",
+              "outcome"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "rounds_total": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 1
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Total rounds for this PR, backfilled when the PR merges. null while PR is open."
+        },
+        "final_review_addressed": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Final value of reviewAddressed in active-task.json when PR merged. e.g. 'fixed', 'accepted', 'stuck:regression-loop'. null while PR is open."
+        }
+      },
+      "required": [
+        "ts",
+        "source",
+        "branch",
+        "round",
+        "reviewer_prompt_version",
+        "findings"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "$schema": "http://json-schema.org/draft-07/schema#"
+}
