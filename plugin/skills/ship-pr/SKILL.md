@@ -192,43 +192,24 @@ Wherever this skill references `staging` / `main` as PR bases or git refs, subst
     - Existing PR → REVIEW_FEEDBACK_FIXED with commit SHA
 16. Via /log-progress with structured format including the preview URL
 
-### Phase 6: Hand off post-push polling to orchestrator (policy change 2026-05-15)
+### Phase 6: Autonomous CI + review polling (default policy as of v0.8.9)
 
-> **Replaces the old review loop.** Effective 2026-05-15, agents no longer wait for CI or
-> the bot review themselves. Steps 17–20 of the original review loop are deprecated.
->
-> **Why**: agent-side polling (`gh pr checks` Monitor, `gh pr view --json comments` Monitor)
-> kept stalling on stream-watchdog timeouts or never-firing predicates — the silent-after-CI
-> pattern that bit ≥7 agents across Sprint 10 + follow-through. The structural fix is to
-> move ALL post-push polling out of agent scope entirely.
+> **Supersedes the 2026-05-15 handoff policy.** Per `.claude/rules/agent-autonomy.md`, the agent owns the FULL lifecycle of a claimed task — push, poll CI, fix failures, address reviews, merge, claim next task. No more "handoff to orchestrator" by default. (`/babysit-prs` orchestrator pattern preserved for multi-agent fan-out — see "When the orchestrator pattern still applies" in agent-autonomy.md.)
 >
 > **What the agent does now**:
 > 1. Push PR (already done in Phase 2-3)
-> 2. Set `reviewAddressed: "handoff-to-orchestrator"` in `.claude/active-task.json`
->    — this is the escape-hatch value both stop hooks recognize (`stop-task-check.sh`
->    Stage 4+5 and `stop-ci-green-check.sh`) to allow exit BEFORE CI completes
-> 3. Proceed to Phase 6.5 (Waiting for UAT) + Phase 6.6 (SendMessage handoff)
-> 4. End the session
+> 2. Poll CI to terminal state (Steps 17–18 below — restored as the canonical flow, not archived)
+> 3. Poll Corridor + Vercel Agent + Claude bot reviews; triage per `ai-review-stack.md`
+> 4. Fix BLOCKERs / CI failures → re-push → loop until clean
+> 5. Merge: `gh pr merge --admin --squash` (NEVER `--delete-branch`)
+> 6. Phase 10 post-merge cleanup
+> 7. Claim next planned task via `/pickup-task` if one exists; otherwise end the session
 >
-> **What the orchestrator does** (in its own session, via `/babysit-prs`):
-> - Arms a Monitor that emits on each new Claude review comment, exits on
->   "ship-ready"/"no BLOCKERs"/"🟢" or "🔴 BLOCKER" in the body text
-> - On READY: merges via `gh pr merge --admin --squash`
-> - On BLOCKER: triages — fixes inline if <10 lines + low-risk, OR spawns a small
->   fixup subagent for larger work (the PR #286 BotID fix is the reference pattern)
-> - Polls Corridor findings independently and triages alongside the Claude review
+> **Stuck is the only valid early exit** (per `agent-autonomy.md`): a genuinely unforeseen, irreversible decision that wasn't anticipated in task creation/refinement. CI failures / review BLOCKERs / known-flake test failures are NOT Stuck — diagnose, fix, retry.
 >
-> **Hotfix exception**: PRs targeting `main` still require human merge — orchestrator
-> doesn't auto-merge them. The handoff-to-orchestrator value still applies though
-> (just means "agent done; human merges").
+> **Hotfix exception (still applies)**: PRs targeting `$hotfixBase` (production-blocker bugfixes) require human merge — the agent stops at "PR open + CI green + reviews addressed" for those and posts a final update naming the PR ready for human action. The autonomous-merge policy applies to default-flow PRs only.
 
-Steps 17–20 below are kept as ARCHIVED REFERENCE for the legacy review-loop pattern,
-which a future task might restore if the orchestrator-merge model proves insufficient.
-Skip directly to **Phase 6.5** under the new policy.
-
----
-
-#### LEGACY (archived) — Phase 6 Review Loop — superseded 2026-05-15
+#### Phase 6 Review Loop — canonical flow
 
 > **CRITICAL**: The stop hook HARD BLOCKS session termination if `reviewAddressed` is not set
 > in `.claude/active-task.json`. This phase is NOT optional. The agent MUST wait for,
@@ -541,45 +522,30 @@ fine to continue; detect the anti-pattern where fixes actively create new proble
     On rejection, the MCP returns a structured error listing the failing gate condition.
     Fix the named field and retry.
 
-### Phase 6.6: Hand off to orchestrator — DO NOT auto-merge (policy change 2026-05-15)
+### Phase 6.6: Autonomous merge (default-flow PRs)
 
-> **Why this phase changed**: Effective 2026-05-15, agents NEVER call `gh pr merge`.
-> The silent-after-CI failure pattern — agents go idle after `/ship-pr` finishes
-> because their tool loop ends, leaving the PR open at `mergeStateStatus: CLEAN`
-> until orchestrator manually merges — bit us across ≥6 Sprint 10 agents.
->
-> **Root cause**: agents have no event loop. They can either (a) poll-inline
-> synchronously (burning tokens + hitting watchdog timeouts) or (b) end their
-> turn and never wake up. Async monitoring is the trap.
->
-> **The fix**: agents do all the work up to "PR open + clean", then SendMessage
-> the orchestrator/team-lead with the PR URL. Orchestrator (a persistent
-> main-session loop, see `/babysit-prs` skill) owns ALL merges + ALL Monday
-> reconciliation. This puts the polling responsibility on the only entity that
-> CAN poll across turns — the orchestrator session.
->
-> **Hotfix exception (NON-NEGOTIABLE)**: hotfix PRs (base = `main`) MUST be
-> merged by a human. Same as before — production-blocker changes require human
-> eyes on the merge button.
+> Per `.claude/rules/agent-autonomy.md`, the agent merges its own default-flow PR after CI green + reviews addressed. The 2026-05-15 "agents never merge" policy is preserved as a non-default escape hatch in `/babysit-prs` for multi-agent fan-out only.
 
-20d. **Verify base + CI green** (informational, not gating):
-    - Base must be `$defaultBase` (read via `gh pr view {PR} --json baseRefName --jq .baseRefName`).
-    - All CI checks at terminal state per Step 17 disposition.
+20d. **Verify base + CI green** (preconditions, blocking):
+    - Base is `$defaultBase` (read via `gh pr view {PR} --json baseRefName --jq .baseRefName`). If `$hotfixBase`, skip to step 20g (hotfix exception — human merges).
+    - CI is all-green per Step 17 (or any failures are acked via `/tmp/.claude-ci-ack-<branch>` with reason).
+    - Review BLOCKERs are all resolved per Steps 18/18b/19 (Corridor + Vercel Agent + Claude bot).
 
-20e. **DO NOT call `gh pr merge`.** Removed. The orchestrator owns merging.
-
-20f. **SendMessage the orchestrator/team-lead** with the handoff:
+20e. **Merge — autonomous**:
     ```
-    SendMessage({
-      to: "team-lead",
-      summary: "PR #{N} ready for merge",
-      message: "PR opened: {PR URL}\nBase: {staging|main}\nBranch: {branch}\nMonday task: #{taskId}\nCI/review state: {summary — pass/fail/skipping per check}\nreviewAddressed: {accepted|fixed|stuck:...}\nUAT doc: {created|skipped (hotfix)}\nNotes for merge: {anything orchestrator needs — known-flake check names, etc.}"
-    })
+    gh pr merge {N} --admin --squash
     ```
-    For solo subagents (no team), still send the same message — the orchestrator handles routing.
+    **NEVER pass `--delete-branch`** (per v0.8.2 fix: collides with worktrees + main checkout). Use `git fetch --prune origin` post-merge for local ref cleanup.
 
-20g. **Trigger Phase 10 cleanup** immediately. The orchestrator will merge; agent's
-    work is done. State file cleanup + worktree removal happen now.
+20f. **Verify merge landed**:
+    ```
+    gh pr view {N} --json state --jq .state
+    ```
+    Should return `"MERGED"`. If `"OPEN"`, the merge command silently failed (branch protection? CI not really green? race with another push?) — diagnose via `gh pr view {N} --json mergeStateStatus,mergeable` and retry.
+
+20g. **Hotfix exception**: PRs targeting `$hotfixBase` (production-blocker bugfixes) require human merge — DO NOT call `gh pr merge`. Post a final update naming the PR ready for human action and stop after Phase 10 cleanup. The autonomous merge policy is default-flow only.
+
+20h. **Continue to Phase 10** (post-merge cleanup).
 
 20h. **Log progress**: `/log-progress TASK_WAITING_FOR_UAT` with:
     ```
@@ -755,6 +721,21 @@ fine to continue; detect the anti-pattern where fixes actively create new proble
 
 **The agent must always clean up the worktree after merge. For default-flow PRs the task stays at `Waiting for UAT` (the release ceremony sets `Done`); for hotfix-flow PRs the task is set `Done` directly.**
 
+### Phase 11: Claim next planned task (autonomous continuation)
+
+Per `.claude/rules/agent-autonomy.md`, after a successful merge + cleanup the agent does NOT stop — it claims the next planned task if one exists.
+
+33. **Check local task queue**: read whatever local plan / task list the operator gave at session start. If the prompt named a sequence of tasks (e.g. "after this, do #X and #Y") OR a `.claude/plan.md` lists pending items, claim the next one.
+
+34. **Claim next**: invoke `/dev-tasks:pickup-task <next-task-id>`. The skill spawns a fresh worktree, writes a new `.claude/active-task.json`, and starts the new task's flow from Phase 0.
+
+35. **End the session** ONLY if:
+    - No planned next task exists, OR
+    - The current task hit a Stuck condition (see `agent-autonomy.md` for criteria), AND no follow-up task is queued, OR
+    - The operator explicitly said "end after this one"
+
+The default posture is keep going. Stopping mid-queue without finishing it is a regression to the pre-v0.8.9 handoff pattern.
+
 ## Failure Handling
 
 - If build/lint/test fails: Show error, do NOT push, do NOT set marker
@@ -780,7 +761,7 @@ fine to continue; detect the anti-pattern where fixes actively create new proble
 - **User acceptance testing checklist presented** — specific, grouped, actionable items with preview URLs
 - **UAT doc generated** — `createTaskUatDoc`/`updateTaskUatDoc` called for default-flow PRs; column `doc_mm3adfdg` populated
 - **Task transitioned to `Waiting for UAT`** — Phase 6.5 default-flow only; hotfix-flow keeps `In Progress` through merge
-- **Handoff sent to orchestrator** — Phase 6.6 SendMessage with PR URL + state summary; agent DOES NOT merge
+- **Autonomous merge completed** — Phase 6.6 `gh pr merge --admin --squash` after CI green + reviews addressed (default flow). Hotfix PRs still require human merge.
 - **State file cleaned up** — `.claude/active-task.json` deleted after handoff
 - **Worktree removed** — `ExitWorktree({ action: "remove" })` called after handoff if the session was started in a worktree (Phase 0). Orchestrator's `/babysit-prs` will merge the PR and reconcile Monday post-merge.
 
