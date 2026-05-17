@@ -53,7 +53,32 @@ These hooks run for every consumer regardless of config:
 | Pre-push validation marker | `bash-guard.sh` gate (c) | `git push` without a fresh `/tmp/.claude-prepush-<branch>` marker matching HEAD |
 | CI green before session exit | `stop-ci-green-check.sh` | `Stop` while a push has happened and CI is not all-green |
 
-Plus the session-level expectation (not hook-enforced): always run Corridor `analyzePlan` before generating code.
+Plus the session-level expectation (not hook-enforced): always run Corridor `analyzePlan` before generating code (declared in user-level `~/.claude/CLAUDE.md`).
+
+## Required companion plugin: Corridor
+
+Corridor is a separate Claude Code plugin (not bundled — owned by Corridor) that provides security/regulatory static analysis. It is the **primary security layer** of the `ai-review-stack.md` framework. STEP-wide policy requires it installed alongside dev-tasks.
+
+**Role** (per `plugin/rules/ai-review-stack.md`):
+- `analyzePlan` (plan-time): scans the agent's plan for known anti-patterns before code-gen
+- Per-PR scan: posts findings on the PR (BLOCKER on open critical findings — `stop-ci-green-check.sh` blocks session exit until they're fixed or POLISH-declined)
+- Stop hook: session can't exit while open BLOCKER findings remain (enforced via Corridor's own hook if `CORRIDOR_BLOCKING_STOP_HOOKS=true` in env)
+
+**Install**: per Corridor's own onboarding docs. STEP-internal: see the team onboarding doc for the marketplace path. The install adds tools under the `mcp__plugin_corridor_corridor__*` namespace:
+
+- `analyzePlan` — call before any code-gen
+- `getFindings({ cwd, state, excludeAIFalsePositives })` — fetch open findings for the current branch
+- `getFinding({ findingId })` — drill into a single finding
+- `updateFindingState({ findingId, state, closedReasonCategory, closedReason })` — close POLISH-declined findings (`risk_accepted` or `false_positive`)
+- `createGuardrail` / `getGuardrails` / `listProjects` — for managing the project's guardrail set
+
+**Wired into the workflow**:
+- `/self-review` Check #11 — fetches findings + triages
+- `/ship-pr` Step 18b — second review source alongside Vercel Agent + Claude bot
+- `/dev-tasks:doctor` Check 11 — verifies the companion plugin is installed
+- Global `~/.claude/CLAUDE.md` — session-level "always call analyzePlan before code-gen"
+
+Without Corridor, those skills degrade to "Corridor unavailable" mode (still functional, but the security layer is missing). The plugin works without it; STEP policy requires it.
 
 ## Per-project config
 

@@ -45,12 +45,12 @@ See `ship-readiness.md` for the full principle.
    - `git diff $defaultBase...HEAD` — captures all branch changes (committed). For hotfix branches off `$hotfixBase`, use `git diff $hotfixBase...HEAD` instead.
    - `git diff HEAD` — captures uncommitted/unstaged changes
    Combine these for the full picture of what this branch introduces.
-2. **Fetch Corridor findings (external security scan)**: Call `mcp__corridor__getFindings({ cwd: "<project root>", state: "open", excludeAIFalsePositives: true })`. These are findings from Corridor's PR scanner / static analysis on this branch. Treat them as a parallel input to the self-reviewer agent — see Check #11 below for triage rules.
+2. **Fetch Corridor findings (external security scan)**: Call `mcp__plugin_corridor_corridor__getFindings({ cwd: "<project root>", state: "open", excludeAIFalsePositives: true })`. These are findings from Corridor's PR scanner / static analysis on this branch. Treat them as a parallel input to the self-reviewer agent — see Check #11 below for triage rules.
 3. **Spawn self-reviewer agent**: Use `Task` tool with `subagent_type: "self-reviewer"` to run the 10-point checklist against all changed files. The agent must NOT edit files — it only reports findings. Remind the agent of the ship-readiness principle in the prompt. Pass the Corridor findings list (file paths + severity) so the agent can correlate.
 4. **Evaluate results**:
    - If **all 10 PASS** AND Corridor has zero open BLOCKER findings on this branch: proceed to step 6
    - If **any FAIL** OR any Corridor BLOCKER remains: proceed to step 5
-5. **Fix all findings classified as FAIL**: Apply fixes for self-reviewer FAILs and Corridor BLOCKERs. For Corridor POLISH findings being declined, call `mcp__corridor__updateFindingState({ findingId, state: "closed", closedReasonCategory: "risk_accepted", closedReason: "<one-line rationale>" })` — this keeps the dashboard clean. Then **go back to step 1** (re-run the full review on the updated diff). Do NOT skip re-review — fixes can introduce new issues.
+5. **Fix all findings classified as FAIL**: Apply fixes for self-reviewer FAILs and Corridor BLOCKERs. For Corridor POLISH findings being declined, call `mcp__plugin_corridor_corridor__updateFindingState({ findingId, state: "closed", closedReasonCategory: "risk_accepted", closedReason: "<one-line rationale>" })` — this keeps the dashboard clean. Then **go back to step 1** (re-run the full review on the updated diff). Do NOT skip re-review — fixes can introduce new issues.
 6. **Mark self-review passed in state file**: Read `.claude/active-task.json` and set `"selfReviewPassed": true` with `"selfReviewPassedAt": "<ISO 8601>"`.
 7. **Post REVIEW_COMPLETED event** via `/log-progress REVIEW_COMPLETED`
 
@@ -112,7 +112,7 @@ Corridor's static-analysis scanner posts security findings on every PR. They're 
 
 If Corridor returns zero open findings on this branch, mark PASS with note "no findings".
 
-If `mcp__corridor__getFindings` errors (e.g. project not yet scanned, MCP unreachable, network error), do NOT block the self-review — mark Check #11 PASS with note "Corridor unavailable: <error>". Corridor's own Stop hook will still gate session exit if `CORRIDOR_BLOCKING_STOP_HOOKS=true`.
+If `mcp__plugin_corridor_corridor__getFindings` errors (e.g. project not yet scanned, MCP unreachable, network error), do NOT block the self-review — mark Check #11 PASS with note "Corridor unavailable: <error>". Corridor's own Stop hook will still gate session exit if `CORRIDOR_BLOCKING_STOP_HOOKS=true`.
 
 ### Check #9 — Docs (Detailed Rules)
 

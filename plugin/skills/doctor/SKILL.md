@@ -92,6 +92,19 @@ The `gh` CLI needs `checks:read` (or fine-grained `Checks: Read`) to query CI st
   - After regen: `gh auth refresh -s checks:read,workflow` or re-login via `gh auth login --web`.
 - If `gh auth status` errors entirely (`not logged in`): WARN — the user can use the plugin without `gh`, but `/babysit-prs` and `/ship-pr` Phase 6 won't work.
 
+### 11. Corridor companion plugin installed
+
+Corridor is a **STEP-wide required companion plugin** (per `.claude/rules/ai-review-stack.md` and the policy baseline in `plugin/README.md`). Without it: `analyzePlan` is unavailable, the Stop hook can't gate on findings, `/self-review` Check #11 + `/ship-pr` Step 18b silently degrade to "Corridor unavailable" mode.
+
+How to check:
+
+1. Inspect `~/.claude/settings.json` `enabledPlugins`. Look for a key matching `corridor@*` (typically `corridor@corridor-plugins`).
+2. Verify the plugin tools are loaded in this session by checking for any tool name starting with `mcp__plugin_corridor_corridor__` (e.g. `mcp__plugin_corridor_corridor__listProjects` should be invocable).
+
+- PASS: `corridor@*` present in `enabledPlugins` AND the MCP tools are loaded.
+- FAIL: missing — instruct the user to install Corridor's plugin per Corridor's own onboarding docs (the install source varies — could be a public marketplace, an internal STEP path, or a Corridor-provided package). After install: `/plugin install corridor@corridor-plugins` (or whatever the marketplace name is) → `/reload-plugins`.
+- WARN if enabledPlugins lists it but the MCP tools aren't loaded — likely needs a Claude Code restart to reconnect the MCP server.
+
 ## Output format
 
 ```
@@ -108,10 +121,11 @@ Plugin version: <X.Y.Z>
 6. ✅ whoami 'nate' resolves to person 103752074 (Nathaniel Refslund)
 7. ✅ bash-guard.sh + stop-ci-green-check.sh policy gates lifted (always-on)
 8. ✅ hooks.enabled[] doesn't list policy hooks
-9. ✅ Plugin version 0.8.2
+9. ✅ Plugin version 0.8.4
 10. ✅ gh PAT scopes include checks:read (or fine-grained Checks: Read)
+11. ✅ Corridor companion plugin installed (corridor@corridor-plugins) and MCP tools loaded
 
-Summary: 9 PASS, 1 WARN, 0 FAIL. Setup is good.
+Summary: 10 PASS, 1 WARN, 0 FAIL. Setup is good.
 ```
 
 If anything is FAIL: list the concrete remediation step for each.
