@@ -212,6 +212,14 @@ If `git.defaultBase` or `monday.productId` is missing, STOP and tell the user to
     - `unplanned`: true if the task was not already in the active sprint at pickup time
 13. **Read related files**: Use Glob/Grep to find files related to the task
 14. **Output context summary**: Show task details, related files, subtask plan
+15. **Conditional claim-time re-plan** — invoke `/dev-tasks:plan-task` if ANY of these signal that the task's subtask descriptions may have drifted from the current code:
+    - Task entered `Ready to Start` ≥72 hours ago
+    - ≥3 tasks have merged to `$defaultBase` since the task was last refined
+    - Subtask descriptions cite specific file paths / function names / schema fields
+    - Task is regulatory / schema migration / public-API contract / payment flow
+    - This is a follow-up to a previously-Stuck task
+
+    Otherwise skip — for recently-refined mechanical tasks, the subtask descriptions are still trustworthy and re-planning is overhead.
 
 ## Arguments
 
