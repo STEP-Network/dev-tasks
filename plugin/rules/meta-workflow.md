@@ -89,6 +89,36 @@ If ALL three apply, fix inline in the current PR/branch:
 Example: a typo in a skill comment → fix inline.
 Example: a hook silencing rule → file as retrospective (changes contract, needs alignment).
 
+## Dedupe before create — universal rule
+
+**Always search before calling any `create*` MCP tool.** Duplicates split owner attention, dilute capacity signals, and clog every board. This applies to tasks, bugs, retros, feedback, epics, and versions equally.
+
+Per-surface dedupe call:
+
+| Creating | Dedupe call | Filter |
+|---|---|---|
+| Task (`createTask`) | `getBacklog({ query, productId })` | name + description keyword search, scoped to product |
+| Bug (`createBug`) | `getBugs({ search, productId })` | name + description keyword search |
+| Retro (`createRetro`) | `listRetros({ activeSprint: true, search })` | scope to current sprint by default |
+| Feedback (`createFeedback`) | `listFeedback({ search, productId })` | name + description keyword search |
+| Epic (`createEpic`) | `listEpics({ productId })` then filter client-side on keyword overlap | no server-side text search on epics yet |
+| Version (`createVersion`) | `listVersions({ search, productId })` | versionNumber + name search |
+
+For each result, apply the same triage:
+
+- **Exact-name match** → stop. Update or comment on the existing item; don't file a duplicate.
+- **>50% keyword overlap + same scope (epic / product / sprint)** → near-duplicate. Default to enriching the existing unless the angle is genuinely different. Surface both to the user before deciding.
+- **No match** → proceed with creation.
+
+**Cross-surface check** — the same friction can land in the wrong queue. Before creating, ask:
+
+- "Would this produce wrong output for a real user?" → YES = Bug. NO = continue.
+- "Is this workflow/tooling friction (hook noise, skill drift, rule contradiction)?" → Retro.
+- "Is this stakeholder input or a feature request?" → Feedback (`createFeedback`) — let `/triage-feedback` route it to Task or Bug later.
+- "Is this a missing capability that needs a slot in the next sprint?" → Task.
+
+If the heuristics say two queues, file in the most authoritative one (Bug > Task > Retro > Feedback) and cross-link from the others.
+
 ## After-filing follow-through
 
 - Reference the filed item ID in the conversation summary so the user knows where to find it
@@ -96,10 +126,11 @@ Example: a hook silencing rule → file as retrospective (changes contract, need
 
 ## Anti-patterns
 
-- **Filing the same friction twice** — search the target board first via `mcp__monday__search` before creating
+- **Filing the same friction twice** — search the target board first (per the dedupe table above) before creating
 - **Filing speculative future-friction** — only file what was actually hit in this session
 - **Filing instead of fixing** — if it's a 3-line fix and meets the inline-fix criteria, fix it. Filing creates backlog noise.
 - **Mixing categories** — a hook that's both broken AND noisy gets two items: one bug for the broken behaviour, one retro for the noise.
+- **Skipping dedupe to save time** — every "save time" duplicate costs 10x more when the team has to reconcile two near-duplicate threads weeks later.
 
 ## When this rule is loaded
 
