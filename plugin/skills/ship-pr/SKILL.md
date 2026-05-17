@@ -192,9 +192,31 @@ Wherever this skill references `staging` / `main` as PR bases or git refs, subst
     - Existing PR → REVIEW_FEEDBACK_FIXED with commit SHA
 16. Via /log-progress with structured format including the preview URL
 
-### Phase 6: Autonomous CI + review polling (default policy as of v0.8.9)
+### Phase 6: Autonomous CI + review polling (main session) — or handoff (subagent)
 
-> **Supersedes the 2026-05-15 handoff policy.** Per `.claude/rules/agent-autonomy.md`, the agent owns the FULL lifecycle of a claimed task — push, poll CI, fix failures, address reviews, merge, claim next task. No more "handoff to orchestrator" by default. (`/babysit-prs` orchestrator pattern preserved for multi-agent fan-out — see "When the orchestrator pattern still applies" in agent-autonomy.md.)
+> **Branch on execution context first.** Per `.claude/rules/agent-autonomy.md`, the behavior depends on whether you're the main Claude Code session or a Task-spawned subagent.
+>
+> **Quick self-check**: is `Monitor` in your tool surface? If no → you're a specialized subagent without persistent polling capability. Use the SUBAGENT HANDOFF path below. If yes (main session or general-purpose subagent with `*` tools) → use the AUTONOMOUS MERGE path below.
+>
+> **Subagent handoff path** (no Monitor):
+> 1. PR is already pushed in Phases 2–3.
+> 2. Set `reviewAddressed: "handoff-to-orchestrator"` in `.claude/active-task.json` — this is the escape-hatch value `stop-task-check.sh` Stages 4+5 and `stop-ci-green-check.sh` recognize to allow exit before CI completes.
+> 3. SendMessage the main session with the PR URL + state summary (template in Phase 6.6 below).
+> 4. Trigger Phase 10 cleanup. Subagent's work is done; main session will pick up via `/babysit-prs` or inline polling.
+> 5. End.
+>
+> **Autonomous merge path** (main session, has Monitor):
+> 1. Push PR (Phases 2–3 done).
+> 2. Poll CI to terminal state (Steps 17–18 below).
+> 3. Poll Corridor + Vercel Agent + Claude bot reviews; triage per `ai-review-stack.md`.
+> 4. Fix BLOCKERs / CI failures → re-push → loop until clean.
+> 5. Merge: `gh pr merge --admin --squash` (NEVER `--delete-branch`).
+> 6. Phase 10 post-merge cleanup.
+> 7. Claim next planned task via `/pickup-task` if one exists; otherwise end.
+>
+> **Stuck is the only valid early exit for both paths** (per `agent-autonomy.md`). For subagents, "Stuck" means write the Stuck update + SendMessage main session with the context — do NOT attempt to fix CI inline.
+>
+> **Hotfix exception (both paths)**: PRs targeting `$hotfixBase` (production-blocker bugfixes) require human merge. Main session stops at "CI green + reviews addressed" with a final update naming the PR ready for human action.
 >
 > **What the agent does now**:
 > 1. Push PR (already done in Phase 2-3)
