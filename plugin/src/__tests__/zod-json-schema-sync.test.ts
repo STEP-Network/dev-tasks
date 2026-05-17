@@ -8,7 +8,7 @@
  * This test re-derives the JSON schema in-memory from the same generator
  * and asserts byte-equality with the committed file. If you edit the Zod
  * schema and forget to regenerate, this fails with a diff that tells you
- * to run `pnpm generate:schema`.
+ * to run `npm run generate:schema`.
  */
 
 import { readFileSync } from "node:fs"
@@ -29,7 +29,7 @@ describe("Zod ↔ JSON Schema sync", () => {
       const message = [
         "schemas/reviews.schema.json is out of sync with hooks/lib/reviews-schema.ts.",
         "",
-        "Run `pnpm generate:schema` and commit the updated JSON.",
+        "Run `npm run generate:schema` and commit the updated JSON.",
         "",
         "First diverging line:",
       ]

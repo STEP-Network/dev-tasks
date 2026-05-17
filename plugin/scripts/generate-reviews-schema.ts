@@ -6,7 +6,7 @@
  * Zod is the source of truth. The JSON Schema is a derived artifact.
  *
  * Manual invocation:
- *   pnpm tsx scripts/generate-reviews-schema.ts
+ *   npm run generate:schema
  *
  * CI invocation: the sync test in src/__tests__/zod-json-schema-sync.test.ts
  * regenerates in-memory and asserts byte-equality with the committed file.

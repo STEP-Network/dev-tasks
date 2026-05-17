@@ -257,7 +257,7 @@ describe("parse-self-review-output parser", () => {
   })
 
   it("reads round from active-task.json reviewAddressed history (path 3) when bot count is 0", () => {
-    const tmpStateFile = `/tmp/parser-test-state-${Date.now()}.json`
+    const tmpStateFile = `/tmp/parser-test-state-${Date.now()}-${process.pid}.json`
     writeFileSync(
       tmpStateFile,
       JSON.stringify({ reviewAddressed: "round 1 fixed; round 2 declined" }),

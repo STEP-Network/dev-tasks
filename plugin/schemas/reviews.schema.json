@@ -43,7 +43,7 @@
         },
         "reviewer_prompt_version": {
           "type": "string",
-          "description": "Version tag of the reviewer prompt that produced these findings. Bumped when .claude/skills/self-review/SKILL.md changes substantively."
+          "description": "Version tag of the reviewer prompt that produced these findings. Bumped when .claude/skills/self-review/SKILL.md changes substantively. Used by GAP-M to avoid conflating findings across prompt versions."
         },
         "diff_summary": {
           "type": "object",

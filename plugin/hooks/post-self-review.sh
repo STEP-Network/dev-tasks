@@ -66,14 +66,12 @@ APPEND_SCRIPT="$SCRIPT_DIR/append-review-memory.ts"
 if [ -x "$TSX_BIN" ]; then
   APPEND_OUTPUT=$(CLAUDE_PROJECT_DIR="$PROJECT_ROOT" "$TSX_BIN" "$APPEND_SCRIPT" 2>&1 <<< "$PARSED_ROW")
   APPEND_EXIT=$?
-elif command -v npx >/dev/null 2>&1; then
-  # Defensive fallback for dev installs where the plugin's node_modules isn't
-  # populated. npx --no-install refuses to fetch tsx — fails fast if it's not
-  # already in some node_modules up the tree.
-  APPEND_OUTPUT=$(CLAUDE_PROJECT_DIR="$PROJECT_ROOT" npx --no-install tsx "$APPEND_SCRIPT" 2>&1 <<< "$PARSED_ROW")
-  APPEND_EXIT=$?
 else
-  APPEND_OUTPUT="tsx binary unavailable at $TSX_BIN and npx not on PATH — skipping append"
+  # No fallback: tsx is a runtime dep in plugin/package.json, and the plugin's
+  # `npm install` at install time populates node_modules/.bin/tsx. If we got
+  # here, something is wrong with the install — fail loudly rather than silently
+  # masking with an npx download path.
+  APPEND_OUTPUT="post-self-review: tsx binary missing at $TSX_BIN — plugin install is incomplete"
   APPEND_EXIT=1
 fi
 

@@ -99,7 +99,7 @@ export const rowSchema = z
     reviewer_prompt_version: z
       .string()
       .describe(
-        "Version tag of the reviewer prompt that produced these findings. Bumped when .claude/skills/self-review/SKILL.md changes substantively.",
+        "Version tag of the reviewer prompt that produced these findings. Bumped when .claude/skills/self-review/SKILL.md changes substantively. Used by GAP-M to avoid conflating findings across prompt versions.",
       ),
     diff_summary: z
       .object({

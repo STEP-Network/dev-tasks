@@ -14,9 +14,11 @@
  *   2. <consumer-repo-root>/.claude/review-memory/reviews.jsonl
  *      (consumer repo root = CLAUDE_PROJECT_DIR ?? cwd)
  *
- * Atomicity: `appendFileSync` under PIPE_BUF (4KB on POSIX) is atomic. Our
- * rows are well under that, so concurrent appends from parallel post-self-
- * review fires don't interleave.
+ * Atomicity: `appendFileSync` opens the file with O_APPEND, which is de-facto
+ * atomic on Linux for small writes (kernel-level append). POSIX does not
+ * formally guarantee this for regular files, and macOS/APFS makes no
+ * guarantee — but rows are small (well under 4KB) and concurrent self-review
+ * fires are rare in practice, so interleaving is unlikely.
  */
 
 import { appendFileSync, mkdirSync, readFileSync } from "node:fs"
