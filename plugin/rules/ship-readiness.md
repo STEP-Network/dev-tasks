@@ -37,7 +37,7 @@ Every review finding — whether from self-review or a PR code reviewer — fall
 
 | Source | Owns | Triage notes |
 |---|---|---|
-| **Corridor** (per-PR findings + Stop hook) | Regulatory + security + project-authored guardrails | BLOCKER on open critical findings (Stop hook enforces); POLISH-declined items closed via `mcp__corridor__updateFindingState({ closedReasonCategory: 'risk_accepted' })` |
+| **Corridor** (per-PR findings + Stop hook) | Regulatory + security + project-authored guardrails | BLOCKER on open critical findings (Stop hook enforces); POLISH-declined items closed via `mcp__plugin_corridor_corridor__updateFindingState({ closedReasonCategory: 'risk_accepted' })` |
 | **Vercel Agent** (PR review comments on staging+main) | Correctness, performance, TS/React best-practices | Bot severity labels are advisory — apply heuristics below; decline POLISH via PR reply with classification + reason |
 | **Sentry Seer** (drafted fix PRs for production errors) | Production-only RCA; never pre-merge code | A Seer-drafted PR is itself a deliverable that must pass the same gates (Corridor + Vercel Agent + `/self-review`). See "Triaging a Seer draft PR" below |
 | **`/self-review`** (local Checks #1–11) | Project-specific rules (i18n, snapshots, GDPR, optimistic updates, sponsor amounts, etc.) | Wins over Vercel Agent on project-specific scope conflicts (reply on Agent's comment "deferred to /self-review Check #N") |

@@ -367,7 +367,7 @@ so they must be fetched and triaged separately (but feed into the SAME triage in
 Call once after the push commit lands on the branch:
 
 ```
-mcp__corridor__getFindings({
+mcp__plugin_corridor_corridor__getFindings({
   cwd: "<absolute project root>",
   branch: "<current branch name>",
   state: "open",
@@ -449,9 +449,9 @@ is worse than the downside of under-fixing (follow-up ticket).
 }
 ```
 
-**For each Corridor finding being declined, also call `mcp__corridor__updateFindingState`:**
+**For each Corridor finding being declined, also call `mcp__plugin_corridor_corridor__updateFindingState`:**
 ```
-mcp__corridor__updateFindingState({
+mcp__plugin_corridor_corridor__updateFindingState({
   findingId: "<finding uuid>",
   state: "closed",
   closedReasonCategory: "risk_accepted" | "false_positive",
