@@ -82,25 +82,44 @@ See `ship-readiness.md` for the full principle.
 
 ### Check #8 — Tests (Detailed Rules)
 
-**All three tiers are MANDATORY** for any feature or bug fix:
+**All applicable tiers are MANDATORY** for any feature or bug fix:
 
 1. **Unit tests** (`__tests__/lib/`): Validation schemas, utility functions, data transforms
 2. **Integration tests** (`__tests__/api/`): API routes with real database operations
 3. **E2E Playwright tests** (`e2e/`): User-facing flows exercised through the browser
-4. **Claude-in-Chrome MCP tests** (optional): Browser automation for complex UI interactions
+4. **Accessibility tests** (`e2e/accessibility.spec.ts`): WCAG-A + WCAG-AA via `@axe-core/playwright`. STEP-wide policy per `testing.md` Accessibility Testing section.
+5. **Cross-browser** (Chromium + Firefox + WebKit) for tests under `e2e/critical/`. Mobile viewports (Pixel 7 + iPhone 14) for tests under `e2e/mobile/`. Configured via `playwright.config.ts` projects.
+6. **Performance budgets** (`e2e/performance.spec.ts`): Web Vitals (LCP, CLS, INP) within configured budgets on user-facing pages.
+7. **Claude-in-Chrome MCP tests** (optional): Browser automation for complex UI interactions.
 
 Mark FAIL if ANY of these are violated:
 - New API route (`app/api/**/*.ts`) → MUST have unit test AND integration test in `__tests__/api/`
 - New hook (`lib/hooks/*.ts`) → MUST have test in `__tests__/hooks/`
-- New/changed UI flow → MUST have E2E test in `e2e/`
-- UI/email template changes → MUST have Playwright screenshot test that captures rendered output (see `testing.md` Visual Validation section)
-- Agent MUST read screenshot files (Read tool supports images) to visually validate rendered output before marking Tests as PASS — do NOT rely solely on string-matching unit tests for visual output
-- Bug fix → MUST have regression test covering the fixed behavior (at the appropriate tier)
+- New/changed UI flow → MUST have E2E test in `e2e/` (place in `e2e/critical/` if cross-browser coverage warranted)
+- New/changed user-facing page → MUST have a11y test entry in `e2e/accessibility.spec.ts` `PAGES_UNDER_TEST` array
+- UI/email template changes → MUST have run `/dev-tasks:visual-diff` (see Check #2)
+- Bug fix → MUST have regression test covering the fixed behavior
 - Modified business logic (validation, data transforms, auth) → existing tests MUST be updated
 - New schema field → MUST have integration test verifying storage, update, and retrieval
-- Claude-in-Chrome MCP testing (optional but recommended) for complex UI interactions: multi-step forms, modals, drag-and-drop, hover states
-- **"N/A" only valid for**: pure CSS/styling, i18n-only (locale file additions), config/infra changes (`.claude/`, `CLAUDE.md`), documentation-only
+- Performance-sensitive change (route changes, new dependencies, bundle additions) → MUST verify `e2e/performance.spec.ts` budgets still pass
+- **"N/A" only valid for**: pure config/infra changes (`.claude/`, `CLAUDE.md`), documentation-only, i18n-only locale additions
 - If claiming "N/A", the reviewer MUST state WHY with the specific exemption category
+
+### Running the tests — delegate to e2e-tester subagent
+
+For non-trivial test runs (full E2E suite, cross-browser sweep, a11y suite, perf suite), delegate to `dev-tasks:e2e-tester` instead of running inline:
+
+```
+Agent({
+  description: "Run E2E suite for self-review",
+  subagent_type: "dev-tasks:e2e-tester",
+  prompt: "Run the full e2e suite via the project's pnpm test:e2e script. Report pass/fail counts per project (chromium/firefox/webkit/mobile-*). Surface failures with stack traces. Don't edit any files."
+})
+```
+
+The subagent reads `playwright.config.ts` + `package.json` to find the right invocation, runs against `environments.uat.url` or a passed-in URL, and returns structured results. Self-review marks Check #8 PASS only if the subagent reports zero failures across all required projects.
+
+For Phase 3 of `e2e-masterplan.md` (auto-promote past UAT), the e2e-tester subagent's output feeds the confidence score.
 
 ### Check #2 — Visual Verification (Detailed Rules)
 

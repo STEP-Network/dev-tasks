@@ -192,7 +192,8 @@
               "subprocess-failure",
               "dev-tasks-update-guard",
               "build-failure-advisor",
-              "pipeline-reminder"
+              "pipeline-reminder",
+              "ui-change-test-reminder"
             ]
           },
           "uniqueItems": true

@@ -12,7 +12,21 @@
     },
     {
       "file": "testing.md",
-      "match": ["**/*.test.*", "**/*.spec.*", "**/tests/**", "**/__tests__/**", "**/e2e/**"]
+      "match": [
+        "**/*.test.*", "**/*.spec.*", "**/tests/**", "**/__tests__/**", "**/e2e/**",
+        "**/components/**/*.tsx", "**/components/**/*.jsx",
+        "**/app/**/page.tsx", "**/app/**/page.jsx",
+        "**/app/**/layout.tsx", "**/app/**/layout.jsx",
+        "**/app/**/error.tsx", "**/app/**/loading.tsx",
+        "**/lib/email/*-templates.tsx"
+      ]
+    },
+    {
+      "file": "e2e-masterplan.md",
+      "match": [
+        "**/playwright.config.*",
+        "**/e2e/**"
+      ]
     },
     {
       "file": "release-flow.md",

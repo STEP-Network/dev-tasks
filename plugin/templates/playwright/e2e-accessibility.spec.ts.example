@@ -1,0 +1,54 @@
+/**
+ * Example accessibility test using @axe-core/playwright.
+ *
+ * Install once: `pnpm add -D @axe-core/playwright`.
+ *
+ * Copy to `<consumer>/e2e/accessibility.spec.ts` and update PAGES_UNDER_TEST
+ * to match your routes. WCAG-A + WCAG-AA is the STEP-wide baseline per
+ * `.claude/rules/testing.md` "Accessibility Testing" section.
+ *
+ * Multi-state a11y (empty/error/loading) is covered by additional tests
+ * lower in this file — adapt to your actual interactions.
+ */
+
+import { test, expect } from "@playwright/test"
+import AxeBuilder from "@axe-core/playwright"
+
+const PAGES_UNDER_TEST = [
+  "/",
+  "/en/register",
+  "/en/account",
+  "/en/admin",
+  // Add critical public-facing + admin routes here
+]
+
+for (const path of PAGES_UNDER_TEST) {
+  test(`a11y: ${path}`, async ({ page }) => {
+    await page.goto(path)
+    const results = await new AxeBuilder({ page })
+      .withTags(["wcag2a", "wcag2aa"])
+      .analyze()
+
+    expect(
+      results.violations,
+      JSON.stringify(results.violations, null, 2),  // surfaces violations in test output
+    ).toEqual([])
+  })
+}
+
+// Multi-state example — registration form empty vs error
+test.describe("a11y: registration form states", () => {
+  test("empty state", async ({ page }) => {
+    await page.goto("/en/register")
+    const results = await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa"]).analyze()
+    expect(results.violations).toEqual([])
+  })
+
+  test("error state — submit empty form", async ({ page }) => {
+    await page.goto("/en/register")
+    await page.getByRole("button", { name: /submit|continue/i }).click()
+    await page.waitForSelector('[role="alert"]')
+    const results = await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa"]).analyze()
+    expect(results.violations).toEqual([])
+  })
+})
