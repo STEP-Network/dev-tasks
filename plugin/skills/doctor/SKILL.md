@@ -80,17 +80,28 @@ Verify `project-config.json` does NOT list `bash-guard` or `stop-ci-green-check`
 - Read `${CLAUDE_PLUGIN_ROOT}/.claude-plugin/plugin.json` — extract `version`
 - Tell the user the installed version. If they expected a different version, suggest `/plugin uninstall` + `/plugin install`.
 
-### 10. GitHub PAT has required scopes
+### 10. GitHub PAT can query CI status
 
-The `gh` CLI needs `checks:read` (or fine-grained `Checks: Read`) to query CI status via `gh pr checks` / `gh pr view --json statusCheckRollup`. Without it, every `babysit-prs` poll falls back to raw `gh api .../actions/runs` queries — slower and prone to scope errors. Also needs `workflow` (classic) or `Workflows: Read` (fine-grained) for run reruns.
+The `gh` CLI needs the ability to query CI status for `/ship-pr` Phase 6 and `/babysit-prs`. Two paths work in practice; check for whichever the user has:
 
-- Run `gh auth status --show-token` (don't dump the token; just check scopes). Look for `Token scopes:` line.
-- PASS: `checks:read` (or `Checks: Read`) is present.
-- FAIL: it's missing — instruct the user to regenerate the PAT:
-  - **Fine-grained**: GitHub → Settings → Developer settings → Fine-grained tokens → edit → Repository permissions → set **Checks: Read** and **Actions: Read**. Save.
-  - **Classic**: Settings → Developer settings → Personal access tokens (classic) → edit → enable `repo` and `workflow` scopes (`workflow` includes checks).
-  - After regen: `gh auth refresh -s checks:read,workflow` or re-login via `gh auth login --web`.
-- If `gh auth status` errors entirely (`not logged in`): WARN — the user can use the plugin without `gh`, but `/babysit-prs` and `/ship-pr` Phase 6 won't work.
+- **Path A (preferred — works on every token type)**: `gh api repos/<owner>/<repo>/actions/runs?per_page=1` returns 200. This is the workflow_runs endpoint that `/babysit-prs` uses as its primary query — it returns the same CI verdict as `gh pr checks`, just structured slightly differently. Requires `workflow` scope (classic) or `Actions: Read` (fine-grained), both of which most STEP-issued tokens already have.
+
+- **Path B (legacy — classic PATs only)**: `gh pr checks <PR>` returns 200. Requires `repo` scope on a classic PAT (which transitively includes check-runs access).
+
+> **Heads-up about `Checks: Read`**: GitHub **removed** the `Checks: Read` permission from fine-grained PATs (see community discussion #129512). No amount of UI clicking will surface it on a fine-grained token. The plugin's earlier (pre-0.8.6) check asked for that exact permission and could never pass for fine-grained tokens. Don't waste time looking for it — use Path A's `Actions: Read` instead.
+
+How to check:
+
+1. Run `gh auth status` (no `--show-token` — we just need the scopes list and the auth source).
+2. Try Path A: `gh api repos/STEP-Network/dev-tasks/actions/runs?per_page=1 >/dev/null 2>&1 && echo OK`. (Substitute any STEP-Network repo the user has access to.)
+3. If Path A returns OK → PASS. Done. `/babysit-prs` and `/ship-pr` Phase 6 work via the workflow_runs path.
+4. If Path A fails → try Path B: `gh pr checks 1 >/dev/null 2>&1 && echo OK`. If OK → PASS.
+5. If neither works → FAIL. Remediation:
+    - **Easiest**: classic PAT with `repo` + `workflow` scopes (deprecated by GitHub but still works). Settings → Developer settings → Personal access tokens (classic) → Generate new token → enable both scopes → set `GH_TOKEN` to it. Note: classic PATs are being phased out, so this is a temporary path.
+    - **Future-proof**: GitHub App installation token (granted `Actions: Read`). ~30 min setup but the GitHub-recommended path.
+    - **Cheapest**: unset `GH_TOKEN` and let `gh` fall back to its OAuth keyring token (`gh auth login --web`), which is a user-to-server token from the `gh` CLI's own GitHub App. The `workflow` scope on it grants Path A access.
+
+If `gh auth status` errors entirely (`not logged in`): WARN — the plugin still works without `gh`, but `/babysit-prs` and `/ship-pr` Phase 6 won't.
 
 ### 11. Corridor companion plugin installed
 
@@ -122,7 +133,7 @@ Plugin version: <X.Y.Z>
 7. ✅ bash-guard.sh + stop-ci-green-check.sh policy gates lifted (always-on)
 8. ✅ hooks.enabled[] doesn't list policy hooks
 9. ✅ Plugin version 0.8.4
-10. ✅ gh PAT scopes include checks:read (or fine-grained Checks: Read)
+10. ✅ gh can query CI status (workflow_runs endpoint OK via Actions: Read / workflow scope)
 11. ✅ Corridor companion plugin installed (corridor@corridor-plugins) and MCP tools loaded
 
 Summary: 10 PASS, 1 WARN, 0 FAIL. Setup is good.
