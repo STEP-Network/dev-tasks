@@ -49,7 +49,16 @@ Take a screenshot of the unmodified page. Use whichever tool is available, in th
 3. **Vercel preview URL of a recent commit on `$defaultBase`** — `gh pr view $(gh pr list --base $defaultBase --state merged --limit 1 --json number --jq '.[0].number') --json comments` to find the latest preview URL, then use the same screenshot tool against it. Acceptable when no local server is running.
 4. **Documented skip** — if NONE of the above is reachable, document why in self-review Check #2 and continue. Don't fake a Before.
 
-Save as `before.png` (or per-state if multiple: `before-empty.png`, `before-error.png`, etc.). Same viewport, login state, and data set as you plan to use in step 4.
+Save as `before.png` (or per-state if multiple: `before-empty.png`, `before-error.png`, etc.). Same login state and data set as you plan to use in step 4.
+
+**Capture BOTH desktop AND mobile by default** (as of v0.8.13). Mobile is no longer opt-in — it's required unless the change is provably desktop-only (e.g. an admin route with no responsive variant). Suggested viewports:
+
+- Desktop: 1440×900 (or `devices['Desktop Chrome']` if using Playwright)
+- Mobile: 390×844 (or `devices['iPhone 14']`)
+
+Save as `before-desktop.png` + `before-mobile.png`. Same for After in step 4. Step 5 reads both pairs and compares both viewports independently.
+
+Reason: mobile-first products fail most visibly on mobile, and Chrome-default screenshots miss responsive regressions. Capturing both is one extra screenshot per Before/After pair — cheap, catches the common failure mode.
 
 ### Step 3 — Apply the diff
 

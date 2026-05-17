@@ -1,0 +1,69 @@
+/**
+ * Example performance-budget tests for STEP Network projects.
+ *
+ * Copy to `<consumer>/e2e/performance.spec.ts` and adjust budgets based on
+ * your baseline measurements. Per `.claude/rules/testing.md`:
+ *   - Capture median LCP/CLS/INP across 5 runs on staging
+ *   - Set initial budgets at that median + 20%
+ *   - Tighten over time
+ *
+ * Failing budgets BLOCK the PR — they're not advisory.
+ */
+
+import { test, expect } from "@playwright/test"
+
+test.describe("Performance budgets", () => {
+  test("landing page — basic navigation timing", async ({ page }) => {
+    await page.goto("/", { waitUntil: "networkidle" })
+
+    const metrics = await page.evaluate(() => {
+      const navTiming = performance.getEntriesByType("navigation")[0] as PerformanceNavigationTiming
+      const paintTiming = performance.getEntriesByType("paint")
+      const fcp = paintTiming.find((p) => p.name === "first-contentful-paint")?.startTime ?? 0
+      return {
+        ttfb: navTiming.responseStart - navTiming.requestStart,
+        fcp,
+        domLoaded: navTiming.domContentLoadedEventEnd,
+      }
+    })
+
+    expect(metrics.ttfb, "TTFB budget").toBeLessThan(800)
+    expect(metrics.fcp, "FCP budget").toBeLessThan(1800)
+    expect(metrics.domLoaded, "DOMContentLoaded budget").toBeLessThan(3500)
+  })
+
+  test("landing page — Web Vitals (LCP + CLS)", async ({ page }) => {
+    await page.goto("/")
+
+    const vitals = await page.evaluate(() => {
+      return new Promise<{ lcp: number; cls: number }>((resolve) => {
+        const result: { lcp: number; cls: number } = { lcp: 0, cls: 0 }
+        let timeoutId: number
+
+        new PerformanceObserver((list) => {
+          const entries = list.getEntries() as (PerformanceEntry & { value?: number })[]
+          for (const entry of entries) {
+            if (entry.entryType === "largest-contentful-paint") {
+              result.lcp = entry.startTime
+            }
+            if (entry.entryType === "layout-shift") {
+              result.cls += entry.value ?? 0
+            }
+          }
+        }).observe({ type: "largest-contentful-paint", buffered: true })
+
+        new PerformanceObserver((list) => {
+          for (const entry of list.getEntries() as (PerformanceEntry & { value?: number })[]) {
+            result.cls += entry.value ?? 0
+          }
+        }).observe({ type: "layout-shift", buffered: true })
+
+        // Settle for 3s then return
+        timeoutId = setTimeout(() => resolve(result), 3000) as unknown as number
+      })
+    })
+
+    expect(vitals.lcp, "LCP budget").toBeLessThan(2500)  // 2.5s = "good"
+    expect(vitals.cls, "CLS budget").toBeLessThan(0.1)   // 0.1 = "good"
+  })
+})

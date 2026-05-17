@@ -1,0 +1,33 @@
+/**
+ * Example user-flow E2E test for STEP Network projects.
+ *
+ * Copy to `<consumer>/e2e/critical/landing-page.spec.ts` and adapt to your
+ * actual flow. The path under `e2e/critical/` is what triggers cross-browser
+ * runs (Firefox + WebKit) per `playwright.config.ts.example`'s projects.
+ *
+ * Pattern: arrange (page setup) → act (user interaction) → assert (observable
+ * outcome). Each test should describe ONE user journey.
+ */
+
+import { test, expect } from "@playwright/test"
+
+test.describe("Landing page", () => {
+  test("renders the primary CTA", async ({ page }) => {
+    await page.goto("/")
+    await expect(page.getByRole("button", { name: /get started|sign up|register/i })).toBeVisible()
+  })
+
+  test("primary CTA navigates to the register flow", async ({ page }) => {
+    await page.goto("/")
+    await page.getByRole("button", { name: /get started|sign up|register/i }).click()
+    await expect(page).toHaveURL(/.*\/register/)
+  })
+
+  test("legacy short-ID URL redirects to the canonical route", async ({ page }) => {
+    // STEP convention: `/<shortid>` redirects to `/[locale]/<resource>/<canonical-id>`
+    const response = await page.goto("/example-short-id", { waitUntil: "domcontentloaded" })
+    // 200 OR 301-style redirect that browser followed
+    expect(response?.status()).toBeLessThan(400)
+    expect(page.url()).toMatch(/\/(en|da|de|fr)\//)  // landed on a locale-prefixed route
+  })
+})

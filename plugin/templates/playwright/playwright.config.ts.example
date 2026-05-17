@@ -1,0 +1,75 @@
+/**
+ * Example Playwright config for STEP Network projects.
+ *
+ * Copy this to `<consumer>/playwright.config.ts`, then:
+ *   1. Adjust `webServer.port` to match your dev server
+ *   2. Adjust `webServer.command` to match your start script
+ *   3. Trim/extend the `projects` array to fit your cross-browser needs
+ *   4. Update `testDir` if your tests live somewhere other than `./e2e`
+ *
+ * Defaults reflect the e2e-masterplan.md baseline:
+ *   - Chromium for all tests
+ *   - Firefox + WebKit for `e2e/critical/*`
+ *   - Mobile Chrome + Mobile Safari for `e2e/mobile/*`
+ *
+ * See `.claude/rules/testing.md` for the broader pattern (a11y, perf budgets,
+ * visual regression).
+ */
+
+import { defineConfig, devices } from "@playwright/test"
+
+export default defineConfig({
+  testDir: "./e2e",
+  fullyParallel: true,
+  forbidOnly: !!process.env.CI,
+  retries: process.env.CI ? 2 : 0,
+  workers: process.env.CI ? 1 : undefined,
+  reporter: process.env.CI ? "html" : "list",
+
+  use: {
+    baseURL: process.env.PLAYWRIGHT_BASE_URL || "http://localhost:3000",
+    trace: "on-first-retry",
+    video: "retain-on-failure",
+    screenshot: "only-on-failure",
+  },
+
+  projects: [
+    // Default: Chromium for most tests
+    {
+      name: "chromium",
+      use: { ...devices["Desktop Chrome"] },
+    },
+
+    // Cross-browser for critical user flows only
+    {
+      name: "firefox",
+      use: { ...devices["Desktop Firefox"] },
+      testMatch: /critical\/.*\.spec\.ts/,
+    },
+    {
+      name: "webkit",
+      use: { ...devices["Desktop Safari"] },
+      testMatch: /critical\/.*\.spec\.ts/,
+    },
+
+    // Mobile viewports for responsive flows
+    {
+      name: "mobile-chrome",
+      use: { ...devices["Pixel 7"] },
+      testMatch: /mobile\/.*\.spec\.ts/,
+    },
+    {
+      name: "mobile-safari",
+      use: { ...devices["iPhone 14"] },
+      testMatch: /mobile\/.*\.spec\.ts/,
+    },
+  ],
+
+  // Adjust to your project's dev server
+  webServer: {
+    command: "pnpm dev",
+    port: 3000,
+    reuseExistingServer: !process.env.CI,
+    timeout: 120_000,
+  },
+})
