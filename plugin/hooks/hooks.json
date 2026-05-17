@@ -13,6 +13,12 @@
         ]
       },
       {
+        "matcher": "mcp__plugin_dev-tasks_dev-tasks__updateTask",
+        "hooks": [
+          { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/hooks/dev-tasks-update-guard.sh" }
+        ]
+      },
+      {
         "matcher": "Edit|Write",
         "hooks": [
           {
@@ -61,7 +67,18 @@
             "type": "command",
             "if": "Bash(*claude-ci-ack-*|*gh run rerun *--failed*|git revert *)",
             "command": "${CLAUDE_PLUGIN_ROOT}/hooks/auto-file-followup-nudge.sh"
+          },
+          {
+            "type": "command",
+            "if": "Bash(pnpm build*|pnpm lint*|pnpm test*|pnpm tsc*|pnpm pre-push*|pnpm validate-schema*)",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/build-failure-advisor.sh"
           }
+        ]
+      },
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/hooks/pipeline-reminder.sh" }
         ]
       },
       {

@@ -1,0 +1,46 @@
+# Overlay example: design-consistency
+
+Drop this file at `<consumer>/.claude/skills/design-consistency/SKILL.md.local`.
+It is APPENDED to the plugin's SKILL.md at runtime (extend-only — never replaces plugin behavior).
+
+The plugin's generic skill covers the reuse-before-invent framework. This overlay names your project's actual design system so the grep-first rule has concrete targets.
+
+---
+
+## <product> design system
+
+### Themed primitives (use over raw HTML)
+
+- **`<ThemedInput />`** — never raw `<input>`
+- **`<ThemedSelect />`** — never raw `<select>`
+- **`<Button />` (gradient variant)** — primary CTAs
+- (List every themed wrapper your project has)
+
+### Design tokens (verbatim — don't drift)
+
+```
+page wrapper:   bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900 pt-20 pb-10
+container:      max-w-4xl mx-auto px-4    (or max-w-6xl for admin)
+card surface:   bg-white/10 backdrop-blur-xl border border-white/20 rounded-xl
+primary CTA:    bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-700 hover:to-pink-700
+tooltip:        bg-gray-900/95 backdrop-blur-sm border-white/20 text-white
+nav clearance:  pt-20  (HARD rule per .claude/rules/ui-design.md)
+```
+
+### Domain component directories (grep these first)
+
+- `components/<domain1>/` — what it owns
+- `components/<domain2>/` — what it owns
+- `components/admin/` — admin tables, etc.
+
+### Stock primitives location
+
+`components/ui/` — shadcn (or equivalent) primitives. `ls` here before inventing.
+
+### Icon library
+
+`lucide-react` — pick names consistent with adjacent pages.
+
+### Toast / inline-feedback helper
+
+`useToast()` from `components/ui/use-toast.tsx`. Standard variants (default, destructive).
