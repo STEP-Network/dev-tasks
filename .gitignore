@@ -2,7 +2,9 @@
 node_modules/
 
 # build output
-plugin/dist/
+# Note: plugin/dist/ IS committed — Claude Code marketplace installs do not
+# run the `prepare`/`build` script, so consumers need pre-built artifacts in
+# the repo. Regenerate via `npm run build` before commit when src/ changes.
 *.tsbuildinfo
 
 # env files
