@@ -88,6 +88,23 @@ If `git.defaultBase` or `monday.productId` is missing, STOP and tell the user to
       skips lifecycle scripts, no interactive prompts. If it fails (store miss
       for some dep), fall back to "CI is the gate; local pnpm is best-effort"
       and proceed.
+    - **Post-EnterWorktree env files** (optional but recommended): `EnterWorktree`
+      starts a clean worktree with only git-tracked files. Any `.env*.local`
+      (gitignored by convention) is missing, so `pnpm dev` / `pnpm test` /
+      validation scripts that read env vars fail with "missing env" errors.
+      Copy from the parent checkout (the main repo dir that holds the `.git/`
+      directory, derivable via `git rev-parse --git-common-dir | xargs dirname`):
+      ```bash
+      PARENT=$(dirname "$(git rev-parse --git-common-dir)")
+      for f in .env.local .env.development.local .env.test.local; do
+        [ -f "$PARENT/$f" ] && cp "$PARENT/$f" "$f"
+      done
+      ```
+      Skip env files the project doesn't use. Don't copy `.env` (typically a
+      tracked example/template, not local secrets). If the project's
+      convention is different (e.g. `.env.staging` is local-only), the
+      consumer's overlay should extend the list — see
+      `.claude/skills/pickup-task/SKILL.md.local` if present.
 
 4.6. **Dependency soft warning** (NON-BLOCKING — claimTask is the actual gate):
     - From the `getTask` response in step 4, read `dependencyIds` (column `dependency_mm0pwbxn`).
