@@ -103,9 +103,9 @@ The 7 plugin skills (`/dev-tasks:pickup-task`, `create-task`, `refine-task`, `lo
 
 - Agent calls `claimTask` → server validates:
   - Status is "Ready to Start" (tasks in "Needs Refinement" must be refined and sprint-assigned first)
-  - Task is in the active sprint
   - Agent ID dropdown is empty
   - All blocked-by dependencies (column `dependency_mm0pwbxn`) are Done
+- Sprint membership is no longer a hard block. If the task isn't in the active sprint, `claimTask` **auto-pulls** it into the active sprint and sets `unplanned: true`, surfacing the action in the response. Hard-block only when there is no active sprint at all.
 - Success → sets In Progress + Agent ID + Plan ID + Started Date + Owner (auto-assigned)
 - Conflict → returns error with current owner
 
@@ -156,7 +156,8 @@ Used in `claimTask` (required), `createTask`, `createEpic`, `updateEpic`, `creat
 
   …and warns (but doesn't block) when missing GitHub link, branch (`text_mm0pvs3n`), demo URL, or PR link.
 
-- **In Progress** requires the task to be in the active sprint.
+- **Sprint auto-pull (any status leaving the refinement phase):** any transition to a status other than "Ready to Start" or "Needs Refinement" requires active-sprint membership. That includes `In Progress`, `Waiting for UAT`, `Pending Deploy to Prod`, `Done`, and `Stuck`. If the task isn't in the active sprint AND the same `updateTask`/`claimTask` call didn't explicitly pass `sprintId`, the plugin auto-pulls the task into the active sprint and sets the `unplanned` checkbox to `true`. Both column writes land atomically in the same `change_multiple_column_values` mutation as the status change. The tool response surfaces the action so the agent is aware. Hard error only when no active sprint exists.
+  - Note on `Done`: usually fires via Monday automation when subtasks complete (no auto-pull involved). A direct `updateTask({status:"Done"})` call DOES trigger auto-pull if the task is out-of-sprint — same rule as every other non-refinement status.
 
 Subtasks should describe work-on-code, not human verification (testing belongs in the UAT doc) — otherwise the "all subtasks Done" gate can't ever be satisfied.
 
