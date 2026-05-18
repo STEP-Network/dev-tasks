@@ -97,4 +97,15 @@ describe("planActiveSprintPull", () => {
     expect(plan.wasInActiveSprint).toBe(true);
     expect(plan.columnsToWrite).toEqual({});
   });
+
+  it("propagates errors from executeMondayQuery so callers' outer try/catch can format them", async () => {
+    executeMondayQueryMock.mockRejectedValueOnce(new Error("Monday API timeout"));
+    await expect(planActiveSprintPull([])).rejects.toThrow(/Monday API timeout/);
+  });
+
+  it("returns no-active-sprint error when boards response is null/empty (defensive)", async () => {
+    executeMondayQueryMock.mockResolvedValueOnce({ boards: null });
+    const plan = await planActiveSprintPull([]);
+    expect(plan.error).toMatch(/No active sprint found/);
+  });
 });

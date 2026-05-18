@@ -227,7 +227,10 @@ export async function getActiveSprintIds() {
   `;
     const response = await executeMondayQuery(query);
     const items = response.boards?.[0]?.items_page?.items || [];
-    return items.map((i) => Number(i.id));
+    // Sort numerically so multi-active-sprint picks are stable across calls —
+    // Monday's items_page does not guarantee stable order between calls, and the
+    // auto-pull picks activeIds[0] deterministically based on this sort.
+    return items.map((i) => Number(i.id)).sort((a, b) => a - b);
 }
 export async function validateTaskInActiveSprint(linkedSprintIds) {
     const activeIds = await getActiveSprintIds();

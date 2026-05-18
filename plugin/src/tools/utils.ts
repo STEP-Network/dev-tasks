@@ -271,7 +271,10 @@ export async function getActiveSprintIds(): Promise<number[]> {
   `;
   const response = await executeMondayQuery<any>(query);
   const items = response.boards?.[0]?.items_page?.items || [];
-  return items.map((i: any) => Number(i.id));
+  // Sort numerically so multi-active-sprint picks are stable across calls —
+  // Monday's items_page does not guarantee stable order between calls, and the
+  // auto-pull picks activeIds[0] deterministically based on this sort.
+  return items.map((i: any) => Number(i.id)).sort((a: number, b: number) => a - b);
 }
 
 export async function validateTaskInActiveSprint(

@@ -69,7 +69,8 @@ export async function updateTask(args) {
                     // not active, that's a contradiction with the status transition.
                     const sprintCheck = await validateTaskInActiveSprint([args.sprintId]);
                     if (!sprintCheck.valid) {
-                        return formatError(`Cannot set task #${itemId} to "${args.status}".\n${sprintCheck.message}`);
+                        return formatError(`Cannot set task #${itemId} to "${args.status}" with sprintId #${args.sprintId}.\n` +
+                            `The explicitly-passed sprintId must be the active sprint. ${sprintCheck.message}`);
                     }
                 }
                 else {

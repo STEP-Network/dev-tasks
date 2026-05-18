@@ -118,7 +118,11 @@ export async function claimTask(args) {
         }
         if (!pull.wasInActiveSprint) {
             lines.push("");
-            lines.push(`**Auto-pulled into active sprint:** #${pull.pulledIntoSprintId}`);
+            // Defensive default: pulledIntoSprintId is invariant-set when
+            // wasInActiveSprint=false && error=undefined, but TypeScript can't narrow
+            // the optional union shape — guard against future refactors silently
+            // emitting "#undefined" in the response.
+            lines.push(`**Auto-pulled into active sprint:** #${pull.pulledIntoSprintId ?? "(unknown)"}`);
             if (pull.markedUnplanned) {
                 lines.push(`**Unplanned flag set:** true`);
             }

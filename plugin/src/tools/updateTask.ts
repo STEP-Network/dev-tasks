@@ -100,7 +100,8 @@ export async function updateTask(args: UpdateTaskInput): Promise<string> {
           const sprintCheck = await validateTaskInActiveSprint([args.sprintId]);
           if (!sprintCheck.valid) {
             return formatError(
-              `Cannot set task #${itemId} to "${args.status}".\n${sprintCheck.message}`
+              `Cannot set task #${itemId} to "${args.status}" with sprintId #${args.sprintId}.\n` +
+              `The explicitly-passed sprintId must be the active sprint. ${sprintCheck.message}`
             );
           }
         } else {
