@@ -1,5 +1,5 @@
 import { executeMondayQuery } from "../monday-client.js";
-import { BOARDS, TASK_COLUMNS, TASK_STATUS, TASK_PRIORITY, TASK_TYPE, BUG_COLUMNS, BUG_STATUS, AGENT_ID, } from "../constants.js";
+import { BOARDS, TASK_COLUMNS, TASK_STATUS, TASK_PRIORITY, TASK_TYPE, BUG_COLUMNS, AGENT_ID, } from "../constants.js";
 import { buildColumnValues, getColumnText, getLinkedItems, resolveMaintenanceEpicId, formatError } from "./utils.js";
 export async function convertBugToTask(args) {
     try {
@@ -113,16 +113,19 @@ export async function convertBugToTask(args) {
       }
     `;
         await executeMondayQuery(linkQuery);
-        // Step 4: Update bug status to "Fixing"
+        // Step 4: Update bug status to "Converted to Task" (Option C workflow,
+        // v0.12.0+). Bug is now a terminal breadcrumb — all dev work lives on the
+        // linked Task. Uses label-based write since the label is created lazily.
         const statusColumnValues = {
-            [BUG_COLUMNS.status]: { index: BUG_STATUS["Fixing"] },
+            [BUG_COLUMNS.status]: { label: "Converted to Task" },
         };
         const statusQuery = `
       mutation {
         change_multiple_column_values(
           board_id: ${BOARDS.BUGS},
           item_id: ${bugId},
-          column_values: ${buildColumnValues(statusColumnValues)}
+          column_values: ${buildColumnValues(statusColumnValues)},
+          create_labels_if_missing: true
         ) {
           id
         }
@@ -139,7 +142,7 @@ export async function convertBugToTask(args) {
             : "";
         lines.push(`  Type: Bugfix | Priority: ${taskPriority} | Status: Ready to Start${epicInfo}`);
         lines.push("");
-        lines.push(`- **Bug #${bugId}:** Status updated to Fixing, linked to task #${newTask.id}`);
+        lines.push(`- **Bug #${bugId}:** Status updated to "Converted to Task", linked to task #${newTask.id}`);
         return lines.join("\n").trim();
     }
     catch (error) {

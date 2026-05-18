@@ -284,6 +284,23 @@ export const CreateBugSchema = z.object({
     epicId: z.number().optional().describe("Epic to link the bug to — use listEpics to find the ID. If omitted and productId is set, auto-assigns the product's maintenance epic"),
     reporter: z.number().optional().describe("Reporter person ID"),
 });
+// updateBug — Option C intake-workflow tool. Lets agents move bugs through
+// the triage funnel without UI access: Awaiting Review → Triaged →
+// (Converted to Task | Declined | Cannot Reproduce | Duplicated | Missing Info | Known Bug).
+// Once `Converted to Task`, the linked Task tracks dev work (use
+// convertBugToTask instead of setting status manually for that transition).
+export const UpdateBugSchema = z.object({
+    bugId: z.number().describe("Bug item ID to update — use getBugs to find it"),
+    delete: z.boolean().optional().describe("Set true to delete the bug item (rare — prefer Declined/Cannot Reproduce/Duplicated)"),
+    name: z.string().optional().describe("Rename the bug"),
+    description: z.string().optional().describe("Updated reproduction steps / expected vs actual behavior"),
+    status: BugStatusEnum.optional().describe("Workflow status. Intake-only flow: Awaiting Review → Triaged → (Converted to Task | Declined | Cannot Reproduce | Duplicated | Missing Info | Known Bug). Legacy values (Ready for Dev, Fixing, Fixed, Pending Deploy, Move to Sprints) accepted for backwards compat but should not be used for new writes."),
+    priority: BugPriorityEnum.optional().describe("Bug severity"),
+    productId: z.number().optional().describe("Product board relation — use listProducts to find the ID"),
+    epicId: z.number().optional().describe("Epic board relation — use listEpics to find the ID"),
+    fixedInVersionId: z.number().optional().describe("Versions board relation — set when the fix is included in a specific release"),
+    filedByAgent: AgentIdEnum.optional().describe("Which agent filed this bug (empty for human-filed). Triage signal."),
+});
 // =============================================================================
 // Tool 12: updateVersion
 // =============================================================================

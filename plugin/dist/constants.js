@@ -121,7 +121,7 @@ export const BUG_COLUMNS = {
     product: "board_relation_mm0mbw41",
     epic: "board_relation_mm0ws076",
     fixedDate: "date_mm0nbxeb",
-    filedByAgent: "dropdown_mm3fq2hs", // which agent filed (added v0.12.0)
+    filedByAgent: "dropdown_mm3fq2hs", // which agent filed (added v0.12.0). Labels NOT pre-configured — tools use `{ labels: [name] }` + create_labels_if_missing. If you later pre-populate labels with numeric IDs matching AGENT_ID (mirroring the Tasks board's dropdown_mm0mrcex), switch writes to `{ ids: [String(AGENT_ID[x])] }` for ID-based stability.
     creationLog: "pulse_log_mm0nb308",
     lastUpdated: "pulse_updated_mm0nh785",
 };
@@ -181,7 +181,7 @@ export const RETRO_COLUMNS = {
     description: "long_text_mm362mkh",
     sprint: "board_relation_mm39dksv",
     resolvedInVersion: "board_relation_mm3fmg92", // link to Versions board (added v0.12.0)
-    filedByAgent: "dropdown_mm3fn3cf", // which agent filed (added v0.12.0)
+    filedByAgent: "dropdown_mm3fn3cf", // which agent filed (added v0.12.0). Labels NOT pre-configured — tools use `{ labels: [name] }` + create_labels_if_missing. If you later pre-populate labels with numeric IDs matching AGENT_ID (mirroring the Tasks board's dropdown_mm0mrcex), switch writes to `{ ids: [String(AGENT_ID[x])] }` for ID-based stability.
     subitems: "subitems",
     creationLog: "pulse_log_mm0nbxdt",
     lastUpdated: "pulse_updated_mm0ne1ny",
