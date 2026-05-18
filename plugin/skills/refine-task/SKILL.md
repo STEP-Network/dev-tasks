@@ -84,7 +84,7 @@ parent flips to Waiting for UAT".
 
 ```text
 Task: [name]
-Subtasks (status → Ready to Start after this run if all prereqs satisfied):
+Subtasks (parent task promoted to `Ready to Start` after this run if all prereqs satisfied; subtasks themselves are created in `Needs Refinement`):
   1. [Type] [name] — ~[hours]h — [acceptance criteria one-liner]
   2. ...
 Total estimated: [sum]h

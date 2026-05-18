@@ -170,7 +170,7 @@ Monitor(
       cur=$(gh pr view "$PR" --json comments --jq "[.comments[] | select(.author.login==\"claude\")] | last | .createdAt // \"\"")
       if [ -n "$cur" ] && [ "$cur" != "$last_seen" ]; then
         body=$(gh pr view "$PR" --json comments --jq "[.comments[] | select(.author.login==\"claude\")] | last | .body")
-        if echo "$body" | grep -qiE "ship-ready|ship as[ -]is|no BLOCKERs|all.*checks pass|self-review passed|verdict.*green|🟢"; then
+        if echo "$body" | grep -qiE "ship-ready|ship[- ]as[- ]is|no BLOCKERs|all 10 checks pass|self-review passed|verdict.*green|🟢"; then
           echo "READY: $cur"
           break
         elif echo "$body" | grep -qiE "🔴 BLOCKER|BLOCKER —"; then

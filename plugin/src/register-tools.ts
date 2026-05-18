@@ -206,7 +206,7 @@ server.tool(
 
 server.tool(
   "manageSubtasks",
-  "Create, update, and delete subtasks in a single call. Each operation specifies action='create'|'update'|'delete'. Subtask types: Backend, Test, Documentation, UX-UI, Database, To Do. Subtask statuses: Needs Refinement → Ready to Start → In Progress → Done (+ Stuck). Always set the type on every subtask. Remember to set actualHours when marking a subtask Done. IMPORTANT: When all subtasks are Done, Monday automation auto-completes the parent task — delete unwanted subtasks before marking the last one Done.",
+  "Create, update, and delete subtasks in a single call. Each operation specifies action='create'|'update'|'delete'. Subtask types: Backend, Test, Documentation, UX-UI, Database, To Do. Subtask statuses: Needs Refinement → In Progress → Done (+ Stuck). Always set the type on every subtask. Remember to set actualHours when marking a subtask Done. IMPORTANT: When all subtasks are Done, Monday automation auto-completes the parent task — delete unwanted subtasks before marking the last one Done.",
   ManageSubtasksSchema.shape,
   async (args) => {
     const result = await manageSubtasks(args);

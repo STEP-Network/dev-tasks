@@ -61,9 +61,11 @@ status + the auto-generated UAT doc on column `doc_mm3adfdg` (written by `/ship-
 Phase 4.5). The legacy "Always add a Testing subitem with owner 48307552" rule is
 removed.
 
-## The 5 subtask statuses
+## The 4 subtask statuses
 
-`Needs Refinement` → `Ready to Start` → `In Progress` → `Done` (+ `Stuck`)
+`Needs Refinement` → `In Progress` → `Done` (+ `Stuck`)
+
+(There is no `Ready to Start` for subtasks — the Subtasks board doesn't have that label configured, and the lifecycle is binary in practice.)
 
 Subtasks don't have a UAT step — they're agent-completed work units. When all
 subtasks are `Done`, `/ship-pr` transitions the parent task to `Waiting for UAT`
