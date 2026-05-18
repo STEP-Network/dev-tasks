@@ -233,10 +233,13 @@ export const TASK_TYPE = {
     "To Do": 4,
     "Not Set": 5,
 };
-// Subtask Status (status column on subtasks board)
+// Subtask Status (status column on subtasks board 5091706366)
+// NOTE: index 153 ("Ready to Start") was copied from the Tasks board's status
+// column but is not configured on the Subtasks board, so writes targeting it
+// failed with ColumnValueException. The corresponding enum value was dropped
+// from SubtaskStatusEnum (schemas.ts).
 export const SUBTASK_STATUS = {
     "Needs Refinement": 5,
-    "Ready to Start": 153,
     "In Progress": 0,
     "Done": 1,
     "Stuck": 2,

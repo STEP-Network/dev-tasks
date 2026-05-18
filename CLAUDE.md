@@ -125,7 +125,7 @@ Used in `claimTask` (required), `createTask`, `createEpic`, `updateEpic`, `creat
 **Task Status:** Needs Refinement → Ready to Start → In Progress → Waiting for UAT → Pending Deploy to Prod → Done (+ Stuck)
 **Task Priority:** Critical, High, Medium, Low, Missing
 **Task Type:** Feature, Fix, Improvement, To Do, Not Set
-**Subtask Status:** Needs Refinement → Ready to Start → In Progress → Done (+ Stuck)
+**Subtask Status:** Needs Refinement → In Progress → Done (+ Stuck) — note: subtasks have no "Ready to Start" intermediate state (the Subtasks board doesn't have that label configured)
 **Subtask Type:** To Do, Database, Backend, Documentation, Test, UX-UI
 **Epic Status:** Backlog, Planned, Refining, In Progress, Review, On Hold, Done
 **Epic Priority:** Critical, High, Medium, Low, Minimal, Not Prioritized
