@@ -57,6 +57,31 @@ const FIXTURE = {
               { id: "status", text: "Active", value: null },
             ],
           },
+          // Two records constructed specifically to verify whoami-tier priority:
+          // The string "ambig" matches record E via display-name (fallback tier 3)
+          // AND record F via whoami (tier 1). A correct resolver returns F.
+          {
+            id: "5000000001",
+            name: "Ambig Display",
+            column_values: [
+              { id: "person", text: "ambig", value: null },
+              { id: "email__1", text: "differentmail@stepnetwork.dk", value: null },
+              { id: "text6__1", text: "11111111", value: null },
+              { id: "text_mm3ffcjd", text: null, value: null },
+              { id: "status", text: "Active", value: null },
+            ],
+          },
+          {
+            id: "5000000002",
+            name: "Different Fullname",
+            column_values: [
+              { id: "person", text: "Different Display", value: null },
+              { id: "email__1", text: "anothermail@stepnetwork.dk", value: null },
+              { id: "text6__1", text: "22222222", value: null },
+              { id: "text_mm3ffcjd", text: "ambig", value: null },
+              { id: "status", text: "Active", value: null },
+            ],
+          },
         ],
       },
     },
@@ -70,18 +95,18 @@ describe("getPersonByUsername", () => {
     executeMondayQueryMock.mockResolvedValue(FIXTURE);
   });
 
-  it("resolves by registered whoami column (text_mm3ffcjd) — highest priority", async () => {
-    // "nate" appears in both text_mm3ffcjd AND the `person` display name; this
-    // test verifies the whoami column wins as the authoritative tier.
-    await expect(getPersonByUsername("nate")).resolves.toBe(103752074);
+  it("whoami column (text_mm3ffcjd) wins over fallback tiers when both would match different records", async () => {
+    // Critical priority test: the string "ambig" matches record E
+    // (id 5000000001) via display-name fallback (person: "ambig") AND record F
+    // (id 5000000002) via whoami tier (text_mm3ffcjd: "ambig"). A correct
+    // tier-1-first resolver returns record F's personId (22222222), not
+    // record E's (11111111). Swapping the loop order in getPersonByUsername
+    // would flip this assertion.
+    await expect(getPersonByUsername("ambig")).resolves.toBe(22222222);
   });
 
-  it("resolves by whoami column for a username NOT present in any fallback tier", async () => {
-    // "kristoffer" is in text_mm3ffcjd but NOT in email (krmoj@), display
-    // ("Kristoffer Møller Nielsen"), or fullName first word ("Kristoffer
-    // Møller Jensen"). Wait, the full name's first word IS "Kristoffer" — let
-    // me pick a tighter assertion: lowercase compare matches via whoami first.
-    await expect(getPersonByUsername("kristoffer")).resolves.toBe(38667531);
+  it("resolves by whoami column when set (nate → 103752074)", async () => {
+    await expect(getPersonByUsername("nate")).resolves.toBe(103752074);
   });
 
   it("falls back to email local-part when whoami column doesn't match (naref → 103752074)", async () => {

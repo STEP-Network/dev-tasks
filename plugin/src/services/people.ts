@@ -99,8 +99,8 @@ export async function getPersonByUsername(
 
   throw new Error(
     `No Monday user found for username '${username}' on People board ${boardId}. ` +
-    `Add them to the board, set their whoami username in column 'text_mm3ffcjd', ` +
-    `or ensure their email local-part matches.`,
+    `Add them to the board, set their system username in the "whoami username" ` +
+    `column (text_mm3ffcjd), or ensure their email local-part matches.`,
   );
 }
 
