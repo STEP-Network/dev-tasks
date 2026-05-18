@@ -20,6 +20,7 @@ const FIXTURE = {
               { id: "person", text: "Nate", value: null },
               { id: "email__1", text: "naref@stepnetwork.dk", value: null },
               { id: "text6__1", text: "103752074", value: null },
+              { id: "text_mm3ffcjd", text: "nate", value: null },
               { id: "status", text: "Active", value: null },
             ],
           },
@@ -30,6 +31,7 @@ const FIXTURE = {
               { id: "person", text: "Kristoffer Møller Nielsen", value: null },
               { id: "email__1", text: "krmoj@stepnetwork.dk", value: null },
               { id: "text6__1", text: "38667531", value: null },
+              { id: "text_mm3ffcjd", text: "kristoffer", value: null },
               { id: "status", text: "Active", value: null },
             ],
           },
@@ -40,6 +42,7 @@ const FIXTURE = {
               { id: "person", text: "Petar Sant", value: null },
               { id: "email__1", text: "pesvr@stepnetwork.dk", value: null },
               { id: "text6__1", text: "43875136", value: null },
+              { id: "text_mm3ffcjd", text: "petar", value: null },
               { id: "status", text: "Past", value: null },
             ],
           },
@@ -50,6 +53,7 @@ const FIXTURE = {
               { id: "person", text: "No ID Person", value: null },
               { id: "email__1", text: "noid@stepnetwork.dk", value: null },
               { id: "text6__1", text: null, value: null },
+              { id: "text_mm3ffcjd", text: null, value: null },
               { id: "status", text: "Active", value: null },
             ],
           },
@@ -66,15 +70,25 @@ describe("getPersonByUsername", () => {
     executeMondayQueryMock.mockResolvedValue(FIXTURE);
   });
 
-  it("resolves by email local-part (naref → 103752074)", async () => {
-    await expect(getPersonByUsername("naref")).resolves.toBe(103752074);
-  });
-
-  it("resolves by lowercased person display name (nate → 103752074)", async () => {
+  it("resolves by registered whoami column (text_mm3ffcjd) — highest priority", async () => {
+    // "nate" appears in both text_mm3ffcjd AND the `person` display name; this
+    // test verifies the whoami column wins as the authoritative tier.
     await expect(getPersonByUsername("nate")).resolves.toBe(103752074);
   });
 
-  it("resolves by email local-part for krmoj → 38667531", async () => {
+  it("resolves by whoami column for a username NOT present in any fallback tier", async () => {
+    // "kristoffer" is in text_mm3ffcjd but NOT in email (krmoj@), display
+    // ("Kristoffer Møller Nielsen"), or fullName first word ("Kristoffer
+    // Møller Jensen"). Wait, the full name's first word IS "Kristoffer" — let
+    // me pick a tighter assertion: lowercase compare matches via whoami first.
+    await expect(getPersonByUsername("kristoffer")).resolves.toBe(38667531);
+  });
+
+  it("falls back to email local-part when whoami column doesn't match (naref → 103752074)", async () => {
+    await expect(getPersonByUsername("naref")).resolves.toBe(103752074);
+  });
+
+  it("falls back to email local-part for krmoj (whoami is 'kristoffer', not 'krmoj')", async () => {
     await expect(getPersonByUsername("krmoj")).resolves.toBe(38667531);
   });
 

@@ -12,9 +12,13 @@ import { mondayAuthContext } from "../auth-context.js";
  * plugin code change, no per-project config edit.
  *
  * Match priority (most specific first):
- *   1. email local-part (before `@`)  — naref@stepnetwork.dk → "naref"
- *   2. `person` column display name   — "Nate"
- *   3. `name` column first word       — "Nathaniel"
+ *   1. `text_mm3ffcjd` whoami column  — authoritative; exact-match against
+ *      a per-person registered system username (set explicitly by the team
+ *      on the People board). This is the canonical mapping — when present,
+ *      always wins over the fuzzier fallbacks below.
+ *   2. email local-part (before `@`)  — naref@stepnetwork.dk → "naref"
+ *   3. `person` column display name   — "Nate"
+ *   4. `name` column first word       — "Nathaniel"
  *
  * Records with status `Past` are excluded.
  *
@@ -40,16 +44,25 @@ export async function getPersonByUsername(username, options) {
         return Number(lower);
     }
     const records = await loadPeople(boardId);
+    // 1. text_mm3ffcjd — registered whoami username. Authoritative when present.
+    for (const r of records) {
+        if (r.whoamiUsername && r.whoamiUsername.toLowerCase() === lower) {
+            return r.personId;
+        }
+    }
+    // 2. Email local-part fallback.
     for (const r of records) {
         if (r.email && r.email.split("@")[0].toLowerCase() === lower) {
             return r.personId;
         }
     }
+    // 3. `person` column display name.
     for (const r of records) {
         if (r.displayName && r.displayName.toLowerCase() === lower) {
             return r.personId;
         }
     }
+    // 4. Full-name first word.
     for (const r of records) {
         const firstWord = r.fullName.split(/\s+/)[0]?.toLowerCase();
         if (firstWord && firstWord === lower) {
@@ -57,7 +70,8 @@ export async function getPersonByUsername(username, options) {
         }
     }
     throw new Error(`No Monday user found for username '${username}' on People board ${boardId}. ` +
-        `Add them to the board or update their email so its local-part matches.`);
+        `Add them to the board, set their whoami username in column 'text_mm3ffcjd', ` +
+        `or ensure their email local-part matches.`);
 }
 function getCacheKey(boardId) {
     // Per-request token (HTTP transport via ALS) wins; env fallback for stdio.
@@ -77,7 +91,7 @@ async function loadPeople(boardId) {
           items {
             id
             name
-            column_values(ids: ["person", "email__1", "text6__1", "status"]) {
+            column_values(ids: ["person", "email__1", "text6__1", "text_mm3ffcjd", "status"]) {
               id
               text
               value
@@ -99,11 +113,14 @@ async function loadPeople(boardId) {
         const personId = peopleIdText && /^\d+$/.test(peopleIdText) ? Number(peopleIdText) : null;
         if (!personId)
             continue;
+        const rawWhoami = cols.get("text_mm3ffcjd")?.text;
+        const whoamiUsername = rawWhoami && String(rawWhoami).trim() ? String(rawWhoami).trim() : null;
         records.push({
             itemId: String(item.id),
             fullName: String(item.name ?? ""),
             displayName: String(cols.get("person")?.text ?? ""),
             email: cols.get("email__1")?.text || null,
+            whoamiUsername,
             personId,
             status,
         });
