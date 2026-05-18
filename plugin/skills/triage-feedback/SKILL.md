@@ -6,89 +6,66 @@ user_invocable: true
 
 # /triage-feedback — Triage Feedback & Requests
 
-> **Overlay**: if `.claude/skills/triage-feedback/SKILL.md.local` exists in the consumer repo, read it and apply as additional project-specific instructions (extend-only — overlay can append checks/steps but cannot replace plugin behavior).
-
 ## Workflow
 
 ### Step 1: List Pending Feedback
 
-1. Call `mcp__plugin_dev-tasks_dev-tasks__listFeedback()` to get all feedback items
-2. Display summary table:
-   ```
-   ID       | Title                    | Status    | Submitter  | Date
-   ---------|--------------------------|-----------|------------|----------
-   {id}     | {title}                  | {status}  | {name}     | {date}
-   ```
-3. Highlight untriaged items (status: New or Pending)
-4. If no untriaged items: "All feedback has been triaged."
+1. `mcp__plugin_dev-tasks_dev-tasks__listFeedback()` — get all items.
+2. Display summary table (ID, Title, Status, Submitter, Date).
+3. Highlight untriaged (status: New or Pending).
+4. None untriaged → "All feedback has been triaged."
 
 ### Step 2: Review Individual Item
 
-For each item the user wants to review:
+For each item to review:
 
-1. Call `mcp__plugin_dev-tasks_dev-tasks__getFeedback(feedbackId)` for full details
-2. Show:
-   - Title and description
-   - Submitter info
-   - Connected tasks (if any — already converted)
-   - Status and priority
-3. Ask user for disposition:
-   - **a) Convert to Task** → Step 3
-   - **b) Convert to Bug** → Step 4
-   - **c) Dismiss** → note as reviewed, skip
-   - **d) Skip** → move to next item
+1. `getFeedback(feedbackId)` for full details.
+2. Show title, description, submitter, connected tasks (if converted), status, priority.
+3. Ask disposition:
+   - a) Convert to Task → Step 3
+   - b) Convert to Bug → Step 4
+   - c) Dismiss → note as reviewed, skip
+   - d) Skip → next item
 
 ### Step 3: Convert to Task
 
-1. Suggest task name (default: feedback title)
+1. Suggest task name (default: feedback title).
 2. Ask user for:
    - Task name (confirm or modify)
    - Priority (default: Medium)
-   - Epic assignment:
-     a. Call `mcp__plugin_dev-tasks_dev-tasks__listEpics()` to show available epics
-     b. Try to auto-match based on feedback content
-     c. If confident: suggest the epic
-     d. If not confident: ask user to pick
-     e. For generic feedback: suggest product's Maintenance epic
-3. Call `mcp__plugin_dev-tasks_dev-tasks__convertFeedbackToTask(feedbackId, taskName, priority, epicId)`
-   - Auto-links feedback → task
-   - Sets feedback status to "Converted"
-   - If no epicId given: auto-assigns product's Maintenance epic
-4. Show created task ID and link
+   - Epic: `listEpics()`, auto-match by content, suggest if confident, else ask user. Generic feedback → product's Maintenance epic.
+3. `convertFeedbackToTask(feedbackId, taskName, priority, epicId)`. Auto-links feedback → task; sets feedback `Converted`; auto-assigns Maintenance epic if no `epicId`.
+4. Show created task ID and link.
 
 ### Step 4: Convert to Bug
 
-1. Suggest bug name (default: feedback title)
+1. Suggest bug name (default: feedback title).
 2. Ask user for:
    - Bug name (confirm or modify)
    - Priority (Critical / High / Medium / Low)
    - Severity (Blocker / Major / Minor / Cosmetic)
-   - Epic (optional — auto-assigns Maintenance epic if omitted)
-3. Call `mcp__plugin_dev-tasks_dev-tasks__createBug(name, description, priority, severity, epicId)`
-   - If no epicId: auto-assigns product's Maintenance epic
-4. Show created bug ID and link
+   - Epic (optional — auto-assigns Maintenance if omitted)
+3. `createBug(name, description, priority, severity, epicId)`. Auto-assigns Maintenance if no `epicId`.
+4. Show created bug ID and link.
 
 ### Step 5: Continue or Finish
 
-- After each item: "Review next item, or done?"
-- If more untriaged items: show remaining count
-- If done: summarize actions taken:
-  ```
-  Triage Summary:
-  - Converted to tasks: {N}
-  - Converted to bugs: {N}
-  - Dismissed: {N}
-  - Skipped: {N}
-  - Remaining untriaged: {N}
-  ```
+After each: "Review next item, or done?" Show remaining count if more. Done → summary:
+```
+Triage Summary:
+- Converted to tasks: {N}
+- Converted to bugs: {N}
+- Dismissed: {N}
+- Skipped: {N}
+- Remaining untriaged: {N}
+```
 
 ## Arguments
 
-- `<feedback-id>` (optional): Jump directly to a specific feedback item
-- If no ID provided, show all feedback for triage
+- `<feedback-id>` (optional): jump directly to specific item; else show all.
 
 ## Post-Conditions
 
-- Reviewed feedback items have disposition (converted, dismissed, or skipped)
+- Reviewed items have disposition (converted / dismissed / skipped)
 - Converted items have tasks/bugs created with epic assignments
-- Converted feedback marked as "Converted" in Monday.com
+- Converted feedback marked `Converted` in Monday

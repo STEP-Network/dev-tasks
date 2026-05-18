@@ -6,86 +6,52 @@ user_invocable: true
 
 # /refine-task — Break Task into Subtasks
 
-> **Overlay**: if `.claude/skills/refine-task/SKILL.md.local` exists in the consumer repo, read it and apply as additional project-specific instructions (extend-only — overlay can append checks/steps but cannot replace plugin behavior).
-
-> Use when a task is `Needs Refinement` and lacks the prerequisites for `Ready to Start`,
-> OR when an in-flight task needs new/replaced subtasks mid-implementation.
+Use when a task is `Needs Refinement` and lacks prerequisites for `Ready to Start`, OR when an in-flight task needs new/replaced subtasks mid-implementation.
 
 ## Workflow
 
-1. **Fetch task**: `mcp__plugin_dev-tasks_dev-tasks__getTask` — read type, priority, epic, description, acceptance criteria, existing subtasks, dependencies.
-2. **Verify task-level prereqs** (required by the `Ready to Start` gate):
-   - `type` (`Feature`/`Fix`/`Improvement`/`To Do`)
-   - `priority` (`Critical`/`High`/`Medium`/`Low`)
-   - `epicId`
-   - `description`
-   - `acceptanceCriteria`
-   - If any are missing: prompt the user (or fill via `mcp__plugin_dev-tasks_dev-tasks__updateTask` if inference is safe).
-3. **Read source files**: Use Glob/Grep to find related code; ground each subtask in a real code path.
-4. **Decompose into 3–7 subtasks** with logical ordering (often: schema → backend → ui → test → docs):
-   - Each subtask MUST carry `name` + `description` + `type` + `estimatedHours`.
-   - Subtask types: `Backend` · `Test` · `Documentation` · `UX-UI` · `Database` · `To Do`. See "Subtask type guidance" below.
-   - **Never include a human-test subtask.** Human verification = parent's `Waiting for UAT` status + auto-generated UAT doc (written by `/ship-pr` Phase 4.5). The legacy "Always add a test subitem with owner 48307552" rule is **removed**.
-5. **Apply subtasks**: `mcp__plugin_dev-tasks_dev-tasks__manageSubtasks` with one `create` op per new subtask, and `delete`/`update` ops for any obsolete ones (rescoping is fine).
-6. **Optional dependency declaration**: if you discover this task is blocked by another task, set `dependencyIds` via `mcp__plugin_dev-tasks_dev-tasks__updateTask` (column `dependency_mm0pwbxn`).
-7. **Promote status** (if appropriate): if the task was `Needs Refinement` and now satisfies all gate prereqs, call `mcp__plugin_dev-tasks_dev-tasks__updateTask` with `status: "Ready to Start"`. The MCP validates; on rejection it lists what's still missing.
-8. **Post PLAN_CREATED event**: `mcp__plugin_dev-tasks_dev-tasks__createUpdate` with the subtask list + total estimate.
+1. **Fetch task**: `getTask` — read type, priority, epic, description, AC, existing subtasks, dependencies.
+2. **Verify task-level prereqs** (required by `Ready to Start` gate): `type`, `priority`, `epicId`, `description`, `acceptanceCriteria`. If missing: prompt user or fill via `updateTask` when inference is safe.
+3. **Read source files**: Glob/Grep to find related code; ground each subtask in a real code path.
+4. **Decompose into 3–7 subtasks** (often: schema → backend → ui → test → docs):
+   - Each: `name` + `description` + `type` + `estimatedHours`
+   - Types: Backend / Test / Documentation / UX-UI / Database / To Do (see `task-lifecycle.md`)
+   - NEVER include a human-test subtask. Human verification = parent's `Waiting for UAT` + auto-generated UAT doc on column `doc_mm3adfdg` (written by `/ship-pr` Phase 4.5).
+5. **Apply subtasks**: `manageSubtasks` with `create` per new, `delete`/`update` for obsolete (rescoping is fine).
+6. **Optional dependency**: set `dependencyIds` via `updateTask` (column `dependency_mm0pwbxn`).
+7. **Promote status** if all prereqs satisfied: `updateTask` with `status: "Ready to Start"`. MCP validates; on rejection lists missing.
+8. **Post PLAN_CREATED**: `createUpdate` with subtask list + total estimate.
 
-9. **Conditional plan depth-check** — if ANY of these criteria match the plan, invoke `/dev-tasks:holistic-thinking` to apply the L1 / L2 / L3 lens BEFORE the task is claimed:
-    - The plan touches ≥2 unrelated subsystems (e.g. registration form AND admin dashboard AND email templates)
-    - This is the Nth attempt at the same class of issue (check `listRetros` + `getBacklog` for prior tasks with overlapping keywords)
-    - The plan addresses a symptom and you're not sure if there's a deeper root cause (e.g. fixing one off-by-one but suspecting the pattern repeats elsewhere)
-    - Acceptance criteria mention "ensure", "all", "every", or list ≥5 bullets (high coupling surface)
-    - The first-draft plan feels off but you can't articulate why
+9. **Conditional plan depth-check** — invoke `/dev-tasks:holistic-thinking` BEFORE claim if ANY:
+    - Plan touches ≥2 unrelated subsystems
+    - Nth attempt at same class of issue (check `listRetros` + `getBacklog` for overlapping keywords)
+    - Addresses a symptom, unsure if deeper root cause
+    - AC mentions "ensure" / "all" / "every", or ≥5 bullets
+    - First-draft plan feels off but you can't articulate why
 
-    Otherwise: skip. Don't run holistic-thinking on a mechanical 30-min refactor — performative depth-checking is noise. Run it when the plan's shape genuinely warrants reflection.
+    Otherwise skip — depth-checking a mechanical 30-min refactor is noise.
 
 ## Arguments
 
-- `<task-id>`: Monday.com task ID to refine.
+- `<task-id>`: Monday task ID to refine
 
-## Estimation Guidelines
+## Estimation
 
 | Size | Hours | Criteria |
 |------|-------|----------|
-| S | 0.25–1h | Single file, mechanical change, no new tests |
+| S | 0.25–1h | Single file, mechanical, no new tests |
 | M | 1–3h | 2–4 files, moderate logic, tests updated |
 | L | 3–8h | 5+ files, complex logic, new tests / migration |
-| XL | 8+h | Split further — anything bigger should decompose into multiple subtasks |
+| XL | 8+h | Split further — anything bigger decomposes into multiple subtasks |
 
 Default to slight overestimation; tracked est-vs-actual deltas help future planning.
 
-## Subtask type guidance
-
-| Type | Use for | Common subtask shape |
-|------|---------|----------------------|
-| **Backend** | API routes, server actions, business logic, hooks, scripts, MCP/AI integrations | "Add POST /api/foo with ownership check" |
-| **Test** | Unit / integration / E2E coverage (Jest, Playwright, MCP-driven) | "Add Playwright E2E for the new flow" |
-| **Documentation** | CLAUDE.md, `.claude/rules/`, `docs/`, README, user guides, RAG content | "Document new flow in BRUGER-GUIDE-REGISTRERING.md" |
-| **UX-UI** | React components, page layouts, styling, a11y, theming | "Build `<FooModal />` with glass-morphism theme" |
-| **Database** | Drizzle schema changes, migrations, indexes, query tuning | "Add `bar` column to `foo` table + migration" |
-| **To Do** | Catchall — use sparingly when no other type fits | "Coordinate copy review with stakeholder" |
-
-The type should reflect the dominant WORK in the subtask. A subtask that mixes two
-types (say a small backend route + its trivial test) stays typed as the dominant one.
-Split off a separate `Test` subtask only when test coverage is non-trivial.
-
-## Why no human-test subtasks
-
-Under the new task lifecycle (CLAUDE.md "Task Management Lifecycle"), human verification
-is the parent task's `Waiting for UAT` status, not a child subtask. `/ship-pr` Phase 4.5
-auto-generates the UAT doc on column `doc_mm3adfdg` from the task's description + AC +
-git diff + preview URL. The doc is the regulator-readable WHAT to test; the `Waiting for
-UAT` status is the WHO/WHEN. This collapses the previous "implementation subtasks + one
-human-test subtask + parent stays In Progress" pattern into "implementation subtasks +
-parent flips to Waiting for UAT".
-
-## Output Format
+## Output
 
 ```text
 Task: [name]
-Subtasks (parent task promoted to `Ready to Start` after this run if all prereqs satisfied; subtasks themselves are created in `Needs Refinement`):
-  1. [Type] [name] — ~[hours]h — [acceptance criteria one-liner]
+Subtasks (parent promoted to Ready to Start if all prereqs met; subtasks created at Needs Refinement):
+  1. [Type] [name] — ~[hours]h — [AC one-liner]
   2. ...
 Total estimated: [sum]h
 Promoted to Ready to Start: yes/no (reason if no)

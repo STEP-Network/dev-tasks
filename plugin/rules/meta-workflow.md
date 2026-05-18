@@ -1,143 +1,84 @@
 # Meta-Workflow Tooling
 
-> **Reference rule** — describes when and how the agent files improvements to
-> the agent's own workflow tooling (hooks, skills, rules, MCP tools). Loaded
-> on demand when the agent encounters a tooling friction point during normal
-> work.
+When the agent files improvements to its own workflow tooling (hooks, skills, rules, MCP tools). Loaded on demand when hitting a tooling friction point.
 
 ## TL;DR
 
-You hit friction in a hook / skill / rule / MCP tool during normal work. File it:
+You hit friction in a hook / skill / rule / MCP tool during normal work. File it.
 
 | Symptom | Board | Tool |
 |---|---|---|
-| Broken (wrong behavior, hard error) | **Bugs Queue** | `mcp__plugin_dev-tasks_dev-tasks__createBug` |
+| Broken (wrong behavior, hard error) | **Bugs Queue** (5091706353) | `mcp__plugin_dev-tasks_dev-tasks__createBug` |
 | Noisy but correct (UX, ergonomics, edge case) | **Retrospectives** (`Improve`) | `mcp__plugin_dev-tasks_dev-tasks__createRetro` |
 | Missing capability in MCP | **Tasks Backlog** (workflow-tooling epic) | `mcp__plugin_dev-tasks_dev-tasks__createTask` |
 | Cross-cutting rule needing alignment | **Retrospectives** (`Discussion`) | `mcp__plugin_dev-tasks_dev-tasks__createRetro` |
 
 **File autonomously** (no user gating) when: observed this session + not a 5-line obvious fix + includes concrete reproduction (PR / turn / what triggered it).
 
-**Bug vs Retro heuristic:** *"if I left this alone, would the system produce wrong output for a real user?"* — Yes → **Bug**. No → **Retro**.
+**Bug vs Retro heuristic**: *"if I left this alone, would the system produce wrong output for a real user?"* — Yes → Bug. No → Retro.
 
 ## When to apply
 
-Use this rule when **you, the agent, encounter friction in the workflow tooling itself** during normal task execution. Concretely:
+Friction in the workflow tooling itself (hooks firing wrong, skills not matching behavior, rule contradictions, MCP tool errors, manual workarounds the user keeps compensating for). Not for product bugs (those go to Bugs Queue against the product) or new feature work (normal Tasks pipeline).
 
-- A hook fires when it shouldn't (false positive)
-- A hook misses something it should catch (false negative)
-- A skill's instructions don't match the actual behaviour it produces
-- A rule contradicts another rule, or both contradict observed code
-- An MCP tool returns ambiguous data, missing fields, or unexpected errors
-- A repeated workflow has obvious structural improvement that the user keeps having to manually compensate for
-
-Do **not** apply this rule for product bugs (those go in the Bugs Queue board) or for new feature work (those go through the normal Tasks board pipeline).
-
-## Where to file
-
-| Friction type | Board | Why |
-|---|---|---|
-| Hook / skill / rule **broken** (wrong behaviour, hard error) | **Bugs Queue** (5091706353) — `mcp__plugin_dev-tasks_dev-tasks__createBug` with `productId` for "Internal tooling" | Bug semantics: it does the wrong thing |
-| Hook / skill / rule **noisy or rough but correct** (UX improvement, ergonomics, edge-case polish) | **Retrospectives** (5091706350) — `mcp__plugin_dev-tasks_dev-tasks__createRetro` with `status: 'Improve'` and `check: 'true'` if the issue keeps recurring | Retro semantics: it works, but could be better |
-| MCP tool **missing capability** that would unlock further automation | **Tasks Backlog** (existing pipeline) under the workflow-tooling epic | Feature work |
-| Cross-cutting workflow rule that needs team alignment | **Retrospectives** as `Discussion` type | Needs vote / discussion |
-
-## How to file (autonomously, no human gating)
-
-The agent **may file these autonomously** without asking the user, as long as:
-
-1. The friction was **actually observed** in this session (not speculative)
-2. The fix is **NOT** a no-brainer the agent could ship in 5 lines (those just get fixed in the current PR)
-3. The filed item includes a **concrete reproduction** (which PR / which turn / what the user typed) so a future maintainer doesn't have to reconstruct it
-
-## Bug vs Retro decision heuristic
-
-Ask: *if I left this alone, would the system produce wrong output for a real user?*
-
-- **Yes** → Bug (file via `mcp__plugin_dev-tasks_dev-tasks__createBug`)
-- **No, but it makes the agent or user's work harder** → Retrospective (`mcp__plugin_dev-tasks_dev-tasks__createRetro`)
-- **No, but it's a missing capability** → Task (`mcp__plugin_dev-tasks_dev-tasks__createTask`)
-
-## Specific triggers (file immediately when these happen)
-
-Concrete observable signals — when ANY of these fire, **stop and file** before continuing other work. Mirrors the trigger list in memory `feedback_auto_file_retros.md` for redundancy.
+## Specific triggers — file immediately
 
 | Trigger | What to file |
 |---|---|
-| You write `/tmp/.claude-ci-ack-*` to acknowledge a CI failure as flake | **Bug** with suite name + error excerpt + root-cause hypothesis |
-| An MCP tool returns an error indicating its own bug (stale field names, schema mismatch) | **Bug** against the MCP / Internal Tooling |
-| `gh run rerun --failed` called >1x on the same suite | **Bug** — flake is confirmed repeating |
-| A hook fires when it shouldn't, OR misses something it should | **Bug** if broken / **Retro `Improve`** if noisy-but-correct |
-| Self-review surfaces a finding OUTSIDE this PR's diff | **Retro** or **Task** — do NOT fix in the current PR |
-| Dead code, stale config, deprecated patterns spotted while editing | **Retro `Improve`** or **Task** |
-| A skill's output doesn't match its description | **Bug** against the skill |
-| You apply a manual workaround (raw `gh api`, direct SQL, etc.) where a helper should exist | **Retro `Improve`** |
-| You write any TODO comment in code (other than this PR's scope) | **Task** (if scoped) or **Retro** (if open-ended) — file **before** commit |
-| Pattern divergence between two areas of the codebase | **Retro `Discussion`** for team alignment |
-| Clear improvement opportunity (>10 lines or contract change) outside current scope | **Task** under appropriate epic |
+| You write `/tmp/.claude-ci-ack-*` to acknowledge CI failure as flake | Bug with suite name + error excerpt + root-cause hypothesis |
+| MCP tool error indicating its own bug (stale field names, schema mismatch) | Bug against MCP / Internal Tooling |
+| `gh run rerun --failed` >1x on same suite | Bug — flake confirmed repeating |
+| Hook fires when it shouldn't, OR misses something it should | Bug if broken / Retro `Improve` if noisy-but-correct |
+| Self-review surfaces a finding OUTSIDE this PR's diff | Retro or Task — do NOT fix in current PR |
+| Dead code, stale config, deprecated patterns spotted while editing | Retro `Improve` or Task |
+| Skill output doesn't match its description | Bug against the skill |
+| Manual workaround applied (raw `gh api`, direct SQL) where helper should exist | Retro `Improve` |
+| TODO comment in code outside this PR's scope | Task (if scoped) or Retro (if open-ended) — file before commit |
+| Pattern divergence between two areas of the codebase | Retro `Discussion` for team alignment |
+| Clear improvement (>10 lines or contract change) outside current scope | Task under appropriate epic |
 
-The `.claude/hooks/auto-file-followup-nudge.sh` PostToolUse hook surfaces a non-blocking nudge for the most common patterns (CI ack writes, `gh run rerun --failed`, `git revert`). The hook is a safety net — the discipline is primary.
+`.claude/hooks/auto-file-followup-nudge.sh` (PostToolUse) surfaces non-blocking nudges for common patterns (CI ack writes, `gh run rerun --failed`, `git revert`). Safety net; discipline is primary.
 
-## When to fix inline instead of filing
+## When to fix inline instead
 
-If ALL three apply, fix inline in the current PR/branch:
+All three must apply:
 
-1. The fix is **<10 lines**
-2. The fix doesn't change a workflow contract (hooks, skill phases, rule semantics)
-3. The fix doesn't need user approval (no security boundary changes, no spend implications)
+1. Fix is <10 lines
+2. Doesn't change a workflow contract (hooks, skill phases, rule semantics)
+3. Doesn't need user approval (no security boundary, no spend implications)
 
-Example: a typo in a skill comment → fix inline.
-Example: a hook silencing rule → file as retrospective (changes contract, needs alignment).
+Typo in skill comment → fix inline. Hook silencing rule → file as retrospective.
 
 ## Dedupe before create — universal rule
 
-**Always search before calling any `create*` MCP tool.** Duplicates split owner attention, dilute capacity signals, and clog every board. This applies to tasks, bugs, retros, feedback, epics, and versions equally.
-
-Per-surface dedupe call:
+**Always search before any `create*` MCP tool.** Duplicates split owner attention.
 
 | Creating | Dedupe call | Filter |
 |---|---|---|
-| Task (`createTask`) | `getBacklog({ query, productId })` | name + description keyword search, scoped to product |
-| Bug (`createBug`) | `getBugs({ search, productId })` | name + description keyword search |
+| Task (`createTask`) | `getBacklog({ query, productId })` | name + description keyword, scoped to product |
+| Bug (`createBug`) | `getBugs({ search, productId })` | name + description keyword |
 | Retro (`createRetro`) | `listRetros({ activeSprint: true, search })` | scope to current sprint by default |
-| Feedback (`createFeedback`) | `listFeedback({ search, productId })` | name + description keyword search |
-| Epic (`createEpic`) | `listEpics({ productId })` then filter client-side on keyword overlap | no server-side text search on epics yet |
-| Version (`createVersion`) | `listVersions({ search, productId })` | versionNumber + name search |
+| Feedback (`createFeedback`) | `listFeedback({ search, productId })` | name + description keyword |
+| Epic (`createEpic`) | `listEpics({ productId })` then filter client-side | no server-side text search yet |
+| Version (`createVersion`) | `listVersions({ search, productId })` | versionNumber + name |
 
-For each result, apply the same triage:
+Triage results:
 
-- **Exact-name match** → stop. Update or comment on the existing item; don't file a duplicate.
-- **>50% keyword overlap + same scope (epic / product / sprint)** → near-duplicate. Default to enriching the existing unless the angle is genuinely different. Surface both to the user before deciding.
-- **No match** → proceed with creation.
+- **Exact-name match** → stop. Update or comment on existing.
+- **>50% keyword overlap + same scope (epic/product/sprint)** → near-duplicate. Default to enriching existing; surface both to user.
+- **No match** → proceed.
 
-**Cross-surface check** — the same friction can land in the wrong queue. Before creating, ask:
-
-- "Would this produce wrong output for a real user?" → YES = Bug. NO = continue.
-- "Is this workflow/tooling friction (hook noise, skill drift, rule contradiction)?" → Retro.
-- "Is this stakeholder input or a feature request?" → Feedback (`createFeedback`) — let `/triage-feedback` route it to Task or Bug later.
-- "Is this a missing capability that needs a slot in the next sprint?" → Task.
-
-If the heuristics say two queues, file in the most authoritative one (Bug > Task > Retro > Feedback) and cross-link from the others.
+**Cross-surface check** — same friction can land in wrong queue. Order: "produces wrong output for a real user?" YES = Bug, NO continue → "workflow/tooling friction?" Retro → "stakeholder input or feature request?" Feedback (`createFeedback`; `/triage-feedback` routes later) → "missing capability needing a sprint slot?" Task. If two queues fit: file in most authoritative (Bug > Task > Retro > Feedback), cross-link.
 
 ## After-filing follow-through
 
-- Reference the filed item ID in the conversation summary so the user knows where to find it
-- If the filed item is `Improve` with `Repeating: true`, mention "this is the Nth time we've hit this; tracking on retro #X" so the user can prioritise
+- Reference filed item ID in conversation summary
+- If `Improve` with `Repeating: true`, mention "this is the Nth time we've hit this; tracking on retro #X"
 
 ## Anti-patterns
 
-- **Filing the same friction twice** — search the target board first (per the dedupe table above) before creating
-- **Filing speculative future-friction** — only file what was actually hit in this session
-- **Filing instead of fixing** — if it's a 3-line fix and meets the inline-fix criteria, fix it. Filing creates backlog noise.
-- **Mixing categories** — a hook that's both broken AND noisy gets two items: one bug for the broken behaviour, one retro for the noise.
-- **Skipping dedupe to save time** — every "save time" duplicate costs 10x more when the team has to reconcile two near-duplicate threads weeks later.
-
-## When this rule is loaded
-
-- Agent encounters a hook firing repeatedly with no actionable outcome
-- Agent finds a skill instruction that doesn't match observed behaviour
-- User explicitly asks "how should we file this?" or "would this be better in a different board?"
-
-## Example: the 2026-05-09 stop-hook noise filing
-
-During the Observability v1 rollout, the `stop-task-check.sh` and `stop-ci-green-check.sh` hooks fired 6–15 times per PR with identical "BLOCKED: …" messages while a Monitor was actively waiting for the bot review. The hooks were correct (they enforce the review-addressed gate); the noise was the friction. Filed as Retrospective #2903271952 with `Improve` + `Repeating`. NOT filed as a bug because nothing was broken.
+- Filing the same friction twice — search the target board first.
+- Filing speculative future-friction — only file what was actually hit this session.
+- Filing instead of fixing — if it meets inline-fix criteria, fix it.
+- Mixing categories — broken AND noisy = two items (one bug, one retro).
+- Skipping dedupe to save time — every "save time" dupe costs 10x at reconciliation.
