@@ -1,7 +1,7 @@
 import { executeMondayQuery } from "../monday-client.js";
 import { BOARDS, TASK_COLUMNS, TASK_STATUS, AGENT_ID } from "../constants.js";
 import { getPersonByUsername } from "../services/people.js";
-import { getColumnText, getDropdownValues, getColumnValue, getLinkedItems, checkDependenciesResolved, validateTaskInActiveSprint, buildColumnValues, todayDate, formatError, } from "./utils.js";
+import { getColumnText, getDropdownValues, getColumnValue, getLinkedItems, checkDependenciesResolved, planActiveSprintPull, buildColumnValues, todayDate, formatError, } from "./utils.js";
 export async function claimTask(args) {
     try {
         const { itemId, agentId, owner, planId } = args;
@@ -51,11 +51,14 @@ export async function claimTask(args) {
             return formatError(`Cannot claim task #${itemId} "${item.name}".\n` +
                 `Already claimed by: ${agentText}.`);
         }
-        // Check task is in the active sprint (claiming sets status to "In Progress")
+        // Sprint gate: claiming transitions the task to "In Progress", which requires
+        // active-sprint membership. If the task isn't in the active sprint, auto-pull
+        // it in and mark unplanned — surface the pull in the response so the agent
+        // sees what happened.
         const linkedSprintIds = getLinkedItems(colMap, TASK_COLUMNS.sprint).map(s => Number(s.id));
-        const sprintCheck = await validateTaskInActiveSprint(linkedSprintIds);
-        if (!sprintCheck.valid) {
-            return formatError(`Cannot claim task #${itemId} "${item.name}".\n${sprintCheck.message}`);
+        const pull = await planActiveSprintPull(linkedSprintIds);
+        if (pull.error) {
+            return formatError(`Cannot claim task #${itemId} "${item.name}".\n${pull.error}`);
         }
         // Check dependencies if the column exists (handle gracefully if missing)
         try {
@@ -76,8 +79,11 @@ export async function claimTask(args) {
             // Dependencies column may not exist yet — skip gracefully
         }
         // Step 3: Perform atomic claim mutation
+        // Auto-pull columns (if any) merge into the same change_multiple_column_values
+        // call so the sprint+unplanned write lands atomically with the status flip.
         const ownerId = await getPersonByUsername(owner);
         const columnValues = {
+            ...pull.columnsToWrite,
             [TASK_COLUMNS.status]: { index: TASK_STATUS["In Progress"] },
             [TASK_COLUMNS.agentId]: { ids: [String(AGENT_ID[agentId])] },
             [TASK_COLUMNS.startedDate]: { date: todayDate() },
@@ -109,6 +115,16 @@ export async function claimTask(args) {
         ];
         if (planId) {
             lines.push(`**Plan:** ${planId}`);
+        }
+        if (!pull.wasInActiveSprint) {
+            lines.push("");
+            lines.push(`**Auto-pulled into active sprint:** #${pull.pulledIntoSprintId}`);
+            if (pull.markedUnplanned) {
+                lines.push(`**Unplanned flag set:** true`);
+            }
+            if (pull.warning) {
+                lines.push(`**Note:** ${pull.warning}`);
+            }
         }
         return lines.join("\n");
     }

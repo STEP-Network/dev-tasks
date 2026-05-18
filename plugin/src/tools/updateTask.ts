@@ -18,6 +18,7 @@ import {
   formatError,
   formatSubtask,
   getLinkedItems,
+  planActiveSprintPull,
   validateReadyToStart,
   validateTaskInActiveSprint,
   validateWaitingForUAT,
@@ -85,13 +86,25 @@ export async function updateTask(args: UpdateTaskInput): Promise<string> {
         for (const w of check.warnings) warnings.push(`Waiting for UAT: ${w}`);
       }
 
-      // If setting status to In Progress, the task must belong to the active sprint.
-      // Check the post-update sprint state: a sprintId in the same call overrides the current value.
-      if (args.status === "In Progress") {
-        let linkedSprintIds: number[];
+      // Sprint gate: any status transition OUT OF the refinement phase
+      // ({Ready to Start, Needs Refinement}) requires the task to be in the
+      // active sprint. If it isn't and the caller didn't explicitly set
+      // `sprintId` in the same call, auto-pull into the active sprint and
+      // mark `unplanned: true` — then continue. The pull columns are merged
+      // into the same atomic mutation as the status change.
+      const refinementStatuses = new Set(["Ready to Start", "Needs Refinement"]);
+      if (args.status !== undefined && !refinementStatuses.has(args.status)) {
         if (args.sprintId !== undefined) {
-          linkedSprintIds = [args.sprintId];
+          // Caller is setting sprint explicitly — validate that choice. If it's
+          // not active, that's a contradiction with the status transition.
+          const sprintCheck = await validateTaskInActiveSprint([args.sprintId]);
+          if (!sprintCheck.valid) {
+            return formatError(
+              `Cannot set task #${itemId} to "${args.status}".\n${sprintCheck.message}`
+            );
+          }
         } else {
+          // Auto-pull path: read current linked sprints, plan the pull.
           const sprintQuery = `
             query {
               items(ids: [${itemId}]) {
@@ -105,13 +118,24 @@ export async function updateTask(args: UpdateTaskInput): Promise<string> {
           const sprintResponse = await executeMondayQuery<any>(sprintQuery);
           const sprintCols = sprintResponse.items?.[0]?.column_values || [];
           const colMap = new Map<string, any>(sprintCols.map((c: any) => [c.id, c]));
-          linkedSprintIds = getLinkedItems(colMap, TASK_COLUMNS.sprint).map(s => Number(s.id));
-        }
-        const sprintCheck = await validateTaskInActiveSprint(linkedSprintIds);
-        if (!sprintCheck.valid) {
-          return formatError(
-            `Cannot set task #${itemId} to "In Progress".\n${sprintCheck.message}`
-          );
+          const linkedSprintIds = getLinkedItems(colMap, TASK_COLUMNS.sprint).map(s => Number(s.id));
+
+          const pull = await planActiveSprintPull(linkedSprintIds, {
+            skipUnplannedFlag: args.unplanned !== undefined,
+          });
+          if (pull.error) {
+            return formatError(
+              `Cannot set task #${itemId} to "${args.status}".\n${pull.error}`
+            );
+          }
+          if (!pull.wasInActiveSprint) {
+            Object.assign(columnValues, pull.columnsToWrite);
+            changes.push(`Sprint -> #${pull.pulledIntoSprintId} (auto-pulled into active sprint)`);
+            if (pull.markedUnplanned) {
+              changes.push(`Unplanned -> true (auto-set: task was pulled into active sprint mid-flight)`);
+            }
+            if (pull.warning) warnings.push(pull.warning);
+          }
         }
       }
 

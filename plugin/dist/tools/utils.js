@@ -252,6 +252,43 @@ export async function validateTaskInActiveSprint(linkedSprintIds) {
     }
     return { valid: true };
 }
+export async function planActiveSprintPull(linkedSprintIds, options = {}) {
+    const activeIds = await getActiveSprintIds();
+    if (activeIds.length === 0) {
+        return {
+            wasInActiveSprint: false,
+            markedUnplanned: false,
+            columnsToWrite: {},
+            error: `No active sprint found. Cannot auto-pull task into a sprint. Activate a sprint first.`,
+        };
+    }
+    const alreadyInActive = linkedSprintIds.some(id => activeIds.includes(id));
+    if (alreadyInActive) {
+        return {
+            wasInActiveSprint: true,
+            markedUnplanned: false,
+            columnsToWrite: {},
+        };
+    }
+    const targetSprintId = activeIds[0];
+    const columnsToWrite = {
+        [TASK_COLUMNS.sprint]: { item_ids: [targetSprintId] },
+    };
+    let markedUnplanned = false;
+    if (!options.skipUnplannedFlag) {
+        columnsToWrite[TASK_COLUMNS.unplanned] = { checked: "true" };
+        markedUnplanned = true;
+    }
+    return {
+        wasInActiveSprint: false,
+        pulledIntoSprintId: targetSprintId,
+        markedUnplanned,
+        columnsToWrite,
+        warning: activeIds.length > 1
+            ? `Multiple active sprints found (#${activeIds.join(", #")}); pulled into #${targetSprintId} deterministically.`
+            : undefined,
+    };
+}
 export function classifyReadyToStartBlockers(snapshot) {
     const blockers = [];
     if (!snapshot.type || snapshot.type === "Not Set") {

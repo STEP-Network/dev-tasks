@@ -301,6 +301,78 @@ export async function validateTaskInActiveSprint(
 }
 
 // =============================================================================
+// Auto-Pull Into Active Sprint
+// =============================================================================
+//
+// Returns a plan describing how to ensure a task is in the active sprint. The
+// caller is responsible for merging `columnsToWrite` into its own pending
+// mutation so the pull lands atomically with the caller's other column changes
+// (single change_multiple_column_values mutation).
+//
+// Behavior:
+//   - 0 active sprints → returns { error } (no auto-pull possible).
+//   - task already linked to an active sprint → returns { wasInActiveSprint: true,
+//     columnsToWrite: {} } (no-op).
+//   - otherwise → returns columns that write task_sprint = first active sprint
+//     AND check (unplanned) = true. Unplanned write is skipped if
+//     `skipUnplannedFlag` is true (caller is explicitly setting unplanned in
+//     the same call, respect their value).
+//
+// Multi-active-sprint case: picks the first active sprint deterministically
+// and surfaces a `warning` so the caller can include it in the response.
+
+export interface AutoPullPlan {
+  wasInActiveSprint: boolean;
+  pulledIntoSprintId?: number;
+  markedUnplanned: boolean;
+  columnsToWrite: Record<string, unknown>;
+  warning?: string;
+  error?: string;
+}
+
+export async function planActiveSprintPull(
+  linkedSprintIds: number[],
+  options: { skipUnplannedFlag?: boolean } = {},
+): Promise<AutoPullPlan> {
+  const activeIds = await getActiveSprintIds();
+  if (activeIds.length === 0) {
+    return {
+      wasInActiveSprint: false,
+      markedUnplanned: false,
+      columnsToWrite: {},
+      error: `No active sprint found. Cannot auto-pull task into a sprint. Activate a sprint first.`,
+    };
+  }
+  const alreadyInActive = linkedSprintIds.some(id => activeIds.includes(id));
+  if (alreadyInActive) {
+    return {
+      wasInActiveSprint: true,
+      markedUnplanned: false,
+      columnsToWrite: {},
+    };
+  }
+  const targetSprintId = activeIds[0];
+  const columnsToWrite: Record<string, unknown> = {
+    [TASK_COLUMNS.sprint]: { item_ids: [targetSprintId] },
+  };
+  let markedUnplanned = false;
+  if (!options.skipUnplannedFlag) {
+    columnsToWrite[TASK_COLUMNS.unplanned] = { checked: "true" };
+    markedUnplanned = true;
+  }
+  return {
+    wasInActiveSprint: false,
+    pulledIntoSprintId: targetSprintId,
+    markedUnplanned,
+    columnsToWrite,
+    warning:
+      activeIds.length > 1
+        ? `Multiple active sprints found (#${activeIds.join(", #")}); pulled into #${targetSprintId} deterministically.`
+        : undefined,
+  };
+}
+
+// =============================================================================
 // Ready-to-Start Validator
 // =============================================================================
 //

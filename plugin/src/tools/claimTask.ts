@@ -8,7 +8,7 @@ import {
   getColumnValue,
   getLinkedItems,
   checkDependenciesResolved,
-  validateTaskInActiveSprint,
+  planActiveSprintPull,
   buildColumnValues,
   todayDate,
   formatError,
@@ -78,12 +78,15 @@ export async function claimTask(args: ClaimTaskInput): Promise<string> {
       );
     }
 
-    // Check task is in the active sprint (claiming sets status to "In Progress")
+    // Sprint gate: claiming transitions the task to "In Progress", which requires
+    // active-sprint membership. If the task isn't in the active sprint, auto-pull
+    // it in and mark unplanned — surface the pull in the response so the agent
+    // sees what happened.
     const linkedSprintIds = getLinkedItems(colMap, TASK_COLUMNS.sprint).map(s => Number(s.id));
-    const sprintCheck = await validateTaskInActiveSprint(linkedSprintIds);
-    if (!sprintCheck.valid) {
+    const pull = await planActiveSprintPull(linkedSprintIds);
+    if (pull.error) {
       return formatError(
-        `Cannot claim task #${itemId} "${item.name}".\n${sprintCheck.message}`
+        `Cannot claim task #${itemId} "${item.name}".\n${pull.error}`
       );
     }
 
@@ -108,8 +111,11 @@ export async function claimTask(args: ClaimTaskInput): Promise<string> {
     }
 
     // Step 3: Perform atomic claim mutation
+    // Auto-pull columns (if any) merge into the same change_multiple_column_values
+    // call so the sprint+unplanned write lands atomically with the status flip.
     const ownerId = await getPersonByUsername(owner);
     const columnValues: Record<string, unknown> = {
+      ...pull.columnsToWrite,
       [TASK_COLUMNS.status]: { index: TASK_STATUS["In Progress"] },
       [TASK_COLUMNS.agentId]: { ids: [String(AGENT_ID[agentId])] },
       [TASK_COLUMNS.startedDate]: { date: todayDate() },
@@ -146,6 +152,17 @@ export async function claimTask(args: ClaimTaskInput): Promise<string> {
 
     if (planId) {
       lines.push(`**Plan:** ${planId}`);
+    }
+
+    if (!pull.wasInActiveSprint) {
+      lines.push("");
+      lines.push(`**Auto-pulled into active sprint:** #${pull.pulledIntoSprintId}`);
+      if (pull.markedUnplanned) {
+        lines.push(`**Unplanned flag set:** true`);
+      }
+      if (pull.warning) {
+        lines.push(`**Note:** ${pull.warning}`);
+      }
     }
 
     return lines.join("\n");
