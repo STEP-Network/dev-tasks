@@ -12,8 +12,13 @@ const TaskPriorityEnum = z.enum([
 const TaskTypeEnum = z.enum([
     "Feature", "Fix", "Improvement", "To Do", "Not Set",
 ]);
+// Subtasks board (5091706366) does NOT have a "Ready to Start" label
+// configured on its status column. Subtask lifecycle is binary in practice:
+// refinement → working → done. Including "Ready to Start" in the schema
+// caused the Monday GraphQL mutation to fail with a cryptic
+// ColumnValueException at write time. Drop it from the contract.
 const SubtaskStatusEnum = z.enum([
-    "Needs Refinement", "Ready to Start", "In Progress", "Done", "Stuck",
+    "Needs Refinement", "In Progress", "Done", "Stuck",
 ]);
 const SubtaskTypeEnum = z.enum([
     "To Do", "Database", "Backend", "Documentation", "Test", "UX-UI",
