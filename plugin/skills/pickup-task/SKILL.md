@@ -6,232 +6,103 @@ user_invocable: true
 
 # /pickup-task — Claim and Start a Task
 
-> **Overlay**: if `.claude/skills/pickup-task/SKILL.md.local` exists in the consumer repo, read it and apply as additional project-specific instructions (extend-only — overlay can append checks/steps but cannot replace plugin behavior).
+Read `.claude/project-config.json`. Extract `git.defaultBase`, `git.hotfixBase`, `git.branchConvention` (default `feat/<slug>`), `monday.productId`, `monday.v1MilestoneEpicIds`. If `git.defaultBase` or `monday.productId` missing → STOP, tell user to set them.
 
-## Project context (read FIRST)
-
-Read `.claude/project-config.json` at the consumer repo root before doing anything else. Extract:
-
-- `git.defaultBase` — base branch for feature PRs (e.g. `staging` or `main`)
-- `git.hotfixBase` — base branch for hotfix PRs (usually `main`)
-- `git.branchConvention` — template for new branch names (default `feat/<slug>`). Used in step 4.5 to derive both the branch name and the worktree directory name.
-- `monday.productId` — Monday Products-board item ID for this product, passed to `listEpics`
-- `monday.v1MilestoneEpicIds` — epic IDs that gate v1.0+ patch bumps (passed to `computeBumpSuggestion`)
-
-If `git.defaultBase` or `monday.productId` is missing, STOP and tell the user to add them to `.claude/project-config.json` before continuing. The fields below reference these as `$defaultBase`, `$productId`, `$v1MilestoneEpicIds`, `$branchConvention`.
-
-> **Source-file edits for a claimed task must happen in a git worktree**, not
-> the main checkout. The `worktree-required.sh` PreToolUse hook hard-blocks
-> edits to non-`.claude/` paths when an active task exists outside a worktree.
-> See `worktree-discipline.md` for the rationale.
->
-> Steps 1–4 below (fetch + validate) don't write any files — they're MCP-only,
-> so they're free to run in the main checkout. Step 4.5 is where the worktree
-> entry happens, after we know the real task name and can derive a meaningful
-> slug. By the time step 9 (set first subtask "In Progress") writes anything,
-> we're already in the worktree.
+Source-file edits for a claimed task must happen in a git worktree, not the main checkout (`worktree-required.sh` hard-blocks edits outside a worktree when an active task exists). Steps 1–4 are MCP-only and free to run in the main checkout. Step 4.5 enters the worktree.
 
 ## Workflow
 
-1. **Fetch available work**: Use `mcp__plugin_dev-tasks_dev-tasks__getSprint` to get current sprint, or `mcp__plugin_dev-tasks_dev-tasks__getBacklog` to see backlog items
-2. **Show available tasks**: Display task list with IDs, names, status, and estimated hours
-3. **User selects task** (or specify task ID as argument)
-4. **Validate task readiness** (HARD BLOCK — must happen before claiming):
-    - Fetch full task data via `mcp__plugin_dev-tasks_dev-tasks__getTask` — read status, epic, dependencies.
-    - **Status check** — `claimTask` only accepts tasks in `Ready to Start`:
-      - If status is `Needs Refinement`: STOP here. The task lacks one or more of `type`/`priority`/`epicId`/`description`/`acceptanceCriteria`/≥1 typed-estimated subtask. Run `/refine-task <id>` first; the MCP gate will surface what's missing.
-      - If status is `In Progress` and the current agent is `Claude Code CLI`: a session may already be active; check `.claude/active-task.json` before continuing.
-      - If status is `In Progress` and a different agent owns it: STOP, pick a different task.
-      - If status is `Done`/`Waiting for UAT`/`Pending Deploy to Prod`/`Stuck`: STOP, the task is past pickup phase.
-    - **Epic check**:
-      - **If task has an epic**: note the `epicId` and `epicName`, continue to step 4.5.
-      - **If task has NO epic**: HARD BLOCK — do NOT claim until resolved:
-        a. Call `mcp__plugin_dev-tasks_dev-tasks__listEpics(productId: $productId)` to show available epics for this product.
-        b. Try to match by task name/description keywords to an epic.
-        c. If confident (>80% match): suggest the epic to user, proceed if confirmed.
-        d. If not confident: ask user "This task has no epic. Which epic should it belong to?"
-        e. Present epic list with IDs.
-        f. After user selects: call `mcp__plugin_dev-tasks_dev-tasks__updateTask(itemId, epicId: selectedEpicId)`.
-        g. For hotfixes/bugs: suggest the product's Maintenance epic by default.
-      - **NEVER claim a task without an epic. This is a hard requirement.**
+1. `mcp__plugin_dev-tasks_dev-tasks__getSprint` (current sprint) or `getBacklog` to see work.
+2. Display task list (IDs, names, status, estimated hours).
+3. User selects task (or specify task ID as argument).
+4. **Validate task readiness** (HARD BLOCK):
+    - Fetch via `getTask` — read status, epic, dependencies.
+    - Status: only `Ready to Start` is claimable.
+      - `Needs Refinement` → run `/refine-task <id>` first.
+      - `In Progress` owned by current agent → check `.claude/active-task.json`.
+      - `In Progress` owned by another agent → STOP, pick different task.
+      - `Done`/`Waiting for UAT`/`Pending Deploy to Prod`/`Stuck` → STOP.
+    - Epic check: HARD BLOCK if no epic. `listEpics(productId: $productId)`, suggest by keyword match, ask user if uncertain, then `updateTask(itemId, epicId)`. For hotfixes/bugs default to product's Maintenance epic.
 
-4.5. **Enter the worktree** (HARD requirement — see top of skill for rationale):
-    - Detect current location: if `git rev-parse --git-common-dir` equals
-      `git rev-parse --git-dir`, you're in the main checkout. Otherwise (you're
-      already in a worktree) skip this step.
-    - Derive a slug from the task name: terse, hyphen-separated, max ~30 chars.
-      e.g. task name "Add publisher sign-off workflow" → slug `publisher-signoff`.
-    - Compute branch + worktree name from `$branchConvention` (read in step 0):
-      ```
-      branch        = $branchConvention.replace("<slug>", slug)   // e.g. "feat/publisher-signoff"
-      worktreeName  = branch.replace("/", "-")                    // e.g. "feat-publisher-signoff"
-      ```
-      For hotfixes, swap `feat/` for `hotfix/` (or whatever the project's hotfix
-      convention is — typically the same template with a different prefix).
-    - Make sure the main checkout HEAD is on the right base (`$defaultBase` for
-      default flow; `$hotfixBase` for hotfixes). If not, get on it:
-      `git checkout $defaultBase && git pull --ff-only`.
-    - Call `EnterWorktree({ name: worktreeName })`. The worktree lands at
-      `.claude/worktrees/$worktreeName/` on branch `worktree-$worktreeName`
-      based off the current HEAD. (Step 10 renames the branch to the canonical
-      `$branch` form afterward.)
-    - Verify with `pwd` — you should now be working under
-      `.claude/worktrees/$worktreeName/`.
-    - **Skip ONLY if** you're already in a worktree, or the user authorized
-      `"allowMainCheckout": true` for an emergency (document the reason in the
-      task body).
-    - **Post-EnterWorktree node_modules** (optional but recommended): fresh
-      worktrees have no `node_modules`, so ship-pr's Phase 1 validation
-      (`pnpm build`/`lint`/`test`) will trigger an implicit install that often
-      hits pnpm's interactive `approve-builds` prompt and fails silently. Pre-empt
-      with `pnpm install --offline --ignore-scripts` — uses the pnpm store cache,
-      skips lifecycle scripts, no interactive prompts. If it fails (store miss
-      for some dep), fall back to "CI is the gate; local pnpm is best-effort"
-      and proceed.
-    - **Post-EnterWorktree env files** (optional but recommended): `EnterWorktree`
-      starts a clean worktree with only git-tracked files. Any `.env*.local`
-      (gitignored by convention) is missing, so `pnpm dev` / `pnpm test` /
-      validation scripts that read env vars fail with "missing env" errors.
-      Copy from the parent checkout (the main repo dir that holds the `.git/`
-      directory, derivable via `git rev-parse --git-common-dir | xargs dirname`):
-      ```bash
-      PARENT=$(dirname "$(git rev-parse --git-common-dir)")
-      for f in .env.local .env.development.local .env.test.local; do
-        [ -f "$PARENT/$f" ] && cp "$PARENT/$f" "$f"
-      done
-      ```
-      Skip env files the project doesn't use. Don't copy `.env` (typically a
-      tracked example/template, not local secrets). If the project's
-      convention is different (e.g. `.env.staging` is local-only), the
-      consumer's overlay should extend the list — see
-      `.claude/skills/pickup-task/SKILL.md.local` if present.
+4.5. **Enter the worktree** (HARD requirement):
+    - If `git rev-parse --git-common-dir` == `git rev-parse --git-dir` you're in main checkout — proceed. Otherwise skip.
+    - Derive slug from task name (terse, hyphen-separated, ≤30 chars).
+    - Compute: `branch = $branchConvention.replace("<slug>", slug)`; `worktreeName = branch.replace("/", "-")`. Hotfixes use `hotfix/` prefix.
+    - Get on the right base: `git checkout $defaultBase && git pull --ff-only` (or `$hotfixBase` for hotfix).
+    - `EnterWorktree({ name: worktreeName })` — lands at `.claude/worktrees/$worktreeName/` on branch `worktree-$worktreeName`. Step 10 renames to canonical form.
+    - Verify with `pwd`.
+    - Skip only if already in a worktree, or user authorized `"allowMainCheckout": true` for emergency.
+    - Pre-warm node_modules: `pnpm install --offline --ignore-scripts` (uses store cache, skips lifecycle scripts, no interactive prompts). On failure, fall back to "CI is the gate".
+    - Copy `.env*.local` from parent checkout: `PARENT=$(dirname "$(git rev-parse --git-common-dir)")` then copy `.env.local`, `.env.development.local`, `.env.test.local` from `$PARENT` if present. Don't copy `.env` (typically tracked). Project-specific local-only env files belong in the overlay.
 
-4.6. **Dependency soft warning** (NON-BLOCKING — claimTask is the actual gate):
-    - From the `getTask` response in step 4, read `dependencyIds` (column `dependency_mm0pwbxn`).
-    - If empty: continue to step 5.
-    - If non-empty: for each dependency, call `mcp__plugin_dev-tasks_dev-tasks__getTask(dependencyId)` and check its status.
-    - **If all dependencies are `Done`**: log "All N dependencies satisfied" and continue.
-    - **If any dependency is NOT `Done`**: emit a clear warning naming the blocking task(s) and their statuses, then:
-      - If the user accepts the risk and wants to continue: proceed — `claimTask` in step 6 will refuse with the same information, at which point the user can either wait for the blocker to clear or remove the dependency via `updateTask(itemId, dependencyIds: [])` (rare; only when the dependency was misfiled).
-      - If the user wants to pick a different task: `ExitWorktree({ action: "remove" })` to clean up the worktree from step 4.5, then loop back to step 1.
-    - This is a soft warning so a determined agent can override if context warrants. The MCP's `claimTask` is the hard gate.
+4.6. **Dependency soft warning** (non-blocking; `claimTask` is the hard gate):
+    - From `getTask` read `dependencyIds` (column `dependency_mm0pwbxn`).
+    - Empty → continue. Non-empty → for each, call `getTask` and check status.
+    - All `Done` → log "All N dependencies satisfied".
+    - Any not `Done` → warn naming blockers; user can accept (then `claimTask` will refuse with same info — wait for blocker or clear via `updateTask(itemId, dependencyIds: [])` only if misfiled), or pick different task (then `ExitWorktree({ action: "remove" })` and loop to step 1).
 
 5. **Version context** (informational only — versions are historical):
-    - Per `versions-lifecycle.md`, **tasks join the open version at the Waiting-for-UAT transition** (server-side via `auto-version.ts`). Versions are historical containers (what shipped), not planning artifacts. Epics — not versions — plan futures.
-    - Optional: call `mcp__plugin_dev-tasks_dev-tasks__listVersions(status: "In Development", productId: $productId)` to surface what's currently open for this product. This is for the agent's awareness, not for linking. **Do not** link the epic to a version here; that contradicts the task-level model and gets overwritten by `auto-version.ts`.
-    - If no open version exists yet for the product, `auto-version.ts` will cold-create a fresh patch version when the task hits Waiting for UAT. No action needed at pickup time.
-6. **Sprint auto-assignment** (MUST run before claim — claimTask refuses tasks outside the active sprint):
-    - Use `mcp__plugin_dev-tasks_dev-tasks__getTask` to check if the task already has a Sprint linked (`task_sprint` field)
-    - Get the active sprint via `mcp__plugin_dev-tasks_dev-tasks__getSprint` (no args = active sprint)
-    - **If the task has NO sprint assigned:**
-      a. Assign the task to the active sprint: `mcp__plugin_dev-tasks_dev-tasks__updateTask` with `sprintId: <active sprint ID>`
-      b. Mark as unplanned: `mcp__plugin_dev-tasks_dev-tasks__updateTask` with `unplanned: true`
-      c. Note in the TASK_CLAIMED event (step 11) that this was an unplanned addition
-    - **If the task is already in the ACTIVE sprint:**
-      a. Do nothing (planned work)
-    - **If the task is in a DIFFERENT sprint (past or future):**
-      a. Reassign to the active sprint: `mcp__plugin_dev-tasks_dev-tasks__updateTask` with `sprintId: <active sprint ID>`
-      b. Mark as unplanned: `mcp__plugin_dev-tasks_dev-tasks__updateTask` with `unplanned: true`
-      c. Note in the TASK_CLAIMED event (step 11): "Moved from sprint X to active sprint Y (unplanned)"
-7. **Claim the task**: Use `mcp__plugin_dev-tasks_dev-tasks__claimTask` to assign it. The MCP validates server-side:
-    - Task status must be `Ready to Start` (step 4 already checked).
-    - Task must be in the active sprint (step 6 above just ensured this).
-    - All `dependencyIds` must be `Done` (step 4.6 already warned).
-    - No other agent currently owns the task.
-    - On rejection, `claimTask` returns a structured error naming the failing precondition — fix the named field via `updateTask`/`manageSubtasks` and retry.
-8. **Set status**: claimTask in step 7 already set status to `In Progress` — this step is only needed if you bypassed claimTask (e.g., agent-id mismatch retry).
-9. **Set first subtask to "In Progress"**: Use `mcp__plugin_dev-tasks_dev-tasks__manageSubtasks` to start first subtask (this triggers `started_date` in Monday.com)
-10. **Rename the worktree branch to project convention**:
-    - Step 4.5's `EnterWorktree` created branch `worktree-feat-<slug>`. Rename it
-      to the canonical `feat/<task-slug>` (or `hotfix/<slug>` for hotfixes — see
-      Step 4.5's branching note): `git branch -M feat/<task-slug>`.
-    - **If you skipped Step 4.5** (legacy / opt-out flow): `git fetch origin &&
-      git checkout $defaultBase && git pull origin $defaultBase && git checkout -b feat/<task-slug>`.
-      Hotfix exception: if the task is a hotfix (Bugfix type tagged
-      "production-blocker" or similar), branch from `$hotfixBase` instead and PR to `$hotfixBase`.
+    - Tasks join the open version at the Waiting-for-UAT transition (server-side via `auto-version.ts`). Per `versions-lifecycle.md`, versions are historical containers, not planning artifacts. Epics plan futures.
+    - Optional: `listVersions(status: "In Development", productId: $productId)` to surface what's currently open. Do NOT link the epic to a version here.
 
-10b. **Verify worktree-path ↔ branch convention** (traceability — see `worktree-discipline.md`):
-    - Convention: `worktree_path = ".claude/worktrees/" + branch.replace("/", "-")`. The Monday Branch column (set by `/ship-pr` Phase 4) is the canonical link.
-    - After the rename in step 10, verify: current worktree path basename equals the branch name with `/` → `-`.
-      ```bash
-      [ "$(basename "$PWD")" = "$(git branch --show-current | tr '/' '-')" ] && echo "convention OK" || echo "WARNING: worktree path does not match branch slug"
-      ```
-    - If the check fails, fix one of: rename the worktree directory, or rename the branch. The convention must hold so `${CLAUDE_PLUGIN_ROOT}/scripts/find-worktree-for-task.sh` and `worktree-audit.sh` can locate the worktree from the Monday task.
-    - Reverse direction: `bash ${CLAUDE_PLUGIN_ROOT}/scripts/find-worktree-for-task.sh <monday-task-id>` prints the worktree path for any task whose Branch column is populated.
-11. **Post TASK_CLAIMED event** (do this BEFORE creating state file — the response provides the `claimToken`):
-    Use `mcp__plugin_dev-tasks_dev-tasks__createUpdate` with structured format:
-    ```
-    [TASK_CLAIMED] Agent Progress Update
-    Time: {ISO 8601} | Branch: feat/<task-slug>
-    Event: Task claimed from sprint/backlog
-    Sprint: {sprint name} {(UNPLANNED - auto-added to active sprint) if unplanned}
-    Version: {versionName or "Not linked (will be resolved at /ship-pr Phase 8)"}
-    Details: {subtask count} subtasks, ~{total estimated hours}h estimated
-    ```
-    **Save the returned update ID** — this becomes the `claimToken` in the state file.
+6. **Sprint auto-assignment** (must run before claim — `claimTask` refuses tasks outside active sprint):
+    - Get active sprint via `getSprint`.
+    - No sprint: `updateTask(itemId, sprintId: <active>)` + `updateTask(itemId, unplanned: true)`. Note in TASK_CLAIMED.
+    - Already in active sprint: do nothing.
+    - Different sprint: reassign to active + `unplanned: true`. Note "Moved from sprint X to Y (unplanned)".
+
+7. **Claim**: `claimTask`. MCP validates: status `Ready to Start`, in active sprint, all `dependencyIds` Done, no other agent owns. On rejection, fix the named field and retry.
+8. Status set to `In Progress` by `claimTask` — only needed manually if bypassed.
+9. Set first subtask "In Progress" via `manageSubtasks` (triggers `started_date`).
+10. Rename worktree branch to canonical: `git branch -M feat/<task-slug>` (or `hotfix/<slug>`). If Step 4.5 skipped: `git fetch origin && git checkout $defaultBase && git pull && git checkout -b feat/<task-slug>`.
+
+11. **Post TASK_CLAIMED event** (do this BEFORE creating state file — response provides `claimToken`):
+    `createUpdate` with structured format including branch, sprint (note if unplanned), version (or "Not linked"), subtask count + estimated hours.
+    Save returned update ID — this is the `claimToken`.
+
 12. **Create state file** (uses `claimToken` from step 11):
-    - Fetch full task data via `mcp__plugin_dev-tasks_dev-tasks__getTask` (includes subtask IDs, names, statuses)
-    - **Write target — WORKTREE-LOCAL**: write `.claude/active-task.json` inside the **current worktree**, not the main checkout. After Phase 4.5 `$PWD` is the worktree root (e.g. `<repo>/.claude/worktrees/feat-foo-bar`), so the file lands at `$PWD/.claude/active-task.json`. **Do NOT** prefix with `$CLAUDE_PROJECT_DIR` — that variable was frozen at session start and points at the main checkout, which is the wrong location. The plugin's `resolve-project-root.sh` helper (used by `task-state-guard`, `branch-task-match`, etc.) reads from the worktree's `.claude/` by design.
-    - Write the file with structure:
+    - Write target is WORKTREE-LOCAL: `$PWD/.claude/active-task.json`. Do NOT prefix with `$CLAUDE_PROJECT_DIR` — that variable was frozen at session start and points at the main checkout. The `resolve-project-root.sh` helper reads from the worktree's `.claude/`.
+    - Schema:
       ```json
       {
-        "taskId": "<monday-task-id>",
-        "taskName": "<task name>",
-        "epicId": "<epic-id>",
-        "epicName": "<epic name>",
-        "versionId": "<version-id or null>",
-        "versionName": "<version name or null>",
-        "branch": "feat/<task-slug>",
-        "claimedAt": "<ISO 8601>",
-        "claimToken": "<update-id-from-step-11>",
+        "taskId": "...", "taskName": "...",
+        "epicId": "...", "epicName": "...",
+        "versionId": null, "versionName": null,
+        "branch": "feat/<slug>",
+        "claimedAt": "ISO 8601",
+        "claimToken": "<update-id from step 11>",
         "selfReviewPassed": false,
         "selfReviewPassedAt": null,
-        "sprintId": "<sprint-id>",
-        "unplanned": false,
+        "sprintId": "...", "unplanned": false,
         "subtasks": [
-          {
-            "id": "<subtask-id>",
-            "name": "<subtask name>",
-            "status": "in_progress",
-            "mondayStartedDate": "<ISO 8601 from Monday.com started_date>"
-          },
-          {
-            "id": "<subtask-id>",
-            "name": "<subtask name>",
-            "status": "pending"
-          }
+          {"id": "...", "name": "...", "status": "in_progress", "mondayStartedDate": "..."},
+          {"id": "...", "name": "...", "status": "pending"}
         ]
       }
       ```
-    - **`claimToken`**: The Monday.com update ID from step 11 — **REQUIRED by task-state-guard.sh**.
-      Without this token, the edit guard will HARD BLOCK all file edits. The token proves
-      the task was claimed via the MCP tool, not by manually writing the state file.
-    - First subtask: `"status": "in_progress"` with `mondayStartedDate` from Monday.com's `started_date`
-    - All other subtasks: `"status": "pending"`
-    - `versionId`/`versionName`: From Step 5 if epic was linked to a version, else `null`
-    - `sprintId`: The active sprint ID the task is now assigned to
-    - `unplanned`: true if the task was not already in the active sprint at pickup time
-13. **Read related files**: Use Glob/Grep to find files related to the task
-14. **Output context summary**: Show task details, related files, subtask plan
-15. **Conditional claim-time re-plan** — invoke `/dev-tasks:plan-task` if ANY of these signal that the task's subtask descriptions may have drifted from the current code:
-    - Task entered `Ready to Start` ≥72 hours ago
-    - ≥3 tasks have merged to `$defaultBase` since the task was last refined
-    - Subtask descriptions cite specific file paths / function names / schema fields
-    - Task is regulatory / schema migration / public-API contract / payment flow
-    - This is a follow-up to a previously-Stuck task
+    - `claimToken` is REQUIRED by `task-state-guard.sh` — without it, the edit guard HARD BLOCKS all file edits. The token proves the task was claimed via MCP, not manually.
 
-    Otherwise skip — for recently-refined mechanical tasks, the subtask descriptions are still trustworthy and re-planning is overhead.
+13. Glob/Grep for related files.
+14. Output context summary: task details, related files, subtask plan.
+
+15. **Conditional claim-time re-plan** — invoke `/dev-tasks:plan-task` if ANY signal that subtask descriptions may have drifted:
+    - Task entered `Ready to Start` ≥72h ago
+    - ≥3 tasks have merged to `$defaultBase` since refinement
+    - Subtask descriptions cite specific file paths / function names / schema fields
+    - Task is regulatory / schema migration / public-API / payment flow
+    - Follow-up to a previously-Stuck task
+
+    Otherwise skip — re-planning is overhead for recently-refined mechanical tasks.
 
 ## Arguments
 
-- `<task-id>` (optional): Monday.com task ID to claim directly
-- If no ID provided, show available tasks for selection
+- `<task-id>` (optional): Monday task ID to claim directly. Otherwise show available tasks.
 
 ## Post-Conditions
 
-- Task status = "In Progress" in Monday.com
-- Task assigned to active sprint (always), with "Unplanned?" checked if it wasn't already there
-- First subtask status = "In Progress"
-- Feature branch created and checked out
-- TASK_CLAIMED event posted to Monday.com (includes sprint/unplanned info)
-- `.claude/active-task.json` created with full subtask tracking data and `claimToken` from the TASK_CLAIMED update
+- Task `In Progress` in Monday
+- Task in active sprint (Unplanned? set if wasn't already there)
+- First subtask `In Progress`
+- Feature branch created, worktree entered
+- TASK_CLAIMED posted (with sprint/unplanned info)
+- `.claude/active-task.json` created with subtasks + `claimToken`
