@@ -1,0 +1,52 @@
+{
+  "$schema": "../plugin/schemas/project-config.schema.json",
+  "version": "1",
+  "git": {
+    "defaultBase": "main",
+    "hotfixBase": "main",
+    "branchConvention": "feat/<slug>",
+    "worktreeRoot": ".claude/worktrees",
+    "autoMergePolicy": {
+      "main": "never"
+    }
+  },
+  "monday": {
+    "productId": "2924964797",
+    "v1MilestoneEpicIds": []
+  },
+  "environments": {
+    "uat": {
+      "url": "https://github.com/STEP-Network/dev-tasks"
+    }
+  },
+  "i18n": {
+    "enabled": false
+  },
+  "ci": {
+    "provider": "github-actions",
+    "requiredChecks": ["Vercel", "Vercel Preview Comments"]
+  },
+  "rules": {
+    "extraRules": []
+  },
+  "hooks": {
+    "enabled": [
+      "task-state-guard",
+      "worktree-required",
+      "worktree-path-boundary",
+      "branch-task-match",
+      "stop-task-check",
+      "protect-sensitive-files",
+      "pre-commit-secrets-scan",
+      "subtask-reminder",
+      "auto-file-followup-nudge",
+      "post-merge-postmortem",
+      "post-push-track",
+      "post-push-review-check",
+      "post-self-review",
+      "pre-compact-task-snapshot",
+      "user-prompt-task-context",
+      "subprocess-failure"
+    ]
+  }
+}

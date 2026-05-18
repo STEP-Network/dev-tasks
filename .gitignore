@@ -14,3 +14,14 @@ node_modules/
 
 # misc
 .DS_Store
+
+# Claude Code per-user / per-session state
+# Track: .claude/project-config.json (shared, committed)
+# Ignore: everything else under .claude/
+.claude/active-task.json
+.claude/worktrees/
+.claude/review-memory/
+.claude/plans/
+.claude/skills/
+.claude/local/
+skills-lock.json

@@ -2,6 +2,8 @@
 
 This repo is a Claude Code plugin marketplace + plugin source. The plugin (`dev-tasks`) packages a Monday.com MCP server, lifecycle rules, skills, and hooks for autonomous coding agents driving development work from a Monday.com board ecosystem.
 
+**The plugin is dogfooded here** — this repo is a consumer of its own plugin. Monday product: **Dev-Tasks Plugin** (#2924964797). Default catch-all epic: **Dev-Tasks Plugin — Maintenance & Hotfixes** (#2924897116). Project-config: `.claude/project-config.json` (committed). All edits to `plugin/src/` go through the full Monday task lifecycle (claim → work → ship → release). Edits to `.claude/`, `memory/`, `CLAUDE.md`, `.gitignore` are exempt from `task-state-guard` for fast infra work.
+
 ## Repo layout
 
 ```
@@ -19,7 +21,11 @@ This repo is a Claude Code plugin marketplace + plugin source. The plugin (`dev-
 │   ├── hooks/                        # 7 hooks (rule-autoload + 6 critical, opt-in)
 │   ├── schemas/                      # project-config.schema.json
 │   └── templates/                    # starter-project-config.json
-├── .claude/                          # project-local Claude Code config (currently just neon-postgres skill)
+├── .claude/                          # project-local Claude Code config
+│   ├── project-config.json           # dev-tasks plugin config (committed)
+│   ├── active-task.json              # current task state (gitignored, per-session)
+│   ├── worktrees/                    # per-task git worktrees (gitignored)
+│   └── skills/                       # per-user local skills (gitignored)
 ├── CLAUDE.md                         # this file
 └── .env.example                      # MONDAY_API_KEY example
 ```
