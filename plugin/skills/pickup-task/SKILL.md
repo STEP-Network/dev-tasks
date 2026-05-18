@@ -171,7 +171,8 @@ If `git.defaultBase` or `monday.productId` is missing, STOP and tell the user to
     **Save the returned update ID** — this becomes the `claimToken` in the state file.
 12. **Create state file** (uses `claimToken` from step 11):
     - Fetch full task data via `mcp__plugin_dev-tasks_dev-tasks__getTask` (includes subtask IDs, names, statuses)
-    - Write `.claude/active-task.json` with structure:
+    - **Write target — WORKTREE-LOCAL**: write `.claude/active-task.json` inside the **current worktree**, not the main checkout. After Phase 4.5 `$PWD` is the worktree root (e.g. `<repo>/.claude/worktrees/feat-foo-bar`), so the file lands at `$PWD/.claude/active-task.json`. **Do NOT** prefix with `$CLAUDE_PROJECT_DIR` — that variable was frozen at session start and points at the main checkout, which is the wrong location. The plugin's `resolve-project-root.sh` helper (used by `task-state-guard`, `branch-task-match`, etc.) reads from the worktree's `.claude/` by design.
+    - Write the file with structure:
       ```json
       {
         "taskId": "<monday-task-id>",

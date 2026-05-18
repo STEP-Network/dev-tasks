@@ -23,7 +23,16 @@ exec >&2
 #   - not in a git repo
 #   - any unexpected error
 
-PROJECT_ROOT="${CLAUDE_PROJECT_DIR:-$PWD}"
+# Read stdin once — we need .tool_input.file_path to detect which checkout
+# (main vs worktree) the edit targets. CLAUDE_PROJECT_DIR is set at session
+# start and does NOT update when the agent enters a worktree, so we can't
+# rely on it for state-file lookup. resolve_project_root prefers
+# `git rev-parse --show-toplevel` from the file's directory, which correctly
+# resolves to the worktree root.
+source "$(dirname "${BASH_SOURCE[0]}")/lib/resolve-project-root.sh"
+INPUT=$(cat)
+FILE_PATH=$(extract_tool_file_path "$INPUT")
+PROJECT_ROOT=$(resolve_project_root "$FILE_PATH")
 STATE_FILE="$PROJECT_ROOT/.claude/active-task.json"
 
 # Skip if no active task — task-state-guard handles that
@@ -51,10 +60,6 @@ CURRENT_BRANCH=$(git -C "$PROJECT_ROOT" branch --show-current 2>/dev/null)
 if ! git -C "$PROJECT_ROOT" show-ref --quiet "refs/heads/$CLAIMED_BRANCH"; then
   exit 0
 fi
-
-# Read input to pull out the file path for a more useful error message
-INPUT=$(cat)
-FILE_PATH=$(printf '%s' "$INPUT" | jq -r '.tool_input.file_path // .tool_input.notebook_path // ""' 2>/dev/null || printf '')
 
 TASK_ID=$(jq -r '.taskId // "(unknown)"' "$STATE_FILE" 2>/dev/null)
 TASK_NAME=$(jq -r '.taskName // "(unnamed)"' "$STATE_FILE" 2>/dev/null)

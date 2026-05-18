@@ -14,9 +14,12 @@ exec >&2
 # ENFORCED post-implementation pipeline — hard blocks (exit 2) when source files
 # changed but pipeline is incomplete. Allows stop for infrastructure-only sessions.
 
-# Resolve project root from this script's location (hooks/ -> .claude/ -> project root)
+# Resolve project root from CWD-based git plumbing — Stop hooks don't carry
+# a file_path payload, but CWD typically reflects the active worktree.
+# CLAUDE_PROJECT_DIR is set at session start and doesn't follow EnterWorktree.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_ROOT="${CLAUDE_PROJECT_DIR:-$PWD}"
+source "$SCRIPT_DIR/lib/resolve-project-root.sh"
+PROJECT_ROOT=$(resolve_project_root "")
 
 STATE_FILE="$PROJECT_ROOT/.claude/active-task.json"
 

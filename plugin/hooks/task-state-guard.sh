@@ -17,12 +17,15 @@ exec >&2
 #   - Reset selfReviewPassed to false (forces re-review before commit)
 # Exit 2 = block the tool call with message shown to agent
 
-# Resolve project root from this script's location (hooks/ -> .claude/ -> project root)
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_ROOT="${CLAUDE_PROJECT_DIR:-$PWD}"
+source "$SCRIPT_DIR/lib/resolve-project-root.sh"
 
 INPUT=$(cat)
 FILE_PATH=$(echo "$INPUT" | python3 -c "import sys,json; print(json.load(sys.stdin).get('tool_input',{}).get('file_path',''))" 2>/dev/null)
+# Use file_path to resolve the actual worktree. This way state-file lookup,
+# push-marker invalidation, and selfReviewPassed reset all target the correct
+# checkout — not whatever directory Claude Code was launched in.
+PROJECT_ROOT=$(resolve_project_root "$FILE_PATH")
 
 # Allow edits to Claude config files (hooks, settings, skills, rules, memory)
 # These are infrastructure changes, not product code
