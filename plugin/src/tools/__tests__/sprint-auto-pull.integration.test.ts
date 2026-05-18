@@ -25,9 +25,11 @@ vi.mock("../../monday-client.ts", () => ({
   executeMondayQuery: (...args: unknown[]) => executeMondayQueryMock(...args),
 }));
 
-// People lookup is needed by claimTask for owner assignment.
+// People lookup is needed by claimTask for owner assignment. The specific
+// mocked person ID is arbitrary — picked to look obviously synthetic so it
+// doesn't read like a real Monday person ID someone might be tempted to grep.
 vi.mock("../../services/people.ts", () => ({
-  getPersonByUsername: vi.fn().mockResolvedValue(48307552),
+  getPersonByUsername: vi.fn().mockResolvedValue(999888777),
 }));
 
 // Auto-version + version-state-machine are best-effort side effects in

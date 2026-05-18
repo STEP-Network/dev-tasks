@@ -59,8 +59,9 @@ This skill is **read-only** — never invoke a mutating MCP tool (`updateTask`, 
 
 - Get `whoami` from the shell
 - Read the People board: there is no direct MCP read tool for arbitrary boards, so this check is best-effort:
-  - If `mcp__claude_ai_monday_com__get_board_items_page` is available in the session, call it on `monday.peopleBoardId` (default `1612664689`) with `columnIds: ["person", "email__1", "text6__1", "status"]` and search the response for a record whose email local-part / `person` display value / `name` first-word matches `whoami`. Report the matched person ID.
-  - Otherwise, tell the user the lookup path: "match `whoami` against the People board (`1612664689`) — your record should have a non-empty `text6__1` (People ID) and status != Past." Have them eyeball it on the board.
+  - If `mcp__claude_ai_monday_com__get_board_items_page` is available in the session, call it on `monday.peopleBoardId` (default `1612664689`) with `columnIds: ["person", "email__1", "text6__1", "text_mm3ffcjd", "status"]`. **First check `text_mm3ffcjd`** — that column holds the canonical whoami username, set explicitly by the team. An exact-match on `text_mm3ffcjd` is the authoritative mapping. If no `text_mm3ffcjd` match, fall back to email local-part / `person` display value / `name` first-word matches (same priority order as `getPersonByUsername`). Report the matched person ID and which column matched.
+  - Otherwise, tell the user the lookup path: "match `whoami` against the People board (`1612664689`) — your record should have your whoami in column `text_mm3ffcjd`, a non-empty `text6__1` (People ID), and status != Past." Have them eyeball it on the board.
+- If `whoami` matches by a fallback tier (email/display/name first word) but `text_mm3ffcjd` is empty for your record: this is a soft WARN — populate the whoami column to lock in the authoritative mapping and avoid future ambiguity when names overlap.
 
 ### 7. Policy hooks always-on
 

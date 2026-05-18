@@ -20,6 +20,7 @@ const FIXTURE = {
               { id: "person", text: "Nate", value: null },
               { id: "email__1", text: "naref@stepnetwork.dk", value: null },
               { id: "text6__1", text: "103752074", value: null },
+              { id: "text_mm3ffcjd", text: "nate", value: null },
               { id: "status", text: "Active", value: null },
             ],
           },
@@ -30,6 +31,7 @@ const FIXTURE = {
               { id: "person", text: "Kristoffer Møller Nielsen", value: null },
               { id: "email__1", text: "krmoj@stepnetwork.dk", value: null },
               { id: "text6__1", text: "38667531", value: null },
+              { id: "text_mm3ffcjd", text: "kristoffer", value: null },
               { id: "status", text: "Active", value: null },
             ],
           },
@@ -40,6 +42,7 @@ const FIXTURE = {
               { id: "person", text: "Petar Sant", value: null },
               { id: "email__1", text: "pesvr@stepnetwork.dk", value: null },
               { id: "text6__1", text: "43875136", value: null },
+              { id: "text_mm3ffcjd", text: "petar", value: null },
               { id: "status", text: "Past", value: null },
             ],
           },
@@ -50,6 +53,32 @@ const FIXTURE = {
               { id: "person", text: "No ID Person", value: null },
               { id: "email__1", text: "noid@stepnetwork.dk", value: null },
               { id: "text6__1", text: null, value: null },
+              { id: "text_mm3ffcjd", text: null, value: null },
+              { id: "status", text: "Active", value: null },
+            ],
+          },
+          // Two records constructed specifically to verify whoami-tier priority:
+          // The string "ambig" matches record E via display-name (fallback tier 3)
+          // AND record F via whoami (tier 1). A correct resolver returns F.
+          {
+            id: "5000000001",
+            name: "Ambig Display",
+            column_values: [
+              { id: "person", text: "ambig", value: null },
+              { id: "email__1", text: "differentmail@stepnetwork.dk", value: null },
+              { id: "text6__1", text: "11111111", value: null },
+              { id: "text_mm3ffcjd", text: null, value: null },
+              { id: "status", text: "Active", value: null },
+            ],
+          },
+          {
+            id: "5000000002",
+            name: "Different Fullname",
+            column_values: [
+              { id: "person", text: "Different Display", value: null },
+              { id: "email__1", text: "anothermail@stepnetwork.dk", value: null },
+              { id: "text6__1", text: "22222222", value: null },
+              { id: "text_mm3ffcjd", text: "ambig", value: null },
               { id: "status", text: "Active", value: null },
             ],
           },
@@ -66,15 +95,25 @@ describe("getPersonByUsername", () => {
     executeMondayQueryMock.mockResolvedValue(FIXTURE);
   });
 
-  it("resolves by email local-part (naref → 103752074)", async () => {
-    await expect(getPersonByUsername("naref")).resolves.toBe(103752074);
+  it("whoami column (text_mm3ffcjd) wins over fallback tiers when both would match different records", async () => {
+    // Critical priority test: the string "ambig" matches record E
+    // (id 5000000001) via display-name fallback (person: "ambig") AND record F
+    // (id 5000000002) via whoami tier (text_mm3ffcjd: "ambig"). A correct
+    // tier-1-first resolver returns record F's personId (22222222), not
+    // record E's (11111111). Swapping the loop order in getPersonByUsername
+    // would flip this assertion.
+    await expect(getPersonByUsername("ambig")).resolves.toBe(22222222);
   });
 
-  it("resolves by lowercased person display name (nate → 103752074)", async () => {
+  it("resolves by whoami column when set (nate → 103752074)", async () => {
     await expect(getPersonByUsername("nate")).resolves.toBe(103752074);
   });
 
-  it("resolves by email local-part for krmoj → 38667531", async () => {
+  it("falls back to email local-part when whoami column doesn't match (naref → 103752074)", async () => {
+    await expect(getPersonByUsername("naref")).resolves.toBe(103752074);
+  });
+
+  it("falls back to email local-part for krmoj (whoami is 'kristoffer', not 'krmoj')", async () => {
     await expect(getPersonByUsername("krmoj")).resolves.toBe(38667531);
   });
 

@@ -111,14 +111,16 @@ The 7 plugin skills (`/dev-tasks:pickup-task`, `create-task`, `refine-task`, `lo
 
 ## Owner assignment
 
-Pass your system username (`whoami`) as the `owner` field. The server maps usernames to Monday.com person IDs:
+Pass your system username (`whoami`) as the `owner` field. The plugin resolves it to a Monday person ID via a live lookup on the People board (`1612664689`), match priority:
 
-- `naref` → 48307552
-- `krmoj` → 38667531
+1. `text_mm3ffcjd` column — registered whoami username (authoritative, highest priority — set this for each team member)
+2. Email local-part (`naref@stepnetwork.dk` → `naref`)
+3. `person` column display name
+4. `name` column first word
 
-Used in `claimTask` (required), `createTask`, `createEpic`, `updateEpic`, `createVersion`, `updateVersion` (all optional).
+Records with status `Past` are excluded. Lookup is cached per `(boardId, apiKey)` with a 5-min TTL.
 
-> Phase 3b TODO: lift this mapping out of `plugin/src/constants.ts` into per-project `project-config.json` so other STEP Network projects can use the plugin without forking constants.
+Used in `claimTask` (required), `createTask`, `createEpic`, `updateEpic`, `createVersion`, `updateVersion` (all optional). `doctor` Check #6 verifies your `whoami` resolves correctly.
 
 ## Key status mappings
 
