@@ -153,7 +153,7 @@ export function registerAllTools(server) {
         const result = await createRetro(args);
         return { content: [{ type: "text", text: result }] };
     });
-    server.tool("updateRetro", "Update any retro item field. Supports: name, type (Discussion/Keep/Improve), description, repeating, submitter, owner, sprintId (sprint this retro was registered or implemented for — use listSprints to discover the ID). Set delete=true to delete the retro item. Use listRetros to find the retroId.", UpdateRetroSchema.shape, async (args) => {
+    server.tool("updateRetro", "Update any retro item field. Supports: name, type (Discussion/Keep/Improve), status (workflow: New → Accepted → Implemented → Validated; off-ramp Declined — added v0.12.0), description, repeating, submitter, owner, implementedBy (person who shipped the improvement), sprintId, resolvedInVersionId (Versions board item — set when status: Implemented), filedByAgent (Agent ID dropdown). Set delete=true to delete the retro item. Use listRetros to find the retroId. Workflow: status: New (default) → Accepted (team agreed, owner assigned) → Implemented (PR merged, implementedBy + resolvedInVersionId populated) → Validated. Use Declined for retros that won't be actioned (terminal).", UpdateRetroSchema.shape, async (args) => {
         const result = await updateRetro(args);
         return { content: [{ type: "text", text: result }] };
     });

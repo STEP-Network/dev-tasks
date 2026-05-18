@@ -23,9 +23,21 @@ const SubtaskStatusEnum = z.enum([
 const SubtaskTypeEnum = z.enum([
     "To Do", "Database", "Backend", "Documentation", "Test", "UX-UI",
 ]);
+// Bug board workflow (Option C — intake-only as of v0.12.0):
+//   Awaiting Review (default) → Triaged → (one of: Converted to Task | Declined |
+//                                          Cannot Reproduce | Duplicated | Missing Info | Known Bug)
+// Once a bug is `Converted to Task`, ALL dev work happens on the linked Task
+// (with type: Fix). The Bug becomes a terminal breadcrumb at that point.
+//
+// `Ready for Dev`, `Fixing`, `Fixed`, `Pending Deploy`, `Move to Sprints` are
+// DEPRECATED (kept for backwards-compat reading legacy items, but new writes
+// should use the intake-only set). The plugin's tools still accept them so
+// existing items remain editable.
 const BugStatusEnum = z.enum([
-    "Awaiting Review", "Ready for Dev", "Fixing", "Fixed",
-    "Missing Info", "Move to Sprints", "Known Bug", "Pending Deploy", "Duplicated",
+    "Awaiting Review", "Triaged", "Converted to Task", "Declined", "Cannot Reproduce",
+    "Missing Info", "Known Bug", "Duplicated",
+    // Deprecated (legacy) — kept for backwards compat on existing items:
+    "Ready for Dev", "Fixing", "Fixed", "Pending Deploy", "Move to Sprints",
 ]);
 const BugPriorityEnum = z.enum([
     "Critical", "High", "Medium", "Low",
@@ -55,6 +67,14 @@ const FeedbackTypeEnum = z.enum(["Request", "Feedback"]);
 const FeedbackPriorityEnum = z.enum(["Critical", "High", "Medium", "Low"]);
 const FeedbackSourceEnum = z.enum(["User", "Internal", "Support", "Partner"]);
 const RetroTypeEnum = z.enum(["Discussion", "Keep", "Improve"]);
+// Retro workflow status (added in v0.12.0).
+// New (default, just filed) → Accepted (team agreed; owner assigned) →
+// Implemented (PR merged; Resolved In Version + Implemented By populated) →
+// Validated (improvement verified to actually help).
+// Off-ramp: Declined (terminal — won't action).
+const RetroStatusEnum = z.enum([
+    "New", "Accepted", "Implemented", "Validated", "Declined",
+]);
 // `productId` is the Monday Products-board item ID. Accept either a number or
 // a numeric string (project-config stores it as a string for JSON readability).
 // Regex `^[1-9]\d*$` rejects "0" and leading zeros — both invalid as item IDs.
@@ -458,11 +478,15 @@ export const UpdateRetroSchema = z.object({
     delete: z.boolean().optional().describe("Set true to delete the retro item"),
     name: z.string().optional().describe("New retro title"),
     type: RetroTypeEnum.optional().describe("New retro type (Discussion / Keep / Improve)"),
+    status: RetroStatusEnum.optional().describe("Workflow status. New (default) → Accepted (team agreed) → Implemented (PR merged) → Validated. Off-ramp: Declined."),
     description: z.string().optional().describe("Updated longer-form context — reasoning, examples, links, suggested next steps"),
     repeating: z.boolean().optional().describe("Toggle the Repeating? checkbox"),
     submitter: z.number().optional().describe("Submitter person ID"),
-    owner: z.number().optional().describe("Owner person ID"),
+    owner: z.number().optional().describe("Owner person ID — the human responsible for shepherding this retro to closure (set on Accepted)"),
+    implementedBy: z.number().optional().describe("Person ID of who actually shipped the improvement (set alongside status: Implemented)"),
     sprintId: z.number().optional().describe("Sprint this retro was registered or implemented for — use listSprints to discover the ID"),
+    resolvedInVersionId: z.number().optional().describe("Version item ID where the improvement shipped — use listVersions to discover. Set when status flips to Implemented."),
+    filedByAgent: AgentIdEnum.optional().describe("Which agent filed this retro (empty for human-filed). Triage signal."),
 });
 // =============================================================================
 // Tool 29: listRetros

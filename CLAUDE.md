@@ -136,6 +136,10 @@ Used in `claimTask` (required), `createTask`, `createEpic`, `updateEpic`, `creat
 **Feedback Type:** Request, Feedback
 **Feedback Priority:** Critical, High, Medium, Low
 **Feedback Source:** User, Internal, Support, Partner
+**Bug Status (Option C, v0.12.0):** Awaiting Review (default) → Triaged → (Converted to Task | Declined | Cannot Reproduce | Duplicated | Missing Info | Known Bug). Bugs are **intake-only** — once `Converted to Task`, all dev work happens on the linked Task (type: Fix). Legacy items in `Ready for Dev`/`Fixing`/`Fixed`/`Pending Deploy`/`Move to Sprints` remain valid for historical compatibility, but new writes should use the intake-only set.
+**Bug Priority:** Critical, High, Medium, Low
+**Retro Type:** Discussion, Keep, Improve (existing — separate from workflow status)
+**Retro Status (v0.12.0):** New (default) → Accepted (team agreed, owner assigned) → Implemented (PR merged, `implementedBy` + `resolvedInVersionId` populated) → Validated. Off-ramp: Declined (terminal).
 **Agent ID:** Claude Code CLI, Claude Desktop Cloud, Codex Local, Claude Desktop Local, Codex Cloud
 
 ## Status transition gates

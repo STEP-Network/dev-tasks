@@ -21,6 +21,12 @@ export async function updateRetro(args) {
             columnValues[RETRO_COLUMNS.type] = { index: RETRO_TYPE[args.type] };
             changes.push(`Type -> ${args.type}`);
         }
+        if (args.status !== undefined) {
+            // Label-based write: Monday creates missing labels on first use; we don't
+            // need to know the numeric index. See RETRO_STATUS in constants.ts.
+            columnValues[RETRO_COLUMNS.status] = { label: args.status };
+            changes.push(`Status -> ${args.status}`);
+        }
         if (args.description !== undefined) {
             columnValues[RETRO_COLUMNS.description] = { text: args.description };
             changes.push(`Description updated`);
@@ -37,9 +43,25 @@ export async function updateRetro(args) {
             columnValues[RETRO_COLUMNS.owner] = { personsAndTeams: [{ id: args.owner, kind: "person" }] };
             changes.push(`Owner -> #${args.owner}`);
         }
+        if (args.implementedBy !== undefined) {
+            columnValues[RETRO_COLUMNS.implementedBy] = { personsAndTeams: [{ id: args.implementedBy, kind: "person" }] };
+            changes.push(`Implemented By -> #${args.implementedBy}`);
+        }
         if (args.sprintId !== undefined) {
             columnValues[RETRO_COLUMNS.sprint] = { item_ids: [args.sprintId] };
             changes.push(`Sprint -> #${args.sprintId}`);
+        }
+        if (args.resolvedInVersionId !== undefined) {
+            columnValues[RETRO_COLUMNS.resolvedInVersion] = { item_ids: [args.resolvedInVersionId] };
+            changes.push(`Resolved In Version -> #${args.resolvedInVersionId}`);
+        }
+        if (args.filedByAgent !== undefined) {
+            // Label-based write: the Filed By Agent dropdown column on the Retros
+            // board (created v0.12.0) doesn't have its labels pre-configured. Using
+            // { labels: [name] } + create_labels_if_missing makes Monday create the
+            // label by name on first write, which matches what humans see in the UI.
+            columnValues[RETRO_COLUMNS.filedByAgent] = { labels: [args.filedByAgent] };
+            changes.push(`Filed By Agent -> ${args.filedByAgent}`);
         }
         if (Object.keys(columnValues).length > 0) {
             const mutation = `
@@ -47,7 +69,8 @@ export async function updateRetro(args) {
           change_multiple_column_values(
             item_id: ${retroId},
             board_id: ${BOARDS.RETROS},
-            column_values: ${buildColumnValues(columnValues)}
+            column_values: ${buildColumnValues(columnValues)},
+            create_labels_if_missing: true
           ) {
             id
           }

@@ -121,6 +121,7 @@ export const BUG_COLUMNS = {
     product: "board_relation_mm0mbw41",
     epic: "board_relation_mm0ws076",
     fixedDate: "date_mm0nbxeb",
+    filedByAgent: "dropdown_mm3fq2hs", // which agent filed (added v0.12.0)
     creationLog: "pulse_log_mm0nb308",
     lastUpdated: "pulse_updated_mm0nh785",
 };
@@ -171,12 +172,16 @@ export const FEEDBACK_COLUMNS = {
 export const RETRO_COLUMNS = {
     name: "name",
     type: "status",
+    status: "color_mm3fq6w7", // workflow status (added v0.12.0)
     repeating: "check",
     submitter: "people1",
     owner: "people",
+    implementedBy: "multiple_person_mm3fc9b7", // person who shipped the improvement (added v0.12.0)
     vote: "vote",
     description: "long_text_mm362mkh",
     sprint: "board_relation_mm39dksv",
+    resolvedInVersion: "board_relation_mm3fmg92", // link to Versions board (added v0.12.0)
+    filedByAgent: "dropdown_mm3fn3cf", // which agent filed (added v0.12.0)
     subitems: "subitems",
     creationLog: "pulse_log_mm0nbxdt",
     lastUpdated: "pulse_updated_mm0ne1ny",
@@ -254,16 +259,44 @@ export const SUBTASK_TYPE = {
     "UX-UI": 12,
 };
 // Bug Status (bug_status column)
+// Bug Status (bug_status column on Bugs board).
+//
+// NOTE: legacy entries below use the label `id` field as the numeric value
+// (Monday accepts either `id` or `index` in the `{ index: N }` write format).
+// New entries (Triaged, Converted to Task, Declined, Cannot Reproduce) lack
+// known IDs — Monday assigns them on first write. Tools that set these
+// statuses MUST use label-based writes (`{ label: "X" }`) which work
+// regardless of the numeric value. The map below is retained for legacy
+// callers that still pass `{ index: BUG_STATUS["X"] }`.
+//
+// Workflow (Option C, v0.12.0+):
+//   Awaiting Review (default) → Triaged → (one of: Converted to Task |
+//   Declined | Cannot Reproduce | Duplicated | Missing Info | Known Bug)
+// Once Converted to Task, all dev work lives on the linked Task (type: Fix).
 export const BUG_STATUS = {
     "Awaiting Review": 9,
+    "Triaged": -1, // assigned on first label-based write
+    "Converted to Task": -1, // assigned on first label-based write
+    "Declined": -1, // assigned on first label-based write
+    "Cannot Reproduce": -1, // assigned on first label-based write
+    "Missing Info": 2,
+    "Known Bug": 4,
+    "Duplicated": 8,
+    // Deprecated (legacy values, do not write via plugin going forward):
     "Ready for Dev": 14,
     "Fixing": 0,
     "Fixed": 1,
-    "Missing Info": 2,
-    "Move to Sprints": 3,
-    "Known Bug": 4,
     "Pending Deploy": 7,
-    "Duplicated": 8,
+    "Move to Sprints": 3,
+};
+// Retro workflow Status (status column color_mm3fq6w7 on Retros board, added v0.12.0).
+// Indices assigned on first label-based write — use label-based writes only.
+export const RETRO_STATUS = {
+    "New": -1,
+    "Accepted": -1,
+    "Implemented": -1,
+    "Validated": -1,
+    "Declined": -1,
 };
 // Bug Priority (priority_1 column)
 export const BUG_PRIORITY = {
