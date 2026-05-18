@@ -4,7 +4,7 @@ import { registerAllTools } from "./register-tools.ts";
 
 const server = new McpServer({
   name: "dev-tasks",
-  version: "0.12.0",
+  version: "0.12.1",
 });
 
 registerAllTools(server);

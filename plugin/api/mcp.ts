@@ -61,7 +61,7 @@ export default async function handler(
   await mondayAuthContext.run({ apiKey }, async () => {
     const server = new McpServer({
       name: "dev-tasks",
-      version: "0.12.0",
+      version: "0.12.1",
     });
     registerAllTools(server);
 

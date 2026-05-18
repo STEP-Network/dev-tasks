@@ -47,6 +47,33 @@ Treat as main-session-like only if the parent's prompt explicitly authorized inl
 | Post-merge | `/ship-pr` Phase 10: clean state file, exit worktree, post Monday update |
 | Next task | If a planned queue exists locally, claim the next one via `/pickup-task`. If not, end the session. |
 
+## Don't pause to ask "should I continue?"
+
+If a piece of work is done and there's an obvious, low-risk follow-up that the same task or session implies, **just do it.** Don't ask "should I draft the releases?", "want me to tag the commits?", "should I update the doc too?" — those are mechanical extensions of the work already authorized, and pausing to ask burns the user's attention for no decision being made.
+
+**Default to continuing.** End-of-turn summaries should describe what shipped and what's next, not solicit permission for the next obvious step. The user can always interrupt or redirect — but make them interrupt to *stop* you, not to *unblock* you.
+
+| Symptom | Action |
+|---|---|
+| Just shipped v0.X.Y with N PRs, no GitHub releases exist | Tag + create releases. Don't ask. |
+| Just renamed a constant; CLAUDE.md still references the old name | Update the doc. Don't ask. |
+| Just merged a fix; same gap exists in a sibling file | Fix the sibling. Don't ask. |
+| Just resolved a bug; the originating retro is still "New" | Mark the retro Implemented. Don't ask. |
+| Just installed a new dependency; lockfile not committed | Commit it. Don't ask. |
+| Just bumped a plugin version; the version string appears in 3 files | Update all 3. Don't ask. |
+| Tests pass, build clean, branch ready | Push + open PR. Don't ask. |
+
+**When you SHOULD still pause and ask:**
+
+- The follow-up requires a non-obvious decision with multiple reasonable answers (which API shape, which library, what to name something material).
+- The follow-up is irreversible and not already implied by the task (delete data, force-push, drop a table, close a PR someone else opened).
+- The follow-up is a scope expansion that changes the task's contract (the user asked for fix X; doing Y would be a different task).
+- Anything the safety rules already require explicit confirmation for (per the `prohibited_actions` and `explicit_permission` lists — those override this rule).
+
+The line is: **mechanical extension of the work already authorized** = just do it. **New decision** = ask.
+
+When in doubt, do it and report — the user can redirect. The reverse (asking and waiting) costs them time and attention they didn't sign up for.
+
 ## The Stuck criterion — the ONLY valid early exit
 
 `updateTask({ status: "Stuck" }) + createUpdate({ body: ... })` is reserved for situations where progress requires a **genuinely unforeseen, irreversible decision the agent has no authority to make**. Concrete examples:
