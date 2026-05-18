@@ -34,12 +34,21 @@ resolve_project_root() {
   local file_path="${1:-}"
 
   # 1. file_path-based detection — most reliable in PreToolUse Edit/Write.
+  # For Write creating a file in a not-yet-existing directory, walk up the
+  # path until we hit a directory that exists, then use that as the git probe
+  # point. Without this, first-file-in-new-dir writes silently fall through
+  # to CWD-based resolution, which is correct only when CWD matches the
+  # target worktree — a wrong-checkout failure mode in agent sessions that
+  # have cd'd somewhere else.
   if [ -n "$file_path" ]; then
-    local file_dir
-    file_dir=$(dirname -- "$file_path" 2>/dev/null)
-    if [ -n "$file_dir" ] && [ -d "$file_dir" ]; then
+    local probe_dir
+    probe_dir=$(dirname -- "$file_path" 2>/dev/null)
+    while [ -n "$probe_dir" ] && [ "$probe_dir" != "/" ] && [ "$probe_dir" != "." ] && [ ! -d "$probe_dir" ]; do
+      probe_dir=$(dirname -- "$probe_dir" 2>/dev/null)
+    done
+    if [ -n "$probe_dir" ] && [ -d "$probe_dir" ]; then
       local toplevel
-      toplevel=$(git -C "$file_dir" rev-parse --show-toplevel 2>/dev/null)
+      toplevel=$(git -C "$probe_dir" rev-parse --show-toplevel 2>/dev/null)
       if [ -n "$toplevel" ]; then
         printf '%s' "$toplevel"
         return 0
