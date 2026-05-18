@@ -60,6 +60,19 @@ A session is "in a worktree" when:
 
 This catches **both** `.claude/worktrees/<name>/` (created by `EnterWorktree`) AND sibling worktrees from `git worktree add ../foo` — the hook works for both layouts.
 
+### Project-root resolution (for hooks that read `.claude/active-task.json`)
+
+**`CLAUDE_PROJECT_DIR` is frozen at session start.** It points at the directory where Claude Code was launched — almost always the main checkout. It does NOT follow `EnterWorktree`. Hooks that read or write state in `.claude/` MUST use the worktree-aware resolver, not `CLAUDE_PROJECT_DIR`:
+
+```bash
+source "$(dirname "${BASH_SOURCE[0]}")/lib/resolve-project-root.sh"
+INPUT=$(cat)
+FILE_PATH=$(extract_tool_file_path "$INPUT")  # safe even without stdin payload
+PROJECT_ROOT=$(resolve_project_root "$FILE_PATH")
+```
+
+`resolve_project_root` returns `git rev-parse --show-toplevel` from (in order): the edited file's directory, then CWD; falls back to `CLAUDE_PROJECT_DIR`, then `$PWD`. This means a hook fired from a worktree edits/reads the worktree's `.claude/active-task.json`, not the main checkout's. Don't read `${CLAUDE_PROJECT_DIR}/.claude/...` directly — that pattern is what caused retros #2922252904, #2922256731, and #2922302538.
+
 ### Cleanup
 
 ```
