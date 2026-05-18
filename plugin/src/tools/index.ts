@@ -12,6 +12,7 @@ export { manageSubtasks } from "./manageSubtasks.ts";
 export { createTask } from "./createTask.ts";
 export { convertBugToTask } from "./convertBugToTask.ts";
 export { createBug } from "./createBug.ts";
+export { updateBug } from "./updateBug.ts";
 export { updateVersion } from "./updateVersion.ts";
 export { createVersion } from "./createVersion.ts";
 export { listVersions } from "./listVersions.ts";

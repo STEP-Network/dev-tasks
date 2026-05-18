@@ -15,6 +15,7 @@ import {
   CreateTaskSchema,
   ConvertBugToTaskSchema,
   CreateBugSchema,
+  UpdateBugSchema,
   UpdateVersionSchema,
   CreateVersionSchema,
   ListVersionsSchema,
@@ -57,6 +58,7 @@ import {
   createTask,
   convertBugToTask,
   createBug,
+  updateBug,
   updateVersion,
   createVersion,
   listVersions,
@@ -230,7 +232,7 @@ server.tool(
 
 server.tool(
   "convertBugToTask",
-  "Convert a bug into a Fix task. Use getBugs to find the bugId. Copies bug name, description, and priority. Creates task with type=Fix, status='Ready to Start', links bug<->task, and sets bug status to 'Fixing'. If no epicId specified, auto-assigns the product's maintenance epic (if one exists). Optionally link to epic/sprint.",
+  "Convert a bug into a Fix task (Option C workflow). Use getBugs to find the bugId. Copies bug name, description, and priority. Creates task with type=Fix, status='Ready to Start', links bug↔task, and sets bug status to 'Converted to Task' (terminal — bug becomes a breadcrumb, all dev work happens on the linked Task). If no epicId specified, auto-assigns the product's maintenance epic. Optionally link to epic/sprint.",
   ConvertBugToTaskSchema.shape,
   async (args) => {
     const result = await convertBugToTask(args);
@@ -244,6 +246,16 @@ server.tool(
   CreateBugSchema.shape,
   async (args) => {
     const result = await createBug(args);
+    return { content: [{ type: "text", text: result }] };
+  }
+);
+
+server.tool(
+  "updateBug",
+  "Update any bug field — name, description, status, priority, productId, epicId, fixedInVersionId, filedByAgent. Set delete=true to delete (rare — prefer Declined/Cannot Reproduce/Duplicated for closure). Option C workflow: Awaiting Review → Triaged → (Converted to Task | Declined | Cannot Reproduce | Duplicated | Missing Info | Known Bug). Once 'Converted to Task', all dev work happens on the linked Task — prefer convertBugToTask for that transition. Legacy statuses (Ready for Dev, Fixing, Fixed, Pending Deploy, Move to Sprints) are still accepted for backwards compat but should NOT be used for new writes. New labels are auto-created by Monday on first write via create_labels_if_missing.",
+  UpdateBugSchema.shape,
+  async (args) => {
+    const result = await updateBug(args);
     return { content: [{ type: "text", text: result }] };
   }
 );
@@ -430,7 +442,7 @@ server.tool(
 
 server.tool(
   "updateRetro",
-  "Update any retro item field. Supports: name, type (Discussion/Keep/Improve), description, repeating, submitter, owner, sprintId (sprint this retro was registered or implemented for — use listSprints to discover the ID). Set delete=true to delete the retro item. Use listRetros to find the retroId.",
+  "Update any retro item field. Supports: name, type (Discussion/Keep/Improve), status (workflow: New → Accepted → Implemented → Validated; off-ramp Declined — added v0.12.0), description, repeating, submitter, owner, implementedBy (person who shipped the improvement), sprintId, resolvedInVersionId (Versions board item — set when status: Implemented), filedByAgent (Agent ID dropdown). Set delete=true to delete the retro item. Use listRetros to find the retroId. Workflow: status: New (default) → Accepted (team agreed, owner assigned) → Implemented (PR merged, implementedBy + resolvedInVersionId populated) → Validated. Use Declined for retros that won't be actioned (terminal).",
   UpdateRetroSchema.shape,
   async (args) => {
     const result = await updateRetro(args);

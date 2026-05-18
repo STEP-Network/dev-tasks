@@ -12,6 +12,7 @@ export { manageSubtasks } from "./manageSubtasks.js";
 export { createTask } from "./createTask.js";
 export { convertBugToTask } from "./convertBugToTask.js";
 export { createBug } from "./createBug.js";
+export { updateBug } from "./updateBug.js";
 export { updateVersion } from "./updateVersion.js";
 export { createVersion } from "./createVersion.js";
 export { listVersions } from "./listVersions.js";
