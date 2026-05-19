@@ -117,6 +117,13 @@
           { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/hooks/subprocess-failure.sh" }
         ]
       }
+    ],
+    "SessionStart": [
+      {
+        "hooks": [
+          { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/hooks/active-task-recon.sh" }
+        ]
+      }
     ]
   }
 }
