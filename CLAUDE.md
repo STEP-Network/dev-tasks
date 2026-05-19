@@ -58,6 +58,8 @@ Then in the Claude Code session:
 
 To activate the blocking hooks (task-state-guard, worktree-required, worktree-path-boundary, bash-guard, stop-task-check, stop-ci-green-check), copy `plugin/templates/starter-project-config.json` to `<consumer-project>/.claude/project-config.json` and trim it to what you want enabled. Without that file, only `rule-autoload` runs; all blocking hooks are dormant.
 
+**Worktree lifecycle.** Per-task worktrees accumulate under `.claude/worktrees/`. The `worktree-janitor.sh` SessionStart hook auto-prunes DONE + ABANDONED worktrees and clears stale git locks (`.git/worktrees/<n>/locked` > 24h) on every session start. Silent when nothing to clean. Manual modes: `bash plugin/scripts/worktree-audit.sh` (report) / `--remove` (interactive) / `--auto` (what the hook runs). Full details in `plugin/README.md` under "Worktree lifecycle".
+
 ## Board ecosystem (what the MCP wraps)
 
 ```
