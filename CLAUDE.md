@@ -130,7 +130,7 @@ Used in `claimTask` (required), `createTask`, `createEpic`, `updateEpic`, `creat
 
 ## Key status mappings
 
-**Task Status:** Needs Refinement → Ready to Start → In Progress → Waiting for UAT → Pending Deploy to Prod → Done (+ Stuck)
+**Task Status:** Needs Refinement → Ready to Start → In Progress → Waiting for UAT → Pending Deploy to Prod → Done. Off-ramps: Stuck (unresolved blocker; recoverable), Declined (superseded mid-sprint — terminal, no work shipped; excluded from `getBacklog` defaults; exempt from active-sprint pull). Use Declined when a task is no longer needed: rework merged elsewhere, requirement changed, duplicate discovered.
 **Task Priority:** Critical, High, Medium, Low, Missing
 **Task Type:** Feature, Fix, Improvement, To Do, Not Set
 **Subtask Status:** Needs Refinement → In Progress → Done (+ Stuck) — note: subtasks have no "Ready to Start" intermediate state (the Subtasks board doesn't have that label configured)

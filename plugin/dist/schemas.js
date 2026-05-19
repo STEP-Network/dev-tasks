@@ -2,9 +2,13 @@ import { z } from "zod";
 // =============================================================================
 // Shared Enums
 // =============================================================================
+// Workflow: Needs Refinement → Ready to Start → In Progress → Waiting for UAT
+//           → Pending Deploy to Prod → Done.
+// Off-ramps: Stuck (unresolved blocker; recoverable) and Declined (superseded
+// mid-sprint — terminal, no work shipped; excluded from getBacklog defaults).
 const TaskStatusEnum = z.enum([
     "Needs Refinement", "Ready to Start", "In Progress",
-    "Waiting for UAT", "Pending Deploy to Prod", "Done", "Stuck",
+    "Waiting for UAT", "Pending Deploy to Prod", "Done", "Stuck", "Declined",
 ]);
 const TaskPriorityEnum = z.enum([
     "Critical", "High", "Medium", "Low", "Missing",
@@ -89,7 +93,7 @@ const FormatEnum = z.enum(["markdown", "json"]);
 // Tool 1: getBacklog
 // =============================================================================
 export const GetBacklogSchema = z.object({
-    statuses: z.array(TaskStatusEnum).optional().describe("Filter to one or more statuses (any_of). Default: Needs Refinement + Ready to Start — the tasks not yet in flight."),
+    statuses: z.array(TaskStatusEnum).optional().describe("Filter to one or more statuses (any_of). Default: Needs Refinement + Ready to Start — the tasks not yet in flight. In Progress, Waiting for UAT, Pending Deploy to Prod, Done, Stuck, and Declined are excluded from the default; pass them explicitly to surface them."),
     types: z.array(TaskTypeEnum).optional().describe("Filter to one or more task types (any_of). Server-side filter."),
     unclaimedOnly: z.boolean().optional().default(false).describe("Only show tasks with no Agent ID set (available for claiming)."),
     agentId: AgentIdEnum.optional().describe("Filter by agent currently working on the task."),

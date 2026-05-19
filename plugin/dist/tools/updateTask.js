@@ -62,8 +62,11 @@ export async function updateTask(args) {
             // `sprintId` in the same call, auto-pull into the active sprint and
             // mark `unplanned: true` — then continue. The pull columns are merged
             // into the same atomic mutation as the status change.
-            const refinementStatuses = new Set(["Ready to Start", "Needs Refinement"]);
-            if (args.status !== undefined && !refinementStatuses.has(args.status)) {
+            //
+            // Declined is a terminal off-ramp (task superseded mid-sprint, no work
+            // shipped). It does not require active-sprint membership — exempt it.
+            const noSprintRequired = new Set(["Ready to Start", "Needs Refinement", "Declined"]);
+            if (args.status !== undefined && !noSprintRequired.has(args.status)) {
                 if (args.sprintId !== undefined) {
                     // Caller is setting sprint explicitly — validate that choice. If it's
                     // not active, that's a contradiction with the status transition.
