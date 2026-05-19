@@ -7,6 +7,10 @@
       "match": ["**/*.ts", "**/*.tsx", "**/*.js", "**/*.jsx", "**/*.py", "**/*.sh", "**/*.sql", "**/*.css", "**/*.scss", "**/*.html", "**/*.md"]
     },
     {
+      "file": "autonomous-by-default.md",
+      "match": ["**/*.ts", "**/*.tsx", "**/*.js", "**/*.jsx", "**/*.py", "**/*.sh", "**/*.sql", "**/*.css", "**/*.scss", "**/*.html", "**/*.md"]
+    },
+    {
       "file": "worktree-discipline.md",
       "match": ["**/*.ts", "**/*.tsx", "**/*.js", "**/*.jsx", "**/*.py", "**/*.sh", "**/*.sql", "**/*.css", "**/*.scss", "**/*.html"]
     },
