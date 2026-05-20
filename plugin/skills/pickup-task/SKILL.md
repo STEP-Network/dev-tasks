@@ -12,6 +12,23 @@ Source-file edits for a claimed task must happen in a git worktree, not the main
 
 ## Workflow
 
+### Phase 0: Investigate relevance (smart default — see `/dev-tasks:investigate-request`)
+
+A task ready-to-start today may have been silently superseded by a recently-merged PR; subtask file paths may have moved; the AC may reference deprecated code. Before claiming, run `/dev-tasks:investigate-request --mode=relevance --taskId=<N>`.
+
+**Skip case** (deterministic): if `now - task.updatedAt < 24h` AND `git log origin/$defaultBase --since=task.updatedAt --count` returns 0 — skip. Same semantics as `/refine-task`'s skip; matches the existing Phase 15 trigger logic.
+
+**Handle the recommendation**:
+- `DECLINE` (task no longer relevant) → `AskUserQuestion`: "Task #N: <reason>. Decline (task superseded, no work needed), or claim anyway and re-refine?" Wait. If decline → `updateTask({ status: "Declined" })` with rationale; do NOT claim. (Declined is the right terminal state for a superseded task — distinct from Stuck which implies an unresolved blocker on real work.) If claim-anyway → proceed but flag to user that re-refinement is needed mid-flight.
+- `REFINE` (task needs scope update before claiming makes sense) → exit `/pickup-task`; invoke `/dev-tasks:refine-task <N>` first, then claim.
+- Proceed (no fundamental issues) → continue to existing Phase 1 (Validate task readiness) and onward.
+
+**BLOCKING questions** in the report MUST be resolved via `AskUserQuestion` before `claimTask`. **OPTIONAL** questions are mentioned in the proceed-message.
+
+**Coordinate with Phase 15** (`Conditional claim-time re-plan`): Phase 0 here checks RELEVANCE before claim. Phase 15 re-plans IMPLEMENTATION DETAILS after claim. They're complementary: Phase 0 decides "should we claim at all"; Phase 15 decides "given we claimed, is the plan still current."
+
+### Standard workflow
+
 1. `mcp__plugin_dev-tasks_dev-tasks__getSprint` (current sprint) or `getBacklog` to see work.
 2. Display task list (IDs, names, status, estimated hours).
 3. User selects task (or specify task ID as argument).

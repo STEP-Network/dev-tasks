@@ -10,13 +10,26 @@ Read `.claude/project-config.json`. Extract `monday.productId` — the Products-
 
 ## Workflow
 
-1. **Dedupe — REQUIRED** (per `.claude/rules/meta-workflow.md`):
-   - **Active backlog**: `getBacklog({ query: "<2-3 keywords>", productId: $productId })`. For each result:
-     - Exact-name match → stop. Update existing via `updateTask`, or if already shipped surface to user.
-     - >50% keyword overlap + same epic → present both; default to enriching existing.
-     - No match → continue.
-   - **Cross-surface**: would this produce wrong output for a real user? → `createBug` instead. Workflow/tooling friction without user-visible bug? → `/dev-tasks:file-retro`. Stakeholder feedback? → `createFeedback` + let `/triage-feedback` route.
-   - **Recently-shipped**: `listVersions({ search: ... })` to catch tasks recreating work shipped recently.
+### Phase 0: Investigate (smart default — see `/dev-tasks:investigate-request`)
+
+Before any `createTask` write, run `/dev-tasks:investigate-request --mode=dedup` with the raw input. This finds related existing tasks (active + recently-shipped), in-flight agents on the same scope, recent merges that may have shipped the work, and surfaces ambiguity as BLOCKING/OPTIONAL questions.
+
+**Skip case** (deterministic): if the caller arg explicitly cites a Monday task/PR/retro ID (regex `/#\d{7,10}\b|PR\s*#\d+|retro\s*#\d+/i`), skip — the dedup work is done. Otherwise the invocation is the default.
+
+**Handle the recommendation**:
+- `SKIP` (duplicate / already covered) → abort. Surface the report to the user. Do NOT call `createTask`. Post a comment on the existing task if context-additive.
+- `REFINE #N` → redirect: invoke `/dev-tasks:refine-task <N>` with the report's findings. Do NOT call `createTask`.
+- `ROUTE → Bug | Feedback | Retro` → wrong surface; redirect: `createBug` / `createFeedback` / `/dev-tasks:file-retro` per the report's suggestion. Do NOT call `createTask`.
+- `DECLINE` (request superseded) → confirm with `AskUserQuestion`, then act.
+- `NEW task` → proceed to step 1+ using the report's "Recommendation" scope as the default (priority, epic, subtask shape).
+
+**BLOCKING questions** in the report MUST be resolved via `AskUserQuestion` before any `createTask` call. **OPTIONAL** questions are mentioned in the proceed-message but don't gate action. See the skill for the BLOCKING vs OPTIONAL heuristic.
+
+The legacy cross-surface check (this should be a bug / retro / feedback, not a task) is subsumed by the investigation — the report's "Recommendation" line says so explicitly when relevant.
+
+### Standard workflow
+
+1. **Cross-surface fallback** (only when Phase 0 was skipped via the explicit-ID skip case): would this produce wrong output for a real user? → `createBug` instead. Workflow/tooling friction? → `/dev-tasks:file-retro`. Stakeholder feedback? → `createFeedback` + let `/triage-feedback` route.
 
 2. **Epic assignment** (MANDATORY — no orphaned tasks):
    - `listEpics(productId: $productId)`. Auto-match by keyword. If confident, use; else ask user.

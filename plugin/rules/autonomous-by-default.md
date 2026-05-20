@@ -18,7 +18,7 @@ Six carve-outs. Everything else proceeds without confirmation.
 | **Scope expansion** — your plan exceeds what the task body explicitly scopes | Surface the delta in 1–2 sentences. Don't silently expand. |
 | **External-system contact** — Slack, email, paging on-call, opening tickets in other tracking systems | Confirm both the action and the message. Internal Monday updates are not external. |
 | **Hidden trade-offs** — multiple legitimate paths with materially different downstream consequences (perf vs. clarity, schema-migration shape, public API contract). NOT every architectural choice; e.g. picking between two equivalent library functions is not a hidden trade-off. | Present 2 options + recommendation. User picks. |
-| **Missing context** — required input the agent can't derive from code or task body (credential, product decision, unclear user intent) | Ask the specific question. Don't guess. |
+| **Missing context** — required input the agent can't derive from code or task body (credential, product decision, unclear user intent) | Ask the specific question via `AskUserQuestion`. Don't guess. The `/dev-tasks:investigate-request` skill formalizes this for task-mutating flows: it emits BLOCKING vs OPTIONAL questions, and callers must resolve BLOCKING ones before any Monday write. |
 | **Stuck** — real blocker after honest debugging attempts | Follow `agent-autonomy.md` Stuck workflow (set status, post update, claim next or end). |
 
 ## What NOT to stop on
