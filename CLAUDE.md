@@ -105,6 +105,8 @@ After plugin install, tools are namespaced as `mcp__plugin_dev-tasks_dev-tasks__
 
 The 7 plugin skills (`/dev-tasks:pickup-task`, `create-task`, `refine-task`, `log-progress`, `self-review`, `ship-pr`, `release-version`) wrap most of this flow.
 
+**Default stance: autonomous-by-default.** The lifecycle chain runs end-to-end without permission checks between phases. The rule `plugin/rules/autonomous-by-default.md` defines the six carve-outs that justify a pause (destructive actions, scope expansion, external-system contact, hidden trade-offs, missing context, stuck) and the communication pattern that replaces check-ins (terse status updates, no trailing "want me to continue?" questions). Complements `agent-autonomy.md` (which covers the main-vs-subagent context boundary and the Stuck criterion).
+
 ## Claiming protocol
 
 - Agent calls `claimTask` → server validates:
