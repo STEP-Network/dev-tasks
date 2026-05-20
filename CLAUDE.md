@@ -214,7 +214,7 @@ Detected drift cases (3 of 5):
 
 | Case | Trigger | Suggested action |
 |---|---|---|
-| **A — Done elsewhere** | Monday task is Done, but the worktree still has an `active-task.json` | `ExitWorktree({action:'remove'})` if shipped + verified clean. The worktree-janitor SessionStart hook will collect this on the next session start anyway |
+| **A — Done elsewhere** | Monday task is Done, but the worktree still has an `active-task.json` | `ExitWorktree({action:'remove'})` if shipped + verified clean. If the worktree-janitor SessionStart hook (PR #34) is installed, it collects DONE-class worktrees on the next session start anyway |
 | **B — Ownership changed** | Monday's Agent ID now points at a different agent than this CLI | Continue at your own risk; `/log-progress TASK_STUCK` if uncertain |
 | **D — Missing state file** | A `.claude/worktrees/*` directory has no `.claude/active-task.json` | `/pickup-task <id>` to reattach, OR `ExitWorktree({action:'remove'})` if abandoned |
 
@@ -222,7 +222,7 @@ Deferred (not detected by the current hook):
 - **C — Task reassigned epic/sprint** — low signal; intentional refinement looks identical to drift
 - **E — Stale claimToken** — would require an extra `getUpdates` API call per session start; cost > benefit
 
-The hook silent-no-ops when: cwd is not under `.claude/worktrees/`, `MONDAY_API_KEY` is unset, `curl`/`jq` missing, or the Monday API returns no response. Output format: `[active-task-recon] Case X: <one-line summary>` followed by indented suggestion lines. Smoke-tested by `plugin/hooks/__tests__/active-task-recon.test.sh` (6 cases — local-only + Monday round-trip).
+The hook silent-no-ops when: cwd is not under `.claude/worktrees/`, `MONDAY_API_KEY` is unset, `curl`/`jq` missing, or the Monday API returns no response. One non-silent edge case: if `active-task.json` is present but `taskId` is empty/malformed, the hook emits a one-line warning ("active-task.json present but taskId empty/malformed; skipping drift check.") before exiting 0 — surfacing the broken state file is more useful than silently skipping it. Output format: `[active-task-recon] Case X: <one-line summary>` followed by indented suggestion lines. Smoke-tested by `plugin/hooks/__tests__/active-task-recon.test.sh` (6 cases — local-only + Monday round-trip).
 
 ## Environment variables
 
