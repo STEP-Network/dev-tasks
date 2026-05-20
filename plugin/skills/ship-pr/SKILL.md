@@ -103,6 +103,14 @@ Branch on execution context per `.claude/rules/agent-autonomy.md`. Quick check: 
 
 20f. Verify: `gh pr view {N} --json state --jq .state` returns `"MERGED"`. If `"OPEN"`, diagnose via `gh pr view {N} --json mergeStateStatus,mergeable`.
 
+20f.5. **Wait for the post-merge deploy before any "verified" / "live" claim.** `gh pr merge` returning success means the commit landed on `$defaultBase`, NOT that the change is live. The Vercel redeploy triggered by the merge takes additional time, and browser caches routinely show the pre-deploy version for several minutes. Before posting anything implying verification:
+- Capture the merge SHA: `mergedSHA=$(gh pr view {N} --json mergeCommit --jq .mergeCommit.oid)`
+- Poll `mcp__vercel__list_deployments` filtered by `meta.githubCommitSha = $mergedSHA` until a production-target deployment reaches state `READY`. Non-Vercel projects: substitute the platform's deploy-status check — `gh run watch` for GitHub Actions deploys, `flyctl status` for Fly, etc.
+- When inspecting through a browser, cache-bust the verification URL with `?_t=$(date +%s)` or use an incognito tab. Service Worker caches survive plain refresh.
+- Word the post-merge Monday update precisely: "Merged — staging deploy in flight" is honest until the deploy is verified; "Verified live in production" is only honest after the steps above succeed.
+
+See `CLAUDE.md` → Shipping conventions for the PR #347 case study that motivated this rule (retro #2926719311).
+
 20g. Hotfix exception: skip merge — human merges `$hotfixBase` PRs.
 
 20h. Continue to Phase 10.

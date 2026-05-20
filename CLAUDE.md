@@ -208,6 +208,18 @@ Monday.com automation auto-completes the parent task when all subtasks are Done:
 - Mark all subtasks `Done` instead (automation triggers when the last subtask flips Done)
 - Delete unwanted subtasks before marking the last one Done
 
+## Shipping conventions
+
+### Deploy-lag gotcha — "PR merged" ≠ "change is live"
+
+`gh pr merge` returning success means the commit landed on `$defaultBase`. The change is NOT yet running in staging or production: CI workflows triggered by the merge (Vercel redeploy, downstream pipelines, edge cache invalidation) need additional time, and browser caches (including Service Workers) routinely serve the pre-deploy version for several minutes after the actual rollout completes.
+
+**The agent must wait for the deploy to complete + cache-bust the verification URL before claiming "verified" / "deployed" / "live".** See `plugin/skills/ship-pr/SKILL.md` Phase 6.6 step 20f.5 for the concrete checklist (poll `mcp__vercel__list_deployments` by merge SHA → wait for `READY` → cache-bust verification URL with `?_t=$(date +%s)` or incognito tab).
+
+**Case study (canonical):** PR #347 (PolAds `fundingSource` fix). The agent merged and immediately tried to verify in staging. It hit the pre-deploy version, mistook the unfixed behavior for "the fix didn't work", and reported a false regression — confusion that took the user a manual round of investigation to untangle. Root cause: stale browser cache + an in-flight redeploy + no wait gate between merge and verification. Retro #2926719311 codified the lesson; this section is its docs landing site.
+
+**Honest wording when in doubt:** "Merged — staging deploy in flight" is correct until the deploy is verified ready. "Verified live in production" requires the deploy poll + cache-bust steps above to have succeeded.
+
 ## Environment variables
 
 - `MONDAY_API_KEY` — Monday.com API key (required). Must be exported in the parent shell that launches Claude Code; `.mcp.json` does not interpolate env values.
