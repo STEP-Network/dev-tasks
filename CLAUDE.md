@@ -18,7 +18,7 @@ This repo is a Claude Code plugin marketplace + plugin source. The plugin (`dev-
 │   ├── rules/                        # 8 universal lifecycle rules
 │   ├── rules-routing.json
 │   ├── skills/                       # 7 core lifecycle skills
-│   ├── hooks/                        # 7 hooks (rule-autoload + 6 critical, opt-in)
+│   ├── hooks/                        # lifecycle hooks (rule-autoload, task-state guard, worktree enforcement, drift recon, etc.); see plugin/.claude-plugin/plugin.json for the registered list
 │   ├── schemas/                      # project-config.schema.json
 │   └── templates/                    # starter-project-config.json
 ├── .claude/                          # project-local Claude Code config
