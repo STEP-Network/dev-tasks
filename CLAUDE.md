@@ -18,7 +18,7 @@ This repo is a Claude Code plugin marketplace + plugin source. The plugin (`dev-
 │   ├── rules/                        # 8 universal lifecycle rules
 │   ├── rules-routing.json
 │   ├── skills/                       # 7 core lifecycle skills
-│   ├── hooks/                        # 7 hooks (rule-autoload + 6 critical, opt-in)
+│   ├── hooks/                        # lifecycle hooks (rule-autoload, task-state guard, worktree enforcement, drift recon, etc.); see plugin/.claude-plugin/plugin.json for the registered list
 │   ├── schemas/                      # project-config.schema.json
 │   └── templates/                    # starter-project-config.json
 ├── .claude/                          # project-local Claude Code config
@@ -57,6 +57,8 @@ Then in the Claude Code session:
 ```
 
 To activate the blocking hooks (task-state-guard, worktree-required, worktree-path-boundary, bash-guard, stop-task-check, stop-ci-green-check), copy `plugin/templates/starter-project-config.json` to `<consumer-project>/.claude/project-config.json` and trim it to what you want enabled. Without that file, only `rule-autoload` runs; all blocking hooks are dormant.
+
+**Worktree lifecycle.** Per-task worktrees accumulate under `.claude/worktrees/`. The `worktree-janitor.sh` SessionStart hook auto-prunes DONE + ABANDONED worktrees and clears stale git locks (`.git/worktrees/<n>/locked` > 24h) on every session start. Silent when nothing to clean. Manual modes: `bash plugin/scripts/worktree-audit.sh` (report) / `--remove` (interactive) / `--auto` (what the hook runs). Full details in `plugin/README.md` under "Worktree lifecycle".
 
 ## Board ecosystem (what the MCP wraps)
 
@@ -105,6 +107,8 @@ After plugin install, tools are namespaced as `mcp__plugin_dev-tasks_dev-tasks__
 
 The 7 plugin skills (`/dev-tasks:pickup-task`, `create-task`, `refine-task`, `log-progress`, `self-review`, `ship-pr`, `release-version`) wrap most of this flow.
 
+**Default stance: autonomous-by-default.** The lifecycle chain runs end-to-end without permission checks between phases. The rule `plugin/rules/autonomous-by-default.md` defines the six carve-outs that justify a pause (destructive actions, scope expansion, external-system contact, hidden trade-offs, missing context, stuck) and the communication pattern that replaces check-ins (terse status updates, no trailing "want me to continue?" questions). Complements `agent-autonomy.md` (which covers the main-vs-subagent context boundary and the Stuck criterion).
+
 ## Claiming protocol
 
 - Agent calls `claimTask` → server validates:
@@ -130,7 +134,7 @@ Used in `claimTask` (required), `createTask`, `createEpic`, `updateEpic`, `creat
 
 ## Key status mappings
 
-**Task Status:** Needs Refinement → Ready to Start → In Progress → Waiting for UAT → Pending Deploy to Prod → Done (+ Stuck)
+**Task Status:** Needs Refinement → Ready to Start → In Progress → Waiting for UAT → Pending Deploy to Prod → Done. Off-ramps: Stuck (unresolved blocker; recoverable), Declined (superseded mid-sprint — terminal, no work shipped; excluded from `getBacklog` defaults; exempt from active-sprint pull). Use Declined when a task is no longer needed: rework merged elsewhere, requirement changed, duplicate discovered.
 **Task Priority:** Critical, High, Medium, Low, Missing
 **Task Type:** Feature, Fix, Improvement, To Do, Not Set
 **Subtask Status:** Needs Refinement → In Progress → Done (+ Stuck) — note: subtasks have no "Ready to Start" intermediate state (the Subtasks board doesn't have that label configured)
@@ -168,8 +172,9 @@ Used in `claimTask` (required), `createTask`, `createEpic`, `updateEpic`, `creat
 
   …and warns (but doesn't block) when missing GitHub link, branch (`text_mm0pvs3n`), demo URL, or PR link.
 
-- **Sprint auto-pull (any status leaving the refinement phase):** any transition to a status other than "Ready to Start" or "Needs Refinement" requires active-sprint membership. That includes `In Progress`, `Waiting for UAT`, `Pending Deploy to Prod`, `Done`, and `Stuck`. If the task isn't in the active sprint AND the same `updateTask`/`claimTask` call didn't explicitly pass `sprintId`, the plugin auto-pulls the task into the active sprint and sets the `unplanned` checkbox to `true`. Both column writes land atomically in the same `change_multiple_column_values` mutation as the status change. The tool response surfaces the action so the agent is aware. Hard error only when no active sprint exists.
+- **Sprint auto-pull (any status leaving the refinement phase):** any transition to a status other than "Ready to Start", "Needs Refinement", or "Declined" requires active-sprint membership. That includes `In Progress`, `Waiting for UAT`, `Pending Deploy to Prod`, `Done`, and `Stuck`. If the task isn't in the active sprint AND the same `updateTask`/`claimTask` call didn't explicitly pass `sprintId`, the plugin auto-pulls the task into the active sprint and sets the `unplanned` checkbox to `true`. Both column writes land atomically in the same `change_multiple_column_values` mutation as the status change. The tool response surfaces the action so the agent is aware. Hard error only when no active sprint exists.
   - Note on `Done`: usually fires via Monday automation when subtasks complete (no auto-pull involved). A direct `updateTask({status:"Done"})` call DOES trigger auto-pull if the task is out-of-sprint — same rule as every other non-refinement status.
+  - Note on `Declined`: terminal off-ramp (task superseded mid-sprint, no work shipped). Exempt from auto-pull — declining a task should not drag it into the active sprint.
 
 Subtasks should describe work-on-code, not human verification (testing belongs in the UAT doc) — otherwise the "all subtasks Done" gate can't ever be satisfied.
 
@@ -206,6 +211,18 @@ Monday.com automation auto-completes the parent task when all subtasks are Done:
 - Mark all subtasks `Done` instead (automation triggers when the last subtask flips Done)
 - Delete unwanted subtasks before marking the last one Done
 
+## Shipping conventions
+
+### Deploy-lag gotcha — "PR merged" ≠ "change is live"
+
+`gh pr merge` returning success means the commit landed on `$defaultBase`. The change is NOT yet running in staging or production: CI workflows triggered by the merge (Vercel redeploy, downstream pipelines, edge cache invalidation) need additional time, and browser caches (including Service Workers) routinely serve the pre-deploy version for several minutes after the actual rollout completes.
+
+**The agent must wait for the deploy to complete + cache-bust the verification URL before claiming "verified" / "deployed" / "live".** See `plugin/skills/ship-pr/SKILL.md` Phase 6.6 step 20f.5 for the concrete checklist (poll `mcp__vercel__list_deployments` by merge SHA → wait for `READY` → cache-bust verification URL with `?_t=$(date +%s)` or incognito tab).
+
+**Case study (canonical):** PR #347 (PolAds `fundingSource` fix). The agent merged and immediately tried to verify in staging. It hit the pre-deploy version, mistook the unfixed behavior for "the fix didn't work", and reported a false regression — confusion that took the user a manual round of investigation to untangle. Root cause: stale browser cache + an in-flight redeploy + no wait gate between merge and verification. Retro #2926719311 codified the lesson; this section is its docs landing site.
+
+**Honest wording when in doubt:** "Merged — staging deploy in flight" is correct until the deploy is verified ready. "Verified live in production" requires the deploy poll + cache-bust steps above to have succeeded.
+
 ## Active-task.json drift reconciliation
 
 A SessionStart hook (`plugin/hooks/active-task-recon.sh`) runs at every session start. When the working directory is inside a plugin worktree (`.claude/worktrees/*`), the hook reads `.claude/active-task.json`, queries the Monday.com source-of-truth, and surfaces drift as informational notices. Always exits 0 — never blocks session start.
@@ -214,7 +231,7 @@ Detected drift cases (3 of 5):
 
 | Case | Trigger | Suggested action |
 |---|---|---|
-| **A — Done elsewhere** | Monday task is Done, but the worktree still has an `active-task.json` | `ExitWorktree({action:'remove'})` if shipped + verified clean. If the worktree-janitor SessionStart hook (PR #34) is installed, it collects DONE-class worktrees on the next session start anyway |
+| **A — Done elsewhere** | Monday task is Done, but the worktree still has an `active-task.json` | `ExitWorktree({action:'remove'})` if shipped + verified clean. The worktree-janitor SessionStart hook collects DONE-class worktrees on the next session start anyway |
 | **B — Ownership changed** | Monday's Agent ID now points at a different agent than this CLI | Continue at your own risk; `/log-progress TASK_STUCK` if uncertain |
 | **D — Missing state file** | A `.claude/worktrees/*` directory has no `.claude/active-task.json` | `/pickup-task <id>` to reattach, OR `ExitWorktree({action:'remove'})` if abandoned |
 

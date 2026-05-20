@@ -121,6 +121,7 @@
     "SessionStart": [
       {
         "hooks": [
+          { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/hooks/worktree-janitor.sh" },
           { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/hooks/active-task-recon.sh" }
         ]
       }

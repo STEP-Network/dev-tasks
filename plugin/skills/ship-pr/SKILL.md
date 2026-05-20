@@ -67,7 +67,7 @@ Branch on execution context per `.claude/rules/agent-autonomy.md`. Quick check: 
 4. Trigger Phase 10 cleanup. End.
 
 **Autonomous merge path** (main session, has `Monitor`):
-1. Poll CI via a `Monitor` that watches `gh pr checks {prNumber}` and emits terminal transitions. Restart the Monitor on each new push — stale events from previous commit confuse triage.
+1. Poll CI via a `Monitor` that watches `gh pr checks {prNumber}` and emits terminal transitions. Restart the Monitor on each new push — stale events from previous commit confuse triage. See [`monitor-predicate-pattern.md`](../../rules/monitor-predicate-pattern.md) for transition-only emission + immediate-action-on-success patterns.
 2. Poll Corridor findings via `mcp__plugin_corridor_corridor__getFindings({ cwd, branch, state: "open", excludeAIFalsePositives: true })`. Retry up to 3× with 60s delay if empty.
 3. Triage findings (GitHub bot review + Corridor) per `ship-readiness.md` (BLOCKER / IMPROVEMENT / POLISH).
 4. Record triage decisions to `reviewTriage` in state file.
@@ -102,6 +102,14 @@ Branch on execution context per `.claude/rules/agent-autonomy.md`. Quick check: 
 20e. `gh pr merge {N} --admin --squash` — NEVER `--delete-branch` (collides with worktrees + main checkout).
 
 20f. Verify: `gh pr view {N} --json state --jq .state` returns `"MERGED"`. If `"OPEN"`, diagnose via `gh pr view {N} --json mergeStateStatus,mergeable`.
+
+20f.5. **Wait for the post-merge deploy before any "verified" / "live" claim.** `gh pr merge` returning success means the commit landed on `$defaultBase`, NOT that the change is live. The Vercel redeploy triggered by the merge takes additional time, and browser caches routinely show the pre-deploy version for several minutes. Before posting anything implying verification:
+- Capture the merge SHA: `mergedSHA=$(gh pr view {N} --json mergeCommit --jq .mergeCommit.oid)`
+- Poll `mcp__vercel__list_deployments` filtered by `meta.githubCommitSha = $mergedSHA` until a production-target deployment reaches state `READY`. Non-Vercel projects: substitute the platform's deploy-status check — `gh run watch` for GitHub Actions deploys, `flyctl status` for Fly, etc.
+- When inspecting through a browser, cache-bust the verification URL with `?_t=$(date +%s)` or use an incognito tab. Service Worker caches survive plain refresh.
+- Word the post-merge Monday update precisely: "Merged — staging deploy in flight" is honest until the deploy is verified; "Verified live in production" is only honest after the steps above succeed.
+
+See `CLAUDE.md` → Shipping conventions for the PR #347 case study that motivated this rule (retro #2926719311).
 
 20g. Hotfix exception: skip merge — human merges `$hotfixBase` PRs.
 
@@ -148,7 +156,7 @@ Hotfix flow: parent still at `In Progress`. Phase 10 sets `Done` directly.
     
     Read PR base via `gh pr view --json baseRefName --jq .baseRefName`:
     - `$defaultBase`: leave task at `Waiting for UAT`. Post `[TASK_COMPLETED]` update noting next transitions (Waiting for UAT → Pending Deploy to Prod by human; Pending Deploy to Prod → Done by `/release-version`).
-    - `$hotfixBase`: `updateTask({status: "Done"})`. Post `[TASK_COMPLETED]` noting hotfix verified on prod.
+    - `$hotfixBase`: BEFORE posting "verified on prod" — wait for the production deploy to complete (poll your deploy platform's status: `mcp__vercel__list_deployments` filtered by merge SHA, `gh run watch`, `flyctl status`, etc.) AND cache-bust the verification URL (`?_t=$(date +%s)` or an incognito tab — Service Worker caches survive plain refresh). The same stale-cache + in-flight-deploy gotcha that caught PR #347 (retro #2926719311) applies to hotfix releases. Then `updateTask({status: "Done"})` and post `[TASK_COMPLETED]`.
 
 31. Worktree cleanup: if `git rev-parse --git-common-dir` differs from `git rev-parse --git-dir`, call `ExitWorktree({ action: "remove" })`. If refused (uncommitted/unreachable), inspect leftovers, commit/stash, then `ExitWorktree({ action: "remove", discard_changes: true })` only with user confirmation.
 

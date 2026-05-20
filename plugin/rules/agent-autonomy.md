@@ -94,3 +94,10 @@ The autonomy policy doesn't weaken any gate:
 - `task-state-guard.sh` — Edit/Write requires `claimToken`.
 
 Agent merges autonomously when ALL pass.
+
+## Monitor usage
+
+When the main session polls CI via `Monitor`, the predicate emits one notification per stdout line and each notification consumes an agent turn. See [`monitor-predicate-pattern.md`](./monitor-predicate-pattern.md) for the two patterns that govern good usage:
+
+- **Transition-only emission** — emit only when watched state changes; don't heartbeat the same state every poll tick.
+- **Immediate action on success** — when the Monitor returns the terminal state the agent was waiting for, the next tool call (merge, log-progress, updateTask) follows in the SAME assistant response. No narrative interlude.

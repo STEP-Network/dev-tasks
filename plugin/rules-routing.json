@@ -7,6 +7,10 @@
       "match": ["**/*.ts", "**/*.tsx", "**/*.js", "**/*.jsx", "**/*.py", "**/*.sh", "**/*.sql", "**/*.css", "**/*.scss", "**/*.html", "**/*.md"]
     },
     {
+      "file": "autonomous-by-default.md",
+      "match": ["**/*.ts", "**/*.tsx", "**/*.js", "**/*.jsx", "**/*.py", "**/*.sh", "**/*.sql", "**/*.css", "**/*.scss", "**/*.html", "**/*.md"]
+    },
+    {
       "file": "worktree-discipline.md",
       "match": ["**/*.ts", "**/*.tsx", "**/*.js", "**/*.jsx", "**/*.py", "**/*.sh", "**/*.sql", "**/*.css", "**/*.scss", "**/*.html"]
     },
@@ -39,6 +43,14 @@
     {
       "file": "versions-lifecycle.md",
       "match": ["**/CHANGELOG.md", "**/package.json", "**/version.txt"]
+    },
+    {
+      "file": "monitor-predicate-pattern.md",
+      "match": [
+        "**/plugin/skills/**/*.md",
+        "**/plugin/rules/**/*.md",
+        "**/plugin/hooks/**/*.sh"
+      ]
     }
   ]
 }
