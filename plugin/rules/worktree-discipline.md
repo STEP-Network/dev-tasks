@@ -109,15 +109,28 @@ Reverse direction (worktree → task): read `.claude/active-task.json`. `taskId`
 
 ## Cleanup cadence
 
-`.claude/scripts/worktree-audit.sh` classifies every `git worktree list` entry and (with `--remove`) deletes DONE ones. Run post-merge, weekly (each stale worktree ~3–5 GB of `node_modules` + `.next`), and before long autonomous runs.
+`.claude/scripts/worktree-audit.sh` classifies every `git worktree list` entry. By default the SessionStart janitor hook (`plugin/hooks/worktree-janitor.sh`) runs it in `--auto` mode at every session start, so consumer projects don't accumulate stale worktrees over time. Manual runs are still useful for ad-hoc cleanup or pre-flight checks before long autonomous runs.
 
-| Class | Branch state | Working tree | active-task.json | Disposition |
-|---|---|---|---|---|
-| **DONE** | Merged (direct or squash-PR) | Clean | Either | Remove with `--remove` |
-| **IN-FLIGHT (dirty)** | Either | Dirty | Either | Preserve; commit/stash or user reviews |
-| **IN-FLIGHT (active task)** | Unmerged | Clean | Present | Preserve; in active development |
-| **ABANDONED** | Unmerged | Clean | Absent | Flag for user decision |
+| Class | Branch state | Working tree | active-task.json | Last commit | Disposition |
+|---|---|---|---|---|---|
+| **DONE** | Merged (direct or squash-PR) | Clean | Either | Any | Removed by `--remove` or `--auto` |
+| **IN-FLIGHT (dirty)** | Either | Dirty | Either | Any | Preserved; commit/stash or user reviews |
+| **IN-FLIGHT (active task)** | Unmerged | Clean | Present | Any | Preserved; in active development |
+| **IN-FLIGHT (fresh exploratory)** | Unmerged | Clean | Absent | < 30 days | Preserved by `--auto` until past the 30-day floor |
+| **ABANDONED** | Unmerged | Clean | Absent | ≥ 30 days | Removed by `--auto`; flagged for user under `--remove` |
+| **Stale `.git/worktrees/<n>/locked`** | n/a | n/a | n/a | Lock mtime > 24h | `--auto` deletes the lock file |
 
-Escape hatches: `git worktree remove --force <path>` (bypasses dirty-tree refusal); `bash .claude/scripts/worktree-audit.sh --remove` (interactive); `--remove -y` (assume-yes; bulk-removes DONE).
+Modes:
 
-Audit NEVER removes: the main checkout (first `git worktree list` entry), the currently-active worktree.
+```sh
+bash .claude/scripts/worktree-audit.sh              # report only (safe, default)
+bash .claude/scripts/worktree-audit.sh --remove     # interactive DONE removal
+bash .claude/scripts/worktree-audit.sh --remove -y  # bulk DONE removal, no prompts
+bash .claude/scripts/worktree-audit.sh --auto       # what the SessionStart hook runs: DONE + ABANDONED + stale locks
+```
+
+`--auto` falls back to `git worktree remove --force` if a plain remove refuses — safe because ABANDONED already requires a clean tree.
+
+Escape hatches: `git worktree remove --force <path>` (bypasses dirty-tree refusal). Path-safety guard refuses anything outside `MAIN_CHECKOUT/`.
+
+Audit NEVER removes: the main checkout (first `git worktree list` entry), the currently-active worktree, IN-FLIGHT worktrees.

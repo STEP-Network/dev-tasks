@@ -159,6 +159,35 @@ The plugin no longer hardcodes a `username → person ID` map. `src/services/peo
 
 Past-status records are excluded. Numeric input is treated as a person ID directly.
 
+## Worktree lifecycle
+
+Every claimed task runs in its own git worktree under `.claude/worktrees/<branch-slug>/`. The worktree-required hooks block source edits from the main checkout, so worktrees accumulate over time — one per task. Two mechanisms keep them in check:
+
+**SessionStart auto-janitor** (`hooks/worktree-janitor.sh`, registered in `hooks.json`). Runs `scripts/worktree-audit.sh --auto` once per session start. Silent on no-op; prints a one-line summary when it cleans something. Each consumer project gets this automatically — no config required.
+
+What it cleans:
+
+| Class | Removed by --auto | Notes |
+|---|---|---|
+| **DONE** (merged + clean) | yes | Merged direct OR via PR squash |
+| **ABANDONED** (unmerged, no `active-task.json`, stale) | yes | Falls back to `--force` if `git worktree remove` refuses |
+| **Stale `.git/worktrees/<n>/locked`** (mtime > 24h) | yes | 24h floor; no legitimate session holds locks that long |
+| **IN-FLIGHT** (dirty tree OR has `active-task.json`) | **no** | Preserved unconditionally |
+| **Main checkout + active session** | **no** | Always skipped |
+
+**Manual escape hatches**:
+
+```sh
+bash plugin/scripts/worktree-audit.sh              # report only (safe)
+bash plugin/scripts/worktree-audit.sh --remove     # interactive DONE removal
+bash plugin/scripts/worktree-audit.sh --remove -y  # bulk DONE removal
+bash plugin/scripts/worktree-audit.sh --auto       # what the hook runs
+```
+
+To disable the janitor in a consumer project, remove the `SessionStart` block from your local `.claude/settings.json` overrides (the hook only runs when registered by the plugin).
+
+Tests in `plugin/scripts/__tests__/worktree-janitor.test.sh` cover: `--auto` accepts and reports, stale lock cleanup, fresh lock preservation, hook silence on no-op, and hook output on cleanup.
+
 ## Layout
 
 ```
