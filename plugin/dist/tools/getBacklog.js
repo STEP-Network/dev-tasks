@@ -91,7 +91,10 @@ export async function getBacklog(args) {
             }
         }
         const rules = [];
-        // Statuses — default to "not yet in flight" if not provided.
+        // Statuses — default to "not yet in flight" if not provided. The default
+        // excludes Done, Stuck, Declined, and the in-flight intermediates by design:
+        // the backlog query surfaces work an agent could PICK UP next, not the
+        // historical state. Pass `statuses` explicitly to widen the view.
         const statusIndices = (statuses ?? ["Needs Refinement", "Ready to Start"]).map(s => TASK_STATUS[s]);
         rules.push(`{ column_id: "${TASK_COLUMNS.status}", compare_value: [${statusIndices.join(",")}], operator: any_of }`);
         if (types && types.length > 0) {

@@ -134,7 +134,7 @@ Used in `claimTask` (required), `createTask`, `createEpic`, `updateEpic`, `creat
 
 ## Key status mappings
 
-**Task Status:** Needs Refinement → Ready to Start → In Progress → Waiting for UAT → Pending Deploy to Prod → Done (+ Stuck)
+**Task Status:** Needs Refinement → Ready to Start → In Progress → Waiting for UAT → Pending Deploy to Prod → Done. Off-ramps: Stuck (unresolved blocker; recoverable), Declined (superseded mid-sprint — terminal, no work shipped; excluded from `getBacklog` defaults; exempt from active-sprint pull). Use Declined when a task is no longer needed: rework merged elsewhere, requirement changed, duplicate discovered.
 **Task Priority:** Critical, High, Medium, Low, Missing
 **Task Type:** Feature, Fix, Improvement, To Do, Not Set
 **Subtask Status:** Needs Refinement → In Progress → Done (+ Stuck) — note: subtasks have no "Ready to Start" intermediate state (the Subtasks board doesn't have that label configured)
@@ -172,8 +172,9 @@ Used in `claimTask` (required), `createTask`, `createEpic`, `updateEpic`, `creat
 
   …and warns (but doesn't block) when missing GitHub link, branch (`text_mm0pvs3n`), demo URL, or PR link.
 
-- **Sprint auto-pull (any status leaving the refinement phase):** any transition to a status other than "Ready to Start" or "Needs Refinement" requires active-sprint membership. That includes `In Progress`, `Waiting for UAT`, `Pending Deploy to Prod`, `Done`, and `Stuck`. If the task isn't in the active sprint AND the same `updateTask`/`claimTask` call didn't explicitly pass `sprintId`, the plugin auto-pulls the task into the active sprint and sets the `unplanned` checkbox to `true`. Both column writes land atomically in the same `change_multiple_column_values` mutation as the status change. The tool response surfaces the action so the agent is aware. Hard error only when no active sprint exists.
+- **Sprint auto-pull (any status leaving the refinement phase):** any transition to a status other than "Ready to Start", "Needs Refinement", or "Declined" requires active-sprint membership. That includes `In Progress`, `Waiting for UAT`, `Pending Deploy to Prod`, `Done`, and `Stuck`. If the task isn't in the active sprint AND the same `updateTask`/`claimTask` call didn't explicitly pass `sprintId`, the plugin auto-pulls the task into the active sprint and sets the `unplanned` checkbox to `true`. Both column writes land atomically in the same `change_multiple_column_values` mutation as the status change. The tool response surfaces the action so the agent is aware. Hard error only when no active sprint exists.
   - Note on `Done`: usually fires via Monday automation when subtasks complete (no auto-pull involved). A direct `updateTask({status:"Done"})` call DOES trigger auto-pull if the task is out-of-sprint — same rule as every other non-refinement status.
+  - Note on `Declined`: terminal off-ramp (task superseded mid-sprint, no work shipped). Exempt from auto-pull — declining a task should not drag it into the active sprint.
 
 Subtasks should describe work-on-code, not human verification (testing belongs in the UAT doc) — otherwise the "all subtasks Done" gate can't ever be satisfied.
 

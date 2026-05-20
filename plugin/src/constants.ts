@@ -231,7 +231,8 @@ export const PRODUCT_COLUMNS = {
 // =============================================================================
 
 // Task Status (task_status column) — workflow:
-// Needs Refinement → Ready to Start → In Progress → Waiting for UAT → Pending Deploy to Prod → Done (+ Stuck)
+// Needs Refinement → Ready to Start → In Progress → Waiting for UAT → Pending Deploy to Prod → Done
+// Off-ramps: Stuck (unresolved blocker), Declined (superseded mid-sprint — terminal, no work shipped).
 export const TASK_STATUS: Record<string, number> = {
   "Needs Refinement": 5,
   "Ready to Start": 11,
@@ -240,6 +241,7 @@ export const TASK_STATUS: Record<string, number> = {
   "Pending Deploy to Prod": 2,
   "Done": 1,
   "Stuck": 103,
+  "Declined": 4,
 };
 
 // Task Priority (task_priority column)
