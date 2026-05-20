@@ -27,6 +27,7 @@ Read `.claude/project-config.json`. Extract `git.defaultBase`, `git.hotfixBase`,
 ### Phase 2: Push Gate
 5. `touch /tmp/.claude-prepush-$(git rev-parse --abbrev-ref HEAD | tr '/' '-')` — allows `bash-guard.sh` to permit push.
 6. Stage and commit if uncommitted changes exist.
+6.5. **Local-spec gate (autonomous-UAT pre-flight)**: if `project-config.json → e2e.enabled` is `true` AND the diff classifier (per [`write-uat-spec`](../write-uat-spec/SKILL.md)) says a spec applies to this task: run `pnpm playwright test e2e/<area>/<slug>.spec.ts --reporter=line` with `BASE_URL=<e2e.baseUrl.local>` (default `http://localhost:3000`). Block push on red unless `/tmp/.claude-playwright-ack-<slug>` exists. If no spec exists yet, defer creation to Phase 4.6 (preview URL is more meaningful for first-write) and skip this step. Classifier "skip / defer-api / defer-integration" → no run.
 7. `git push -u origin {branch}`.
 
 ### Phase 3: PR Management
@@ -49,9 +50,41 @@ Read `.claude/project-config.json`. Extract `git.defaultBase`, `git.hotfixBase`,
 
 14b. Generate UAT doc covering preview URL, AC checklist, edge states, cross-cutting checks (i18n, mobile, empty/error/loading, auth paths if relevant), out-of-scope notes, sign-off checklist.
 
+14b.1. **Agent-verified vs Human-only split** — if `project-config.json → e2e.enabled` is `true`, the UAT doc must have two distinct sections:
+- **Agent-verified (autonomous Playwright)**: populated by Phase 4.6 output — spec path, assertions covered, screenshot milestones, console-error count, visual-regression result
+- **Human-only (judgment calls)**: union of `project-config.json → e2e.humanOnlyChecks[]` PLUS any task AC item the spec's assertions don't cover
+
+The split is the load-bearing honesty principle: agents claiming coverage they don't have erode the gate's value. Over-flag human-only items rather than under-flag.
+
+When `e2e.enabled: false`: skip the agent-verified section; UAT doc reads "autonomous UAT not configured for this project — full human verification required."
+
 14c. Persist via `createTaskUatDoc({ taskId, markdown })`. On "already exists" error, call `updateTaskUatDoc({ taskId, markdown, overwrite: true })`. Doc lands on column `doc_mm3adfdg`.
 
 14d. Post `/log-progress UAT_DOC_GENERATED`.
+
+### Phase 4.6: Autonomous UAT (default flow only; hotfix skips)
+
+NEW gate between UAT doc generation and the `Waiting for UAT` transition. Runs the per-task Playwright spec against the preview URL as a HARD gate. Skip when `project-config.json → e2e.enabled: false` — UAT doc records "autonomous UAT skipped (disabled in project-config)."
+
+14e. **Classifier check**: read task `type` + `git diff $defaultBase...HEAD --stat`. Per [`write-uat-spec`](../write-uat-spec/SKILL.md) classifier table:
+- Feature / Bug-fix-extends / Bug-fix-new → spec applies, continue to 14f
+- Refactor / API-only / Migration / Docs → no spec required; UAT doc records classification; continue to Phase 5
+
+14f. **Spec presence check**: does `e2e/<feature-area>/<slug>.spec.ts` exist on this branch?
+- Yes → 14g
+- No → invoke `/dev-tasks:write-uat-spec --target=preview --taskId=<id>`. Skill writes the spec (or REFUSES with auth-remediation if persona's storageState is missing — surface that to the user via `AskUserQuestion`; the task can't proceed to Waiting-for-UAT until either spec exists or `e2e.enabled` is flipped false). Re-push so spec lands on the PR.
+
+14g. **Run the spec against the preview URL**: `pnpm playwright test e2e/<area>/<slug>.spec.ts --reporter=line` with `BASE_URL=<previewUrl from active-task.json>`.
+
+14h. **HARD gate**:
+- PASS → record `RUN_RESULT=PASS` in active-task.json under `autonomousUat`. Continue to Phase 5.
+- PASS_NEW_BASELINE (first run with `--update-snapshots`) → baselines auto-committed. Re-push. UAT doc notes "first-run baselines captured."
+- FAIL → treat as regression. Loop back to fix mode (re-run self-review with the Playwright failure as a finding). Don't transition to Waiting-for-UAT.
+- FAIL but `/tmp/.claude-playwright-ack-<slug>` exists → soft-pass. UAT doc explicitly logs "KNOWN-FLAKY: `<slug>` — ack'd by agent at <timestamp>; follow-up task needed to debug." Continue to Phase 5. Ack escape hatch mirrors `/tmp/.claude-ci-ack-<branch>` from Phase 6.
+
+14i. **Output to UAT doc** (consumed by Phase 4.5's agent-verified section): spec path, run target, run result, list of `expect()` assertions, screenshot milestones, selector breakdown, known tech debt. The skill's output contract documents the exact field shape.
+
+**Coordination with Phase 6**: existing CI polling (Phase 6) covers Vercel build + Vercel Preview Comments. The full `pnpm playwright test e2e/` should run as a separate CI lane (consumer-side responsibility — declared in `.github/workflows/...`). Phase 4.6 here runs ONLY the new task's spec against preview (fast); CI catches cross-feature regressions on every PR. Both gates must pass before merge.
 
 ### Phase 5: Monday.com Event Update
 15. Post via `/log-progress`: `PR_CREATED` (new PR) or `REVIEW_FEEDBACK_FIXED` (existing PR).
@@ -92,6 +125,7 @@ Branch on execution context per `.claude/rules/agent-autonomy.md`. Quick check: 
 - All subtasks `done` with `actualHours`.
 - UAT doc set on `doc_mm3adfdg` (re-run Phase 4.5 if absent).
 - `demoUrl`, `prLink`, `branch`, `githubLink` set on task.
+- Phase 4.6 autonomous-UAT gate PASSED or skipped per project-config (when `e2e.enabled: true` AND classifier said spec applies, the Playwright run must be `PASS` or `ACK_FLAKY` — not unrun, not FAIL).
 
 20c. `mcp__plugin_dev-tasks_dev-tasks__updateTask({ itemId: taskId, status: "Waiting for UAT" })`. On rejection, fix the named field and retry.
 

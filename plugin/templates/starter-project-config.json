@@ -46,5 +46,29 @@
       "user-prompt-task-context",
       "subprocess-failure"
     ]
+  },
+  "e2e": {
+    "enabled": false,
+    "framework": "playwright",
+    "specDir": "e2e",
+    "baselineSnapshots": "commit",
+    "baseUrl": {
+      "preview": "auto",
+      "local": "http://localhost:3000"
+    },
+    "personas": [
+      {
+        "id": "public-visitor",
+        "storageState": null,
+        "description": "Unauthenticated visitor — public marketing pages, signup flows."
+      }
+    ],
+    "humanOnlyChecks": [
+      "Subjective design quality (visual hierarchy, brand voice)",
+      "Copy tone — does the copy match brand voice / locale conventions",
+      "Business logic correctness on novel edge cases not covered by AC",
+      "Cross-browser parity beyond Playwright's default Chromium (Safari, Firefox)"
+    ],
+    "flakyDir": "e2e/flaky"
   }
 }
