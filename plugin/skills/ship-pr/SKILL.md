@@ -148,7 +148,7 @@ Hotfix flow: parent still at `In Progress`. Phase 10 sets `Done` directly.
     
     Read PR base via `gh pr view --json baseRefName --jq .baseRefName`:
     - `$defaultBase`: leave task at `Waiting for UAT`. Post `[TASK_COMPLETED]` update noting next transitions (Waiting for UAT → Pending Deploy to Prod by human; Pending Deploy to Prod → Done by `/release-version`).
-    - `$hotfixBase`: `updateTask({status: "Done"})`. Post `[TASK_COMPLETED]` noting hotfix verified on prod.
+    - `$hotfixBase`: BEFORE posting "verified on prod" — wait for the production deploy to complete (poll your deploy platform's status: `mcp__vercel__list_deployments` filtered by merge SHA, `gh run watch`, `flyctl status`, etc.) AND cache-bust the verification URL (`?_t=$(date +%s)` or an incognito tab — Service Worker caches survive plain refresh). The same stale-cache + in-flight-deploy gotcha that caught PR #347 (retro #2926719311) applies to hotfix releases. Then `updateTask({status: "Done"})` and post `[TASK_COMPLETED]`.
 
 31. Worktree cleanup: if `git rev-parse --git-common-dir` differs from `git rev-parse --git-dir`, call `ExitWorktree({ action: "remove" })`. If refused (uncommitted/unreachable), inspect leftovers, commit/stash, then `ExitWorktree({ action: "remove", discard_changes: true })` only with user confirmation.
 
