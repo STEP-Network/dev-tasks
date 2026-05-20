@@ -43,6 +43,14 @@
     {
       "file": "versions-lifecycle.md",
       "match": ["**/CHANGELOG.md", "**/package.json", "**/version.txt"]
+    },
+    {
+      "file": "monitor-predicate-pattern.md",
+      "match": [
+        "**/plugin/skills/**/*.md",
+        "**/plugin/rules/**/*.md",
+        "**/plugin/hooks/**/*.sh"
+      ]
     }
   ]
 }

@@ -102,6 +102,8 @@ Use a `Monitor` that evaluates current state on first iteration (so an already-p
 
 A wait condition that ignores current state and only watches future events is broken — always evaluate current state on first iteration. Don't wait for `mergeStateStatus=CLEAN` — it can be permanently UNSTABLE from secondary workflow noise.
 
+See [`plugin/rules/monitor-predicate-pattern.md`](../../rules/monitor-predicate-pattern.md) for the two patterns that govern Monitor emission cadence (transition-only) + post-success action timing (act in the same response — don't narrate between Monitor returning and the merge call).
+
 ## Anti-patterns
 
 - DO NOT use `gh pr merge --auto` — flaky against this repo's CI (UNSTABLE noise blocks auto-merge). Use `--admin --squash`.

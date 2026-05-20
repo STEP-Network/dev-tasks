@@ -67,7 +67,7 @@ Branch on execution context per `.claude/rules/agent-autonomy.md`. Quick check: 
 4. Trigger Phase 10 cleanup. End.
 
 **Autonomous merge path** (main session, has `Monitor`):
-1. Poll CI via a `Monitor` that watches `gh pr checks {prNumber}` and emits terminal transitions. Restart the Monitor on each new push — stale events from previous commit confuse triage.
+1. Poll CI via a `Monitor` that watches `gh pr checks {prNumber}` and emits terminal transitions. Restart the Monitor on each new push — stale events from previous commit confuse triage. See [`monitor-predicate-pattern.md`](../../rules/monitor-predicate-pattern.md) for transition-only emission + immediate-action-on-success patterns.
 2. Poll Corridor findings via `mcp__plugin_corridor_corridor__getFindings({ cwd, branch, state: "open", excludeAIFalsePositives: true })`. Retry up to 3× with 60s delay if empty.
 3. Triage findings (GitHub bot review + Corridor) per `ship-readiness.md` (BLOCKER / IMPROVEMENT / POLISH).
 4. Record triage decisions to `reviewTriage` in state file.
