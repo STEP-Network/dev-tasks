@@ -10,6 +10,21 @@ Use when a task is `Needs Refinement` and lacks prerequisites for `Ready to Star
 
 ## Workflow
 
+### Phase 0: Investigate relevance (smart default — see `/dev-tasks:investigate-request`)
+
+Tasks decay. A task filed weeks ago may cite functions that have been renamed, an AC may reference a deprecated library, or a related PR may have shipped the work in flight. Before any field-mutating call (`manageSubtasks`, `updateTask` description / AC / subtasks), run `/dev-tasks:investigate-request --mode=relevance --taskId=<N>`.
+
+**Skip case** (deterministic): if `now - task.updatedAt < 24h` AND `git log origin/$defaultBase --since=task.updatedAt --count` returns 0 — no time for drift; skip the invocation. Otherwise it runs.
+
+**Handle the recommendation**:
+- `DECLINE` (task superseded or no longer relevant) → confirm via `AskUserQuestion`: "Task #N appears superseded by PR #M (merged YYYY-MM-DD). Mark as Declined, or refine to remaining scope?" Wait. If Declined → `updateTask({ status: "Declined" })` with rationale; do NOT refine. If remaining-scope → continue with reduced scope.
+- `SKIP` (the original problem has been shipped) → surface to user, propose moving to Done or Declined as appropriate.
+- `REFINE` (proceed) → continue to step 1+ using the report's findings to inform subtask additions / removals.
+
+**BLOCKING questions** MUST be resolved via `AskUserQuestion` before any `manageSubtasks` / `updateTask` field-write. **OPTIONAL** questions are mentioned in the proceed-message.
+
+### Standard workflow
+
 1. **Fetch task**: `getTask` — read type, priority, epic, description, AC, existing subtasks, dependencies.
 2. **Verify task-level prereqs** (required by `Ready to Start` gate): `type`, `priority`, `epicId`, `description`, `acceptanceCriteria`. If missing: prompt user or fill via `updateTask` when inference is safe.
 3. **Read source files**: Glob/Grep to find related code; ground each subtask in a real code path.
