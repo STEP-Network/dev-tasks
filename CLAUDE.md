@@ -223,6 +223,24 @@ Monday.com automation auto-completes the parent task when all subtasks are Done:
 
 **Honest wording when in doubt:** "Merged — staging deploy in flight" is correct until the deploy is verified ready. "Verified live in production" requires the deploy poll + cache-bust steps above to have succeeded.
 
+## Active-task.json drift reconciliation
+
+A SessionStart hook (`plugin/hooks/active-task-recon.sh`) runs at every session start. When the working directory is inside a plugin worktree (`.claude/worktrees/*`), the hook reads `.claude/active-task.json`, queries the Monday.com source-of-truth, and surfaces drift as informational notices. Always exits 0 — never blocks session start.
+
+Detected drift cases (3 of 5):
+
+| Case | Trigger | Suggested action |
+|---|---|---|
+| **A — Done elsewhere** | Monday task is Done, but the worktree still has an `active-task.json` | `ExitWorktree({action:'remove'})` if shipped + verified clean. The worktree-janitor SessionStart hook collects DONE-class worktrees on the next session start anyway |
+| **B — Ownership changed** | Monday's Agent ID now points at a different agent than this CLI | Continue at your own risk; `/log-progress TASK_STUCK` if uncertain |
+| **D — Missing state file** | A `.claude/worktrees/*` directory has no `.claude/active-task.json` | `/pickup-task <id>` to reattach, OR `ExitWorktree({action:'remove'})` if abandoned |
+
+Deferred (not detected by the current hook):
+- **C — Task reassigned epic/sprint** — low signal; intentional refinement looks identical to drift
+- **E — Stale claimToken** — would require an extra `getUpdates` API call per session start; cost > benefit
+
+The hook silent-no-ops when: cwd is not under `.claude/worktrees/`, `MONDAY_API_KEY` is unset, `curl`/`jq` missing, or the Monday API returns no response. One non-silent edge case: if `active-task.json` is present but `taskId` is empty/malformed, the hook emits a one-line warning ("active-task.json present but taskId empty/malformed; skipping drift check.") before exiting 0 — surfacing the broken state file is more useful than silently skipping it. Output format: `[active-task-recon] Case X: <one-line summary>` followed by indented suggestion lines. Smoke-tested by `plugin/hooks/__tests__/active-task-recon.test.sh` (6 cases — local-only + Monday round-trip).
+
 ## Environment variables
 
 - `MONDAY_API_KEY` — Monday.com API key (required). Must be exported in the parent shell that launches Claude Code; `.mcp.json` does not interpolate env values.
