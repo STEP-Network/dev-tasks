@@ -161,6 +161,88 @@
         }
       }
     },
+    "e2e": {
+      "description": "Autonomous-UAT (Playwright) harness configuration. Consumed by /dev-tasks:write-uat-spec and /ship-pr Phase 4.6 to write per-task specs that walk the feature before transitioning to Waiting for UAT. Auth-agnostic — skill REFUSES on missing persona storageState rather than guessing.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "description": "Opt-in flag. When false, /ship-pr Phase 4.6 skips entirely (UAT doc notes 'autonomous UAT not configured'). Consumer projects opt in when they've completed the auth/storageState wiring + CI lane setup.",
+          "type": "boolean",
+          "default": false
+        },
+        "framework": {
+          "description": "E2E framework. Only 'playwright' supported in v1.",
+          "type": "string",
+          "enum": ["playwright"],
+          "default": "playwright"
+        },
+        "specDir": {
+          "description": "Root directory (relative to repo root) where specs live. Skill writes new specs under `<specDir>/<feature-area>/<short-slug>.spec.ts`.",
+          "type": "string",
+          "default": "e2e"
+        },
+        "baselineSnapshots": {
+          "description": "How visual baselines are stored. 'commit' → PNG baselines under `<specDir>/<area>/<slug>.spec.ts-snapshots/` are committed to the repo (default; never gitignore them — silently makes the gate a no-op). 'lfs' → Git LFS tracks them (recommended once total snapshot weight exceeds ~50MB).",
+          "type": "string",
+          "enum": ["commit", "lfs"],
+          "default": "commit"
+        },
+        "baseUrl": {
+          "description": "BASE_URL targets for the spec runner. Spec MUST read `process.env.BASE_URL` in playwright.config.ts — never hardcode.",
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "preview": {
+              "description": "Preview-environment URL. 'auto' → use the previewUrl from `.claude/active-task.json` (set by ship-pr Phase 4). Override only if the deploy platform exposes preview URLs in a non-standard place.",
+              "type": "string",
+              "default": "auto"
+            },
+            "local": {
+              "description": "Local dev-server URL. Used when /dev-tasks:write-uat-spec is invoked with `--target=local` (dev iteration only — Phase 4.6 always uses preview for the hard gate).",
+              "type": "string",
+              "default": "http://localhost:3000"
+            }
+          }
+        },
+        "personas": {
+          "description": "Test personas the skill can target. Each persona maps to a `storageState` file produced by the consumer's `e2e/auth.setup.ts`. `storageState: null` declares an unauthenticated persona (e.g. public-visitor). Skill REFUSES to write specs for an authenticated persona whose storageState is null/missing — no inline login walks.",
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["id", "storageState"],
+            "properties": {
+              "id": {
+                "description": "Persona identifier (kebab-case). Examples: 'public-visitor', 'advertiser', 'partner-admin', 'super-admin'.",
+                "type": "string",
+                "pattern": "^[a-z][a-z0-9-]*$"
+              },
+              "storageState": {
+                "description": "Path (relative to repo root) to the storageState JSON file produced by auth.setup.ts. Use null for unauthenticated personas.",
+                "type": ["string", "null"]
+              },
+              "description": {
+                "description": "Human-readable description of the persona's role + capabilities. Helps the skill pick the right persona for a task.",
+                "type": "string"
+              }
+            }
+          },
+          "default": []
+        },
+        "humanOnlyChecks": {
+          "description": "Items that are NEVER agent-verifiable for this product — subjective design, copy tone, business-edge cases, cross-browser parity beyond default Chromium. Surfaced verbatim in the UAT doc's 'Human-only' section so the human's UAT focus is explicit.",
+          "type": "array",
+          "items": { "type": "string" },
+          "default": []
+        },
+        "flakyDir": {
+          "description": "Path (relative to repo root) where chronically-flaky specs go. Specs here still run in CI but with a non-failing reporter — they catch eventual regressions without blocking PRs. Use sparingly; flaky-quarantine is maintenance debt.",
+          "type": "string",
+          "default": "e2e/flaky"
+        }
+      }
+    },
     "hooks": {
       "description": "Per-project hook activation for non-policy hooks. Policy hooks (bash-guard, stop-ci-green-check) are STEP-wide and always-on regardless of this list. Listing them here is harmless (kept in the enum for backward compatibility with existing project-configs).",
       "type": "object",

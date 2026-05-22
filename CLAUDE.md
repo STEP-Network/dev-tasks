@@ -17,7 +17,7 @@ This repo is a Claude Code plugin marketplace + plugin source. The plugin (`dev-
 │   ├── dist/                         # tsc output (gitignored)
 │   ├── rules/                        # 8 universal lifecycle rules
 │   ├── rules-routing.json
-│   ├── skills/                       # 7 core lifecycle skills
+│   ├── skills/                       # 8 core lifecycle skills
 │   ├── hooks/                        # lifecycle hooks (rule-autoload, task-state guard, worktree enforcement, drift recon, etc.); see plugin/.claude-plugin/plugin.json for the registered list
 │   ├── schemas/                      # project-config.schema.json
 │   └── templates/                    # starter-project-config.json
@@ -105,7 +105,7 @@ After plugin install, tools are namespaced as `mcp__plugin_dev-tasks_dev-tasks__
 9. generateChangelog(versionId)         → auto-generate changelog doc
 ```
 
-The 7 plugin skills (`/dev-tasks:pickup-task`, `create-task`, `refine-task`, `log-progress`, `self-review`, `ship-pr`, `release-version`) wrap most of this flow.
+The 8 plugin skills (`/dev-tasks:pickup-task`, `create-task`, `refine-task`, `log-progress`, `self-review`, `ship-pr`, `release-version`, `write-uat-spec`) wrap most of this flow.
 
 **Default stance: autonomous-by-default.** The lifecycle chain runs end-to-end without permission checks between phases. The rule `plugin/rules/autonomous-by-default.md` defines the six carve-outs that justify a pause (destructive actions, scope expansion, external-system contact, hidden trade-offs, missing context, stuck) and the communication pattern that replaces check-ins (terse status updates, no trailing "want me to continue?" questions). Complements `agent-autonomy.md` (which covers the main-vs-subagent context boundary and the Stuck criterion).
 
@@ -222,6 +222,33 @@ Monday.com automation auto-completes the parent task when all subtasks are Done:
 **Case study (canonical):** PR #347 (PolAds `fundingSource` fix). The agent merged and immediately tried to verify in staging. It hit the pre-deploy version, mistook the unfixed behavior for "the fix didn't work", and reported a false regression — confusion that took the user a manual round of investigation to untangle. Root cause: stale browser cache + an in-flight redeploy + no wait gate between merge and verification. Retro #2926719311 codified the lesson; this section is its docs landing site.
 
 **Honest wording when in doubt:** "Merged — staging deploy in flight" is correct until the deploy is verified ready. "Verified live in production" requires the deploy poll + cache-bust steps above to have succeeded.
+
+### Autonomous UAT — Phase 4.6 hard gate before `Waiting for UAT`
+
+For consumer projects that opt in (`.claude/project-config.json` → `e2e.enabled: true`), `/ship-pr` runs a per-task Playwright spec against the preview URL as a HARD gate before the `Waiting for UAT` transition. The skill `/dev-tasks:write-uat-spec` writes the spec by delegating to `dev-tasks:e2e-tester`, which inspects the rendered DOM on the preview URL to choose stable selectors, then writes `e2e/<feature-area>/<short-slug>.spec.ts`.
+
+**Per-task spec lifecycle:**
+1. Phase 2 (push gate) — if a spec already exists for this task, run it locally against `BASE_URL=<e2e.baseUrl.local>`; block push on red unless `/tmp/.claude-playwright-ack-<slug>` exists.
+2. Phase 4.6 (preview gate) — if no spec exists yet, write one. Run against `BASE_URL=<previewUrl>`. PASS → continue. FAIL → loop back to fix mode.
+3. CI lane (consumer-side) — full `pnpm playwright test e2e/` runs on every PR to catch cross-feature regressions.
+4. Phase 4.5 UAT doc — splits into "Agent-verified by spec X" (from Phase 4.6 output) and "Human-only" (from `e2e.humanOnlyChecks[]` + any AC item the spec doesn't cover).
+
+**Auth-agnostic contract:** the skill is portable across projects. The plugin doesn't ship auth logic — it reads `e2e.personas[]` with `storageState` paths. If a spec needs an authenticated persona AND that persona's storageState is missing, the skill REFUSES with a concrete remediation message (add `e2e/auth.setup.ts` per Playwright docs, declare in `playwright.config.ts`, populate the persona's `storageState`). Same BLOCKING-question pattern as `/dev-tasks:investigate-request`.
+
+**For consumer projects adopting autonomous UAT:**
+1. Install Playwright (`@playwright/test`) + write `playwright.config.ts` with `baseURL: process.env.BASE_URL ?? "http://localhost:3000"` and project entries per persona
+2. Write `e2e/auth.setup.ts` per persona — log in via the project's actual auth flow, save storage state to `playwright/.auth/<persona>.json`. One-time setup; persists across all specs.
+3. Add `e2e` block to `.claude/project-config.json` declaring personas, baseline policy (`commit`), humanOnlyChecks (subjective items)
+4. Add a CI lane running `pnpm playwright test e2e/` on every PR
+5. Commit baseline images (`e2e/<area>/<slug>.spec.ts-snapshots/*.png`) — **NEVER gitignore them**; doing so silently makes the visual-regression gate a no-op
+6. Flake convention: chronically-flaky specs go to `e2e/flaky/` (runs but doesn't fail the gate)
+
+**Honest caveats:**
+- Autonomous UAT covers what's *reproducible*. Subjective design quality, copy tone, business-edge cases remain human-only — the UAT doc enumerates both halves so the human knows what was and wasn't verified.
+- Local pass ≠ preview pass — cookie domains, OAuth callbacks, env vars all differ. Phase 4.6 always uses `--target=preview` for the hard gate.
+- The 5-line cap from PolAds's original brief was rejected; real specs for golden paths run 80–120 lines. Soft guidance only.
+
+See `plugin/skills/write-uat-spec/SKILL.md` for the full contract and `plugin/skills/write-uat-spec/EXAMPLES.md` for two worked walkthroughs (authenticated SaaS flow, public marketing flow).
 
 ## Active-task.json drift reconciliation
 

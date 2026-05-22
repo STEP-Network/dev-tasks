@@ -105,9 +105,19 @@ Agent({
 })
 ```
 
+## Coordination with `/dev-tasks:write-uat-spec`
+
+Both skills involve screenshot-based verification but cover different cases:
+
+- **`/dev-tasks:visual-diff`** (this skill) — ad-hoc Before/After verification during self-review Check #2. "I changed `<Header>`, did anything else move?" One-shot, not codified, focused on detecting cascading regressions in a specific commit. Run manually.
+- **`/dev-tasks:write-uat-spec`** — writes a codified per-flow Playwright spec that ships in the PR and runs as the Phase 4.6 hard gate before `Waiting for UAT`. The spec's `toHaveScreenshot()` runs every time the spec runs (every PR going forward). Catches regressions caused by *future* changes.
+
+When in doubt: visual-diff for "did this commit break something visible" during dev; write-uat-spec for "is this flow still working" as a durable gate. They're complementary, not duplicative.
+
 ## Reference
 
 - `.claude/rules/testing.md` Visual Validation — fuller rationale + Playwright snippets
 - `.claude/skills/self-review/SKILL.md` Check #2 — the gate enforcing this skill ran
 - `mcp__claude-in-chrome__*` — browser MCP, preferred capture
 - `.claude/skills/e2e-tester/` — Playwright subagent for delegation
+- `plugin/skills/write-uat-spec/SKILL.md` — sibling skill for codified per-flow regression (see "Coordination" above)
