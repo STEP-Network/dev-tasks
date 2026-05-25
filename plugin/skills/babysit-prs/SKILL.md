@@ -37,15 +37,39 @@ Single-agent main-session work uses `/ship-pr` Phase 6.6 autonomous merge — no
    - `OPEN` + `UNKNOWN` → recheck in 30s
 3. Report one-line summary per PR.
 
+### Phase 1b: Wait for configured reviewers (reviewer-wait gate)
+
+Before evaluating merge readiness, wait for ALL configured review sources to have posted. This prevents the race condition where merge fires on CI-green before the Claude bot or Corridor even had time to analyze the PR.
+
+1. Read configured sources from `project-config.json` → `review.sources[]` (default: `["claudeBot", "corridor", "selfReview"]`). For each source, define the expected signal:
+   - `claudeBot`: a comment by `author.login == "claude"` containing `"## Code Review"`
+   - `corridor`: Corridor findings returned by `getFindings` (even if empty — presence of response = posted)
+   - `selfReview`: `selfReviewPassed: true` in active-task.json (set by the producing agent)
+   - `vercelAgent`: a PR review by `author.login == "vercel[bot]"` or Vercel comment
+   - `seer`: a PR or linked PR by `author.login == "sentry-io[bot]"`
+
+2. For each PR at CLEAN: check which configured sources have NOT yet posted.
+
+3. If any source is missing: wait up to `review.reviewerTimeoutSeconds` (default: 600s / 10 min), polling every 60s. Use the transition-only Monitor pattern (emit only on new-source-arrival).
+
+4. **Timeout without all sources posting**: do NOT merge optimistically. Instead:
+   - Log which source(s) are still silent
+   - File a Retro (type: Improve) noting the reviewer timeout and the PR
+   - Mark the PR as "reviewer-timeout — requires manual merge or re-run" in the sweep log
+   - Continue to the next PR in the sweep
+
+This gate fires BEFORE Phase 2's verdict check — a positive verdict from one source doesn't override the absence of another configured source.
+
 ### Phase 2: Merge sweep
 
-For each PR at CLEAN (or UNSTABLE-but-ready per latest review verdict):
+For each PR that passed Phase 1b (all configured reviewers posted):
 
 1. Verify review state via `gh pr view {N} --json comments` — latest `claude` author comment. Positive verdicts: "ship-ready", "ship as-is", "no BLOCKERs", "all checks pass", "Self-Review PASSED", "verdict: green", or 🟢. If BLOCKERs surfaced → Phase 2b.
 2. Read PR body for Monday task ID: `gh pr view {N} --json body | grep "Monday\.com Task"`.
-3. Merge: `gh pr merge {N} --admin --squash`. NEVER `--delete-branch` — `gh` tries to delete the local tracking branch by switching cwd's checkout to `$defaultBase`, which fails with `fatal: '$defaultBase' is already used by worktree` and can corrupt the active task's branch state in a worktree session.
-4. Local cleanup: `git fetch --prune origin`. Drops the stale ref. Safe from any worktree.
-5. Capture merge SHA: `gh pr view {N} --json mergeCommit --jq .mergeCommit.oid`.
+3. Ensure `reviewAddressed` is populated in the PR's worktree active-task.json (structured format preferred — see `/ship-pr` SKILL.md Phase 6 schema). If the producing agent used `"handoff-to-orchestrator"`, the orchestrator must now perform its own triage pass and write the structured `reviewAddressed` before merging. The `pre-merge-review-gate` hook enforces this.
+4. Merge: `gh pr merge {N} --admin --squash`. NEVER `--delete-branch` — `gh` tries to delete the local tracking branch by switching cwd's checkout to `$defaultBase`, which fails with `fatal: '$defaultBase' is already used by worktree` and can corrupt the active task's branch state in a worktree session.
+5. Local cleanup: `git fetch --prune origin`. Drops the stale ref. Safe from any worktree.
+6. Capture merge SHA: `gh pr view {N} --json mergeCommit --jq .mergeCommit.oid`.
 
 ### Phase 2b: Handling BLOCKER findings
 
