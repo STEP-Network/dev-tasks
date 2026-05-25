@@ -51,6 +51,16 @@
         "**/plugin/rules/**/*.md",
         "**/plugin/hooks/**/*.sh"
       ]
+    },
+    {
+      "file": "agent-orchestration.md",
+      "match": [
+        "**/plugin/skills/babysit-prs/**/*.md",
+        "**/plugin/skills/ship-pr/**/*.md",
+        "**/plugin/skills/pickup-task/**/*.md",
+        "**/plugin/hooks/**/*.sh",
+        "**/plugin/rules/agent-*.md"
+      ]
     }
   ]
 }

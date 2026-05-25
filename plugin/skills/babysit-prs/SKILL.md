@@ -79,14 +79,24 @@ For each freshly-merged PR (if MCP up):
 
 MCP down: capture state inline as checklist; defer reconciliation; catch up immediately on recovery.
 
-### Phase 4: Worktree cleanup
+### Phase 4: Worktree cleanup (mandatory, not optional)
 
-For each merged PR:
-1. Worktree path: `branch.replace('/', '-')` → `.claude/worktrees/feat-<slug>`
-2. `git worktree remove --force <path>` (--force because remote branch deleted by merge)
-3. `git branch -D <branch>`
+For each merged PR, run the canonical wrapper:
 
-Batch: `bash .claude/scripts/worktree-audit.sh --remove -y` cleans every DONE worktree.
+```bash
+bash ${CLAUDE_PLUGIN_ROOT}/scripts/post-merge-cleanup.sh <PR>
+```
+
+Wrapper does:
+1. Resolves worktree path from PR's branch (`branch.replace('/', '-')` → `.claude/worktrees/<slug>`).
+2. `git worktree remove --force <path>` (--force because remote branch deleted by merge).
+3. Prints a checklist of remaining manual steps (createUpdate with merge SHA, verify demoUrl, manageSubtasks Done, SendMessage shutdown — Phase 5).
+
+Resolves the consumer project root from `$CLAUDE_PROJECT_DIR` (Claude Code sets it at session start) so it works invoked from the plugin path.
+
+Batch mode for retroactive cleanup of multiple DONE worktrees: `bash ${CLAUDE_PLUGIN_ROOT}/scripts/worktree-audit.sh --remove -y`.
+
+The full post-merge contract — what the orchestrator owes the Monday board for each merged PR (createUpdate, manageSubtasks, worktree-remove, SendMessage, demoUrl verify) — lives in [`agent-orchestration.md`](../../rules/agent-orchestration.md) "Orchestrator post-merge checklist". This Phase 4 is the mechanical wrapper; the rule is the spec.
 
 ### Phase 5: Agent shutdown
 
@@ -134,6 +144,16 @@ Sweeping PR queue (N open targeting staging):
 Merged: #283 at {SHA}, Monday #2915513137 → Waiting for UAT
 Next sweep: 5min, or when agent notifies
 ```
+
+## Dispatching subagents
+
+When the orchestrator spawns a fix-class subagent (the most common `/babysit-prs` precursor), use the canonical dispatch template:
+
+```bash
+cat ${CLAUDE_PLUGIN_ROOT}/templates/agent-dispatch-fix.md
+```
+
+Fill the placeholders (`<task-ID>`, `<task-name>`, `<branch>`, etc.) — keep the Anti-shortcuts + Hard-rules sections intact. The template enumerates the workflow-enforcement hooks the subagent will encounter so it doesn't discover them mid-implementation.
 
 ## Cross-references
 

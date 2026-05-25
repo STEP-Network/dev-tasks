@@ -250,6 +250,31 @@ For consumer projects that opt in (`.claude/project-config.json` → `e2e.enable
 
 See `plugin/skills/write-uat-spec/SKILL.md` for the full contract and `plugin/skills/write-uat-spec/EXAMPLES.md` for two worked walkthroughs (authenticated SaaS flow, public marketing flow).
 
+### Quality over speed
+
+Sourced from a downstream consumer's UAT 2026-05-22 retro: 4 of 5 fan-out agents skipped `/refine-task` verification, `/log-progress`, UAT doc creation, or Monday reconciliation. PRs landed fast; the Monday board lost its audit trail; ~30 min of manual reconciliation followed.
+
+**The four most-skipped steps** — each gets a workflow-enforcement hook (opt-in via `project-config.json` → `hooks.enabled[]`):
+
+1. **`/refine-task` quality** — `refinement-gate` (PreToolUse `claimTask`) refuses claims when the task lacks type, priority, epic, description (<200 chars), AC, OR has subtasks missing type/description/estimatedHours.
+2. **`/log-progress` per subtask** — `subtask-progress-gate` (PreToolUse Bash `git push`) refuses push when subtasks exist but none Done-with-actualHours.
+3. **UAT doc + Waiting-for-UAT flip** — `stop-waiting-for-uat-stage` (Stop) refuses session exit when all subtasks Done but parent task not at Waiting for UAT. `demo-url-required` (PreToolUse `updateTask`) refuses the WfUAT transition without a valid preview URL (validated against `project-config.ci.previewUrlPattern`).
+4. **Monday reconciliation after merge** — `stop-monday-reconciled-check` (Stop) refuses session exit when a merge commit landed but its SHA isn't recorded as reconciled.
+
+**The principle**: a 1-line edit gets the same workflow as a 500-line refactor. The Monday board is the audit trail; gaps in it compound into quality debt. Don't skip steps — the hooks won't let you, and bypassing them ALSO blocks (no `--admin` past CI failures).
+
+Full detail in `plugin/rules/agent-orchestration.md` "Quality-over-speed loop integration".
+
+### Workflow enforcement gates
+
+The following hooks ship in plugin v0.15.0 (PR B follows this PR — see Monday #2940302752). All are opt-in via `project-config.json` → `hooks.enabled[]`:
+
+- **`refinement-gate`** — refuses `claimTask` on Bugs-board items, un-refined tasks, or under-refined subtasks
+- **`subtask-progress-gate`** — refuses `git push` when subtasks exist but none Done-with-actualHours (escape: `allowPushWithoutSubtaskProgress: true` in active-task.json)
+- **`demo-url-required`** — refuses `updateTask(status='Waiting for UAT')` without `demoUrl` matching `project-config.ci.previewUrlPattern` (default permits any HTTPS URL)
+- **`stop-waiting-for-uat-stage`** — refuses session exit when subtasks all Done but parent not at Waiting for UAT (escape: `reviewAddressed: handoff-to-orchestrator`)
+- **`stop-monday-reconciled-check`** — refuses session exit when merge commit landed during session but its SHA isn't in active-task.json `mondayReconciledShas[]` (escape: `reviewAddressed: handoff-to-orchestrator`)
+
 ## Active-task.json drift reconciliation
 
 A SessionStart hook (`plugin/hooks/active-task-recon.sh`) runs at every session start. When the working directory is inside a plugin worktree (`.claude/worktrees/*`), the hook reads `.claude/active-task.json`, queries the Monday.com source-of-truth, and surfaces drift as informational notices. Always exits 0 — never blocks session start.
