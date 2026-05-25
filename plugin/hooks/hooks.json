@@ -15,7 +15,14 @@
       {
         "matcher": "mcp__plugin_dev-tasks_dev-tasks__updateTask",
         "hooks": [
-          { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/hooks/dev-tasks-update-guard.sh" }
+          { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/hooks/dev-tasks-update-guard.sh" },
+          { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/hooks/demo-url-required.sh" }
+        ]
+      },
+      {
+        "matcher": "mcp__plugin_dev-tasks_dev-tasks__claimTask",
+        "hooks": [
+          { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/hooks/refinement-gate.sh" }
         ]
       },
       {
@@ -40,6 +47,11 @@
             "type": "command",
             "if": "Bash(git commit *)",
             "command": "${CLAUDE_PLUGIN_ROOT}/hooks/pre-commit-secrets-scan.sh"
+          },
+          {
+            "type": "command",
+            "if": "Bash(git push *)",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/subtask-progress-gate.sh"
           }
         ]
       }
@@ -93,7 +105,9 @@
       {
         "hooks": [
           { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/hooks/stop-task-check.sh" },
-          { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/hooks/stop-ci-green-check.sh" }
+          { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/hooks/stop-ci-green-check.sh" },
+          { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/hooks/stop-waiting-for-uat-stage.sh" },
+          { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/hooks/stop-monday-reconciled-check.sh" }
         ]
       }
     ],

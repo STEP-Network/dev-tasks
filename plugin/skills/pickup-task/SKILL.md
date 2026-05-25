@@ -98,6 +98,9 @@ A task ready-to-start today may have been silently superseded by a recently-merg
       }
       ```
     - `claimToken` is REQUIRED by `task-state-guard.sh` — without it, the edit guard HARD BLOCKS all file edits. The token proves the task was claimed via MCP, not manually.
+    - Optional fields written by later skills (do NOT initialize here; absence is the correct default state):
+      - `parentStatus` — mirror of Monday parent status. Written by `/ship-pr` Phase 6.5 after the `Waiting for UAT` transition. Read by `stop-waiting-for-uat-stage` to avoid false-positives.
+      - `mondayReconciledShas: []` — merge SHAs that have been reconciled to Monday. Appended by `/ship-pr` Phase 10 + `/babysit-prs` Phase 3 after `gh pr merge`. Read by `stop-monday-reconciled-check`.
 
 13. Glob/Grep for related files.
 14. Output context summary: task details, related files, subtask plan.
