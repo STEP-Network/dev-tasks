@@ -89,6 +89,11 @@
           "description": "CI check names that must be green before merge.",
           "type": "array",
           "items": { "type": "string" }
+        },
+        "previewUrlPattern": {
+          "description": "Python regex pattern that validates the `demoUrl` passed to updateTask when transitioning to Waiting for UAT (read by demo-url-required hook). Default `^https://` permits any HTTPS URL. Tighten per deploy platform (e.g. `^https://.*\\.vercel\\.app(/.*)?$`, `^https://test\\.example\\.com`).",
+          "type": "string",
+          "default": "^https://"
         }
       }
     },
@@ -275,7 +280,12 @@
               "dev-tasks-update-guard",
               "build-failure-advisor",
               "pipeline-reminder",
-              "ui-change-test-reminder"
+              "ui-change-test-reminder",
+              "refinement-gate",
+              "subtask-progress-gate",
+              "demo-url-required",
+              "stop-waiting-for-uat-stage",
+              "stop-monday-reconciled-check"
             ]
           },
           "uniqueItems": true

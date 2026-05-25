@@ -215,7 +215,7 @@ plugin/
 ├── rules/                       # 9 universal lifecycle rules
 ├── rules-routing.json           # file-glob → rule-file mapping
 ├── skills/                      # 14 skills (workflow + posture + doctor)
-├── hooks/                       # 19 hooks (2 policy + 17 opt-in/auto)
+├── hooks/                       # 24 hooks (2 policy + 22 opt-in/auto, incl. 5 workflow-enforcement gates)
 ├── agents/                      # 4 subagent definitions
 ├── schemas/                     # project-config.schema.json
 └── templates/                   # starter-project-config.json

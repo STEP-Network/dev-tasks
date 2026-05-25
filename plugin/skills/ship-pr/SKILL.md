@@ -129,6 +129,8 @@ Branch on execution context per `.claude/rules/agent-autonomy.md`. Quick check: 
 
 20c. `mcp__plugin_dev-tasks_dev-tasks__updateTask({ itemId: taskId, status: "Waiting for UAT" })`. On rejection, fix the named field and retry.
 
+20c.1. **Mirror parent status to active-task.json** (required when `stop-waiting-for-uat-stage` is enabled — else the hook fires at session-end because subtasks are all `done` but local state still shows the parent at "In Progress"). Set `parentStatus: "Waiting for UAT"` in `.claude/active-task.json`. Single jq-style edit; no other fields change.
+
 ### Phase 6.6: Autonomous merge (default-flow PRs)
 
 20d. Preconditions: base is `$defaultBase`; CI all-green (or failures acked via `/tmp/.claude-ci-ack-<branch>`); review BLOCKERs resolved.
@@ -183,8 +185,9 @@ Hotfix flow: parent still at `In Progress`. Phase 10 sets `Done` directly.
 30. Post-merge sequence (order matters for `allowMainCheckout: true` — `gh pr merge` switches to `$defaultBase` and deletes local branch):
     1. Mark remaining subtasks `Done` via `manageSubtasks` (MCP call — no Edit/Write hook).
     2. `gh pr merge --admin --squash` (no `--delete-branch`).
-    3. Immediately `rm .claude/active-task.json` — BEFORE any Edit/Write.
-    4. Post final updates via `createUpdate`.
+    3. **Capture the merge SHA + append to `mondayReconciledShas[]`** (required when `stop-monday-reconciled-check` is enabled — else the hook fires at session-end because a merge landed during the session but the SHA isn't recorded as reconciled). Run `mergedSHA=$(gh pr view {N} --json mergeCommit --jq .mergeCommit.oid)`, then append to `.claude/active-task.json` `mondayReconciledShas[]` (initialize as `[]` if absent). Do this BEFORE the state-file delete in step 4.
+    4. Immediately `rm .claude/active-task.json` — BEFORE any Edit/Write.
+    5. Post final updates via `createUpdate`.
     
     In worktree sessions, `ExitWorktree({ action: "remove" })` in step 31 deletes the state file implicitly.
     

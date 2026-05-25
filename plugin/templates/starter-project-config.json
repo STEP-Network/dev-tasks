@@ -22,7 +22,8 @@
   },
   "ci": {
     "provider": "github-actions",
-    "requiredChecks": ["build", "test", "lint"]
+    "requiredChecks": ["build", "test", "lint"],
+    "previewUrlPattern": "^https://"
   },
   "rules": {
     "extraRules": []
@@ -44,7 +45,12 @@
       "post-self-review",
       "pre-compact-task-snapshot",
       "user-prompt-task-context",
-      "subprocess-failure"
+      "subprocess-failure",
+      "refinement-gate",
+      "subtask-progress-gate",
+      "demo-url-required",
+      "stop-waiting-for-uat-stage",
+      "stop-monday-reconciled-check"
     ]
   },
   "e2e": {

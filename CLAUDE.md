@@ -267,7 +267,7 @@ Full detail in `plugin/rules/agent-orchestration.md` "Quality-over-speed loop in
 
 ### Workflow enforcement gates
 
-The following hooks ship in plugin v0.15.0 (PR B follows this PR — see Monday #2940302752). All are opt-in via `project-config.json` → `hooks.enabled[]`:
+Five hooks ship in plugin v0.15.0. All are opt-in via `project-config.json` → `hooks.enabled[]`:
 
 - **`refinement-gate`** — refuses `claimTask` on Bugs-board items, un-refined tasks, or under-refined subtasks
 - **`subtask-progress-gate`** — refuses `git push` when subtasks exist but none Done-with-actualHours (escape: `allowPushWithoutSubtaskProgress: true` in active-task.json)
