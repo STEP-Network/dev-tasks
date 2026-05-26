@@ -36,6 +36,18 @@ case "$FILE_PATH" in
     ;;
 esac
 
+# Allow edits to project-config exemptPaths (e.g. docs/dev, docs/plan, notes)
+EXEMPT_PATHS=$(read_project_config '.hooks.exemptPaths[]' 2>/dev/null)
+if [ -n "$EXEMPT_PATHS" ] && [ -n "$FILE_PATH" ]; then
+  REL_PATH="${FILE_PATH#"$PROJECT_ROOT"/}"
+  while IFS= read -r prefix; do
+    [ -z "$prefix" ] && continue
+    case "$REL_PATH" in
+      "$prefix"/*) exit 0 ;;
+    esac
+  done <<< "$EXEMPT_PATHS"
+fi
+
 STATE_FILE="$PROJECT_ROOT/.claude/active-task.json"
 if [ ! -f "$STATE_FILE" ]; then
   echo "BLOCKED: No active Monday.com task."
