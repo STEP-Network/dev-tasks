@@ -277,6 +277,13 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
+        "exemptPaths": {
+          "description": "Path prefixes (relative to repo root) exempt from task-state-guard. Files under these paths can be edited without an active Monday task. The built-in exemptions (.claude/, memory/, CLAUDE.md, .gitignore) always apply regardless of this list.",
+          "type": "array",
+          "items": { "type": "string" },
+          "uniqueItems": true,
+          "examples": [["docs/dev", "docs/plan", "notes"]]
+        },
         "enabled": {
           "description": "Names of opt-in plugin hooks active in this project. `bash-guard` and `stop-ci-green-check` are accepted but ignored at runtime — they are always-on STEP policy hooks. Drop them from the array when convenient.",
           "type": "array",
