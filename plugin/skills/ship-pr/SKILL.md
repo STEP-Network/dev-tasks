@@ -102,12 +102,51 @@ Branch on execution context per `.claude/rules/agent-autonomy.md`. Quick check: 
 **Autonomous merge path** (main session, has `Monitor`):
 1. Poll CI via a `Monitor` that watches `gh pr checks {prNumber}` and emits terminal transitions. Restart the Monitor on each new push — stale events from previous commit confuse triage. See [`monitor-predicate-pattern.md`](../../rules/monitor-predicate-pattern.md) for transition-only emission + immediate-action-on-success patterns.
 2. Poll Corridor findings via `mcp__plugin_corridor_corridor__getFindings({ cwd, branch, state: "open", excludeAIFalsePositives: true })`. Retry up to 3× with 60s delay if empty.
-3. Triage findings (GitHub bot review + Corridor) per `ship-readiness.md` (BLOCKER / IMPROVEMENT / POLISH).
-4. Record triage decisions to `reviewTriage` in state file.
-5. For Corridor declines: call `mcp__plugin_corridor_corridor__updateFindingState({ findingId, state: "closed", closedReasonCategory, closedReason })`.
-6. Loop: fix BLOCKERs + cheap IMPROVEMENTs → re-push → restart Monitors → re-poll Corridor → re-triage. No round cap; regression-loop escalation if 3 consecutive rounds introduce new BLOCKERs.
-7. Set `reviewAddressed`: `"accepted"` (all POLISH), `"fixed"` (loop terminated), `"stuck:regression-loop"`, or `"timeout:{reason}"`.
-8. Merge via `gh pr merge --admin --squash` (NEVER `--delete-branch` — collides with worktrees).
+3. Fetch GitHub bot review comments: `gh pr view {prNumber} --json comments` → filter for `author.login == "claude"` and body contains `"## Code Review"`.
+4. Triage ALL findings (GitHub bot review + Corridor + /self-review) per `ship-readiness.md` (BLOCKER / IMPROVEMENT / POLISH).
+5. For each POLISH finding: post a PR-reply declining it (category + reason). Capture the GitHub comment ID returned.
+6. For Corridor declines: call `mcp__plugin_corridor_corridor__updateFindingState({ findingId, state: "closed", closedReasonCategory, closedReason })`.
+7. Loop: fix BLOCKERs + cheap IMPROVEMENTs → re-push → restart Monitors → re-poll Corridor → re-triage. No round cap; regression-loop escalation if 3 consecutive rounds introduce new BLOCKERs.
+8. Write structured `reviewAddressed` to active-task.json (see schema below).
+9. Merge via `gh pr merge --admin --squash` (NEVER `--delete-branch` — collides with worktrees). The `pre-merge-review-gate` hook validates step 8 before allowing this.
+
+**`reviewAddressed` structured schema** (written in step 8):
+
+```json
+{
+  "status": "fixed" | "accepted" | "pending" | "blocker_unaddressed",
+  "triagedAt": "2026-05-25T12:34:00Z",
+  "sources": {
+    "claudeBot": {
+      "commentsFound": 1,
+      "blockers": 0,
+      "improvements": 0,
+      "polish": 5,
+      "replies": ["IC_kwDOL1234"]
+    },
+    "corridor": {
+      "commentsFound": 3,
+      "blockers": 0,
+      "improvements": 1,
+      "polish": 2,
+      "replies": ["IC_kwDOL5678"]
+    },
+    "selfReview": {
+      "commentsFound": 0,
+      "blockers": 0,
+      "improvements": 0,
+      "polish": 0,
+      "replies": []
+    }
+  }
+}
+```
+
+Field semantics:
+- `status`: `"fixed"` (BLOCKERs existed and were resolved), `"accepted"` (only POLISH/IMPROVEMENT, all declined or cheap-fixed), `"pending"` (triage incomplete), `"blocker_unaddressed"` (BLOCKERs remain open).
+- `triagedAt`: ISO 8601 UTC timestamp of when triage completed. Must be AFTER the `createdAt` of the latest bot review comment (the `pre-merge-review-gate` hook enforces this to prevent race conditions).
+- `sources.<name>.replies[]`: GitHub comment IDs (from `gh pr comment` output or `gh api`) proving POLISH items were declined via PR comment. The hook verifies count > 0 when `polish > 0`.
+- Legacy string values (`"fixed"`, `"accepted"`, `"handoff-to-orchestrator"`) are still accepted by the hook for backward compatibility but the structured format is required for new merges going forward.
 
 **Hotfix exception (both paths)**: PRs targeting `$hotfixBase` require human merge. Stop at "CI green + reviews addressed" with a final update.
 
