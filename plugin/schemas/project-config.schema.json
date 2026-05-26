@@ -7,6 +7,10 @@
   "required": ["version"],
   "additionalProperties": false,
   "properties": {
+    "$schema": {
+      "description": "JSON Schema URI reference. Ignored at runtime — exists so consumer files can declare their schema without triggering additionalProperties: false.",
+      "type": "string"
+    },
     "version": {
       "description": "Schema version. Bump when making breaking changes to this schema.",
       "type": "string",
