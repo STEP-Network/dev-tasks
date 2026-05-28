@@ -4,6 +4,7 @@
 # lists "post-merge-postmortem" in hooks.enabled[]. Keeps the plugin's hooks dormant in
 # projects that don't follow this workflow.
 source "$(dirname "${BASH_SOURCE[0]}")/lib/config-reader.sh"
+source "$(dirname "${BASH_SOURCE[0]}")/lib/resolve-agent-cwd.sh"
 hook_enabled "post-merge-postmortem" || exit 0
 # Hook: PostToolUse Bash — capture multi-round PR merges as post-mortem candidates.
 #
@@ -26,9 +27,16 @@ hook_enabled "post-merge-postmortem" || exit 0
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="${CLAUDE_PROJECT_DIR:-$PWD}"
-CANDIDATES_FILE="$PROJECT_ROOT/.claude/postmortem-candidates.md"
 
 INPUT=$(cat)
+
+# Update PROJECT_ROOT with the agent's actual cwd from the hook payload
+# (prefer it over CLAUDE_PROJECT_DIR which is pinned to the main checkout).
+AGENT_CWD=$(resolve_agent_cwd "$INPUT")
+[ -n "$AGENT_CWD" ] && PROJECT_ROOT="$AGENT_CWD"
+# CANDIDATES_FILE must be computed AFTER the AGENT_CWD override so it lands in
+# the worktree's .claude/, not the main checkout's.
+CANDIDATES_FILE="$PROJECT_ROOT/.claude/postmortem-candidates.md"
 
 # Extract the bash command via jq (already a dependency for gh and other hooks).
 COMMAND=$(echo "$INPUT" | jq -r '.tool_input.command // ""' 2>/dev/null)

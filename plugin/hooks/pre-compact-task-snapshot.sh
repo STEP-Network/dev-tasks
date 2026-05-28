@@ -4,6 +4,7 @@
 # lists "pre-compact-task-snapshot" in hooks.enabled[]. Keeps the plugin's hooks dormant in
 # projects that don't follow this workflow.
 source "$(dirname "${BASH_SOURCE[0]}")/lib/config-reader.sh"
+source "$(dirname "${BASH_SOURCE[0]}")/lib/resolve-agent-cwd.sh"
 hook_enabled "pre-compact-task-snapshot" || exit 0
 # Hook: PreCompact — snapshot task + orchestration state before context compaction.
 #
@@ -29,7 +30,9 @@ hook_enabled "pre-compact-task-snapshot" || exit 0
 # Non-blocking: this hook MUST never block compaction. Exit 0 on every error.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_ROOT="${CLAUDE_PROJECT_DIR:-$PWD}"
+INPUT=$(cat 2>/dev/null || echo "")
+AGENT_CWD=$(resolve_agent_cwd "$INPUT")
+PROJECT_ROOT="${AGENT_CWD:-${CLAUDE_PROJECT_DIR:-$PWD}}"
 
 snapshot_atomic() {
   local src="$1"

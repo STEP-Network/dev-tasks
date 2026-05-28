@@ -4,6 +4,7 @@
 # lists "user-prompt-task-context" in hooks.enabled[]. Keeps the plugin's hooks dormant in
 # projects that don't follow this workflow.
 source "$(dirname "${BASH_SOURCE[0]}")/lib/config-reader.sh"
+source "$(dirname "${BASH_SOURCE[0]}")/lib/resolve-agent-cwd.sh"
 hook_enabled "user-prompt-task-context" || exit 0
 # Hook: UserPromptSubmit — inject task + orchestration state as additionalContext
 # on every user prompt. Survives compaction by re-injecting after each prompt.
@@ -38,7 +39,9 @@ hook_enabled "user-prompt-task-context" || exit 0
 # Exit 0 always — never block the user's prompt.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_ROOT="${CLAUDE_PROJECT_DIR:-$PWD}"
+INPUT=$(cat 2>/dev/null || echo "")
+AGENT_CWD=$(resolve_agent_cwd "$INPUT")
+PROJECT_ROOT="${AGENT_CWD:-${CLAUDE_PROJECT_DIR:-$PWD}}"
 
 STATE_FILE="$PROJECT_ROOT/.claude/active-task.json"
 ORCHESTRATION_FILE="$PROJECT_ROOT/.claude/orchestration-state.json"

@@ -30,7 +30,15 @@ exec >&2
 #   (in /tmp), so it doesn't accidentally carry over between unrelated PRs.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_ROOT="${CLAUDE_PROJECT_DIR:-$PWD}"
+source "$SCRIPT_DIR/lib/resolve-agent-cwd.sh"
+
+# Read the Stop-hook payload (may be empty for older Claude Code versions —
+# resolve_agent_cwd handles that gracefully). Prefer agent's actual cwd over
+# CLAUDE_PROJECT_DIR — the BRANCH we look up the marker by must match what
+# post-push-track.sh wrote, which is the WORKTREE's branch.
+INPUT=$(cat 2>/dev/null || echo "")
+AGENT_CWD=$(resolve_agent_cwd "$INPUT")
+PROJECT_ROOT="${AGENT_CWD:-${CLAUDE_PROJECT_DIR:-$PWD}}"
 
 BRANCH=$(cd "$PROJECT_ROOT" && git rev-parse --abbrev-ref HEAD 2>/dev/null)
 if [ -z "$BRANCH" ]; then

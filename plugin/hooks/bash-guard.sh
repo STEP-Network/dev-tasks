@@ -9,6 +9,7 @@
 # project-config.git.protectedBranches[] (empty array disables; default list:
 # main staging master production prod).
 source "$(dirname "${BASH_SOURCE[0]}")/lib/config-reader.sh"
+source "$(dirname "${BASH_SOURCE[0]}")/lib/resolve-agent-cwd.sh"
 
 # Redirect stdout to stderr so block messages (exit 2) reach Claude Code
 # correctly. Per Claude Code hooks spec, block reasons must be on stderr.
@@ -38,9 +39,12 @@ if [ -z "$ACTUAL_CMD" ]; then
   exit 0  # Can't parse input, don't block
 fi
 
-# Resolve project root
+# Resolve project root. Prefer the agent's actual cwd from the hook payload —
+# CLAUDE_PROJECT_DIR is pinned to the main checkout at session start and is
+# wrong when the agent is in a worktree. See lib/resolve-agent-cwd.sh.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_ROOT="${CLAUDE_PROJECT_DIR:-$PWD}"
+AGENT_CWD=$(resolve_agent_cwd "$INPUT")
+PROJECT_ROOT="${AGENT_CWD:-${CLAUDE_PROJECT_DIR:-$PWD}}"
 
 # (a) Block destructive commands
 DESTRUCTIVE_PATTERNS=(

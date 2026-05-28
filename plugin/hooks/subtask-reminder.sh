@@ -4,6 +4,7 @@
 # lists "subtask-reminder" in hooks.enabled[]. Keeps the plugin's hooks dormant in
 # projects that don't follow this workflow.
 source "$(dirname "${BASH_SOURCE[0]}")/lib/config-reader.sh"
+source "$(dirname "${BASH_SOURCE[0]}")/lib/resolve-agent-cwd.sh"
 hook_enabled "subtask-reminder" || exit 0
 # Hook: PreToolUse (Edit|Write)
 # NON-BLOCKING reminder to track subtask progress.
@@ -15,6 +16,11 @@ PROJECT_ROOT="${CLAUDE_PROJECT_DIR:-$PWD}"
 
 # Skip infrastructure files — no subtask tracking needed
 INPUT=$(cat)
+
+# Update PROJECT_ROOT with the agent's actual cwd from the hook payload
+# (prefer it over CLAUDE_PROJECT_DIR which is pinned to the main checkout).
+AGENT_CWD=$(resolve_agent_cwd "$INPUT")
+[ -n "$AGENT_CWD" ] && PROJECT_ROOT="$AGENT_CWD"
 FILE_PATH=$(echo "$INPUT" | python3 -c "import sys,json; print(json.load(sys.stdin).get('tool_input',{}).get('file_path',''))" 2>/dev/null)
 
 case "$FILE_PATH" in

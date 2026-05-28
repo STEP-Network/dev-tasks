@@ -26,6 +26,7 @@ exec >&2
 # Opt-in gate: silent no-op unless the consumer enabled this hook in their
 # .claude/project-config.json hooks.enabled[] array.
 source "$(dirname "${BASH_SOURCE[0]}")/lib/config-reader.sh"
+source "$(dirname "${BASH_SOURCE[0]}")/lib/resolve-agent-cwd.sh"
 hook_enabled "subtask-progress-gate" || exit 0
 
 # Read tool input from stdin.
@@ -48,7 +49,8 @@ case "$ACTUAL_CMD" in
   *) exit 0 ;;
 esac
 
-PROJECT_ROOT="${CLAUDE_PROJECT_DIR:-$PWD}"
+AGENT_CWD=$(resolve_agent_cwd "$INPUT")
+PROJECT_ROOT="${AGENT_CWD:-${CLAUDE_PROJECT_DIR:-$PWD}}"
 STATE_FILE="$PROJECT_ROOT/.claude/active-task.json"
 
 # No active-task.json — task-state-guard owns the block. Pass-through.

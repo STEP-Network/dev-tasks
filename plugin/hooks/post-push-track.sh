@@ -4,6 +4,7 @@
 # lists "post-push-track" in hooks.enabled[]. Keeps the plugin's hooks dormant in
 # projects that don't follow this workflow.
 source "$(dirname "${BASH_SOURCE[0]}")/lib/config-reader.sh"
+source "$(dirname "${BASH_SOURCE[0]}")/lib/resolve-agent-cwd.sh"
 hook_enabled "post-push-track" || exit 0
 # Hook: PostToolUse on Bash(git push *)
 # Records that a push happened so the Stop hook can verify CI reached terminal
@@ -23,9 +24,13 @@ hook_enabled "post-push-track" || exit 0
 # new push.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_ROOT="${CLAUDE_PROJECT_DIR:-$PWD}"
 
 INPUT=$(cat)
+# Prefer agent's actual cwd over CLAUDE_PROJECT_DIR — the BRANCH + SHA we
+# write into /tmp/.claude-pushed-<branch> must reflect the WORKTREE's push,
+# not the main checkout's stale state. See lib/resolve-agent-cwd.sh.
+AGENT_CWD=$(resolve_agent_cwd "$INPUT")
+PROJECT_ROOT="${AGENT_CWD:-${CLAUDE_PROJECT_DIR:-$PWD}}"
 
 # Only mark on a real `git push` (the matcher `if:` already filters this, but
 # defense in depth — a future settings.json edit could broaden the matcher).
