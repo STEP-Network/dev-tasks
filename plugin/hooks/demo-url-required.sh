@@ -26,6 +26,7 @@ exec >&2
 
 # Opt-in gate.
 source "$(dirname "${BASH_SOURCE[0]}")/lib/config-reader.sh"
+source "$(dirname "${BASH_SOURCE[0]}")/lib/resolve-agent-cwd.sh"
 hook_enabled "demo-url-required" || exit 0
 
 INPUT=$(cat)
@@ -55,10 +56,11 @@ if [ "$TARGET_STATUS" != "Waiting for UAT" ]; then
 fi
 
 # Resolve project root.
+AGENT_CWD=$(resolve_agent_cwd "$INPUT")
 PROJECT_ROOT=""
-# Prefer $CLAUDE_PROJECT_DIR (Claude Code session-level, authoritative). Fall
-# back to git rev-parse + $PWD for CLI usage outside Claude Code.
-if [ -n "${CLAUDE_PROJECT_DIR:-}" ] && [ -d "$CLAUDE_PROJECT_DIR/.claude" ]; then
+if [ -n "$AGENT_CWD" ] && [ -d "$AGENT_CWD/.claude" ]; then
+  PROJECT_ROOT="$AGENT_CWD"
+elif [ -n "${CLAUDE_PROJECT_DIR:-}" ] && [ -d "$CLAUDE_PROJECT_DIR/.claude" ]; then
   PROJECT_ROOT="$CLAUDE_PROJECT_DIR"
 elif git_top=$(git rev-parse --show-toplevel 2>/dev/null); then
   PROJECT_ROOT="$git_top"

@@ -4,6 +4,7 @@
 # lists "dev-tasks-update-guard" in hooks.enabled[]. Keeps the plugin's hooks
 # dormant in projects that don't follow the Monday task-first workflow.
 source "$(dirname "${BASH_SOURCE[0]}")/lib/config-reader.sh"
+source "$(dirname "${BASH_SOURCE[0]}")/lib/resolve-agent-cwd.sh"
 hook_enabled "dev-tasks-update-guard" || exit 0
 
 # Hook: PreToolUse (mcp__plugin_dev-tasks_dev-tasks__updateTask)
@@ -26,6 +27,11 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="${CLAUDE_PROJECT_DIR:-$PWD}"
 
 INPUT=$(cat)
+
+# Update PROJECT_ROOT with the agent's actual cwd from the hook payload
+# (prefer it over CLAUDE_PROJECT_DIR which is pinned to the main checkout).
+AGENT_CWD=$(resolve_agent_cwd "$INPUT")
+[ -n "$AGENT_CWD" ] && PROJECT_ROOT="$AGENT_CWD"
 
 # Extract status + itemId from tool_input JSON
 TARGET_STATUS=$(echo "$INPUT" | python3 -c "import sys,json; print(json.load(sys.stdin).get('tool_input',{}).get('status') or '')" 2>/dev/null)

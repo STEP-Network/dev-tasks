@@ -4,6 +4,7 @@
 # lists "post-push-review-check" in hooks.enabled[]. Keeps the plugin's hooks dormant in
 # projects that don't follow this workflow.
 source "$(dirname "${BASH_SOURCE[0]}")/lib/config-reader.sh"
+source "$(dirname "${BASH_SOURCE[0]}")/lib/resolve-agent-cwd.sh"
 hook_enabled "post-push-review-check" || exit 0
 # Hook: PostToolUse (Bash)
 # After a successful git push, poll CI status until complete, then check reviews.
@@ -45,7 +46,8 @@ if ! echo "$STDOUT" | grep -q -- "->"; then
 fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_ROOT="${CLAUDE_PROJECT_DIR:-$PWD}"
+AGENT_CWD=$(resolve_agent_cwd "$INPUT")
+PROJECT_ROOT="${AGENT_CWD:-${CLAUDE_PROJECT_DIR:-$PWD}}"
 BRANCH=$(cd "$PROJECT_ROOT" && git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "unknown")
 
 # Find PR number for this branch

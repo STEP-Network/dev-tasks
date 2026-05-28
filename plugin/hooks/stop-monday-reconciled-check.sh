@@ -31,12 +31,20 @@ exec >&2
 # Opt-in gate: silent no-op unless the consumer enabled this hook in their
 # .claude/project-config.json hooks.enabled[] array.
 source "$(dirname "${BASH_SOURCE[0]}")/lib/config-reader.sh"
+source "$(dirname "${BASH_SOURCE[0]}")/lib/resolve-agent-cwd.sh"
 hook_enabled "stop-monday-reconciled-check" || exit 0
 
+# Prefer the agent's actual cwd from the Stop-hook payload (Claude Code
+# includes it). Falls through to $CLAUDE_PROJECT_DIR (pinned to main checkout
+# at session start), then git_top, then $PWD. The agent's cwd is the worktree
+# when one is in use — that's where the relevant active-task.json lives.
+INPUT=$(cat 2>/dev/null || echo "")
+AGENT_CWD=$(resolve_agent_cwd "$INPUT")
+
 PROJECT_ROOT=""
-# Prefer $CLAUDE_PROJECT_DIR (Claude Code session-level, authoritative). Fall
-# back to git rev-parse + $PWD for CLI usage outside Claude Code.
-if [ -n "${CLAUDE_PROJECT_DIR:-}" ] && [ -d "$CLAUDE_PROJECT_DIR/.claude" ]; then
+if [ -n "$AGENT_CWD" ] && [ -d "$AGENT_CWD/.claude" ]; then
+  PROJECT_ROOT="$AGENT_CWD"
+elif [ -n "${CLAUDE_PROJECT_DIR:-}" ] && [ -d "$CLAUDE_PROJECT_DIR/.claude" ]; then
   PROJECT_ROOT="$CLAUDE_PROJECT_DIR"
 elif git_top=$(git rev-parse --show-toplevel 2>/dev/null); then
   PROJECT_ROOT="$git_top"

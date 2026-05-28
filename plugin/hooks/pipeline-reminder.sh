@@ -4,6 +4,7 @@
 # lists "pipeline-reminder" in hooks.enabled[]. Keeps the plugin's hooks
 # dormant in projects that don't follow this workflow.
 source "$(dirname "${BASH_SOURCE[0]}")/lib/config-reader.sh"
+source "$(dirname "${BASH_SOURCE[0]}")/lib/resolve-agent-cwd.sh"
 hook_enabled "pipeline-reminder" || exit 0
 
 # Hook: PostToolUse (Edit|Write)
@@ -17,10 +18,17 @@ hook_enabled "pipeline-reminder" || exit 0
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="${CLAUDE_PROJECT_DIR:-$PWD}"
-STATE_FILE="$PROJECT_ROOT/.claude/active-task.json"
 
 # Only trigger for source file edits (skip .claude/, memory, config)
 INPUT=$(cat)
+
+# Update PROJECT_ROOT with the agent's actual cwd from the hook payload
+# (prefer it over CLAUDE_PROJECT_DIR which is pinned to the main checkout).
+AGENT_CWD=$(resolve_agent_cwd "$INPUT")
+[ -n "$AGENT_CWD" ] && PROJECT_ROOT="$AGENT_CWD"
+# STATE_FILE must be computed AFTER the AGENT_CWD override so it points at the
+# worktree's active-task.json, not the main checkout's.
+STATE_FILE="$PROJECT_ROOT/.claude/active-task.json"
 FILE_PATH=$(echo "$INPUT" | python3 -c "import sys,json; print(json.load(sys.stdin).get('tool_input',{}).get('file_path',''))" 2>/dev/null)
 
 case "$FILE_PATH" in
