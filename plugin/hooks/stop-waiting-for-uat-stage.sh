@@ -32,12 +32,20 @@ exec >&2
 # Opt-in gate: silent no-op unless the consumer enabled this hook in their
 # .claude/project-config.json hooks.enabled[] array.
 source "$(dirname "${BASH_SOURCE[0]}")/lib/config-reader.sh"
+source "$(dirname "${BASH_SOURCE[0]}")/lib/resolve-agent-cwd.sh"
 hook_enabled "stop-waiting-for-uat-stage" || exit 0
 
+# Read the Stop-hook payload (may be empty on older Claude Code versions —
+# resolve_agent_cwd handles that gracefully). Prefer the agent's actual cwd
+# from the payload; fall back to git plumbing (Stop hook cwd typically
+# reflects the active worktree), then $CLAUDE_PROJECT_DIR, then $PWD.
+INPUT=$(cat 2>/dev/null || echo "")
+AGENT_CWD=$(resolve_agent_cwd "$INPUT")
+
 PROJECT_ROOT=""
-# Resolve project root from CWD via git plumbing. Stop hooks don't receive a
-# file_path payload; CWD typically reflects the active worktree.
-if git_top=$(git rev-parse --show-toplevel 2>/dev/null); then
+if [ -n "$AGENT_CWD" ]; then
+  PROJECT_ROOT="$AGENT_CWD"
+elif git_top=$(git rev-parse --show-toplevel 2>/dev/null); then
   PROJECT_ROOT="$git_top"
 else
   PROJECT_ROOT="${CLAUDE_PROJECT_DIR:-$PWD}"

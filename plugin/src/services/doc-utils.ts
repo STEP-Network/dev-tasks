@@ -73,15 +73,18 @@ export async function fetchItemName(itemId: number): Promise<string | undefined>
 export function extractDocObjectId(docValue: unknown): number | undefined {
   if (!docValue || typeof docValue !== "object") return undefined;
   const obj = docValue as Record<string, unknown>;
-  if (typeof obj.doc_id === "number") return obj.doc_id;
-  if (typeof obj.doc_id === "string" && /^\d+$/.test(obj.doc_id)) return Number(obj.doc_id);
+  // NOTE: do NOT check `doc_id` here. Some older Monday item shapes store the
+  // doc's PRIMARY id under `doc_id`, not the per-item object_id we need for
+  // docs(object_ids: [...]). Treating that primary id as an object_id makes
+  // resolveDocPrimaryId silently return undefined (no doc found). Mirror the
+  // sibling changelog-doc.ts pattern: only `objectId` / `object_id`.
   const files = obj.files as Array<Record<string, unknown>> | undefined;
   if (files && files.length > 0) {
     const oid = files[0].objectId;
     if (typeof oid === "number") return oid;
     if (typeof oid === "string" && /^\d+$/.test(oid)) return Number(oid);
   }
-  const match = JSON.stringify(obj).match(/"(?:doc_id|objectId|object_id)"\s*:\s*(\d+)/);
+  const match = JSON.stringify(obj).match(/"(?:objectId|object_id)"\s*:\s*(\d+)/);
   return match ? Number(match[1]) : undefined;
 }
 
@@ -200,46 +203,56 @@ async function deleteAllDocBlocks(docId: number): Promise<number> {
 }
 
 /**
+ * Internal: run the add_content mutation and surface Monday's `success: false`
+ * as a thrown Error. Both writeDocContentReplacing and appendDocContent
+ * delegate here so failure detection is consistent.
+ */
+async function addContentToDocOrThrow(docId: number, markdown: string): Promise<void> {
+  const mutation = `
+    mutation {
+      add_content_to_doc_from_markdown(
+        docId: ${docId},
+        markdown: ${JSON.stringify(markdown)}
+      ) { success error }
+    }
+  `;
+  const response = await executeMondayQuery<any>(mutation, undefined, DOC_OPTS);
+  const result = response.add_content_to_doc_from_markdown;
+  if (!result?.success) {
+    throw new Error(
+      `Monday add_content_to_doc_from_markdown failed for doc ${docId}: ${
+        result?.error ?? "unknown error"
+      }`,
+    );
+  }
+}
+
+/**
  * Overwrite a doc's content with the given markdown. Drains existing blocks
  * first, then appends. Returns `{ deletedBlocks }` for the caller's progress
- * message.
+ * message. Throws if Monday reports the content write failed.
  */
 export async function writeDocContentReplacing(
   docId: number,
   markdown: string,
 ): Promise<{ deletedBlocks: number }> {
   const deletedBlocks = await deleteAllDocBlocks(docId);
-  const mutation = `
-    mutation {
-      add_content_to_doc_from_markdown(
-        docId: ${docId},
-        markdown: ${JSON.stringify(markdown)}
-      ) { success }
-    }
-  `;
-  await executeMondayQuery<unknown>(mutation, undefined, DOC_OPTS);
+  await addContentToDocOrThrow(docId, markdown);
   return { deletedBlocks };
 }
 
 /**
- * Append content to a doc without clearing existing blocks.
+ * Append content to a doc without clearing existing blocks. Throws if Monday
+ * reports the content write failed.
  */
 export async function appendDocContent(docId: number, markdown: string): Promise<void> {
-  const mutation = `
-    mutation {
-      add_content_to_doc_from_markdown(
-        docId: ${docId},
-        markdown: ${JSON.stringify(markdown)}
-      ) { success }
-    }
-  `;
-  await executeMondayQuery<unknown>(mutation, undefined, DOC_OPTS);
+  await addContentToDocOrThrow(docId, markdown);
 }
 
 /**
- * Export a doc's content as a markdown string. Returns empty string when the
- * doc exists but has no exportable content (rather than throwing — callers
- * can fall back to legacy long_text reads).
+ * Export a doc's content as a markdown string. Throws on Monday export
+ * failure so callers can surface a useful error instead of mis-reporting the
+ * doc as empty. Callers that want best-effort behavior must wrap in try/catch.
  */
 export async function readDocAsMarkdown(docId: number): Promise<string> {
   const query = `
@@ -253,6 +266,12 @@ export async function readDocAsMarkdown(docId: number): Promise<string> {
   `;
   const response = await executeMondayQuery<any>(query, undefined, DOC_OPTS);
   const result = response.export_markdown_from_doc;
-  if (!result?.success) return "";
+  if (!result?.success) {
+    throw new Error(
+      `Monday export_markdown_from_doc failed for doc ${docId}: ${
+        result?.error ?? "unknown error"
+      }`,
+    );
+  }
   return typeof result.markdown === "string" ? result.markdown : "";
 }

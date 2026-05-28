@@ -4,6 +4,7 @@
 # lists "post-self-review" in hooks.enabled[]. Keeps the plugin's hooks dormant in
 # projects that don't follow this workflow.
 source "$(dirname "${BASH_SOURCE[0]}")/lib/config-reader.sh"
+source "$(dirname "${BASH_SOURCE[0]}")/lib/resolve-agent-cwd.sh"
 hook_enabled "post-self-review" || exit 0
 # Hook: PostToolUse (Task) — captures /self-review iterations into review-memory.
 # Non-blocking: this hook MUST never block the agent. Exit 0 on every error.
@@ -22,7 +23,13 @@ hook_enabled "post-self-review" || exit 0
 INPUT=$(cat)
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_ROOT="${CLAUDE_PROJECT_DIR:-$PWD}"
+# Prefer the agent's actual cwd from the hook payload — both the parse step
+# (which reads STATE_FILE) and the append-review-memory.ts call (which keys on
+# CLAUDE_PROJECT_DIR for memory path resolution) need the worktree's root, not
+# the main checkout's. PR I (#58) fixed only the marker-emit path; this picks
+# up the rest of the hook.
+AGENT_CWD=$(resolve_agent_cwd "$INPUT")
+PROJECT_ROOT="${AGENT_CWD:-${CLAUDE_PROJECT_DIR:-$PWD}}"
 
 # Quick filter: only fire on Task calls to the self-reviewer agent.
 # tool_input.subagent_type === "self-reviewer" identifies the call.
@@ -111,24 +118,12 @@ if 'Self-Review PASSED' in str(text):
 if [ "$PASSED" = "YES" ]; then
   EMITTER="$SCRIPT_DIR/../scripts/emit-state-marker.sh"
   if [ -x "$EMITTER" ]; then
-    # Resolve the emit-from directory carefully. The marker is SHA-scoped via
-    # `git rev-parse HEAD` from whatever cwd the emitter runs in. Claude Code
-    # sets $CLAUDE_PROJECT_DIR at session start to the main checkout and never
-    # updates it when the agent enters a worktree — so using PROJECT_ROOT
-    # here would emit at MAIN's HEAD while the agent's actual work (and the
-    # protect-active-task-state hook's check) happens in the WORKTREE at a
-    # different HEAD. The payload's `cwd` field is the agent's actual cwd,
-    # which is the worktree when one is in use. Prefer it; fall back to
-    # PROJECT_ROOT for old payloads or non-worktree sessions.
-    EMIT_CWD=$(echo "$INPUT" | python3 -c "
-import sys, json
-try:
-    print(json.load(sys.stdin).get('cwd', ''))
-except Exception:
-    pass
-" 2>/dev/null)
-    [ -z "$EMIT_CWD" ] && EMIT_CWD="$PROJECT_ROOT"
-    (cd "$EMIT_CWD" && bash "$EMITTER" selfReviewPassed >/dev/null 2>&1) || true
+    # Emit from the agent's actual cwd (the worktree, when one is in use).
+    # AGENT_CWD was already resolved at the top of the hook via the shared
+    # lib/resolve-agent-cwd.sh helper; PROJECT_ROOT is the AGENT_CWD-aware
+    # fallback chain. The marker is SHA-scoped via `git rev-parse HEAD`
+    # from the emit-from directory.
+    (cd "$PROJECT_ROOT" && bash "$EMITTER" selfReviewPassed >/dev/null 2>&1) || true
   fi
 fi
 

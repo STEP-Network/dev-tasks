@@ -60,6 +60,14 @@ assert_eq "empty cwd field returns empty" \
   "$(resolve_agent_cwd '{"cwd":""}')" \
   ""
 
+# JSON null vs missing key: both must yield empty string. Python's
+# `.get('cwd', '')` returns '' for MISSING but None for explicit null —
+# without the `or ''` coercion in the helper, print(None) emits 'None'
+# and callers treat it as a valid path.
+assert_eq "JSON null cwd returns empty (not 'None' string)" \
+  "$(resolve_agent_cwd '{"cwd":null}')" \
+  ""
+
 assert_eq "empty JSON object returns empty" \
   "$(resolve_agent_cwd '{}')" \
   ""
