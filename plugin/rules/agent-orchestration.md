@@ -198,6 +198,65 @@ The workflow-enforcement hooks all support:
 - Opt-in per `project-config.json → hooks.enabled[]` — consumers enable
   individually based on their workflow shape.
 
+## Protected state fields (`.claude/active-task.json`)
+
+Every workflow-enforcement hook reads its decision from `.claude/active-task.json`.
+An agent that writes the file directly can flip all of them — that's the bypass
+vector the 2026-05-27 polads incident exploited (4 commits pushed directly to
+staging, all gates skipped, by manually editing this file). The
+`protect-active-task-state` hook closes the bypass at the local layer.
+
+| Field | Bypass value | Marker (unlocks the write) | Emitted by |
+|---|---|---|---|
+| `selfReviewPassed` | `true` | `/tmp/.claude-state-marker-selfReviewPassed-<HEAD_SHA>` | `post-self-review.sh` on `Self-Review PASSED` in the self-reviewer subagent's output |
+| `reviewAddressed` | any non-empty value | `/tmp/.claude-state-marker-reviewAddressed-<HEAD_SHA>` | `/ship-pr` Phase 6 (structured) or Phase 6.2 (handoff-to-orchestrator) |
+| `parentStatus` | `"Waiting for UAT"` | `/tmp/.claude-state-marker-parentStatus-<HEAD_SHA>` | `/ship-pr` Phase 6.5 after the WfUAT transition succeeds |
+| `mondayReconciledShas` | array grew (append) | `/tmp/.claude-state-marker-mondayReconciledShas-<HEAD_SHA>` | `/ship-pr` Phase 10 + `/babysit-prs` Phase 3 after `gh pr merge` succeeds |
+| `allowMainCheckout` | `true` | **none — always blocked** | direct user authorization only |
+
+**Marker contract**:
+- Markers are SHA-scoped — they unlock at the current `HEAD` only. New commits
+  invalidate prior markers, so an old marker can't be reused after more code lands.
+- Each marker unlocks ONE field. A `selfReviewPassed` marker doesn't unlock
+  `reviewAddressed`.
+- Skills emit markers via the canonical wrapper:
+  ```bash
+  bash ${CLAUDE_PLUGIN_ROOT}/scripts/emit-state-marker.sh <field>
+  ```
+- The plugin's lifecycle skills (`/self-review`, `/ship-pr`, `/babysit-prs`)
+  already emit the right markers at the right phases — no agent action required
+  unless the agent is writing a custom workflow.
+
+**Honest caveat**: markers are bash files in `/tmp`. A determined agent can
+emit them via Bash itself. This hook makes the bypass *visible* in the
+transcript (the bash command is audited) and *inconvenient* (extra step). The
+unforgeable complement is **server-side GitHub branch protection** on
+`main`/`staging` — configured per-consumer-repo, not by the plugin. The
+`bash-guard` gate (f) is the local complement: it hard-blocks `git push` to
+any branch in `project-config.git.protectedBranches[]` (default:
+`main, staging, master, production, prod`) regardless of marker state. Set the
+list to `[]` to disable just gate (f); set to a custom list to restrict
+protection to specific branches.
+
+**Adopting in a consumer project**:
+1. Add `protect-active-task-state` to `.claude/project-config.json →
+   hooks.enabled[]`. Co-enable `post-self-review` in the same list — it is
+   the sole emitter of the `selfReviewPassed` marker, so without it the agent
+   cannot complete the self-review lifecycle (the user would have to manually
+   set `selfReviewPassed: true` via direct file edit).
+2. Set `git.protectedBranches[]` if the defaults need adjusting.
+3. Configure GitHub branch protection on the same branches (one-time, per repo):
+   ```bash
+   gh api -X PUT repos/:owner/:repo/branches/main/protection \
+     -f required_status_checks='{"strict":true,"contexts":[]}' \
+     -F enforce_admins=true \
+     -f required_pull_request_reviews='{"required_approving_review_count":1}' \
+     -F restrictions=null
+   ```
+4. Off-ramp for emergencies: `allowMainCheckout: true` in the state file (set by
+   the user via direct Edit, NOT by the agent — the hook explicitly blocks
+   agent-set `allowMainCheckout` even with a marker present).
+
 ## When this rule is loaded
 
 - Editing an `Agent(prompt=...)` dispatch from the orchestrator
@@ -216,3 +275,9 @@ The workflow-enforcement hooks all support:
 - **2026-05-24** (PolAds task #2938404391, PR #385): hooks first shipped as
   project-level in polads.eu. Migrated to plugin v0.15.0 (this rule + the
   hooks themselves).
+- **2026-05-28** (Dev-Tasks Plugin task #2947098385): added `bash-guard` gate
+  (f) (protected-branch push block) and the `protect-active-task-state`
+  integrity hook. Driver: 2026-05-27 polads incident where an agent pushed
+  4 commits directly to staging by manually editing `active-task.json` to
+  set `selfReviewPassed: true`, `reviewAddressed: handoff-to-orchestrator`,
+  `allowMainCheckout: true`. Plugin v0.16.0.

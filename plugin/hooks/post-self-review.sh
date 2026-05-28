@@ -35,9 +35,13 @@ except Exception:
     pass
 " 2>/dev/null)
 
-if [ "$SUBAGENT" != "self-reviewer" ]; then
-  exit 0
-fi
+# Match both the bare name and the plugin-namespaced form. Claude Code passes
+# the fully-qualified `dev-tasks:self-reviewer` when the agent is invoked from
+# an installed plugin; the bare form covers project-local definitions.
+case "$SUBAGENT" in
+  self-reviewer|dev-tasks:self-reviewer) ;;
+  *) exit 0 ;;
+esac
 
 # Parse the agent output + extract structured findings + append.
 # All work delegated to a Python parser to keep the hook fast and the parser
@@ -78,6 +82,37 @@ fi
 if [ "$APPEND_EXIT" -ne 0 ]; then
   echo "post-self-review: append failed (non-blocking)" >&2
   echo "$APPEND_OUTPUT" >&2
+fi
+
+# Marker emission: if the self-reviewer agent's output contains "Self-Review PASSED",
+# emit the marker that unlocks `selfReviewPassed=true` in protect-active-task-state.
+# Tied to the subagent's actual stdout — an orchestrator that didn't run /self-review
+# has nothing to emit unless it explicitly fakes the marker via Bash (visible in
+# the transcript).
+PASSED=$(echo "$INPUT" | python3 -c "
+import sys, json
+try:
+    data = json.load(sys.stdin)
+except Exception:
+    sys.exit(0)
+resp = data.get('tool_response', '')
+if isinstance(resp, dict):
+    text = resp.get('content') or resp.get('output') or resp.get('text') or ''
+    if isinstance(text, list):
+        text = '\n'.join(p.get('text','') if isinstance(p, dict) else str(p) for p in text)
+elif isinstance(resp, str):
+    text = resp
+else:
+    text = ''
+if 'Self-Review PASSED' in str(text):
+    print('YES')
+" 2>/dev/null)
+
+if [ "$PASSED" = "YES" ]; then
+  EMITTER="$SCRIPT_DIR/../scripts/emit-state-marker.sh"
+  if [ -x "$EMITTER" ]; then
+    (cd "$PROJECT_ROOT" && bash "$EMITTER" selfReviewPassed >/dev/null 2>&1) || true
+  fi
 fi
 
 exit 0

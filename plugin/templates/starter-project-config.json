@@ -8,7 +8,8 @@
     "worktreeRoot": ".claude/worktrees",
     "autoMergePolicy": {
       "main": "never"
-    }
+    },
+    "protectedBranches": ["main", "staging", "master", "production", "prod"]
   },
   "monday": {
     "productId": "REQUIRED — Monday Products-board item ID for this product",
@@ -50,7 +51,8 @@
       "subtask-progress-gate",
       "demo-url-required",
       "stop-waiting-for-uat-stage",
-      "stop-monday-reconciled-check"
+      "stop-monday-reconciled-check",
+      "protect-active-task-state"
     ]
   },
   "e2e": {

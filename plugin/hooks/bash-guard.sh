@@ -1,10 +1,13 @@
 #!/bin/bash
 
 # STEP-wide policy: gates (a) destructive commands (incl. --force), (b)
-# self-review before commit, and (c) pre-push validation marker are always-on
-# regardless of project-config.hooks.enabled[]. The previous opt-in gate was
-# lifted as part of the multi-project alignment (Phase 3). Gates (d)(e) — i18n
-# parity — remain conditional on project-config.i18n.enabled = true.
+# self-review before commit, (c) pre-push validation marker, and (f) protected-
+# branch push block are always-on regardless of project-config.hooks.enabled[].
+# The previous opt-in gate was lifted as part of the multi-project alignment
+# (Phase 3). Gates (d)(e) — i18n parity — remain conditional on
+# project-config.i18n.enabled = true. Gate (f) is configurable via
+# project-config.git.protectedBranches[] (empty array disables; default list:
+# main staging master production prod).
 source "$(dirname "${BASH_SOURCE[0]}")/lib/config-reader.sh"
 
 # Redirect stdout to stderr so block messages (exit 2) reach Claude Code
@@ -12,7 +15,7 @@ source "$(dirname "${BASH_SOURCE[0]}")/lib/config-reader.sh"
 exec >&2
 
 # Hook: PreToolUse (Bash)
-# Five gates:
+# Six gates:
 #   (a) Block destructive commands
 #   (b) Block git commit without self-review (Fix 1)
 #   (c) SHA-scoped pre-push gate (Fix 5)
@@ -21,6 +24,9 @@ exec >&2
 #       project-config.i18n.enabled = true.
 #   (e) i18n completeness — block commit when project-config.i18n.parityHookMode = "block"
 #       and the branch has modified some but not all configured locale files.
+#   (f) Protected-branch push block — hard-refuse `git push` to any branch in
+#       project-config.git.protectedBranches[] (default: main staging master
+#       production prod). No marker bypass. Set list to [] to disable.
 # Input: JSON on stdin with tool_input.command
 
 # Read tool input from stdin (consumed once)
@@ -248,6 +254,76 @@ print(f'Missing ({len(missing)}): {\", \".join(missing)}')
       fi
     fi
   fi
+fi
+
+# (f) Protected-branch push block: hard-refuse `git push` whose target ref
+# matches any branch in project-config.git.protectedBranches[] (default list:
+# main staging master production prod). No marker bypass — direct push to
+# these branches must go through a PR. Server-side GitHub branch protection
+# is the unforgeable complement; this hook stops bypass at the local layer.
+if echo "$ACTUAL_CMD" | grep -q "git push"; then
+  # Distinguish three cases:
+  #   key absent (or .git absent)        → use default list
+  #   key explicitly [] (or [null])      → gate disabled
+  #   key set to ["a", "b", ...]         → use that list
+  PROTECTED_RAW=$(read_project_config '((.git // {}).protectedBranches // "__DEFAULT__") | if type == "string" then . else join(" ") end')
+  if [ "$PROTECTED_RAW" = "__DEFAULT__" ]; then
+    PROTECTED_BRANCHES="main staging master production prod"
+  else
+    PROTECTED_BRANCHES="$PROTECTED_RAW"  # may be empty string → gate disabled
+  fi
+
+  # Parse target ref. Forms: `git push`, `git push origin`, `git push origin BRANCH`,
+  # `git push -u origin BRANCH`, `git push origin SRC:DST`, `git push origin :DST`,
+  # `git push --delete origin BRANCH`, `git push origin HEAD:DST`.
+  TARGET_REF=$(echo "$ACTUAL_CMD" | python3 -c "
+import sys, shlex
+raw = sys.stdin.read().strip()
+try:
+    parts = shlex.split(raw)
+except ValueError:
+    parts = raw.split()
+try:
+    push_idx = parts.index('push')
+except ValueError:
+    print(''); sys.exit(0)
+rest = [p for p in parts[push_idx+1:] if not p.startswith('-')]
+target = ''
+if len(rest) >= 2:
+    refspec = rest[1]
+    target = refspec.split(':')[-1] if ':' in refspec else refspec
+elif len(rest) == 1 and ':' in rest[0]:
+    target = rest[0].split(':')[-1]
+if target in ('HEAD', ''):
+    target = ''
+print(target)
+" 2>/dev/null)
+
+  if [ -z "$TARGET_REF" ]; then
+    TARGET_REF=$(cd "$PROJECT_ROOT" && git rev-parse --abbrev-ref HEAD 2>/dev/null)
+  fi
+  TARGET_REF="${TARGET_REF#refs/heads/}"
+  # Strip force-push `+` prefix (e.g. `git push origin +main`) — otherwise an
+  # agent bypasses gate (f) by prepending `+` to the refspec.
+  TARGET_REF="${TARGET_REF#+}"
+
+  for protected in $PROTECTED_BRANCHES; do
+    if [ "$TARGET_REF" = "$protected" ]; then
+      echo "BLOCKED: Direct push to protected branch '$TARGET_REF' is forbidden."
+      echo ""
+      echo "Protected branches (from project-config.git.protectedBranches[]):"
+      echo "  $PROTECTED_BRANCHES"
+      echo ""
+      echo "All changes to protected branches must land via a Pull Request:"
+      echo "  1. Push to a feature branch: git push origin feat/<slug>"
+      echo "  2. Open a PR via /ship-pr (build + lint + test + schema + PR creation)"
+      echo "  3. Bot review + CI complete, then merge via the PR"
+      echo ""
+      echo "Server-side complement: configure GitHub branch protection on '$TARGET_REF'"
+      echo "to enforce this at the platform level (prevents bypass via direct git push)."
+      exit 2
+    fi
+  done
 fi
 
 # (c) SHA-scoped pre-push gate: if command contains 'git push', check marker + SHA

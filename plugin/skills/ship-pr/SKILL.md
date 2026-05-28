@@ -95,7 +95,11 @@ Branch on execution context per `.claude/rules/agent-autonomy.md`. Quick check: 
 
 **Subagent handoff path** (no `Monitor`):
 1. PR pushed (Phases 2–3).
-2. Set `reviewAddressed: "handoff-to-orchestrator"` in state file (escape-hatch for `stop-task-check.sh` and `stop-ci-green-check.sh`).
+2. **Emit the reviewAddressed marker** that unlocks `protect-active-task-state` before writing the field:
+   ```bash
+   bash ${CLAUDE_PLUGIN_ROOT}/scripts/emit-state-marker.sh reviewAddressed
+   ```
+   Then set `reviewAddressed: "handoff-to-orchestrator"` in state file (escape-hatch for `stop-task-check.sh` and `stop-ci-green-check.sh`).
 3. SendMessage main session with PR URL + state summary.
 4. Trigger Phase 10 cleanup. End.
 
@@ -107,7 +111,7 @@ Branch on execution context per `.claude/rules/agent-autonomy.md`. Quick check: 
 5. For each POLISH finding: post a PR-reply declining it (category + reason). Capture the GitHub comment ID returned.
 6. For Corridor declines: call `mcp__plugin_corridor_corridor__updateFindingState({ findingId, state: "closed", closedReasonCategory, closedReason })`.
 7. Loop: fix BLOCKERs + cheap IMPROVEMENTs → re-push → restart Monitors → re-poll Corridor → re-triage. No round cap; regression-loop escalation if 3 consecutive rounds introduce new BLOCKERs.
-8. Write structured `reviewAddressed` to active-task.json (see schema below).
+8. **Emit the reviewAddressed marker** (`bash ${CLAUDE_PLUGIN_ROOT}/scripts/emit-state-marker.sh reviewAddressed`), then write structured `reviewAddressed` to active-task.json (see schema below). The marker unlocks `protect-active-task-state`.
 9. Merge via `gh pr merge --admin --squash` (NEVER `--delete-branch` — collides with worktrees). The `pre-merge-review-gate` hook validates step 8 before allowing this.
 
 **`reviewAddressed` structured schema** (written in step 8):
@@ -168,7 +172,11 @@ Field semantics:
 
 20c. `mcp__plugin_dev-tasks_dev-tasks__updateTask({ itemId: taskId, status: "Waiting for UAT" })`. On rejection, fix the named field and retry.
 
-20c.1. **Mirror parent status to active-task.json** (required when `stop-waiting-for-uat-stage` is enabled — else the hook fires at session-end because subtasks are all `done` but local state still shows the parent at "In Progress"). Set `parentStatus: "Waiting for UAT"` in `.claude/active-task.json`. Single jq-style edit; no other fields change.
+20c.1. **Mirror parent status to active-task.json** (required when `stop-waiting-for-uat-stage` is enabled — else the hook fires at session-end because subtasks are all `done` but local state still shows the parent at "In Progress"). Emit the parentStatus marker first, then write the field:
+   ```bash
+   bash ${CLAUDE_PLUGIN_ROOT}/scripts/emit-state-marker.sh parentStatus
+   ```
+   Then set `parentStatus: "Waiting for UAT"` in `.claude/active-task.json`. Single jq-style edit; no other fields change.
 
 ### Phase 6.6: Autonomous merge (default-flow PRs)
 
@@ -224,7 +232,12 @@ Hotfix flow: parent still at `In Progress`. Phase 10 sets `Done` directly.
 30. Post-merge sequence (order matters for `allowMainCheckout: true` — `gh pr merge` switches to `$defaultBase` and deletes local branch):
     1. Mark remaining subtasks `Done` via `manageSubtasks` (MCP call — no Edit/Write hook).
     2. `gh pr merge --admin --squash` (no `--delete-branch`).
-    3. **Capture the merge SHA + append to `mondayReconciledShas[]`** (required when `stop-monday-reconciled-check` is enabled — else the hook fires at session-end because a merge landed during the session but the SHA isn't recorded as reconciled). Run `mergedSHA=$(gh pr view {N} --json mergeCommit --jq .mergeCommit.oid)`, then append to `.claude/active-task.json` `mondayReconciledShas[]` (initialize as `[]` if absent). Do this BEFORE the state-file delete in step 4.
+    3. **Capture the merge SHA + append to `mondayReconciledShas[]`** (required when `stop-monday-reconciled-check` is enabled — else the hook fires at session-end because a merge landed during the session but the SHA isn't recorded as reconciled). Emit the marker first, then perform the append:
+       ```bash
+       bash ${CLAUDE_PLUGIN_ROOT}/scripts/emit-state-marker.sh mondayReconciledShas
+       mergedSHA=$(gh pr view {N} --json mergeCommit --jq .mergeCommit.oid)
+       ```
+       Then append `$mergedSHA` to `.claude/active-task.json` `mondayReconciledShas[]` (initialize as `[]` if absent). Do this BEFORE the state-file delete in step 4. The marker unlocks `protect-active-task-state`.
     4. Immediately `rm .claude/active-task.json` — BEFORE any Edit/Write.
     5. Post final updates via `createUpdate`.
     
