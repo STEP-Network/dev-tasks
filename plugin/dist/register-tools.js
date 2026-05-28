@@ -207,9 +207,9 @@ export function registerAllTools(server) {
         return { content: [{ type: "text", text: result }] };
     });
     // =========================================================================
-    // Description Docs (Monday Doc column doc_mm3sg1kr — replaces legacy long_text)
+    // Description Docs (Monday Doc column doc_mm3sg1kr)
     // =========================================================================
-    server.tool("getTaskDescriptionDoc", "Read the task description doc (Monday Doc on column doc_mm3sg1kr) as markdown. New tasks have descriptions stored here (uncapped length) instead of the legacy long_text_mm0mcp77 column (2000-char cap). getTask transparently reads this with a fallback to the legacy column for pre-migration tasks; use this tool for direct doc-level access.", GetTaskDescriptionDocSchema.shape, async (args) => {
+    server.tool("getTaskDescriptionDoc", "Read the task description doc (Monday Doc on column doc_mm3sg1kr) as markdown. Tasks store descriptions on this doc column (uncapped length); getTask reads it transparently. Use this tool for direct doc-level access (avoids the createTask/updateTask round-trip when you only want the description content).", GetTaskDescriptionDocSchema.shape, async (args) => {
         const result = await getTaskDescriptionDoc(args);
         return { content: [{ type: "text", text: result }] };
     });

@@ -23,6 +23,10 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 const executeMondayQueryMock = vi.fn();
 vi.mock("../../monday-client.ts", () => ({
   executeMondayQuery: (...args: unknown[]) => executeMondayQueryMock(...args),
+  // Re-export the API version constants needed by doc-utils.ts (imported
+  // transitively by updateTask). Mock returns the same string the real module
+  // exports — only the executeMondayQuery call is mocked.
+  DOC_API_VERSION: "2025-10",
 }));
 
 // People lookup is needed by claimTask for owner assignment. The specific
@@ -225,7 +229,10 @@ describe("updateTask auto-pull integration", () => {
             { id: TASK_COLUMNS.type, text: "Feature" },
             { id: TASK_COLUMNS.priority, text: "Medium" },
             { id: TASK_COLUMNS.epic, linked_items: [{ id: "1", name: "Epic" }] },
-            { id: TASK_COLUMNS.description, text: "A description" },
+            {
+              id: TASK_COLUMNS.descriptionDoc,
+              value: JSON.stringify({ files: [{ fileId: "abc", objectId: 12345 }] }),
+            },
             { id: "long_text_mm0pqaxy", text: "Acceptance criteria" },
           ],
           subitems: [

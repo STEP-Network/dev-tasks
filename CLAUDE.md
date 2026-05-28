@@ -240,26 +240,15 @@ For consumer projects that opt in (`.claude/project-config.json` → `e2e.enable
 
 See `plugin/skills/write-uat-spec/SKILL.md` for the full contract and `plugin/skills/write-uat-spec/EXAMPLES.md` for two worked walkthroughs (authenticated SaaS flow, public marketing flow).
 
-### Task description doc migration (v0.17.0)
+### Task description doc (v0.17.0 → v0.18.0 cleanup complete)
 
-Task descriptions now live in a Monday doc column (`doc_mm3sg1kr`) instead of the legacy `long_text_mm0mcp77` text column (capped at 2000 chars). The plain `description` parameter on `createTask`/`updateTask` writes through transparently; `getTask` reads the doc first with a fallback to the legacy column for un-backfilled tasks.
+Task descriptions live in a Monday doc column (`doc_mm3sg1kr`) — uncapped length. The plain `description` parameter on `createTask`/`updateTask` writes through transparently; `getTask` reads the doc.
 
-**New MCP tools** for direct doc access (parallel to UAT-doc tools): `createTaskDescriptionDoc`, `updateTaskDescriptionDoc`, `getTaskDescriptionDoc`.
+**MCP tools** for direct doc access (parallel to UAT-doc tools): `createTaskDescriptionDoc`, `updateTaskDescriptionDoc`, `getTaskDescriptionDoc`.
 
-**Refinement-gate** accepts "doc attached on `doc_mm3sg1kr`" as evidence of description (no length check on doc content — content quality enforced server-side via `validateReadyToStart`).
+**Refinement-gate** accepts "doc attached on `doc_mm3sg1kr`" as evidence of description (no length check on the doc content — content quality enforced server-side via `validateReadyToStart`).
 
-**One-off backfill** copies existing long_text values into freshly-created docs:
-
-```bash
-cd plugin
-export MONDAY_API_KEY=...
-npx tsx scripts/backfill-description-to-doc.ts            # dry run
-npx tsx scripts/backfill-description-to-doc.ts --apply    # actually write
-```
-
-Idempotent — re-runs skip tasks that already have a doc attached.
-
-**After backfill verified**, delete `long_text_mm0mcp77` from the Tasks board on the Monday admin UI (no API for column deletion). A follow-up plugin PR drops the legacy fallback reads.
+**Migration history** (2026-05-28): the prior `long_text_mm0mcp77` column was migrated to `doc_mm3sg1kr` via `plugin/scripts/backfill-description-to-doc.ts` (one-off, ~662 tasks). After backfill the legacy column was deleted from Monday admin UI and v0.18.0 dropped the fallback reads from `getTask` / `validateReadyToStart` / `refinement-gate.sh`.
 
 ### Quality over speed
 
@@ -267,7 +256,7 @@ Sourced from a downstream consumer's UAT 2026-05-22 retro: 4 of 5 fan-out agents
 
 **The four most-skipped steps** — each gets a workflow-enforcement hook (opt-in via `project-config.json` → `hooks.enabled[]`):
 
-1. **`/refine-task` quality** — `refinement-gate` (PreToolUse `claimTask`) refuses claims when the task lacks type, priority, epic, description (<200 chars), AC, OR has subtasks missing type/description/estimatedHours.
+1. **`/refine-task` quality** — `refinement-gate` (PreToolUse `claimTask`) refuses claims when the task lacks type, priority, epic, description (no doc attached on `doc_mm3sg1kr`), AC, OR has subtasks missing type/description/estimatedHours.
 2. **`/log-progress` per subtask** — `subtask-progress-gate` (PreToolUse Bash `git push`) refuses push when subtasks exist but none Done-with-actualHours.
 3. **UAT doc + Waiting-for-UAT flip** — `stop-waiting-for-uat-stage` (Stop) refuses session exit when all subtasks Done but parent task not at Waiting for UAT. `demo-url-required` (PreToolUse `updateTask`) refuses the WfUAT transition without a valid preview URL (validated against `project-config.ci.previewUrlPattern`).
 4. **Monday reconciliation after merge** — `stop-monday-reconciled-check` (Stop) refuses session exit when a merge commit landed but its SHA isn't recorded as reconciled.

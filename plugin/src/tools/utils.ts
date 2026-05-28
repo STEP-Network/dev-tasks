@@ -453,7 +453,6 @@ export async function validateReadyToStart(
     TASK_COLUMNS.type,
     TASK_COLUMNS.priority,
     TASK_COLUMNS.epic,
-    TASK_COLUMNS.description,
     TASK_COLUMNS.descriptionDoc,
     TASK_COLUMNS.acceptanceCriteria,
   ].map(c => `"${c}"`).join(", ");
@@ -505,22 +504,19 @@ export async function validateReadyToStart(
     };
   });
 
-  // Description resolution: prefer proposed input; else fall back to long_text
-  // (legacy column, pre-migration tasks); else accept the descriptionDoc column
-  // when a doc is attached. The doc-attached path uses a sentinel string so the
-  // "is empty" check in classifyReadyToStartBlockers passes without paying for
-  // an export_markdown_from_doc round-trip (the actual content is whatever the
-  // caller wrote via createTaskDescriptionDoc / write paths).
+  // Description resolution: prefer proposed input; else accept the
+  // descriptionDoc column when a doc is attached. The doc-attached path uses a
+  // sentinel string so the "is empty" check in classifyReadyToStartBlockers
+  // passes without paying for an export_markdown_from_doc round-trip — the
+  // actual content is whatever the caller wrote via createTaskDescriptionDoc
+  // or the createTask/updateTask description write path.
   let descriptionForCheck: string | undefined = proposed.description;
   if (descriptionForCheck === undefined) {
-    descriptionForCheck = getColumnText(colMap, TASK_COLUMNS.description);
-    if (!descriptionForCheck?.trim()) {
-      const docVal = getColumnValue(colMap, TASK_COLUMNS.descriptionDoc);
-      if (docVal && typeof docVal === "object") {
-        const files = (docVal as any).files;
-        if (Array.isArray(files) && files.length > 0) {
-          descriptionForCheck = "(stored in description doc)";
-        }
+    const docVal = getColumnValue(colMap, TASK_COLUMNS.descriptionDoc);
+    if (docVal && typeof docVal === "object") {
+      const files = (docVal as any).files;
+      if (Array.isArray(files) && files.length > 0) {
+        descriptionForCheck = "(stored in description doc)";
       }
     }
   }
