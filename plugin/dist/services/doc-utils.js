@@ -91,7 +91,7 @@ export function extractDocObjectId(docValue) {
  * if Monday doesn't find a doc behind that object_id (shouldn't happen for
  * docs created through this codebase, but defensive).
  */
-async function resolveDocPrimaryId(objectId) {
+export async function resolveDocPrimaryId(objectId) {
     const query = `query { docs(object_ids: [${objectId}]) { id } }`;
     const response = await executeMondayQuery(query, undefined, DOC_OPTS);
     const raw = response.docs?.[0]?.id;

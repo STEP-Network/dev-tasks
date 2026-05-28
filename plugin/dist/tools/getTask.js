@@ -1,8 +1,7 @@
 import { executeMondayQuery } from "../monday-client.js";
 import { BOARDS, TASK_COLUMNS, SUBTASK_COLUMNS } from "../constants.js";
 import { evaluatePublicVisibility, getColumnText, getColumnValue, getLinkedItems, getMirrorDisplayValue, getLinkUrl, mondayItemUrl, parseMondayDate, formatSubtask, formatError, } from "./utils.js";
-import { extractDocObjectId, readDocAsMarkdown, } from "../services/doc-utils.js";
-import { DOC_API_VERSION } from "../monday-client.js";
+import { extractDocObjectId, readDocAsMarkdown, resolveDocPrimaryId, } from "../services/doc-utils.js";
 export async function getTask(args) {
     try {
         const { itemId, format = "markdown" } = args;
@@ -91,14 +90,7 @@ export async function getTask(args) {
         const descObjectId = extractDocObjectId(descDocValue);
         if (descObjectId) {
             try {
-                const docIdQuery = `query { docs(object_ids: [${descObjectId}]) { id } }`;
-                const docIdResp = await executeMondayQuery(docIdQuery, undefined, { apiVersion: DOC_API_VERSION });
-                const rawDocId = docIdResp.docs?.[0]?.id;
-                const docId = typeof rawDocId === "number"
-                    ? rawDocId
-                    : typeof rawDocId === "string" && /^\d+$/.test(rawDocId)
-                        ? Number(rawDocId)
-                        : undefined;
+                const docId = await resolveDocPrimaryId(descObjectId);
                 if (docId) {
                     description = (await readDocAsMarkdown(docId)).trim();
                 }

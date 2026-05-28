@@ -16,8 +16,8 @@ import {
 import {
   extractDocObjectId,
   readDocAsMarkdown,
+  resolveDocPrimaryId,
 } from "../services/doc-utils.ts";
-import { DOC_API_VERSION } from "../monday-client.ts";
 
 interface TaskLinkedRef { id: number; name: string; url: string }
 
@@ -157,15 +157,7 @@ export async function getTask(args: GetTaskInput): Promise<string> {
     const descObjectId = extractDocObjectId(descDocValue);
     if (descObjectId) {
       try {
-        const docIdQuery = `query { docs(object_ids: [${descObjectId}]) { id } }`;
-        const docIdResp = await executeMondayQuery<any>(docIdQuery, undefined, { apiVersion: DOC_API_VERSION });
-        const rawDocId = docIdResp.docs?.[0]?.id;
-        const docId =
-          typeof rawDocId === "number"
-            ? rawDocId
-            : typeof rawDocId === "string" && /^\d+$/.test(rawDocId)
-              ? Number(rawDocId)
-              : undefined;
+        const docId = await resolveDocPrimaryId(descObjectId);
         if (docId) {
           description = (await readDocAsMarkdown(docId)).trim();
         }
