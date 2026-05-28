@@ -10,6 +10,7 @@ import {
   AGENT_ID,
 } from "../constants.ts";
 import type { ConvertBugToTaskInput } from "../schemas.ts";
+import { ensureItemDoc, writeDocContentReplacing } from "../services/doc-utils.ts";
 import { buildColumnValues, getColumnText, getLinkedItems, resolveMaintenanceEpicId, formatError } from "./utils.ts";
 
 export async function convertBugToTask(args: ConvertBugToTaskInput): Promise<string> {
@@ -87,9 +88,8 @@ export async function convertBugToTask(args: ConvertBugToTaskInput): Promise<str
     taskColumnValues[TASK_COLUMNS.priority] = { index: TASK_PRIORITY[taskPriority] };
     taskColumnValues[TASK_COLUMNS.status] = { index: TASK_STATUS["Ready to Start"] };
 
-    if (fullDescription) {
-      taskColumnValues[TASK_COLUMNS.description] = { text: fullDescription };
-    }
+    // fullDescription is written to the descriptionDoc (doc column) AFTER
+    // create_item — needs the new taskId to attach the doc.
 
     if (resolvedEpicId) {
       taskColumnValues[TASK_COLUMNS.epic] = { item_ids: [resolvedEpicId] };
@@ -126,6 +126,25 @@ export async function convertBugToTask(args: ConvertBugToTaskInput): Promise<str
 
     if (!newTask) {
       return formatError("Failed to create task from bug.");
+    }
+
+    // Write the synthesized description to the doc column. Best-effort.
+    if (fullDescription) {
+      const newTaskId = Number(newTask.id);
+      try {
+        const docId = await ensureItemDoc(
+          newTaskId,
+          TASK_COLUMNS.descriptionDoc,
+          `Description — Task #${newTaskId}: ${bugName}`,
+        );
+        await writeDocContentReplacing(docId, fullDescription);
+      } catch (e) {
+        console.error(
+          `convertBugToTask: failed to write description doc for new task #${newTaskId}: ${
+            e instanceof Error ? e.message : String(e)
+          }`,
+        );
+      }
     }
 
     // Step 3: Link the new task to the bug (update bug's connectedTasks column)

@@ -590,3 +590,18 @@ export const UpdateTaskUatDocSchema = z.object({
     markdown: z.string().describe("Markdown content"),
     overwrite: z.boolean().optional().default(true).describe("true (default) replaces the doc; false appends to existing content"),
 });
+// =============================================================================
+// Description Doc tools (column doc_mm3sg1kr on Tasks board)
+// =============================================================================
+export const GetTaskDescriptionDocSchema = z.object({
+    taskId: z.number().describe("Task item ID"),
+});
+export const CreateTaskDescriptionDocSchema = z.object({
+    taskId: z.number().describe("Task item ID — must not already have a description doc; use updateTaskDescriptionDoc to modify an existing one"),
+    markdown: z.string().describe("Markdown content for the task description (replaces the legacy long_text description column which capped at 2000 chars)"),
+});
+export const UpdateTaskDescriptionDocSchema = z.object({
+    taskId: z.number().describe("Task item ID — must already have a description doc; use createTaskDescriptionDoc otherwise"),
+    markdown: z.string().describe("Markdown content"),
+    overwrite: z.boolean().optional().default(true).describe("true (default) replaces the doc; false appends to existing content"),
+});

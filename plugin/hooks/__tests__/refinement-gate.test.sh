@@ -195,6 +195,25 @@ assert "BLOCK when no epic linked via any path" "$EXIT_CODE" "2"
 assert_contains "block message names epicId" "$OUTPUT" "epicId"
 
 # -----------------------------------------------------------------------------
+# Test 13: PASS when description is in the descriptionDoc column (doc_mm3sg1kr)
+# and the legacy long_text column is empty. Hook accepts "doc attached" as
+# evidence of refinement without paying for an export call.
+# -----------------------------------------------------------------------------
+FIXTURE_DESC_DOC_ONLY='{"data":{"items":[{"id":"123","name":"desc in doc","board":{"id":"5091706356"},"column_values":[{"id":"task_type","text":"Fix"},{"id":"task_priority","text":"High"},{"id":"task_epic","text":"Epic"},{"id":"long_text_mm0mcp77","text":""},{"id":"doc_mm3sg1kr","text":"","value":"{\"files\":[{\"fileId\":\"abc\",\"objectId\":12345}]}"},{"id":"long_text_mm0pqaxy","text":"AC"}],"subitems":[{"id":"s1","name":"sub","column_values":[{"id":"color_a","text":"Backend"},{"id":"long_text","text":"do"},{"id":"numeric_h","text":"1"}]}]}]}}'
+OUTPUT=$(run_hook 123 "$FIXTURE_DESC_DOC_ONLY")
+EXIT_CODE=$?
+assert "PASS when description is in descriptionDoc (long_text empty)" "$EXIT_CODE" "0"
+
+# -----------------------------------------------------------------------------
+# Test 14: BLOCK when description column AND doc column both empty.
+# -----------------------------------------------------------------------------
+FIXTURE_DESC_BOTH_EMPTY='{"data":{"items":[{"id":"123","name":"no desc","board":{"id":"5091706356"},"column_values":[{"id":"task_type","text":"Fix"},{"id":"task_priority","text":"High"},{"id":"task_epic","text":"Epic"},{"id":"long_text_mm0mcp77","text":""},{"id":"doc_mm3sg1kr","text":"","value":""},{"id":"long_text_mm0pqaxy","text":"AC"}],"subitems":[{"id":"s1","name":"sub","column_values":[{"id":"color_a","text":"Backend"},{"id":"long_text","text":"do"},{"id":"numeric_h","text":"1"}]}]}]}}'
+OUTPUT=$(run_hook 123 "$FIXTURE_DESC_BOTH_EMPTY")
+EXIT_CODE=$?
+assert "BLOCK when both description column and doc empty" "$EXIT_CODE" "2"
+assert_contains "block message mentions description" "$OUTPUT" "description"
+
+# -----------------------------------------------------------------------------
 echo ""
 echo "==================================================="
 echo "refinement-gate tests: $PASS_COUNT passed, $FAIL_COUNT failed"

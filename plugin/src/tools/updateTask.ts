@@ -8,6 +8,11 @@ import {
   AGENT_ID,
 } from "../constants.ts";
 import type { UpdateTaskInput } from "../schemas.ts";
+import {
+  ensureItemDoc,
+  fetchItemName,
+  writeDocContentReplacing,
+} from "../services/doc-utils.ts";
 import { autoAssignVersionForTask } from "../services/auto-version.ts";
 import {
   maybeHandleBounceback,
@@ -197,10 +202,9 @@ export async function updateTask(args: UpdateTaskInput): Promise<string> {
       changes.push(`Type -> ${args.type}`);
     }
 
-    if (args.description !== undefined) {
-      columnValues[TASK_COLUMNS.description] = { text: args.description };
-      changes.push(`Description updated`);
-    }
+    // Description is written to the descriptionDoc (doc column), not long_text.
+    // Handled as a separate post-mutation step below since it needs its own
+    // doc-API calls (ensureItemDoc + writeDocContentReplacing).
 
     if (args.dueDate !== undefined) {
       columnValues[TASK_COLUMNS.dueDate] = { date: args.dueDate };
@@ -308,6 +312,25 @@ export async function updateTask(args: UpdateTaskInput): Promise<string> {
         }
       `;
       await executeMondayQuery<any>(mutation);
+    }
+
+    // Write description to the doc column. Best-effort: surface failure but
+    // don't undo the column updates above.
+    if (args.description !== undefined) {
+      try {
+        const name = await fetchItemName(itemId);
+        const docId = await ensureItemDoc(
+          itemId,
+          TASK_COLUMNS.descriptionDoc,
+          name ? `Description — Task #${itemId}: ${name}` : `Description — Task #${itemId}`,
+        );
+        await writeDocContentReplacing(docId, args.description);
+        changes.push(`Description updated`);
+      } catch (e) {
+        warnings.push(
+          `Description write failed: ${e instanceof Error ? e.message : String(e)}`,
+        );
+      }
     }
 
     // Version-side automation after a status change. Three steps run in order

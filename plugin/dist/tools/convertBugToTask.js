@@ -1,5 +1,6 @@
 import { executeMondayQuery } from "../monday-client.js";
 import { BOARDS, TASK_COLUMNS, TASK_STATUS, TASK_PRIORITY, TASK_TYPE, BUG_COLUMNS, AGENT_ID, } from "../constants.js";
+import { ensureItemDoc, writeDocContentReplacing } from "../services/doc-utils.js";
 import { buildColumnValues, getColumnText, getLinkedItems, resolveMaintenanceEpicId, formatError } from "./utils.js";
 export async function convertBugToTask(args) {
     try {
@@ -64,9 +65,8 @@ export async function convertBugToTask(args) {
         taskColumnValues[TASK_COLUMNS.type] = { index: TASK_TYPE["Fix"] };
         taskColumnValues[TASK_COLUMNS.priority] = { index: TASK_PRIORITY[taskPriority] };
         taskColumnValues[TASK_COLUMNS.status] = { index: TASK_STATUS["Ready to Start"] };
-        if (fullDescription) {
-            taskColumnValues[TASK_COLUMNS.description] = { text: fullDescription };
-        }
+        // fullDescription is written to the descriptionDoc (doc column) AFTER
+        // create_item — needs the new taskId to attach the doc.
         if (resolvedEpicId) {
             taskColumnValues[TASK_COLUMNS.epic] = { item_ids: [resolvedEpicId] };
         }
@@ -96,6 +96,17 @@ export async function convertBugToTask(args) {
         const newTask = createResponse.create_item;
         if (!newTask) {
             return formatError("Failed to create task from bug.");
+        }
+        // Write the synthesized description to the doc column. Best-effort.
+        if (fullDescription) {
+            const newTaskId = Number(newTask.id);
+            try {
+                const docId = await ensureItemDoc(newTaskId, TASK_COLUMNS.descriptionDoc, `Description — Task #${newTaskId}: ${bugName}`);
+                await writeDocContentReplacing(docId, fullDescription);
+            }
+            catch (e) {
+                console.error(`convertBugToTask: failed to write description doc for new task #${newTaskId}: ${e instanceof Error ? e.message : String(e)}`);
+            }
         }
         // Step 3: Link the new task to the bug (update bug's connectedTasks column)
         const linkColumnValues = {

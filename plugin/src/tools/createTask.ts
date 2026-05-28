@@ -11,6 +11,7 @@ import {
   AGENT_ID,
 } from "../constants.ts";
 import { getPersonByUsername } from "../services/people.ts";
+import { ensureItemDoc, writeDocContentReplacing } from "../services/doc-utils.ts";
 import type { CreateTaskInput } from "../schemas.ts";
 import { buildColumnValues, formatError, validateReadyToStart } from "./utils.ts";
 
@@ -22,6 +23,7 @@ export async function createTask(args: CreateTaskInput): Promise<string> {
       subitemCount: number;
       promoted?: boolean;
       promotionBlockers?: string[];
+      descriptionWriteFailed?: string;
     }> = [];
 
     for (const task of args.tasks) {
@@ -44,10 +46,10 @@ export async function createTask(args: CreateTaskInput): Promise<string> {
         index: TASK_STATUS[initialStatus],
       };
 
-      // Optional fields
-      if (task.description) {
-        columnValues[TASK_COLUMNS.description] = { text: task.description };
-      }
+      // Description is now stored in the descriptionDoc column (Monday doc), not
+      // long_text. Writes go through ensureItemDoc + writeDocContentReplacing
+      // AFTER the item exists (we need the taskId to attach the doc). See
+      // post-create block below.
 
       if (task.dueDate) {
         columnValues[TASK_COLUMNS.dueDate] = { date: task.dueDate };
@@ -113,6 +115,27 @@ export async function createTask(args: CreateTaskInput): Promise<string> {
 
       if (!createdItem) {
         throw new Error(`Failed to create task "${task.name}"`);
+      }
+
+      // Write description to the doc column (requires taskId — has to happen
+      // after create_item). Best-effort: surface failure in the result so the
+      // agent sees it, but don't roll back the task creation.
+      let descriptionWriteFailed: string | undefined;
+      if (task.description) {
+        const taskId = Number(createdItem.id);
+        try {
+          const docId = await ensureItemDoc(
+            taskId,
+            TASK_COLUMNS.descriptionDoc,
+            `Description — Task #${taskId}: ${task.name}`,
+          );
+          await writeDocContentReplacing(docId, task.description);
+        } catch (error) {
+          descriptionWriteFailed = error instanceof Error ? error.message : String(error);
+          console.error(
+            `createTask: failed to write description doc for task #${taskId}: ${descriptionWriteFailed}`,
+          );
+        }
       }
 
       // Set dependencies after creation (dependency column requires a separate mutation)
@@ -202,6 +225,7 @@ export async function createTask(args: CreateTaskInput): Promise<string> {
         subitemCount,
         promoted,
         promotionBlockers,
+        descriptionWriteFailed,
       });
     }
 
@@ -222,6 +246,10 @@ export async function createTask(args: CreateTaskInput): Promise<string> {
         for (const b of result.promotionBlockers) {
           lines.push(`    - ${b}`);
         }
+      }
+      if (result.descriptionWriteFailed) {
+        lines.push(`  ⚠️  Description doc write failed: ${result.descriptionWriteFailed}`);
+        lines.push(`     Task created without description; retry via updateTask({ itemId: ${result.id}, description: "..." })`);
       }
     }
 
