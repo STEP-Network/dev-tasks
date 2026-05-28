@@ -390,6 +390,17 @@ export async function updateTask(args: UpdateTaskInput): Promise<string> {
     }
 
     if (changes.length === 0) {
+      // If we attempted side-effect work (e.g. description doc write) but it
+      // failed, the only signal is in `warnings`. Surface those instead of the
+      // misleading "no fields provided" message — the caller DID provide a
+      // field; the write just failed (often transient Monday doc-API races).
+      if (warnings.length > 0) {
+        const lines = [
+          `Update failed for task #${itemId}:`,
+          ...warnings.map(w => `  - ${w}`),
+        ];
+        return formatError(lines.join("\n"));
+      }
       return formatError(`No fields provided to update for task #${itemId}.`);
     }
 
