@@ -61,6 +61,15 @@
         "**/plugin/hooks/**/*.sh",
         "**/plugin/rules/agent-*.md"
       ]
+    },
+    {
+      "file": "workflow-pipeline.md",
+      "match": [
+        "**/plugin/skills/**/*.md",
+        "**/plugin/hooks/*.sh",
+        "**/plugin/rules/*.md",
+        "**/CLAUDE.md"
+      ]
     }
   ]
 }
