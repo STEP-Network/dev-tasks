@@ -128,7 +128,7 @@ export const rowSchema = z
       .nullable()
       .optional()
       .describe(
-        "Final value of reviewAddressed in active-task.json when PR merged. e.g. 'fixed', 'accepted', 'stuck:regression-loop'. null while PR is open.",
+        "Final value of reviewAddressed in active-task.json when PR merged. e.g. 'fixed', 'accepted', 'stuck:regression-loop', 'stuck:max-rounds'. null while PR is open.",
       ),
   })
   .strict()

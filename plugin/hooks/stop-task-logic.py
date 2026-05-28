@@ -91,11 +91,21 @@ def main():
         sys.exit(2)
 
     # Stage 4: CI checks must be green (LIVE verification — cannot be faked)
-    # ESCAPE HATCH (2026-05-15): when reviewAddressed is "handoff-to-orchestrator",
-    # the agent has explicitly handed off post-push polling to the orchestrator
-    # session per the new no-merge policy. Skip Stages 4 + 5 — orchestrator's
-    # /babysit-prs handles CI gating + review triage + merge from there.
-    if state.get("reviewAddressed") == "handoff-to-orchestrator":
+    # ESCAPE HATCHES:
+    #   - "handoff-to-orchestrator" (2026-05-15): agent handed off post-push
+    #     polling to the orchestrator session per the no-merge policy. Skip
+    #     Stages 4 + 5 — orchestrator's /babysit-prs handles CI gating + review
+    #     triage + merge from there.
+    #   - "stuck:*" / "timeout:*" (2026-05-28): agent halted intentionally
+    #     (regression-loop, max-rounds, etc.) and is waiting for user. Blocking
+    #     on CI green or set-reviewAddressed here creates an impossible state
+    #     when the halt itself was triggered by failing/pending CI plus
+    #     unresolvable BLOCKERs. pre-merge-review-gate.py still refuses the
+    #     merge for any stuck:*/timeout:* (line 118), so this escape only
+    #     governs the session-stop gate. Mirrors the stop-ci-green-check.sh
+    #     and stop-monday-reconciled-check.sh escape pattern.
+    ra = state.get("reviewAddressed") or ""
+    if ra == "handoff-to-orchestrator" or ra.startswith("stuck:") or ra.startswith("timeout:"):
         sys.exit(0)
 
     try:
@@ -138,7 +148,7 @@ def main():
         err("  2. If review has actionable feedback: fix issues, self-review, push")
         err("  3. If review is clean: set reviewAddressed in .claude/active-task.json")
         err("")
-        err('  Valid values: "accepted", "fixed", "timeout:{reason}", "handoff-to-orchestrator"')
+        err('  Valid values: "accepted", "fixed", "timeout:{reason}", "handoff-to-orchestrator", "stuck:regression-loop", "stuck:max-rounds"')
         err("")
         err("The /ship-pr skill handles this automatically in Phase 6.")
         sys.exit(2)
