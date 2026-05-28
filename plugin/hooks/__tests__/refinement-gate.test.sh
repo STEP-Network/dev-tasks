@@ -113,7 +113,7 @@ assert_contains "BLOCK_REFINEMENT message mentions 'type'" "$OUTPUT" "type"
 # Test 3: BLOCK_NO_SUBTASKS — task is fully refined but no subtasks.
 # -----------------------------------------------------------------------------
 LONG_DESC=$(printf 'x%.0s' {1..250})
-FIXTURE_NO_SUBS='{"data":{"items":[{"id":"123","name":"x","board":{"id":"5091706356"},"column_values":[{"id":"color_mksbm5er","text":"Improvement"},{"id":"priority","text":"High"},{"id":"board_relation_x","text":"Epic Name"},{"id":"long_text","text":"'"$LONG_DESC"'"},{"id":"long_text_mkqnf3aw","text":"AC content here"}],"subitems":[]}]}}'
+FIXTURE_NO_SUBS='{"data":{"items":[{"id":"123","name":"x","board":{"id":"5091706356"},"column_values":[{"id":"color_mksbm5er","text":"Improvement"},{"id":"priority","text":"High"},{"id":"board_relation_x","text":"Epic Name"},{"id":"doc_mm3sg1kr","text":"","value":"{\"files\":[{\"fileId\":\"abc\",\"objectId\":12345}]}"},{"id":"long_text_mkqnf3aw","text":"AC content here"}],"subitems":[]}]}}'
 OUTPUT=$(run_hook 123 "$FIXTURE_NO_SUBS")
 EXIT_CODE=$?
 assert "BLOCK_NO_SUBTASKS exit code 2" "$EXIT_CODE" "2"
@@ -122,7 +122,7 @@ assert_contains "BLOCK_NO_SUBTASKS message mentions zero subtasks" "$OUTPUT" "ze
 # -----------------------------------------------------------------------------
 # Test 4: BLOCK_SUBTASKS — subtasks exist but lack type/desc/hours.
 # -----------------------------------------------------------------------------
-FIXTURE_BAD_SUBS='{"data":{"items":[{"id":"123","name":"x","board":{"id":"5091706356"},"column_values":[{"id":"color_mksbm5er","text":"Improvement"},{"id":"priority","text":"High"},{"id":"board_relation_x","text":"Epic"},{"id":"long_text","text":"'"$LONG_DESC"'"},{"id":"long_text_mkqnf3aw","text":"AC"}],"subitems":[{"id":"s1","name":"halfbaked sub","column_values":[{"id":"color_x","text":""},{"id":"long_text","text":""},{"id":"numeric_x","text":""}]}]}]}}'
+FIXTURE_BAD_SUBS='{"data":{"items":[{"id":"123","name":"x","board":{"id":"5091706356"},"column_values":[{"id":"color_mksbm5er","text":"Improvement"},{"id":"priority","text":"High"},{"id":"board_relation_x","text":"Epic"},{"id":"doc_mm3sg1kr","text":"","value":"{\"files\":[{\"fileId\":\"abc\",\"objectId\":12345}]}"},{"id":"long_text_mkqnf3aw","text":"AC"}],"subitems":[{"id":"s1","name":"halfbaked sub","column_values":[{"id":"color_x","text":""},{"id":"long_text","text":""},{"id":"numeric_x","text":""}]}]}]}}'
 OUTPUT=$(run_hook 123 "$FIXTURE_BAD_SUBS")
 EXIT_CODE=$?
 assert "BLOCK_SUBTASKS exit code 2" "$EXIT_CODE" "2"
@@ -131,7 +131,7 @@ assert_contains "BLOCK_SUBTASKS message names refinement" "$OUTPUT" "refinement 
 # -----------------------------------------------------------------------------
 # Test 5: PASS — fully refined task on the Tasks board.
 # -----------------------------------------------------------------------------
-FIXTURE_PASS='{"data":{"items":[{"id":"123","name":"good","board":{"id":"5091706356"},"column_values":[{"id":"color_mksbm5er","text":"Improvement"},{"id":"priority","text":"High"},{"id":"board_relation_x","text":"Epic"},{"id":"long_text","text":"'"$LONG_DESC"'"},{"id":"long_text_mkqnf3aw","text":"AC"}],"subitems":[{"id":"s1","name":"sub","column_values":[{"id":"color_a","text":"Backend"},{"id":"long_text","text":"do the thing"},{"id":"numeric_h","text":"1.5"}]}]}]}}'
+FIXTURE_PASS='{"data":{"items":[{"id":"123","name":"good","board":{"id":"5091706356"},"column_values":[{"id":"color_mksbm5er","text":"Improvement"},{"id":"priority","text":"High"},{"id":"board_relation_x","text":"Epic"},{"id":"doc_mm3sg1kr","text":"","value":"{\"files\":[{\"fileId\":\"abc\",\"objectId\":12345}]}"},{"id":"long_text_mkqnf3aw","text":"AC"}],"subitems":[{"id":"s1","name":"sub","column_values":[{"id":"color_a","text":"Backend"},{"id":"long_text","text":"do the thing"},{"id":"numeric_h","text":"1.5"}]}]}]}}'
 OUTPUT=$(run_hook 123 "$FIXTURE_PASS")
 EXIT_CODE=$?
 assert "PASS case exit code 0" "$EXIT_CODE" "0"
@@ -159,10 +159,10 @@ assert "Malformed itemId pass-through exit code 0" "$EXIT_CODE" "0"
 
 # -----------------------------------------------------------------------------
 # Test 9: PASS with CURRENT column IDs (task_type / task_priority /
-# long_text_mm0mcp77 / long_text_mm0pqaxy / task_epic with text).
+# long_text_mm0pqaxy AC / task_epic with text / descriptionDoc attached).
 # Driver: 2026-05-28 polads incident where the hook read stale legacy IDs.
 # -----------------------------------------------------------------------------
-FIXTURE_CURRENT_IDS='{"data":{"items":[{"id":"123","name":"current-id task","board":{"id":"5091706356"},"column_values":[{"id":"task_type","text":"Fix"},{"id":"task_priority","text":"High"},{"id":"task_epic","text":"Epic Name"},{"id":"long_text_mm0mcp77","text":"'"$LONG_DESC"'"},{"id":"long_text_mm0pqaxy","text":"AC content"}],"subitems":[{"id":"s1","name":"sub","column_values":[{"id":"color_a","text":"Backend"},{"id":"long_text","text":"do it"},{"id":"numeric_h","text":"1.5"}]}]}]}}'
+FIXTURE_CURRENT_IDS='{"data":{"items":[{"id":"123","name":"current-id task","board":{"id":"5091706356"},"column_values":[{"id":"task_type","text":"Fix"},{"id":"task_priority","text":"High"},{"id":"task_epic","text":"Epic Name"},{"id":"doc_mm3sg1kr","text":"","value":"{\"files\":[{\"fileId\":\"abc\",\"objectId\":12345}]}"},{"id":"long_text_mm0pqaxy","text":"AC content"}],"subitems":[{"id":"s1","name":"sub","column_values":[{"id":"color_a","text":"Backend"},{"id":"long_text","text":"do it"},{"id":"numeric_h","text":"1.5"}]}]}]}}'
 OUTPUT=$(run_hook 123 "$FIXTURE_CURRENT_IDS")
 EXIT_CODE=$?
 assert "PASS with current column IDs" "$EXIT_CODE" "0"
@@ -171,7 +171,7 @@ assert "PASS with current column IDs" "$EXIT_CODE" "0"
 # Test 10: PASS when task_epic has empty text but linked_item_ids set via
 # BoardRelationValue typed fragment.
 # -----------------------------------------------------------------------------
-FIXTURE_EPIC_LINKED_IDS='{"data":{"items":[{"id":"123","name":"epic via linked_item_ids","board":{"id":"5091706356"},"column_values":[{"id":"task_type","text":"Fix"},{"id":"task_priority","text":"High"},{"id":"task_epic","text":"","display_value":"","linked_item_ids":[2743409388]},{"id":"long_text_mm0mcp77","text":"'"$LONG_DESC"'"},{"id":"long_text_mm0pqaxy","text":"AC"}],"subitems":[{"id":"s1","name":"sub","column_values":[{"id":"color_a","text":"Backend"},{"id":"long_text","text":"do"},{"id":"numeric_h","text":"1"}]}]}]}}'
+FIXTURE_EPIC_LINKED_IDS='{"data":{"items":[{"id":"123","name":"epic via linked_item_ids","board":{"id":"5091706356"},"column_values":[{"id":"task_type","text":"Fix"},{"id":"task_priority","text":"High"},{"id":"task_epic","text":"","display_value":"","linked_item_ids":[2743409388]},{"id":"doc_mm3sg1kr","text":"","value":"{\"files\":[{\"fileId\":\"abc\",\"objectId\":12345}]}"},{"id":"long_text_mm0pqaxy","text":"AC"}],"subitems":[{"id":"s1","name":"sub","column_values":[{"id":"color_a","text":"Backend"},{"id":"long_text","text":"do"},{"id":"numeric_h","text":"1"}]}]}]}}'
 OUTPUT=$(run_hook 123 "$FIXTURE_EPIC_LINKED_IDS")
 EXIT_CODE=$?
 assert "PASS when task_epic linked via linked_item_ids (empty text)" "$EXIT_CODE" "0"
@@ -180,7 +180,7 @@ assert "PASS when task_epic linked via linked_item_ids (empty text)" "$EXIT_CODE
 # Test 11: PASS when task_epic has empty text + empty linked_item_ids but
 # display_value populated.
 # -----------------------------------------------------------------------------
-FIXTURE_EPIC_DISPLAY='{"data":{"items":[{"id":"123","name":"epic via display_value","board":{"id":"5091706356"},"column_values":[{"id":"task_type","text":"Fix"},{"id":"task_priority","text":"High"},{"id":"task_epic","text":"","display_value":"PolAds: Maintenance & Hotfixes","linked_item_ids":[]},{"id":"long_text_mm0mcp77","text":"'"$LONG_DESC"'"},{"id":"long_text_mm0pqaxy","text":"AC"}],"subitems":[{"id":"s1","name":"sub","column_values":[{"id":"color_a","text":"Backend"},{"id":"long_text","text":"do"},{"id":"numeric_h","text":"1"}]}]}]}}'
+FIXTURE_EPIC_DISPLAY='{"data":{"items":[{"id":"123","name":"epic via display_value","board":{"id":"5091706356"},"column_values":[{"id":"task_type","text":"Fix"},{"id":"task_priority","text":"High"},{"id":"task_epic","text":"","display_value":"PolAds: Maintenance & Hotfixes","linked_item_ids":[]},{"id":"doc_mm3sg1kr","text":"","value":"{\"files\":[{\"fileId\":\"abc\",\"objectId\":12345}]}"},{"id":"long_text_mm0pqaxy","text":"AC"}],"subitems":[{"id":"s1","name":"sub","column_values":[{"id":"color_a","text":"Backend"},{"id":"long_text","text":"do"},{"id":"numeric_h","text":"1"}]}]}]}}'
 OUTPUT=$(run_hook 123 "$FIXTURE_EPIC_DISPLAY")
 EXIT_CODE=$?
 assert "PASS when task_epic linked via display_value (empty text)" "$EXIT_CODE" "0"
@@ -188,29 +188,30 @@ assert "PASS when task_epic linked via display_value (empty text)" "$EXIT_CODE" 
 # -----------------------------------------------------------------------------
 # Test 12: BLOCK_REFINEMENT epicId when task_epic empty AND no board_relation.
 # -----------------------------------------------------------------------------
-FIXTURE_NO_EPIC='{"data":{"items":[{"id":"123","name":"no epic","board":{"id":"5091706356"},"column_values":[{"id":"task_type","text":"Fix"},{"id":"task_priority","text":"High"},{"id":"task_epic","text":"","display_value":"","linked_item_ids":[]},{"id":"long_text_mm0mcp77","text":"'"$LONG_DESC"'"},{"id":"long_text_mm0pqaxy","text":"AC"}],"subitems":[{"id":"s1","name":"sub","column_values":[{"id":"color_a","text":"Backend"},{"id":"long_text","text":"do"},{"id":"numeric_h","text":"1"}]}]}]}}'
+FIXTURE_NO_EPIC='{"data":{"items":[{"id":"123","name":"no epic","board":{"id":"5091706356"},"column_values":[{"id":"task_type","text":"Fix"},{"id":"task_priority","text":"High"},{"id":"task_epic","text":"","display_value":"","linked_item_ids":[]},{"id":"doc_mm3sg1kr","text":"","value":"{\"files\":[{\"fileId\":\"abc\",\"objectId\":12345}]}"},{"id":"long_text_mm0pqaxy","text":"AC"}],"subitems":[{"id":"s1","name":"sub","column_values":[{"id":"color_a","text":"Backend"},{"id":"long_text","text":"do"},{"id":"numeric_h","text":"1"}]}]}]}}'
 OUTPUT=$(run_hook 123 "$FIXTURE_NO_EPIC")
 EXIT_CODE=$?
 assert "BLOCK when no epic linked via any path" "$EXIT_CODE" "2"
 assert_contains "block message names epicId" "$OUTPUT" "epicId"
 
 # -----------------------------------------------------------------------------
-# Test 13: PASS when description is in the descriptionDoc column (doc_mm3sg1kr)
-# and the legacy long_text column is empty. Hook accepts "doc attached" as
-# evidence of refinement without paying for an export call.
+# Test 13: PASS when description is in the descriptionDoc column (doc_mm3sg1kr).
+# Hook accepts "doc attached" as evidence of refinement without paying for an
+# export call. (Duplicate of Test 9 after legacy long_text removal — kept as
+# an explicit doc-only fixture for clarity.)
 # -----------------------------------------------------------------------------
-FIXTURE_DESC_DOC_ONLY='{"data":{"items":[{"id":"123","name":"desc in doc","board":{"id":"5091706356"},"column_values":[{"id":"task_type","text":"Fix"},{"id":"task_priority","text":"High"},{"id":"task_epic","text":"Epic"},{"id":"long_text_mm0mcp77","text":""},{"id":"doc_mm3sg1kr","text":"","value":"{\"files\":[{\"fileId\":\"abc\",\"objectId\":12345}]}"},{"id":"long_text_mm0pqaxy","text":"AC"}],"subitems":[{"id":"s1","name":"sub","column_values":[{"id":"color_a","text":"Backend"},{"id":"long_text","text":"do"},{"id":"numeric_h","text":"1"}]}]}]}}'
+FIXTURE_DESC_DOC_ONLY='{"data":{"items":[{"id":"123","name":"desc in doc","board":{"id":"5091706356"},"column_values":[{"id":"task_type","text":"Fix"},{"id":"task_priority","text":"High"},{"id":"task_epic","text":"Epic"},{"id":"doc_mm3sg1kr","text":"","value":"{\"files\":[{\"fileId\":\"abc\",\"objectId\":12345}]}"},{"id":"long_text_mm0pqaxy","text":"AC"}],"subitems":[{"id":"s1","name":"sub","column_values":[{"id":"color_a","text":"Backend"},{"id":"long_text","text":"do"},{"id":"numeric_h","text":"1"}]}]}]}}'
 OUTPUT=$(run_hook 123 "$FIXTURE_DESC_DOC_ONLY")
 EXIT_CODE=$?
-assert "PASS when description is in descriptionDoc (long_text empty)" "$EXIT_CODE" "0"
+assert "PASS when description doc is attached" "$EXIT_CODE" "0"
 
 # -----------------------------------------------------------------------------
-# Test 14: BLOCK when description column AND doc column both empty.
+# Test 14: BLOCK when no description doc is attached.
 # -----------------------------------------------------------------------------
-FIXTURE_DESC_BOTH_EMPTY='{"data":{"items":[{"id":"123","name":"no desc","board":{"id":"5091706356"},"column_values":[{"id":"task_type","text":"Fix"},{"id":"task_priority","text":"High"},{"id":"task_epic","text":"Epic"},{"id":"long_text_mm0mcp77","text":""},{"id":"doc_mm3sg1kr","text":"","value":""},{"id":"long_text_mm0pqaxy","text":"AC"}],"subitems":[{"id":"s1","name":"sub","column_values":[{"id":"color_a","text":"Backend"},{"id":"long_text","text":"do"},{"id":"numeric_h","text":"1"}]}]}]}}'
+FIXTURE_DESC_BOTH_EMPTY='{"data":{"items":[{"id":"123","name":"no desc","board":{"id":"5091706356"},"column_values":[{"id":"task_type","text":"Fix"},{"id":"task_priority","text":"High"},{"id":"task_epic","text":"Epic"},{"id":"doc_mm3sg1kr","text":"","value":""},{"id":"long_text_mm0pqaxy","text":"AC"}],"subitems":[{"id":"s1","name":"sub","column_values":[{"id":"color_a","text":"Backend"},{"id":"long_text","text":"do"},{"id":"numeric_h","text":"1"}]}]}]}}'
 OUTPUT=$(run_hook 123 "$FIXTURE_DESC_BOTH_EMPTY")
 EXIT_CODE=$?
-assert "BLOCK when both description column and doc empty" "$EXIT_CODE" "2"
+assert "BLOCK when no description doc attached" "$EXIT_CODE" "2"
 assert_contains "block message mentions description" "$OUTPUT" "description"
 
 # -----------------------------------------------------------------------------

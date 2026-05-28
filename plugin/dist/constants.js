@@ -24,10 +24,9 @@ export const TASK_COLUMNS = {
     owner: "task_owner",
     estimatedHours: "lookup_mm0vm1wc",
     actualHours: "lookup_mm0vx6nx",
-    // Legacy: 2000-char cap meant overflow on large refinements. Reads fall back
-    // to this only when descriptionDoc is empty (pre-migration tasks). New writes
-    // go to descriptionDoc. Eventually deleted from Monday side after backfill.
-    description: "long_text_mm0mcp77",
+    // Task descriptions live on this Monday doc column (no length cap). Removed
+    // 2026-05-28: the legacy long_text_mm0mcp77 column was deleted from Monday
+    // after the one-off backfill (script: plugin/scripts/backfill-description-to-doc.ts).
     descriptionDoc: "doc_mm3sg1kr",
     epic: "task_epic",
     sprint: "task_sprint",

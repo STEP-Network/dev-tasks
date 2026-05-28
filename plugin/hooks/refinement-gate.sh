@@ -5,7 +5,7 @@
 #
 # Refuses the claim with exit 2 if:
 #   (a) Task lives on the Bugs Queue board (5091706353) — must run convertBugToTask first.
-#   (b) Task is missing type / priority / epicId / description (<200 chars) / acceptanceCriteria.
+#   (b) Task is missing type / priority / epicId / description (no doc attached on doc_mm3sg1kr) / acceptanceCriteria.
 #   (c) Subtasks list is empty OR any subtask lacks type / description / estimatedHours>0.
 #   (d) Significant code drift since last refinement (Monday updatedAt < N commits ago on
 #       this project's defaultBase). Soft warning only — call /plan-task to reconcile.
@@ -152,18 +152,17 @@ if board_id == bugs_board_id:
 # that pre-date the v0.x column renames.
 #   Type:        task_type            (legacy: color_mksbm5er, status_1__1)
 #   Priority:    task_priority        (legacy: priority)
-#   Description: long_text_mm0mcp77   (legacy: long_text, long_text__1, long_text_mkqnezpz)
+#   Description: doc_mm3sg1kr         (Monday doc column — descriptionDoc)
 #   AC:          long_text_mm0pqaxy   (legacy: long_text_mkqnf3aw, long_text_mkqnf2tk)
 #   Epic:        task_epic            (legacy: any board_relation_* column)
 TYPE = col_text("task_type") or col_text("color_mksbm5er") or col_text("status_1__1")
 PRIORITY = col_text("task_priority") or col_text("priority")
-DESCRIPTION = col_text("long_text_mm0mcp77") or col_text("long_text") or col_text("long_text__1") or col_text("long_text_mkqnezpz")
 AC = col_text("long_text_mm0pqaxy") or col_text("long_text_mkqnf3aw") or col_text("long_text_mkqnf2tk")
 
-# Description doc column (doc_mm3sg1kr): when a Monday doc is attached, the
-# `value` JSON contains a non-empty `files` array. Reading the doc content
-# would cost 2 extra API calls per hook invocation — skip the length check
-# in that case and treat "doc attached" as evidence of refinement. The MCP
+# Description: stored on the descriptionDoc column (doc_mm3sg1kr). When a Monday
+# doc is attached, the `value` JSON contains a non-empty `files` array. Reading
+# the doc content would cost 2 extra API calls per hook invocation — skip the
+# content check and treat "doc attached" as evidence of refinement. The MCP
 # server-side validator (validateReadyToStart) applies the same rule.
 DESCRIPTION_DOC_ATTACHED = False
 for cv in col_vals:
@@ -209,11 +208,11 @@ if not PRIORITY:
     missing.append("priority")
 if not EPIC_LINKED:
     missing.append("epicId")
-# Description: accept either >=200 chars on the legacy long_text column OR a
-# doc attached on the new descriptionDoc column (content quality enforced
-# server-side by the MCP createTask/updateTask gates).
-if not DESCRIPTION_DOC_ATTACHED and len(DESCRIPTION) < 200:
-    missing.append(f"description (got {len(DESCRIPTION)} chars, need 200+ or a description doc attached)")
+# Description: a Monday doc must be attached on the descriptionDoc column.
+# Content quality (length, structure) is enforced server-side by the MCP
+# createTask/updateTask gates — the hook just verifies presence.
+if not DESCRIPTION_DOC_ATTACHED:
+    missing.append("description (no doc attached on doc_mm3sg1kr — run /refine-task or pass `description` to createTask/updateTask)")
 if not AC:
     missing.append("acceptanceCriteria")
 
@@ -303,7 +302,7 @@ case "$RESULT" in
     echo "Missing required refinement fields: $DETAIL"
     echo ""
     echo "Run /refine-task $TASK_ID before /pickup-task. Every claimed task must have"
-    echo "type + priority + epicId + description (>=200 chars) + acceptanceCriteria."
+    echo "type + priority + epicId + description (Monday doc attached on doc_mm3sg1kr) + acceptanceCriteria."
     exit 2
     ;;
   BLOCK_NO_SUBTASKS)

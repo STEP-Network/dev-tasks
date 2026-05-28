@@ -74,7 +74,6 @@ export async function getTask(args: GetTaskInput): Promise<string> {
       TASK_COLUMNS.owner,
       TASK_COLUMNS.estimatedHours,
       TASK_COLUMNS.actualHours,
-      TASK_COLUMNS.description,
       TASK_COLUMNS.descriptionDoc,
       TASK_COLUMNS.epic,
       TASK_COLUMNS.sprint,
@@ -150,10 +149,9 @@ export async function getTask(args: GetTaskInput): Promise<string> {
     const taskType = getColumnText(colMap, TASK_COLUMNS.type) || "—";
     const estimatedHours = getMirrorDisplayValue(colMap, TASK_COLUMNS.estimatedHours);
     const actualHours = getMirrorDisplayValue(colMap, TASK_COLUMNS.actualHours);
-    // Description: read from the descriptionDoc column first; fall back to the
-    // legacy long_text column for tasks not yet backfilled. The doc read is two
-    // extra Monday API calls (resolve objectId → primary docId, then export)
-    // and only fires when a doc is attached. Skip entirely if no doc.
+    // Description lives on the descriptionDoc column (Monday doc). The doc read
+    // is two extra Monday API calls (resolve objectId → primary docId, then
+    // export). Skip entirely if no doc is attached; description stays empty.
     let description = "";
     const descDocValue = getColumnValue(colMap, TASK_COLUMNS.descriptionDoc);
     const descObjectId = extractDocObjectId(descDocValue);
@@ -172,11 +170,8 @@ export async function getTask(args: GetTaskInput): Promise<string> {
           description = (await readDocAsMarkdown(docId)).trim();
         }
       } catch {
-        // Fall through to legacy long_text.
+        // Best-effort: description stays empty.
       }
-    }
-    if (!description) {
-      description = getColumnText(colMap, TASK_COLUMNS.description) || "";
     }
     const owner = getColumnText(colMap, TASK_COLUMNS.owner) || "Unassigned";
 
