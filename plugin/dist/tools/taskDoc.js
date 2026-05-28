@@ -1,6 +1,7 @@
 import { DOC_API_VERSION, executeMondayQuery } from "../monday-client.js";
 import { TASK_COLUMNS } from "../constants.js";
 import { getColumnValue, formatError } from "./utils.js";
+import { setDocName, fetchItemName } from "../services/doc-utils.js";
 // Doc-related GraphQL fields are exposed on API 2025-10+ (`docId` camelCase
 // args, `export_markdown_from_doc`, `add_content_to_doc_from_markdown`).
 // The rest of the codebase stays on the project default (2024-10).
@@ -158,9 +159,26 @@ export async function createTaskUatDoc(args) {
       }
     `;
         const createResponse = await executeMondayQuery(createMutation, undefined, DOC_OPTS);
-        const newDocId = createResponse.create_doc?.id;
+        const newDocIdRaw = createResponse.create_doc?.id;
+        const newDocId = typeof newDocIdRaw === "number"
+            ? newDocIdRaw
+            : typeof newDocIdRaw === "string" && /^\d+$/.test(newDocIdRaw)
+                ? Number(newDocIdRaw)
+                : undefined;
         if (!newDocId) {
             return formatError(`Failed to create UAT doc for task #${taskId}: Monday did not return a doc id.`);
+        }
+        // Rename the new doc so it's findable in Monday's UI ("Untitled doc" is the
+        // default). Best-effort — a rename failure shouldn't block the content write.
+        const taskName = await fetchItemName(taskId);
+        const docTitle = taskName
+            ? `UAT — Task #${taskId}: ${taskName}`
+            : `UAT — Task #${taskId}`;
+        try {
+            await setDocName(newDocId, docTitle);
+        }
+        catch {
+            // Title is nice-to-have, not load-bearing. Proceed with content write.
         }
         const writeMutation = `
       mutation {
@@ -178,6 +196,7 @@ export async function createTaskUatDoc(args) {
             ``,
             `**Task:** #${taskId}`,
             `**Doc ID:** ${newDocId}`,
+            `**Title:** ${docTitle}`,
             `**Characters written:** ${markdown.length}`,
         ].join("\n");
     }

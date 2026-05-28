@@ -48,6 +48,7 @@
 import { DOC_API_VERSION, executeMondayQuery } from "../monday-client.ts";
 import { VERSION_COLUMNS } from "../constants.ts";
 import { getColumnValue, todayDate } from "../tools/utils.ts";
+import { setDocName, fetchItemName } from "./doc-utils.ts";
 import type { StructuredChangelog, ChangelogEntry } from "../tools/structuredChangelog.ts";
 
 const DOC_OPTS = { apiVersion: DOC_API_VERSION };
@@ -122,10 +123,30 @@ export async function ensureDocForVersion(versionId: number): Promise<number> {
     }
   `;
   const res = await executeMondayQuery<any>(createMutation, undefined, DOC_OPTS);
-  const newId = res.create_doc?.id;
-  if (typeof newId === "number") return newId;
-  if (typeof newId === "string" && /^\d+$/.test(newId)) return Number(newId);
-  throw new Error(`Failed to create changelog Doc for version #${versionId}`);
+  const newIdRaw = res.create_doc?.id;
+  const newId =
+    typeof newIdRaw === "number"
+      ? newIdRaw
+      : typeof newIdRaw === "string" && /^\d+$/.test(newIdRaw)
+        ? Number(newIdRaw)
+        : undefined;
+  if (!newId) {
+    throw new Error(`Failed to create changelog Doc for version #${versionId}`);
+  }
+
+  // Rename the new doc so it's findable in Monday's UI. Best-effort —
+  // a rename failure shouldn't block downstream changelog content writes.
+  const versionName = await fetchItemName(versionId);
+  const docTitle = versionName
+    ? `Changelog — ${versionName}`
+    : `Changelog — Version #${versionId}`;
+  try {
+    await setDocName(newId, docTitle);
+  } catch {
+    // Title is nice-to-have.
+  }
+
+  return newId;
 }
 
 // =============================================================================
