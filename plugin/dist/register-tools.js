@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-import { GetBacklogSchema, GetBugsSchema, GetTaskSchema, GetSprintSchema, ListSprintsSchema, GetEpicSchema, ListEpicsSchema, ListProductsSchema, ClaimTaskSchema, UpdateTaskSchema, ManageSubtasksSchema, CreateTaskSchema, ConvertBugToTaskSchema, CreateBugSchema, UpdateBugSchema, UpdateVersionSchema, CreateVersionSchema, ListVersionsSchema, GetVersionSchema, GetVersionTimelineSchema, GenerateChangelogSchema, GetUpdatesSchema, CreateUpdateSchema, CreateEpicSchema, UpdateEpicSchema, ListFeedbackSchema, GetFeedbackSchema, CreateFeedbackSchema, UpdateFeedbackSchema, ConvertFeedbackToTaskSchema, CreateRetroSchema, UpdateRetroSchema, ListRetrosSchema, SetPublicTaskNameSchema, GetPublicRoadmapSchema, GetStructuredChangelogSchema, UpdateStructuredChangelogSchema, MigrateStructuredChangelogSchema, GetTaskUatDocSchema, CreateTaskUatDocSchema, UpdateTaskUatDocSchema, } from "./schemas.js";
-import { getBacklog, getBugs, getTask, getSprint, listSprints, getEpic, listEpics, listProducts, claimTask, updateTask, manageSubtasks, createTask, convertBugToTask, createBug, updateBug, updateVersion, createVersion, listVersions, getVersion, generateChangelog, getUpdates, createUpdate, createEpic, updateEpic, listFeedback, getFeedback, createFeedback, updateFeedback, convertFeedbackToTask, createRetro, updateRetro, listRetros, setPublicTaskName, getPublicRoadmap, getStructuredChangelog, updateStructuredChangelog, migrateStructuredChangelog, getTaskUatDoc, createTaskUatDoc, updateTaskUatDoc, getVersionTimeline, } from "./tools/index.js";
+import { GetBacklogSchema, GetBugsSchema, GetTaskSchema, GetSprintSchema, ListSprintsSchema, GetEpicSchema, ListEpicsSchema, ListProductsSchema, ClaimTaskSchema, UpdateTaskSchema, ManageSubtasksSchema, CreateTaskSchema, ConvertBugToTaskSchema, CreateBugSchema, UpdateBugSchema, UpdateVersionSchema, CreateVersionSchema, ListVersionsSchema, GetVersionSchema, GetVersionTimelineSchema, GenerateChangelogSchema, GetUpdatesSchema, CreateUpdateSchema, CreateEpicSchema, UpdateEpicSchema, ListFeedbackSchema, GetFeedbackSchema, CreateFeedbackSchema, UpdateFeedbackSchema, ConvertFeedbackToTaskSchema, CreateRetroSchema, UpdateRetroSchema, ListRetrosSchema, SetPublicTaskNameSchema, GetPublicRoadmapSchema, GetStructuredChangelogSchema, UpdateStructuredChangelogSchema, MigrateStructuredChangelogSchema, GetTaskUatDocSchema, CreateTaskUatDocSchema, UpdateTaskUatDocSchema, GetTaskDescriptionDocSchema, CreateTaskDescriptionDocSchema, UpdateTaskDescriptionDocSchema, } from "./schemas.js";
+import { getBacklog, getBugs, getTask, getSprint, listSprints, getEpic, listEpics, listProducts, claimTask, updateTask, manageSubtasks, createTask, convertBugToTask, createBug, updateBug, updateVersion, createVersion, listVersions, getVersion, generateChangelog, getUpdates, createUpdate, createEpic, updateEpic, listFeedback, getFeedback, createFeedback, updateFeedback, convertFeedbackToTask, createRetro, updateRetro, listRetros, setPublicTaskName, getPublicRoadmap, getStructuredChangelog, updateStructuredChangelog, migrateStructuredChangelog, getTaskUatDoc, createTaskUatDoc, updateTaskUatDoc, getTaskDescriptionDoc, createTaskDescriptionDoc, updateTaskDescriptionDoc, getVersionTimeline, } from "./tools/index.js";
 /**
  * Register all 38 Monday MCP tools on the given McpServer. Shared by the
  * stdio entry (server.ts) and the HTTP entry (api/mcp.ts).
@@ -204,6 +204,21 @@ export function registerAllTools(server) {
     });
     server.tool("updateTaskUatDoc", "Update the existing UAT testing doc on a task (column doc_mm3adfdg). overwrite=true (default) replaces the doc; overwrite=false appends. Refuses if no doc exists — use createTaskUatDoc first.", UpdateTaskUatDocSchema.shape, async (args) => {
         const result = await updateTaskUatDoc(args);
+        return { content: [{ type: "text", text: result }] };
+    });
+    // =========================================================================
+    // Description Docs (Monday Doc column doc_mm3sg1kr — replaces legacy long_text)
+    // =========================================================================
+    server.tool("getTaskDescriptionDoc", "Read the task description doc (Monday Doc on column doc_mm3sg1kr) as markdown. New tasks have descriptions stored here (uncapped length) instead of the legacy long_text_mm0mcp77 column (2000-char cap). getTask transparently reads this with a fallback to the legacy column for pre-migration tasks; use this tool for direct doc-level access.", GetTaskDescriptionDocSchema.shape, async (args) => {
+        const result = await getTaskDescriptionDoc(args);
+        return { content: [{ type: "text", text: result }] };
+    });
+    server.tool("createTaskDescriptionDoc", "Create a new description doc on a task (column doc_mm3sg1kr). Refuses if a doc already exists — use updateTaskDescriptionDoc to modify. Most callers should pass `description` to createTask/updateTask instead; this is for direct doc-only flows (e.g. converting an existing long description without other field changes).", CreateTaskDescriptionDocSchema.shape, async (args) => {
+        const result = await createTaskDescriptionDoc(args);
+        return { content: [{ type: "text", text: result }] };
+    });
+    server.tool("updateTaskDescriptionDoc", "Update the existing description doc on a task (column doc_mm3sg1kr). overwrite=true (default) replaces; overwrite=false appends. Refuses if no doc exists — use createTaskDescriptionDoc first.", UpdateTaskDescriptionDocSchema.shape, async (args) => {
+        const result = await updateTaskDescriptionDoc(args);
         return { content: [{ type: "text", text: result }] };
     });
     // =========================================================================

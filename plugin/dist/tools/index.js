@@ -34,4 +34,5 @@ export { setPublicTaskName } from "./setPublicTaskName.js";
 export { getPublicRoadmap } from "./getPublicRoadmap.js";
 export { getStructuredChangelog, updateStructuredChangelog, migrateStructuredChangelog } from "./structuredChangelog.js";
 export { getTaskUatDoc, createTaskUatDoc, updateTaskUatDoc } from "./taskDoc.js";
+export { getTaskDescriptionDoc, createTaskDescriptionDoc, updateTaskDescriptionDoc, } from "./taskDescriptionDoc.js";
 export { getVersionTimeline } from "./getVersionTimeline.js";

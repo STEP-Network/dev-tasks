@@ -13,7 +13,7 @@ This repo is a Claude Code plugin marketplace + plugin source. The plugin (`dev-
 │   ├── .claude-plugin/plugin.json    # plugin manifest
 │   ├── .mcp.json                     # registers the stdio MCP server
 │   ├── package.json + tsconfig.json  # plugin deps (@modelcontextprotocol/sdk + zod) + TS build
-│   ├── src/                          # MCP TypeScript source (37 tools)
+│   ├── src/                          # MCP TypeScript source (44 tools)
 │   ├── dist/                         # tsc output (gitignored)
 │   ├── rules/                        # 8 universal lifecycle rules
 │   ├── rules-routing.json
@@ -78,7 +78,7 @@ Subtasks board: 5091706366 (linked from Tasks).
 
 ## Tools (37)
 
-The plugin's MCP server registers 37 tools in `plugin/src/server.ts`. See that file for current names, descriptions, and Zod schemas. High-level phases:
+The plugin's MCP server registers 44 tools (registered in `plugin/src/register-tools.ts`; entry points: `plugin/src/server.ts` for stdio, `plugin/src/api/mcp.ts` for HTTP). See `register-tools.ts` for current names, descriptions, and Zod schemas. High-level phases:
 
 | Phase | Tools |
 |---|---|
@@ -160,7 +160,7 @@ Used in `claimTask` (required), `createTask`, `createEpic`, `updateEpic`, `creat
   - `type` is set (not "Not Set")
   - `priority` is set (not "Missing")
   - linked to an epic
-  - `description` is non-empty
+  - `description` is non-empty OR a description doc is attached to the task's `doc_mm3sg1kr` column
   - acceptance criteria (`long_text_mm0pqaxy`) is non-empty
   - ≥1 subtask with name, description, type (not "Missing Status"), positive estimate
 
@@ -249,6 +249,27 @@ For consumer projects that opt in (`.claude/project-config.json` → `e2e.enable
 - The 5-line cap from PolAds's original brief was rejected; real specs for golden paths run 80–120 lines. Soft guidance only.
 
 See `plugin/skills/write-uat-spec/SKILL.md` for the full contract and `plugin/skills/write-uat-spec/EXAMPLES.md` for two worked walkthroughs (authenticated SaaS flow, public marketing flow).
+
+### Task description doc migration (v0.17.0)
+
+Task descriptions now live in a Monday doc column (`doc_mm3sg1kr`) instead of the legacy `long_text_mm0mcp77` text column (capped at 2000 chars). The plain `description` parameter on `createTask`/`updateTask` writes through transparently; `getTask` reads the doc first with a fallback to the legacy column for un-backfilled tasks.
+
+**New MCP tools** for direct doc access (parallel to UAT-doc tools): `createTaskDescriptionDoc`, `updateTaskDescriptionDoc`, `getTaskDescriptionDoc`.
+
+**Refinement-gate** accepts "doc attached on `doc_mm3sg1kr`" as evidence of description (no length check on doc content — content quality enforced server-side via `validateReadyToStart`).
+
+**One-off backfill** copies existing long_text values into freshly-created docs:
+
+```bash
+cd plugin
+export MONDAY_API_KEY=...
+npx tsx scripts/backfill-description-to-doc.ts            # dry run
+npx tsx scripts/backfill-description-to-doc.ts --apply    # actually write
+```
+
+Idempotent — re-runs skip tasks that already have a doc attached.
+
+**After backfill verified**, delete `long_text_mm0mcp77` from the Tasks board on the Monday admin UI (no API for column deletion). A follow-up plugin PR drops the legacy fallback reads.
 
 ### Quality over speed
 

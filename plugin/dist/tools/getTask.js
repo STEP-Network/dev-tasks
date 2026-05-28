@@ -1,6 +1,8 @@
 import { executeMondayQuery } from "../monday-client.js";
 import { BOARDS, TASK_COLUMNS, SUBTASK_COLUMNS } from "../constants.js";
 import { evaluatePublicVisibility, getColumnText, getColumnValue, getLinkedItems, getMirrorDisplayValue, getLinkUrl, mondayItemUrl, parseMondayDate, formatSubtask, formatError, } from "./utils.js";
+import { extractDocObjectId, readDocAsMarkdown, } from "../services/doc-utils.js";
+import { DOC_API_VERSION } from "../monday-client.js";
 export async function getTask(args) {
     try {
         const { itemId, format = "markdown" } = args;
@@ -13,6 +15,7 @@ export async function getTask(args) {
             TASK_COLUMNS.estimatedHours,
             TASK_COLUMNS.actualHours,
             TASK_COLUMNS.description,
+            TASK_COLUMNS.descriptionDoc,
             TASK_COLUMNS.epic,
             TASK_COLUMNS.sprint,
             TASK_COLUMNS.targetVersion,
@@ -81,7 +84,34 @@ export async function getTask(args) {
         const taskType = getColumnText(colMap, TASK_COLUMNS.type) || "—";
         const estimatedHours = getMirrorDisplayValue(colMap, TASK_COLUMNS.estimatedHours);
         const actualHours = getMirrorDisplayValue(colMap, TASK_COLUMNS.actualHours);
-        const description = getColumnText(colMap, TASK_COLUMNS.description) || "";
+        // Description: read from the descriptionDoc column first; fall back to the
+        // legacy long_text column for tasks not yet backfilled. The doc read is two
+        // extra Monday API calls (resolve objectId → primary docId, then export)
+        // and only fires when a doc is attached. Skip entirely if no doc.
+        let description = "";
+        const descDocValue = getColumnValue(colMap, TASK_COLUMNS.descriptionDoc);
+        const descObjectId = extractDocObjectId(descDocValue);
+        if (descObjectId) {
+            try {
+                const docIdQuery = `query { docs(object_ids: [${descObjectId}]) { id } }`;
+                const docIdResp = await executeMondayQuery(docIdQuery, undefined, { apiVersion: DOC_API_VERSION });
+                const rawDocId = docIdResp.docs?.[0]?.id;
+                const docId = typeof rawDocId === "number"
+                    ? rawDocId
+                    : typeof rawDocId === "string" && /^\d+$/.test(rawDocId)
+                        ? Number(rawDocId)
+                        : undefined;
+                if (docId) {
+                    description = (await readDocAsMarkdown(docId)).trim();
+                }
+            }
+            catch {
+                // Fall through to legacy long_text.
+            }
+        }
+        if (!description) {
+            description = getColumnText(colMap, TASK_COLUMNS.description) || "";
+        }
         const owner = getColumnText(colMap, TASK_COLUMNS.owner) || "Unassigned";
         // Dates
         const startedDate = parseMondayDate(colMap.get(TASK_COLUMNS.startedDate));

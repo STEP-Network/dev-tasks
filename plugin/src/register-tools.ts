@@ -42,6 +42,9 @@ import {
   GetTaskUatDocSchema,
   CreateTaskUatDocSchema,
   UpdateTaskUatDocSchema,
+  GetTaskDescriptionDocSchema,
+  CreateTaskDescriptionDocSchema,
+  UpdateTaskDescriptionDocSchema,
 } from "./schemas.ts";
 import {
   getBacklog,
@@ -84,6 +87,9 @@ import {
   getTaskUatDoc,
   createTaskUatDoc,
   updateTaskUatDoc,
+  getTaskDescriptionDoc,
+  createTaskDescriptionDoc,
+  updateTaskDescriptionDoc,
   getVersionTimeline,
 } from "./tools/index.ts";
 
@@ -548,6 +554,40 @@ server.tool(
   UpdateTaskUatDocSchema.shape,
   async (args) => {
     const result = await updateTaskUatDoc(args);
+    return { content: [{ type: "text", text: result }] };
+  }
+);
+
+// =========================================================================
+// Description Docs (Monday Doc column doc_mm3sg1kr — replaces legacy long_text)
+// =========================================================================
+
+server.tool(
+  "getTaskDescriptionDoc",
+  "Read the task description doc (Monday Doc on column doc_mm3sg1kr) as markdown. New tasks have descriptions stored here (uncapped length) instead of the legacy long_text_mm0mcp77 column (2000-char cap). getTask transparently reads this with a fallback to the legacy column for pre-migration tasks; use this tool for direct doc-level access.",
+  GetTaskDescriptionDocSchema.shape,
+  async (args) => {
+    const result = await getTaskDescriptionDoc(args);
+    return { content: [{ type: "text", text: result }] };
+  }
+);
+
+server.tool(
+  "createTaskDescriptionDoc",
+  "Create a new description doc on a task (column doc_mm3sg1kr). Refuses if a doc already exists — use updateTaskDescriptionDoc to modify. Most callers should pass `description` to createTask/updateTask instead; this is for direct doc-only flows (e.g. converting an existing long description without other field changes).",
+  CreateTaskDescriptionDocSchema.shape,
+  async (args) => {
+    const result = await createTaskDescriptionDoc(args);
+    return { content: [{ type: "text", text: result }] };
+  }
+);
+
+server.tool(
+  "updateTaskDescriptionDoc",
+  "Update the existing description doc on a task (column doc_mm3sg1kr). overwrite=true (default) replaces; overwrite=false appends. Refuses if no doc exists — use createTaskDescriptionDoc first.",
+  UpdateTaskDescriptionDocSchema.shape,
+  async (args) => {
+    const result = await updateTaskDescriptionDoc(args);
     return { content: [{ type: "text", text: result }] };
   }
 );

@@ -1,5 +1,6 @@
 import { executeMondayQuery } from "../monday-client.js";
 import { BOARDS, TASK_COLUMNS, TASK_STATUS, TASK_PRIORITY, TASK_TYPE, AGENT_ID, } from "../constants.js";
+import { ensureItemDoc, fetchItemName, writeDocContentReplacing, } from "../services/doc-utils.js";
 import { autoAssignVersionForTask } from "../services/auto-version.js";
 import { maybeHandleBounceback, recomputeAggregateForTaskVersion, } from "../services/version-state-machine.js";
 import { buildColumnValues, formatError, formatSubtask, getLinkedItems, planActiveSprintPull, validateReadyToStart, validateTaskInActiveSprint, validateWaitingForUAT, } from "./utils.js";
@@ -156,10 +157,9 @@ export async function updateTask(args) {
             columnValues[TASK_COLUMNS.type] = { index: TASK_TYPE[args.type] };
             changes.push(`Type -> ${args.type}`);
         }
-        if (args.description !== undefined) {
-            columnValues[TASK_COLUMNS.description] = { text: args.description };
-            changes.push(`Description updated`);
-        }
+        // Description is written to the descriptionDoc (doc column), not long_text.
+        // Handled as a separate post-mutation step below since it needs its own
+        // doc-API calls (ensureItemDoc + writeDocContentReplacing).
         if (args.dueDate !== undefined) {
             columnValues[TASK_COLUMNS.dueDate] = { date: args.dueDate };
             changes.push(`Due Date -> ${args.dueDate}`);
@@ -256,6 +256,19 @@ export async function updateTask(args) {
         }
       `;
             await executeMondayQuery(mutation);
+        }
+        // Write description to the doc column. Best-effort: surface failure but
+        // don't undo the column updates above.
+        if (args.description !== undefined) {
+            try {
+                const name = await fetchItemName(itemId);
+                const docId = await ensureItemDoc(itemId, TASK_COLUMNS.descriptionDoc, name ? `Description — Task #${itemId}: ${name}` : `Description — Task #${itemId}`);
+                await writeDocContentReplacing(docId, args.description);
+                changes.push(`Description updated`);
+            }
+            catch (e) {
+                warnings.push(`Description write failed: ${e instanceof Error ? e.message : String(e)}`);
+            }
         }
         // Version-side automation after a status change. Three steps run in order
         // — each is fail-soft so a Monday API hiccup doesn't fail the underlying

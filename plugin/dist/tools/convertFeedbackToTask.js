@@ -1,5 +1,6 @@
 import { executeMondayQuery } from "../monday-client.js";
 import { BOARDS, TASK_COLUMNS, TASK_STATUS, TASK_PRIORITY, TASK_TYPE, FEEDBACK_COLUMNS, FEEDBACK_STATUS, } from "../constants.js";
+import { ensureItemDoc, writeDocContentReplacing } from "../services/doc-utils.js";
 import { buildColumnValues, getColumnText, getLinkedItems, resolveMaintenanceEpicId, formatError } from "./utils.js";
 export async function convertFeedbackToTask(args) {
     try {
@@ -69,9 +70,7 @@ export async function convertFeedbackToTask(args) {
         taskColumnValues[TASK_COLUMNS.status] = { index: TASK_STATUS["Ready to Start"] };
         // Link task back to feedback item via the two-way relation
         taskColumnValues[TASK_COLUMNS.feedback] = { item_ids: [feedbackId] };
-        if (fullDescription) {
-            taskColumnValues[TASK_COLUMNS.description] = { text: fullDescription };
-        }
+        // fullDescription written to descriptionDoc (doc column) after create_item.
         if (resolvedEpicId) {
             taskColumnValues[TASK_COLUMNS.epic] = { item_ids: [resolvedEpicId] };
         }
@@ -95,6 +94,17 @@ export async function convertFeedbackToTask(args) {
         const newTask = createResponse.create_item;
         if (!newTask) {
             return formatError("Failed to create task from feedback item.");
+        }
+        // Step 2b: Write the synthesized description to the doc column. Best-effort.
+        if (fullDescription) {
+            const newTaskId = Number(newTask.id);
+            try {
+                const docId = await ensureItemDoc(newTaskId, TASK_COLUMNS.descriptionDoc, `Description — Task #${newTaskId}: ${itemName}`);
+                await writeDocContentReplacing(docId, fullDescription);
+            }
+            catch (e) {
+                console.error(`convertFeedbackToTask: failed to write description doc for new task #${newTaskId}: ${e instanceof Error ? e.message : String(e)}`);
+            }
         }
         // Step 3: Update feedback status to "Converted"
         const statusColumnValues = {

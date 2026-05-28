@@ -160,6 +160,27 @@ PRIORITY = col_text("task_priority") or col_text("priority")
 DESCRIPTION = col_text("long_text_mm0mcp77") or col_text("long_text") or col_text("long_text__1") or col_text("long_text_mkqnezpz")
 AC = col_text("long_text_mm0pqaxy") or col_text("long_text_mkqnf3aw") or col_text("long_text_mkqnf2tk")
 
+# Description doc column (doc_mm3sg1kr): when a Monday doc is attached, the
+# `value` JSON contains a non-empty `files` array. Reading the doc content
+# would cost 2 extra API calls per hook invocation — skip the length check
+# in that case and treat "doc attached" as evidence of refinement. The MCP
+# server-side validator (validateReadyToStart) applies the same rule.
+DESCRIPTION_DOC_ATTACHED = False
+for cv in col_vals:
+    if cv.get("id") != "doc_mm3sg1kr":
+        continue
+    value_str = (cv.get("value") or "").strip()
+    if not value_str:
+        break
+    try:
+        vdata = json.loads(value_str)
+        files = vdata.get("files") or []
+        if isinstance(files, list) and len(files) > 0:
+            DESCRIPTION_DOC_ATTACHED = True
+    except (json.JSONDecodeError, AttributeError, TypeError):
+        pass
+    break
+
 # Epic detection: match `task_epic` explicitly OR any `board_relation_*` column.
 # board_relation columns return empty `text` via the basic GraphQL query, so we
 # also check the BoardRelationValue typed fragment fields (display_value,
@@ -188,8 +209,11 @@ if not PRIORITY:
     missing.append("priority")
 if not EPIC_LINKED:
     missing.append("epicId")
-if len(DESCRIPTION) < 200:
-    missing.append(f"description (got {len(DESCRIPTION)} chars, need 200+)")
+# Description: accept either >=200 chars on the legacy long_text column OR a
+# doc attached on the new descriptionDoc column (content quality enforced
+# server-side by the MCP createTask/updateTask gates).
+if not DESCRIPTION_DOC_ATTACHED and len(DESCRIPTION) < 200:
+    missing.append(f"description (got {len(DESCRIPTION)} chars, need 200+ or a description doc attached)")
 if not AC:
     missing.append("acceptanceCriteria")
 
