@@ -97,21 +97,15 @@ fi
 # has nothing to emit unless it explicitly fakes the marker via Bash (visible in
 # the transcript).
 PASSED=$(echo "$INPUT" | python3 -c "
-import sys, json
+import sys, json, os
+sys.path.insert(0, os.path.join('$SCRIPT_DIR', 'lib'))
+from tool_response_helpers import extract_text
 try:
     data = json.load(sys.stdin)
 except Exception:
     sys.exit(0)
-resp = data.get('tool_response', '')
-if isinstance(resp, dict):
-    text = resp.get('content') or resp.get('output') or resp.get('text') or ''
-    if isinstance(text, list):
-        text = '\n'.join(p.get('text','') if isinstance(p, dict) else str(p) for p in text)
-elif isinstance(resp, str):
-    text = resp
-else:
-    text = ''
-if 'Self-Review PASSED' in str(text):
+text = extract_text(data.get('tool_response', ''))
+if 'Self-Review PASSED' in text:
     print('YES')
 " 2>/dev/null)
 

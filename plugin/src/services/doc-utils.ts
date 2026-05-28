@@ -76,8 +76,8 @@ export function extractDocObjectId(docValue: unknown): number | undefined {
   // NOTE: do NOT check `doc_id` here. Some older Monday item shapes store the
   // doc's PRIMARY id under `doc_id`, not the per-item object_id we need for
   // docs(object_ids: [...]). Treating that primary id as an object_id makes
-  // resolveDocPrimaryId silently return undefined (no doc found). Mirror the
-  // sibling changelog-doc.ts pattern: only `objectId` / `object_id`.
+  // resolveDocPrimaryId silently return undefined (no doc found). Accept
+  // only `objectId` / `object_id`.
   const files = obj.files as Array<Record<string, unknown>> | undefined;
   if (files && files.length > 0) {
     const oid = files[0].objectId;

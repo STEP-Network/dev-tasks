@@ -20,6 +20,12 @@ import subprocess
 import sys
 from datetime import datetime, timezone
 
+# Shared tool_response → text helper. Co-located in lib/ so post-self-review.sh
+# can also import it from its inline python3 -c block. Single source of truth
+# for the Claude Code PostToolUse payload shape variants.
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib"))
+from tool_response_helpers import extract_text  # noqa: E402
+
 
 # Severity tokens are case-sensitive. Reviewer prose consistently uses
 # UPPERCASE for severity (BLOCKER / IMPROVEMENT / POLISH / FAIL / PASS / N/A);
@@ -243,30 +249,9 @@ def main() -> None:
         # Can't parse hook input — emit nothing (hook will skip the append).
         return
 
-    # The Task tool result is in `tool_response`. Different surfaces shape this
-    # slightly differently; handle the common cases.
-    tool_response = payload.get("tool_response", {}) or {}
-    if isinstance(tool_response, str):
-        text = tool_response
-    elif isinstance(tool_response, dict):
-        # Common shapes: {"content": "..."}, {"output": "..."}, {"text": "..."}
-        text = (
-            tool_response.get("content")
-            or tool_response.get("output")
-            or tool_response.get("text")
-            or ""
-        )
-        if isinstance(text, list):
-            # Sometimes content is a list of parts — join the text parts.
-            text = "\n".join(
-                part.get("text", "") if isinstance(part, dict) else str(part)
-                for part in text
-            )
-    else:
-        text = ""
-
-    if not isinstance(text, str):
-        text = str(text)
+    # The Task tool result is in `tool_response`. Shape-handling for str / dict
+    # (with content|output|text) / list-of-parts lives in `tool_response_helpers`.
+    text = extract_text(payload.get("tool_response", {}))
 
     active_task = safe_get_active_task()
     branch = safe_run(["git", "rev-parse", "--abbrev-ref", "HEAD"]) or active_task.get("branch", "unknown")

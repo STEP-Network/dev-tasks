@@ -34,116 +34,33 @@
  *   between the markers is the machine-readable canonical form. Both regenerate
  *   together on every write.
  *
- * **Doc resolution**: Monday's `doc` column stores `{ files: [{ objectId }] }`.
- * The objectId is the per-item linkage id, but `add_content_to_doc_from_markdown`
- * and `export_markdown_from_doc` want the doc's primary `id`. Resolve via
- * `docs(object_ids: [objectId]) { id }`. This module hides that complexity.
- *
- * **Replace semantics**: Monday 2025-10 dropped the `overwrite` flag on
- * `add_content_to_doc_from_markdown`. To emulate replacement, drain every
- * existing block via `delete_doc_block`, then `add_content_to_doc_from_markdown`
- * with the new content. Pattern lifted from generateChangelog.ts.
+ * **Doc resolution + drain-and-replace** live in `doc-utils.ts` (`fetchItemDocId`,
+ * `ensureItemDoc`, `writeDocContentReplacing`, `readDocAsMarkdown`). Earlier
+ * versions of this module inlined those Monday API patterns; the cleanup that
+ * landed in PR M (code-review finding #12) collapsed them to thin wrappers
+ * around the shared helpers so changes to the Monday doc contract land in one
+ * place instead of silently diverging.
  */
-import { DOC_API_VERSION, executeMondayQuery } from "../monday-client.js";
 import { VERSION_COLUMNS } from "../constants.js";
-import { getColumnValue, todayDate } from "../tools/utils.js";
-import { setDocName, fetchItemName } from "./doc-utils.js";
-const DOC_OPTS = { apiVersion: DOC_API_VERSION };
+import { todayDate } from "../tools/utils.js";
+import { fetchItemDocId, fetchItemName, ensureItemDoc, readDocAsMarkdown, writeDocContentReplacing, } from "./doc-utils.js";
 const MARKER_BEGIN = "<!-- structured-changelog:begin -->";
 const MARKER_END = "<!-- structured-changelog:end -->";
 // =============================================================================
-// Resolve / ensure a Doc on a version
+// Ensure a Doc on a version (find-or-create with title)
 // =============================================================================
 /**
- * Find the docId for a version's changelog column. Returns null if no doc
- * is attached yet.
+ * Ensure a Doc exists for a version's changelog column. Creates one if missing,
+ * setting a title based on the version's name. Returns the doc's primary id.
+ *
+ * Internal — callers go through `writeUnifiedChangelogToVersion`.
  */
-export async function resolveDocIdForVersion(versionId) {
-    const query = `
-    query {
-      items(ids: [${versionId}]) {
-        column_values(ids: ["${VERSION_COLUMNS.changelog}"]) {
-          id
-          value
-        }
-      }
-    }
-  `;
-    const res = await executeMondayQuery(query);
-    const cols = res.items?.[0]?.column_values || [];
-    const colMap = new Map(cols.map((c) => [c.id, c]));
-    const docValue = getColumnValue(colMap, VERSION_COLUMNS.changelog);
-    if (!docValue || typeof docValue !== "object")
-        return null;
-    let docObjectId;
-    const obj = docValue;
-    const files = obj.files;
-    if (files && files.length > 0) {
-        const oid = files[0].objectId;
-        if (typeof oid === "number")
-            docObjectId = oid;
-        else if (typeof oid === "string" && /^\d+$/.test(oid))
-            docObjectId = Number(oid);
-    }
-    if (!docObjectId) {
-        const idMatch = JSON.stringify(obj).match(/"(?:objectId|object_id)"\s*:\s*(\d+)/);
-        if (idMatch)
-            docObjectId = Number(idMatch[1]);
-    }
-    if (!docObjectId)
-        return null;
-    const resolveQuery = `
-    query {
-      docs(object_ids: [${docObjectId}]) { id }
-    }
-  `;
-    const resolveRes = await executeMondayQuery(resolveQuery, undefined, DOC_OPTS);
-    const rawId = resolveRes.docs?.[0]?.id;
-    if (typeof rawId === "number")
-        return rawId;
-    if (typeof rawId === "string" && /^\d+$/.test(rawId))
-        return Number(rawId);
-    return null;
-}
-/**
- * Ensure a Doc exists for a version's changelog column. Creates one if missing.
- */
-export async function ensureDocForVersion(versionId) {
-    const existing = await resolveDocIdForVersion(versionId);
-    if (existing)
-        return existing;
-    const createMutation = `
-    mutation {
-      create_doc(
-        location: { board: { item_id: ${versionId}, column_id: "${VERSION_COLUMNS.changelog}" } }
-      ) {
-        id
-      }
-    }
-  `;
-    const res = await executeMondayQuery(createMutation, undefined, DOC_OPTS);
-    const newIdRaw = res.create_doc?.id;
-    const newId = typeof newIdRaw === "number"
-        ? newIdRaw
-        : typeof newIdRaw === "string" && /^\d+$/.test(newIdRaw)
-            ? Number(newIdRaw)
-            : undefined;
-    if (!newId) {
-        throw new Error(`Failed to create changelog Doc for version #${versionId}`);
-    }
-    // Rename the new doc so it's findable in Monday's UI. Best-effort —
-    // a rename failure shouldn't block downstream changelog content writes.
+async function ensureDocForVersion(versionId) {
     const versionName = await fetchItemName(versionId);
-    const docTitle = versionName
+    const title = versionName
         ? `Changelog — ${versionName}`
         : `Changelog — Version #${versionId}`;
-    try {
-        await setDocName(newId, docTitle);
-    }
-    catch {
-        // Title is nice-to-have.
-    }
-    return newId;
+    return ensureItemDoc(versionId, VERSION_COLUMNS.changelog, title);
 }
 // =============================================================================
 // Read structured changelog from Doc
@@ -211,23 +128,24 @@ export function extractStructuredFromMarkdown(markdown) {
  *   - No Doc attached
  *   - Doc has no `structured-changelog:begin/end` markers
  *   - JSON block fails to parse
+ *   - Monday export fails (best-effort — callers fall back to legacy paths)
  */
 export async function readStructuredFromVersionDoc(versionId) {
-    const docId = await resolveDocIdForVersion(versionId);
+    const docId = await fetchItemDocId(versionId, VERSION_COLUMNS.changelog);
     if (!docId)
         return null;
-    const query = `
-    query {
-      export_markdown_from_doc(docId: ${docId}) {
-        markdown
-      }
+    try {
+        const markdown = await readDocAsMarkdown(docId);
+        if (!markdown)
+            return null;
+        return extractStructuredFromMarkdown(markdown);
     }
-  `;
-    const res = await executeMondayQuery(query, undefined, DOC_OPTS);
-    const markdown = res.export_markdown_from_doc?.markdown;
-    if (!markdown || typeof markdown !== "string")
+    catch {
+        // readDocAsMarkdown throws on Monday `success:false`; pre-refactor behavior
+        // was to silently return null here, and callers already treat null as "no
+        // parseable structured changelog available" and fall back accordingly.
         return null;
-    return extractStructuredFromMarkdown(markdown);
+    }
 }
 // =============================================================================
 // Render structured changelog as unified markdown (human + JSON block)
@@ -305,40 +223,6 @@ export function renderUnifiedChangelog(c, opts) {
 export async function writeUnifiedChangelogToVersion(versionId, c, opts) {
     const docId = await ensureDocForVersion(versionId);
     const markdown = renderUnifiedChangelog(c, opts);
-    // Drain all existing blocks. Monday paginates ~25 per query; cap iterations.
-    for (let pass = 0; pass < 50; pass++) {
-        const blocksQuery = `
-      query {
-        docs(ids: [${docId}]) {
-          blocks { id }
-        }
-      }
-    `;
-        const blocksRes = await executeMondayQuery(blocksQuery, undefined, DOC_OPTS);
-        const blocks = blocksRes.docs?.[0]?.blocks || [];
-        if (blocks.length === 0)
-            break;
-        for (const block of blocks) {
-            if (!block.id)
-                continue;
-            const delMutation = `
-        mutation {
-          delete_doc_block(block_id: ${JSON.stringify(block.id)}) { id }
-        }
-      `;
-            await executeMondayQuery(delMutation, undefined, DOC_OPTS);
-        }
-    }
-    const writeMutation = `
-    mutation {
-      add_content_to_doc_from_markdown(
-        docId: ${docId},
-        markdown: ${JSON.stringify(markdown)}
-      ) {
-        success
-      }
-    }
-  `;
-    await executeMondayQuery(writeMutation, undefined, DOC_OPTS);
+    await writeDocContentReplacing(docId, markdown);
     return docId;
 }
