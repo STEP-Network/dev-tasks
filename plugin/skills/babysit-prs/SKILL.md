@@ -100,7 +100,11 @@ For each freshly-merged PR (if MCP up):
    - Flip subtasks Done via `manageSubtasks({ parentItemId, operations })` with `actualHours`
    - Monday automation auto-flips parent when all subtasks Done
 5. Post `createUpdate({ itemId, body: HTML })` summarizing merge.
-6. **Record the merge SHA as reconciled** (required when `stop-monday-reconciled-check` is enabled in the orchestrator session — else the hook fires at orchestrator session-end because merges landed without their SHAs appearing in `.claude/active-task.json` `mondayReconciledShas[]`). Append the SHA captured in Phase 2 step 5 to the orchestrator's own `.claude/active-task.json` `mondayReconciledShas[]` (initialize as `[]` if absent). Subagent-driven worktree sessions don't need this — they're already removed in Phase 4.
+6. **Record the merge SHA as reconciled** (required when `stop-monday-reconciled-check` is enabled in the orchestrator session — else the hook fires at orchestrator session-end because merges landed without their SHAs appearing in `.claude/active-task.json` `mondayReconciledShas[]`). Emit the marker first, then append:
+   ```bash
+   bash ${CLAUDE_PLUGIN_ROOT}/scripts/emit-state-marker.sh mondayReconciledShas
+   ```
+   Then append the SHA captured in Phase 2 step 6 to the orchestrator's own `.claude/active-task.json` `mondayReconciledShas[]` (initialize as `[]` if absent). The marker unlocks `protect-active-task-state` for this append. Subagent-driven worktree sessions don't need this — they're already removed in Phase 4.
 
 MCP down: capture state inline as checklist; defer reconciliation; catch up immediately on recovery.
 

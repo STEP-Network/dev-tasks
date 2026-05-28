@@ -47,6 +47,12 @@
             "type": "string",
             "enum": ["never", "auto-after-checks-and-review", "manual-only"]
           }
+        },
+        "protectedBranches": {
+          "description": "Branch names that must never receive a direct `git push`. Enforced by bash-guard gate (f). Default: [main, staging, master, production, prod]. Set to [] to disable the gate while keeping the rest of bash-guard active.",
+          "type": "array",
+          "items": { "type": "string" },
+          "default": ["main", "staging", "master", "production", "prod"]
         }
       }
     },
@@ -321,7 +327,8 @@
               "demo-url-required",
               "stop-waiting-for-uat-stage",
               "stop-monday-reconciled-check",
-              "pre-merge-review-gate"
+              "pre-merge-review-gate",
+              "protect-active-task-state"
             ]
           },
           "uniqueItems": true
