@@ -504,14 +504,15 @@ export async function validateReadyToStart(
     };
   });
 
-  // Description resolution: prefer proposed input; else accept the
-  // descriptionDoc column when a doc is attached. The doc-attached path uses a
-  // sentinel string so the "is empty" check in classifyReadyToStartBlockers
-  // passes without paying for an export_markdown_from_doc round-trip — the
-  // actual content is whatever the caller wrote via createTaskDescriptionDoc
-  // or the createTask/updateTask description write path.
+  // Description resolution: prefer non-empty proposed input; else accept the
+  // descriptionDoc column when a doc is attached. Use `!x?.trim()` (not
+  // `=== undefined`) so an explicit `description: ''` from the caller still
+  // falls through to the doc-attached sentinel — otherwise a caller clearing
+  // the description string while updating other fields would get a spurious
+  // 'description is empty' blocker even when a populated description doc
+  // already exists on the task.
   let descriptionForCheck: string | undefined = proposed.description;
-  if (descriptionForCheck === undefined) {
+  if (!descriptionForCheck?.trim()) {
     const docVal = getColumnValue(colMap, TASK_COLUMNS.descriptionDoc);
     if (docVal && typeof docVal === "object") {
       const files = (docVal as any).files;

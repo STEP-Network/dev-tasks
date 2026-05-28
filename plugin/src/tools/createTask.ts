@@ -200,7 +200,14 @@ export async function createTask(args: CreateTaskInput): Promise<string> {
       let promoted: boolean | undefined;
       let promotionBlockers: string[] | undefined;
       if (wantsReadyToStart) {
-        const check = await validateReadyToStart(Number(createdItem.id), {});
+        // Pass the in-memory `task.description` so validateReadyToStart doesn't
+        // re-query Monday for the descriptionDoc column. Monday's docs-resolve
+        // API has eventual-consistency latency after create_doc, which would
+        // otherwise make the validator see "no doc attached" and silently set
+        // promoted=false — even though the doc was just created.
+        const check = await validateReadyToStart(Number(createdItem.id), {
+          description: task.description,
+        });
         if (check.valid) {
           const promoteMutation = `
             mutation {

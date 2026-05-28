@@ -21,10 +21,17 @@
 
 resolve_agent_cwd() {
   local input="$1"
+  # NOTE: the python source below is interpolated as a double-quoted shell
+  # string, so backticks and unescaped $ would be evaluated by bash. Keep the
+  # python body free of those shell metacharacters.
   printf '%s' "$input" | python3 -c "
 import sys, json
 try:
-    print(json.load(sys.stdin).get('cwd', ''))
+    # get(key) defaults to None on missing; for JSON null the value IS None.
+    # print(None) emits the literal string None, which callers misinterpret
+    # as a valid path. Coerce with 'or empty-string' so missing AND null both
+    # produce empty output and the caller fallback chain triggers.
+    print(json.load(sys.stdin).get('cwd') or '')
 except Exception:
     pass
 " 2>/dev/null

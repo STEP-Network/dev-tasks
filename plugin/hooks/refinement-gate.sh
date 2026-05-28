@@ -27,6 +27,7 @@ exec >&2
 # Opt-in gate: silent no-op unless the consumer enabled this hook in their
 # .claude/project-config.json hooks.enabled[] array.
 source "$(dirname "${BASH_SOURCE[0]}")/lib/config-reader.sh"
+source "$(dirname "${BASH_SOURCE[0]}")/lib/resolve-agent-cwd.sh"
 hook_enabled "refinement-gate" || exit 0
 
 # Read tool input from stdin (consumed once).
@@ -62,9 +63,12 @@ if [[ "$PLAN_ID" == *"--accept-drift"* ]]; then
   ACCEPT_DRIFT=1
 fi
 
-# Resolve project root via existing helper (worktree-aware).
+# Resolve project root. Prefer the agent's actual cwd from the hook payload —
+# CLAUDE_PROJECT_DIR is pinned to the main checkout at session start and would
+# point at the wrong .claude/cache/monday-board-map.json in a worktree session.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_ROOT="${CLAUDE_PROJECT_DIR:-$PWD}"
+AGENT_CWD=$(resolve_agent_cwd "$INPUT")
+PROJECT_ROOT="${AGENT_CWD:-${CLAUDE_PROJECT_DIR:-$PWD}}"
 
 # Read the cached board map. If absent, fall back to the canonical Bugs board id.
 BUGS_BOARD_ID="5091706353"
