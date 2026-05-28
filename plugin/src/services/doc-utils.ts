@@ -25,13 +25,20 @@ const DOC_OPTS = { apiVersion: DOC_API_VERSION };
  * Rename a Monday doc. Idempotent — repeated calls with the same name are
  * harmless. Errors are surfaced to the caller so they can decide whether
  * a missing title is fatal (it usually isn't — the doc still works).
+ *
+ * `update_doc_name` returns Monday's `JSON` scalar (verified via schema
+ * introspection 2026-05-28). The JSON scalar has no GraphQL subfields, so
+ * Monday rejects any selection set with "must not have a selection since
+ * type 'JSON' has no subfields" — meaning the mutation call must be bare.
+ * Bug introduced in PR B (which selected `{ id }`); every doc created via
+ * `ensureItemDoc` between PR B and this fix landed with the default
+ * "Untitled" name because the failure was swallowed by the caller's
+ * try/catch.
  */
 export async function setDocName(docId: number, name: string): Promise<void> {
   const mutation = `
     mutation {
-      update_doc_name(docId: ${docId}, name: ${JSON.stringify(name)}) {
-        id
-      }
+      update_doc_name(docId: ${docId}, name: ${JSON.stringify(name)})
     }
   `;
   await executeMondayQuery<unknown>(mutation, undefined, DOC_OPTS);
