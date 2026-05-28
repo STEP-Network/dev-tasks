@@ -13,17 +13,21 @@
 # looking for commits authored by `gh pr merge` (i.e. the merged-PR commit on
 # the staging/main branch tip).
 #
-# Escape hatch: handoff-to-orchestrator. Per the new agent policy (memory
-# feedback_agent_never_merges.md), agents push + open PR + handoff; the
-# orchestrator merges centrally. Setting reviewAddressed=handoff-to-orchestrator
-# means "I'm handing off, the orchestrator does the reconciliation". Skip
-# this hook in that case.
+# Escape hatches:
+#   - handoff-to-orchestrator: per the agent-never-merges policy, agents push +
+#     open PR + handoff; the orchestrator merges centrally and reconciles. Skip.
+#   - stuck:* / timeout:*: the agent has intentionally halted because it can't
+#     proceed (regression-loop, max-rounds, etc.) — there's no merge SHA to
+#     reconcile (the merge didn't happen, that's the point of the halt).
+#     Blocking on reconciliation here creates an impossible state.
+#     pre-merge-review-gate.py still refuses the merge for any stuck:*/timeout:*
+#     value, so this escape only governs the session-stop gate, not the merge.
 #
 # Pass-through cases:
 #   - No active-task.json
 #   - No PRs detected as merged this session (reflog has no `gh pr merge` traces
 #     since the marker)
-#   - reviewAddressed=handoff-to-orchestrator
+#   - reviewAddressed matches: handoff-to-orchestrator | stuck:* | timeout:*
 
 # Redirect stdout to stderr.
 exec >&2
@@ -60,11 +64,17 @@ if ! STATE_FILE_PATH="$STATE_FILE" python3 -c "import json, os; json.load(open(o
   exit 0
 fi
 
-# Escape hatch: handoff-to-orchestrator.
+# Escape hatch: handoff-to-orchestrator, or any stuck:*/timeout:* halt the
+# agent has explicitly entered. A round-5 HALT will not have a merge SHA to
+# reconcile (the merge didn't happen — that's the point of the halt), so
+# blocking on missing reconciliation would create an impossible state. The
+# user resumes manually after triaging the unresolved findings.
 REVIEW_ADDRESSED=$(jq -r '.reviewAddressed // ""' "$STATE_FILE" 2>/dev/null)
-if [ "$REVIEW_ADDRESSED" = "handoff-to-orchestrator" ]; then
-  exit 0
-fi
+case "$REVIEW_ADDRESSED" in
+  handoff-to-orchestrator|stuck:*|timeout:*)
+    exit 0
+    ;;
+esac
 
 # Locate the merge marker. If absent, create + exit silently (this is the
 # session-start state; nothing to reconcile yet).

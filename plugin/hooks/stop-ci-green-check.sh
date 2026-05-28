@@ -61,13 +61,22 @@ fi
 # If the agent set reviewAddressed: "handoff-to-orchestrator" in active-task.json,
 # clear the marker (so subsequent stops don't re-trigger) and let exit through.
 # This is opt-in per agent + per push — auto-merge agents still gate on CI green.
+#
+# Also escape on `stuck:*` values (regression-loop, max-rounds, etc.): the agent
+# has deliberately halted because it cannot proceed, and the user needs to
+# intervene. Blocking the stop on CI green here would create an impossible
+# state (can't fix, can't stop). pre-merge-review-gate.py still refuses the
+# merge for any stuck:* value (line 118), so this escape only governs the
+# session-stop gate, not the merge gate.
 ACTIVE_TASK="$PROJECT_ROOT/.claude/active-task.json"
 if [ -f "$ACTIVE_TASK" ]; then
   REVIEW_ADDRESSED=$(jq -r '.reviewAddressed // ""' "$ACTIVE_TASK" 2>/dev/null)
-  if [ "$REVIEW_ADDRESSED" = "handoff-to-orchestrator" ]; then
-    rm -f "$MARKER"
-    exit 0
-  fi
+  case "$REVIEW_ADDRESSED" in
+    handoff-to-orchestrator|stuck:*|timeout:*)
+      rm -f "$MARKER"
+      exit 0
+      ;;
+  esac
 fi
 
 # Find PR for this branch

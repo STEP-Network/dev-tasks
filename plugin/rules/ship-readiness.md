@@ -71,19 +71,58 @@ When in doubt, lean POLISH. Over-fixing > under-fixing.
 
 ## Review loop termination
 
-No hard cap on iteration count — a later round can surface a new BLOCKER introduced by an earlier fix.
+**`/ship-pr` Phase 6 hard cap: 5 rounds** (CI+review polling loop, autonomous-merge path). `/self-review` keeps its no-cap-with-regression-loop behavior — local pre-push iterations are cheap and rarely hit 5 anyway.
 
 | Round N outcome | Action |
 |---|---|
-| Any BLOCKER (incl. regression from N-1) | Fix → re-push → round N+1 |
+| Any BLOCKER (incl. regression from N-1) AND round ≤ 4 | Fix → re-push → round N+1 |
+| Any BLOCKER remaining at round 5 | **At-cap re-triage** (see next section) — halt or demote-and-merge based on actual-critical filter |
 | Only IMPROVEMENTs, all declined | Post decline, ship (`reviewAddressed: "accepted"` or `"fixed"`) |
-| Only IMPROVEMENTs, some cheap | Fix cheap ones → re-push → round N+1 |
+| Only IMPROVEMENTs, some cheap | Fix cheap ones → re-push → round N+1 (within cap) |
 | Only POLISH | Post decline listing items + reasons, ship |
-| Mix | Fix BLOCKERs + cheap IMPROVEMENTs, decline POLISH, round N+1 |
+| Mix | Fix BLOCKERs + cheap IMPROVEMENTs, decline POLISH, round N+1 (within cap) |
 
-Loop terminates when zero BLOCKERs remain.
+Loop terminates when zero BLOCKERs remain OR at-cap re-triage halts/demotes.
 
-**Escalation signal (not a cap)**: three consecutive rounds each introducing a NEW BLOCKER → something is architecturally wrong. Post `/log-progress TASK_STUCK` and ask for direction. Regression-loop detection, not a round limit.
+**Escalation signals:**
+- **Regression loop** (early exit, fires before round 5): three consecutive rounds each introducing a NEW BLOCKER → architectural problem, `reviewAddressed: "stuck:regression-loop"`, `/log-progress TASK_STUCK`, ask for direction.
+- **Round-cap reached with actual-critical BLOCKER**: see "At-cap re-triage" below.
+
+## At-cap re-triage (round 5 → 6 boundary)
+
+Triggered when the round-5 re-push completes with BLOCKERs still remaining. Distinct from regression-loop escalation — at-cap doesn't require new BLOCKERs each round, just that some BLOCKER persisted across 5 rounds.
+
+Apply the strict "actual critical" filter to each remaining BLOCKER:
+
+**Passes filter → HALT, do NOT merge:**
+- Auth bypass, secret exposure, injection, client-controlled auth data
+- Wrong logic producing incorrect output for real input
+- Immutable-state mutation, dropped writes, confirmed race conditions
+- PII leaked to public surface, consent/retention violations
+- Crashes, broken flows, wrong emails to real users
+- EU Reg 2024/900 or 2025/1410 non-compliance (project-specific — applies where declared)
+- Silent misconfiguration risk
+- Performance regressions with measurable user impact (p95, bundle, render blocking)
+- Regression introduced this PR (always passes filter)
+
+**Does NOT pass filter → DEMOTE to IMPROVEMENT/POLISH, decline via PR comment, MERGE:**
+- Bot-labeled "Critical" for code style / pattern consistency
+- Speculative defensive code without evidence of harm
+- Edge cases without a plausible real-world trigger
+- Premature optimization without measurement
+- "Would be nice" code-quality observations
+- Documentation of already-obvious behavior
+
+The cap exists to force this final honest re-triage. Without it, the agent chases bot noise indefinitely (especially GitHub Claude bot, which over-labels POLISH as Critical). With it, every round-5 BLOCKER gets one strict pass: ship-blocking or not?
+
+**Action by outcome:**
+
+| Outcome | Action |
+|---|---|
+| ANY remaining BLOCKER passes filter | `reviewAddressed: "stuck:max-rounds"`, post `[TASK_STUCK]` summary to Monday with unresolved findings + source attribution (which bot/source flagged each, link to PR comment), let stop-task-check halt. User reviews + resumes manually. `pre-merge-review-gate` refuses merge until the user clears `reviewAddressed` to a terminal value. |
+| NONE pass filter | Demote each via PR-reply with reasoning, capture comment IDs into `reviewAddressed.sources.<name>.replies[]`, merge per Phase 6 step 9. |
+
+This is a **refinement of, not a contradiction to**, the "never ship a real BLOCKER" principle: actual critical BLOCKERs still halt the merge. What changes is that bot-mislabeled BLOCKERs no longer hold the PR hostage indefinitely.
 
 ## Reviewer bot severity labels are advisory
 
@@ -140,8 +179,8 @@ Projects declare which review sources they use in `project-config.json` → `rev
 - Review-addiction loop — bot always finds something.
 - Premature polish — JSDoc, memoization, defensive `.trim()` before asked.
 - Scope creep via review — fixing pre-existing unrelated issues.
-- Triaging BLOCKERs down to POLISH — don't downgrade real security issues. In doubt, lean BLOCKER.
-- Round caps that ship bugs — cap by "no BLOCKERs remain", not by number.
+- Triaging BLOCKERs down to POLISH — don't downgrade real security issues. In doubt, lean BLOCKER. The at-cap re-triage is the ONE sanctioned moment for downgrades, and only for findings that fail the actual-critical filter.
+- Round caps that ship bugs — the `/ship-pr` Phase 6 5-round cap is paired with mandatory at-cap re-triage that halts on any actual-critical BLOCKER. A cap without the re-triage step WOULD ship bugs; with it, the cap only releases the PR when remaining BLOCKERs are bot-mislabeled.
 - **Merging before triage** — setting `reviewAddressed` without reading the review. The hook catches this via the timestamp race check.
 - **Optimistic merge on reviewer silence** — merging because no review appeared yet (reviewer hasn't posted). The `/babysit-prs` reviewer-wait gate (Phase 1b) prevents this.
 

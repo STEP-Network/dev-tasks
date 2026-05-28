@@ -110,9 +110,31 @@ Branch on execution context per `.claude/rules/agent-autonomy.md`. Quick check: 
 4. Triage ALL findings (GitHub bot review + Corridor + /self-review) per `ship-readiness.md` (BLOCKER / IMPROVEMENT / POLISH).
 5. For each POLISH finding: post a PR-reply declining it (category + reason). Capture the GitHub comment ID returned.
 6. For Corridor declines: call `mcp__plugin_corridor_corridor__updateFindingState({ findingId, state: "closed", closedReasonCategory, closedReason })`.
-7. Loop: fix BLOCKERs + cheap IMPROVEMENTs → re-push → restart Monitors → re-poll Corridor → re-triage. No round cap; regression-loop escalation if 3 consecutive rounds introduce new BLOCKERs.
+7. Loop: fix BLOCKERs + cheap IMPROVEMENTs → re-push → restart Monitors → re-poll Corridor → re-triage. **Hard cap at 5 rounds — see "Round cap" below.** Early escalation if 3 consecutive rounds each introduce a NEW BLOCKER (regression-loop signal) → `TASK_STUCK` with `reviewAddressed: "stuck:regression-loop"` per `ship-readiness.md`.
 8. **Emit the reviewAddressed marker** (`bash ${CLAUDE_PLUGIN_ROOT}/scripts/emit-state-marker.sh reviewAddressed`), then write structured `reviewAddressed` to active-task.json (see schema below). The marker unlocks `protect-active-task-state`.
 9. Merge via `gh pr merge --admin --squash` (NEVER `--delete-branch` — collides with worktrees). The `pre-merge-review-gate` hook validates step 8 before allowing this.
+
+**Round cap (5 max — autonomous merge path)**
+
+Track the current round with `/tmp/.claude-ship-pr-round-<branch>` — a single-integer file. Initialize to `1` on the first push, increment on each subsequent re-push during Phase 6. After the 5th re-push completes and the re-triage still surfaces BLOCKERs, do NOT enter round 6 — run the at-cap re-triage protocol below.
+
+The cap is intentional. Without it, the agent chases bot-mislabeled "Critical" findings indefinitely (the GitHub Claude bot is the usual offender). With it, every round-5 BLOCKER gets one strict pass: ship-blocking or not?
+
+**At-cap re-triage protocol** (canonical criteria in [`ship-readiness.md`](../../rules/ship-readiness.md) → "At-cap re-triage"):
+
+1. List remaining BLOCKERs across all sources (`claudeBot`, `corridor`, `selfReview`).
+2. For each, apply the strict "actual critical" filter: would this break production for real users (security / data loss / wrong user-visible output / auth bypass / regression introduced this PR)? Bot-mislabeled "Critical" style nits, speculative edge cases, and pattern-consistency complaints do NOT pass.
+3. **HALT** (do NOT merge) if ANY remaining BLOCKER passes the filter:
+   - `bash ${CLAUDE_PLUGIN_ROOT}/scripts/emit-state-marker.sh reviewAddressed`
+   - Set `reviewAddressed: "stuck:max-rounds"` in active-task.json
+   - Post `[TASK_STUCK]` to Monday with a numbered list of unresolved actual-critical findings + source attribution (which bot/source flagged each, link to PR comment)
+   - Let `stop-task-check.sh` halt the session — user reviews and resumes manually
+   - `pre-merge-review-gate` will refuse the merge until the user clears `reviewAddressed` to a terminal value
+4. **DEMOTE-AND-MERGE** if NO remaining BLOCKER passes the filter:
+   - For each, post a PR-reply demoting to IMPROVEMENT or POLISH with one-line reasoning ("style preference, declined", "speculative edge case without measurable trigger, declined", etc.)
+   - Capture comment IDs into the `reviewAddressed.sources.<name>.replies[]` arrays as POLISH/IMPROVEMENT declines
+   - Proceed to step 8 (write `reviewAddressed`, then merge)
+5. Clear `/tmp/.claude-ship-pr-round-<branch>` on merge or halt (next PR starts fresh).
 
 **`reviewAddressed` structured schema** (written in step 8):
 
@@ -257,7 +279,8 @@ Per `agent-autonomy.md`, after merge + cleanup the agent does NOT stop unless: n
 
 - Build/lint/test fails → show error, do NOT push, do NOT set marker.
 - CI fails → fix and re-push.
-- Regression loop (3 consecutive rounds introducing new BLOCKERs) → `TASK_STUCK`, `reviewAddressed: "stuck:regression-loop"`, alert user.
+- Regression loop (3 consecutive rounds introducing new BLOCKERs) → `TASK_STUCK`, `reviewAddressed: "stuck:regression-loop"`, alert user. Fires BEFORE the 5-round cap.
+- Round cap reached with actual-critical BLOCKER remaining (Phase 6 only) → `TASK_STUCK`, `reviewAddressed: "stuck:max-rounds"`, post unresolved-findings summary to Monday, halt. See Phase 6 "Round cap" + `ship-readiness.md` "At-cap re-triage".
 - 3 consecutive failures any stage → `/log-progress TASK_STUCK`.
 - Vercel deployment not found after 3 retries → warn but post PR URL to Monday.
 
@@ -281,4 +304,4 @@ Per `agent-autonomy.md`, after merge + cleanup the agent does NOT stop unless: n
 3. `previewUrl` exists in state file
 4. `reviewAddressed` exists in state file
 
-Valid `reviewAddressed`: `"accepted"`, `"fixed"`, `"stuck:regression-loop"`, `"timeout:{reason}"`.
+Valid `reviewAddressed`: `"accepted"`, `"fixed"`, `"stuck:regression-loop"`, `"stuck:max-rounds"`, `"timeout:{reason}"`, `"handoff-to-orchestrator"`.
