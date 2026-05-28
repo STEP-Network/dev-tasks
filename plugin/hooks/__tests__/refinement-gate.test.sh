@@ -158,6 +158,43 @@ EXIT_CODE=$?
 assert "Malformed itemId pass-through exit code 0" "$EXIT_CODE" "0"
 
 # -----------------------------------------------------------------------------
+# Test 9: PASS with CURRENT column IDs (task_type / task_priority /
+# long_text_mm0mcp77 / long_text_mm0pqaxy / task_epic with text).
+# Driver: 2026-05-28 polads incident where the hook read stale legacy IDs.
+# -----------------------------------------------------------------------------
+FIXTURE_CURRENT_IDS='{"data":{"items":[{"id":"123","name":"current-id task","board":{"id":"5091706356"},"column_values":[{"id":"task_type","text":"Fix"},{"id":"task_priority","text":"High"},{"id":"task_epic","text":"Epic Name"},{"id":"long_text_mm0mcp77","text":"'"$LONG_DESC"'"},{"id":"long_text_mm0pqaxy","text":"AC content"}],"subitems":[{"id":"s1","name":"sub","column_values":[{"id":"color_a","text":"Backend"},{"id":"long_text","text":"do it"},{"id":"numeric_h","text":"1.5"}]}]}]}}'
+OUTPUT=$(run_hook 123 "$FIXTURE_CURRENT_IDS")
+EXIT_CODE=$?
+assert "PASS with current column IDs" "$EXIT_CODE" "0"
+
+# -----------------------------------------------------------------------------
+# Test 10: PASS when task_epic has empty text but linked_item_ids set via
+# BoardRelationValue typed fragment.
+# -----------------------------------------------------------------------------
+FIXTURE_EPIC_LINKED_IDS='{"data":{"items":[{"id":"123","name":"epic via linked_item_ids","board":{"id":"5091706356"},"column_values":[{"id":"task_type","text":"Fix"},{"id":"task_priority","text":"High"},{"id":"task_epic","text":"","display_value":"","linked_item_ids":[2743409388]},{"id":"long_text_mm0mcp77","text":"'"$LONG_DESC"'"},{"id":"long_text_mm0pqaxy","text":"AC"}],"subitems":[{"id":"s1","name":"sub","column_values":[{"id":"color_a","text":"Backend"},{"id":"long_text","text":"do"},{"id":"numeric_h","text":"1"}]}]}]}}'
+OUTPUT=$(run_hook 123 "$FIXTURE_EPIC_LINKED_IDS")
+EXIT_CODE=$?
+assert "PASS when task_epic linked via linked_item_ids (empty text)" "$EXIT_CODE" "0"
+
+# -----------------------------------------------------------------------------
+# Test 11: PASS when task_epic has empty text + empty linked_item_ids but
+# display_value populated.
+# -----------------------------------------------------------------------------
+FIXTURE_EPIC_DISPLAY='{"data":{"items":[{"id":"123","name":"epic via display_value","board":{"id":"5091706356"},"column_values":[{"id":"task_type","text":"Fix"},{"id":"task_priority","text":"High"},{"id":"task_epic","text":"","display_value":"PolAds: Maintenance & Hotfixes","linked_item_ids":[]},{"id":"long_text_mm0mcp77","text":"'"$LONG_DESC"'"},{"id":"long_text_mm0pqaxy","text":"AC"}],"subitems":[{"id":"s1","name":"sub","column_values":[{"id":"color_a","text":"Backend"},{"id":"long_text","text":"do"},{"id":"numeric_h","text":"1"}]}]}]}}'
+OUTPUT=$(run_hook 123 "$FIXTURE_EPIC_DISPLAY")
+EXIT_CODE=$?
+assert "PASS when task_epic linked via display_value (empty text)" "$EXIT_CODE" "0"
+
+# -----------------------------------------------------------------------------
+# Test 12: BLOCK_REFINEMENT epicId when task_epic empty AND no board_relation.
+# -----------------------------------------------------------------------------
+FIXTURE_NO_EPIC='{"data":{"items":[{"id":"123","name":"no epic","board":{"id":"5091706356"},"column_values":[{"id":"task_type","text":"Fix"},{"id":"task_priority","text":"High"},{"id":"task_epic","text":"","display_value":"","linked_item_ids":[]},{"id":"long_text_mm0mcp77","text":"'"$LONG_DESC"'"},{"id":"long_text_mm0pqaxy","text":"AC"}],"subitems":[{"id":"s1","name":"sub","column_values":[{"id":"color_a","text":"Backend"},{"id":"long_text","text":"do"},{"id":"numeric_h","text":"1"}]}]}]}}'
+OUTPUT=$(run_hook 123 "$FIXTURE_NO_EPIC")
+EXIT_CODE=$?
+assert "BLOCK when no epic linked via any path" "$EXIT_CODE" "2"
+assert_contains "block message names epicId" "$OUTPUT" "epicId"
+
+# -----------------------------------------------------------------------------
 echo ""
 echo "==================================================="
 echo "refinement-gate tests: $PASS_COUNT passed, $FAIL_COUNT failed"
