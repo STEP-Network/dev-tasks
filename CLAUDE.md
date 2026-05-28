@@ -93,19 +93,9 @@ After plugin install, tools are namespaced as `mcp__plugin_dev-tasks_dev-tasks__
 
 ## Agent workflow
 
-```
-1. getBacklog(unclaimedOnly: true)     → find available work
-2. getTask(itemId)                      → read full context
-3. listEpics()                          → find epic to assign (if needed)
-4. claimTask(itemId, agentId, planId)   → claim it (auto-assigns owner)
-5. manageSubtasks(parentItemId, ops)    → create/update subtasks as you work
-6. updateTask(itemId, prLink, status)   → set PR link, update status
-7. listVersions()                       → find or create target version
-8. updateVersion(versionId, linkTaskIds) → link to release version
-9. generateChangelog(versionId)         → auto-generate changelog doc
-```
+**Canonical walkthrough:** [`plugin/rules/workflow-pipeline.md`](plugin/rules/workflow-pipeline.md). End-to-end lifecycle (pickup → ship → release), per-phase hook table, agent vs human role split, and the v0.16.0 push-guard + active-task-integrity enforcement pattern. Read that first; the per-phase rules go deeper on each step.
 
-The 8 plugin skills (`/dev-tasks:pickup-task`, `create-task`, `refine-task`, `log-progress`, `self-review`, `ship-pr`, `release-version`, `write-uat-spec`) wrap most of this flow.
+Plugin skills wrap most of the flow: `/dev-tasks:pickup-task`, `create-task`, `refine-task`, `log-progress`, `self-review`, `ship-pr`, `release-version`, `write-uat-spec`.
 
 **Default stance: autonomous-by-default.** The lifecycle chain runs end-to-end without permission checks between phases. The rule `plugin/rules/autonomous-by-default.md` defines the six carve-outs that justify a pause (destructive actions, scope expansion, external-system contact, hidden trade-offs, missing context, stuck) and the communication pattern that replaces check-ins (terse status updates, no trailing "want me to continue?" questions). Complements `agent-autonomy.md` (which covers the main-vs-subagent context boundary and the Stuck criterion).
 
