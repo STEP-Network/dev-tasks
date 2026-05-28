@@ -91,7 +91,7 @@ fi
 # subitems.column_values + subitems.name.
 QUERY=$(cat <<EOF
 {
-  "query": "query{items(ids:[$TASK_ID]){id name board{id} column_values{id text value} subitems{id name column_values{id text value}}}}"
+  "query": "query{items(ids:[$TASK_ID]){id name board{id} column_values{id text value ... on BoardRelationValue{display_value linked_item_ids}} subitems{id name column_values{id text value}}}}"
 }
 EOF
 )
@@ -147,26 +147,36 @@ if board_id == bugs_board_id:
     print("BLOCK_BUG")
     sys.exit(0)
 
-# (b) Refinement metadata. Column IDs sourced from dev-tasks MCP schema docs.
-#   Status:             "status"        (state machine)
-#   Priority:           "priority"      (Monday priority column)
-#   Type:               "color_mksbm5er" (Improvement/Fix/Feature/...)
-#   Epic link:          "board_relation_mkkqfn8c" or similar — fallback: any non-empty board_relation
-#   Description:        rendered text doesn't come via column_values, so we read the long_text column
-#                       which dev-tasks plugin uses for the "description" markdown.
-#   AC:                 "long_text_mkqnf3aw" (acceptance criteria long-text column)
-#
-# These column IDs match what listEpics / createTask / updateTask exposes.
-TYPE = col_text("color_mksbm5er") or col_text("status_1__1")  # fallback for older boards
-PRIORITY = col_text("priority")
-DESCRIPTION = col_text("long_text") or col_text("long_text__1") or col_text("long_text_mkqnezpz")
-AC = col_text("long_text_mkqnf3aw") or col_text("long_text_mkqnf2tk")
+# (b) Refinement metadata. Column IDs match the current TASK_COLUMNS in
+# plugin/src/constants.ts; legacy IDs are kept as fallbacks for older boards
+# that pre-date the v0.x column renames.
+#   Type:        task_type            (legacy: color_mksbm5er, status_1__1)
+#   Priority:    task_priority        (legacy: priority)
+#   Description: long_text_mm0mcp77   (legacy: long_text, long_text__1, long_text_mkqnezpz)
+#   AC:          long_text_mm0pqaxy   (legacy: long_text_mkqnf3aw, long_text_mkqnf2tk)
+#   Epic:        task_epic            (legacy: any board_relation_* column)
+TYPE = col_text("task_type") or col_text("color_mksbm5er") or col_text("status_1__1")
+PRIORITY = col_text("task_priority") or col_text("priority")
+DESCRIPTION = col_text("long_text_mm0mcp77") or col_text("long_text") or col_text("long_text__1") or col_text("long_text_mkqnezpz")
+AC = col_text("long_text_mm0pqaxy") or col_text("long_text_mkqnf3aw") or col_text("long_text_mkqnf2tk")
 
-# epic link: any column whose id starts with "board_relation" and has non-empty text
+# Epic detection: match `task_epic` explicitly OR any `board_relation_*` column.
+# board_relation columns return empty `text` via the basic GraphQL query, so we
+# also check the BoardRelationValue typed fragment fields (display_value,
+# linked_item_ids) added to the query above.
 EPIC_LINKED = False
 for cv in col_vals:
     cid = cv.get("id") or ""
-    if cid.startswith("board_relation") and (cv.get("text") or "").strip():
+    if cid != "task_epic" and not cid.startswith("board_relation"):
+        continue
+    if (cv.get("text") or "").strip():
+        EPIC_LINKED = True
+        break
+    if (cv.get("display_value") or "").strip():
+        EPIC_LINKED = True
+        break
+    linked = cv.get("linked_item_ids") or []
+    if isinstance(linked, list) and linked:
         EPIC_LINKED = True
         break
 
