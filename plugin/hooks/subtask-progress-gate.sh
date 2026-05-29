@@ -6,9 +6,12 @@
 # with actualHours > 0.
 #
 # Rationale: under the UAT 2026-05-22 retro, 4 of 5 agents pushed PRs without
-# ever marking subtasks Done — Monday board lost the per-step audit trail.
-# This is the mechanical correction: the push refuses until at least one
-# subtask shows completion, forcing /log-progress flow.
+# ever marking subtasks Done — the Monday board's per-subtask STATE went stale.
+# This is the mechanical correction: the push refuses until at least one subtask
+# shows completion (status + actualHours). As of v0.22.0 the plugin no longer
+# posts narrative progress Updates (progress lives in git commits, each carrying
+# its task #id); this gate enforces board STATE only, not a feed post.
+# /log-progress SUBTASK_COMPLETED advances that state without posting.
 #
 # Pass-through cases (NOT a block):
 #   - No active-task.json — task-state-guard already blocks edits in this case.
@@ -108,13 +111,14 @@ case "$VERDICT" in
     TASK_ID=$(jq -r '.taskId // "?"' "$STATE_FILE" 2>/dev/null)
     echo "BLOCKED: cannot push — task '#$TASK_ID $TASK_NAME' has $TOTAL subtask(s) but none are marked Done with actualHours > 0."
     echo ""
-    echo "Per the UAT 2026-05-22 retro: every claimed task with subtasks must record"
-    echo "per-step progress on Monday before code is pushed. The Monday board IS the"
-    echo "audit trail; gaps in it are quality debt."
+    echo "Per the UAT 2026-05-22 retro: every claimed task with subtasks must keep"
+    echo "its per-subtask STATE current on Monday before code is pushed. Git commits"
+    echo "(each carrying the task #id) are the per-step audit trail; the Monday board"
+    echo "carries subtask state + the final summary. Gaps in it are quality debt."
     echo ""
     echo "To unblock:"
     echo "  1. Mark each completed subtask via manageSubtasks(status='Done', actualHours=X)."
-    echo "  2. Run /log-progress SUBTASK_COMPLETED so Monday gets the timing signal."
+    echo "  2. Run /log-progress SUBTASK_COMPLETED to update Monday board state (status + hours)."
     echo "  3. Retry the push."
     echo ""
     echo "Legitimate flat-task case: if this task genuinely has no per-step work to log"
