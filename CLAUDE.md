@@ -257,13 +257,22 @@ Sourced from a downstream consumer's UAT 2026-05-22 retro: 4 of 5 fan-out agents
 **The four most-skipped steps** — each gets a workflow-enforcement hook (opt-in via `project-config.json` → `hooks.enabled[]`):
 
 1. **`/refine-task` quality** — `refinement-gate` (PreToolUse `claimTask`) refuses claims when the task lacks type, priority, epic, description (no doc attached on `doc_mm3sg1kr`), AC, OR has subtasks missing type/description/estimatedHours.
-2. **`/log-progress` per subtask** — `subtask-progress-gate` (PreToolUse Bash `git push`) refuses push when subtasks exist but none Done-with-actualHours.
+2. **Subtask board state** — `subtask-progress-gate` (PreToolUse Bash `git push`) refuses push when subtasks exist but none Done-with-actualHours. This gates board **state** (status + hours), not a narrative Update — see "Monday Updates policy" below.
 3. **UAT doc + Waiting-for-UAT flip** — `stop-waiting-for-uat-stage` (Stop) refuses session exit when all subtasks Done but parent task not at Waiting for UAT. `demo-url-required` (PreToolUse `updateTask`) refuses the WfUAT transition without a valid preview URL (validated against `project-config.ci.previewUrlPattern`).
 4. **Monday reconciliation after merge** — `stop-monday-reconciled-check` (Stop) refuses session exit when a merge commit landed but its SHA isn't recorded as reconciled.
 
-**The principle**: a 1-line edit gets the same workflow as a 500-line refactor. The Monday board is the audit trail; gaps in it compound into quality debt. Don't skip steps — the hooks won't let you, and bypassing them ALSO blocks (no `--admin` past CI failures).
+**The principle**: a 1-line edit gets the same workflow as a 500-line refactor. **Git commit history is the per-step audit trail** (every commit carries its task `#id`); the Monday board carries state + one final summary. Gaps compound into quality debt. Don't skip steps — the hooks won't let you, and bypassing them ALSO blocks (no `--admin` past CI failures).
 
 Full detail in `plugin/rules/agent-orchestration.md` "Quality-over-speed loop integration".
+
+### Monday Updates policy (v0.22.0)
+
+**Don't log narrative progress to Monday — track it in git commits.** The plugin no longer posts a per-step Update stream (TASK_CLAIMED, PR_CREATED, REVIEW_COMPLETED, …). Monday gets exactly two things from the agent:
+
+1. **Board state** — status transitions + subtask → Done with `actualHours`. Keeps the board accurate at a glance. (`subtask-progress-gate` enforces the hours; `/log-progress SUBTASK_COMPLETED` advances this state without posting an Update.)
+2. **One final-result summary** — a single `createUpdate` at task completion (`/ship-pr` Phase 7 `[PIPELINE_COMPLETE]`), a roll-up derived from the commit log. Plus `TASK_STUCK` escalations.
+
+**Every commit MUST reference a Monday Tasks-board id** (`#123456789`). Enforced by `commit-id-gate` (PreToolUse Bash, opt-in via `hooks.enabled[]`): format is required on every commit (offline-safe block if absent); when `MONDAY_API_KEY` is available the id is validated to be a **Tasks-board** item (bugs/feedback are intake-only — convert to a Task first; infra/docs commits use the catch-all maintenance task id). No exemptions. The commit↔task link is what replaces the old narrative feed as the per-step audit trail.
 
 ### Workflow enforcement gates
 

@@ -83,7 +83,7 @@ Regulated industries: relevant regulation/audit context in overlay file.
 1. Read each of the seven questions to yourself.
 2. Honest yes → continue.
 3. "Not sure" / "no" → fix the gap; do NOT declare done.
-4. All seven honest yes → proceed with self-review / ship-pr / log-progress.
+4. All seven honest yes → proceed with self-review → ship-pr (and any board-state writes via `manageSubtasks` / `/log-progress SUBTASK_COMPLETED`). No narrative progress Update is posted from this checklist — progress is tracked in git commits (every commit carries the task `#id`), and the single routine summary posts at the end of `/ship-pr`.
 
 ## Reference
 

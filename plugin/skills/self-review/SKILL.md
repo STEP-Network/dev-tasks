@@ -20,8 +20,8 @@ Mark FAIL only when concrete production/user/maintainer harm. Style preferences,
 3. Spawn `Task` with `subagent_type: "self-reviewer"` to run the checklist. Agent reports only — does NOT edit. Pass Corridor findings for correlation.
 4. If all 10 PASS AND zero Corridor BLOCKERs → step 6. Otherwise step 5.
 5. Fix FAILs + Corridor BLOCKERs. For Corridor POLISH being declined, call `updateFindingState({ findingId, state: "closed", closedReasonCategory: "risk_accepted", closedReason })`. Re-run from step 1 — no skip; fixes can introduce new issues.
-6. Set `selfReviewPassed: true` + `selfReviewPassedAt` in state file.
-7. `/log-progress REVIEW_COMPLETED`.
+6. Set `selfReviewPassed: true` + `selfReviewPassedAt` in state file. This is the marker the `post-self-review` hook reads — keep it. Then continue to the auto-chain below.
+7. No `REVIEW_COMPLETED` Update. Progress is tracked in git commits (every commit carries the task `#id`); the `selfReviewPassed` state + the commits are the record — no narrative Update here, and the single summary posts at the end of `/ship-pr`.
 
 No hard iteration cap. Regression-loop escalation: 3 consecutive iterations each introducing a NEW BLOCKER → `/log-progress TASK_STUCK`.
 
@@ -106,7 +106,7 @@ Overall: 9/10 PASS, 1 FAIL
 
 On clean:
 ```
-Self-Review PASSED (iteration N): selfReviewPassed = true → /log-progress REVIEW_COMPLETED
+Self-Review PASSED (iteration N): selfReviewPassed = true → auto-chain to /ship-pr
 ```
 
 ## After PASS — conditional ownership pass
@@ -123,7 +123,7 @@ Otherwise skip — overhead for marginal value on small mechanical diffs.
 
 ## Auto-chain
 
-After PASS + REVIEW_COMPLETED, auto-invoke `/ship-pr`. Do NOT wait for user.
+After PASS (with `selfReviewPassed: true` set), auto-invoke `/ship-pr`. Do NOT wait for user.
 
 ## Auto-Invoke
 
@@ -132,5 +132,5 @@ Run automatically when: implementation finished AND source files modified AND `/
 ## Post-Conditions
 
 - `selfReviewPassed: true` in `.claude/active-task.json`
-- `/log-progress REVIEW_COMPLETED` posted
+- No `REVIEW_COMPLETED` Update posted (progress tracked in git commits; `selfReviewPassed` state is the record)
 - `/ship-pr` auto-invoked
