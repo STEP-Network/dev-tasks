@@ -58,9 +58,9 @@ The split is the load-bearing honesty principle: agents claiming coverage they d
 
 When `e2e.enabled: false`: skip the agent-verified section; UAT doc reads "autonomous UAT not configured for this project — full human verification required."
 
-14c. Persist via `createTaskUatDoc({ taskId, markdown })`. On "already exists" error, call `updateTaskUatDoc({ taskId, markdown, overwrite: true })`. Doc lands on column `doc_mm3adfdg`.
+14c. Persist via `createTaskUatDoc({ taskId, markdown })`. On "already exists" error, call `updateTaskUatDoc({ taskId, markdown, overwrite: true })`. Doc lands on column `doc_mm3adfdg`. (STATE write — keep it.)
 
-14d. Post `/log-progress UAT_DOC_GENERATED`.
+14d. Progress is tracked in git commits (every commit carries the task `#id`); no narrative Update here — the UAT doc itself is the artifact, and the single summary posts at Phase 7.
 
 ### Phase 4.6: Autonomous UAT (default flow only; hotfix skips)
 
@@ -86,8 +86,8 @@ NEW gate between UAT doc generation and the `Waiting for UAT` transition. Runs t
 
 **Coordination with Phase 6**: existing CI polling (Phase 6) covers Vercel build + Vercel Preview Comments. The full `pnpm playwright test e2e/` should run as a separate CI lane (consumer-side responsibility — declared in `.github/workflows/...`). Phase 4.6 here runs ONLY the new task's spec against preview (fast); CI catches cross-feature regressions on every PR. Both gates must pass before merge.
 
-### Phase 5: Monday.com Event Update
-15. Post via `/log-progress`: `PR_CREATED` (new PR) or `REVIEW_FEEDBACK_FIXED` (existing PR).
+### Phase 5: (no narrative post — PR link recorded as STATE)
+15. The PR link, branch, and demo URL are recorded on the Monday task via `updateTask` (state, not narrative) in Phase 4 step 13. Progress is tracked in git commits (every commit carries the task `#id`); no `PR_CREATED` / `REVIEW_FEEDBACK_FIXED` Update here — the single summary posts at Phase 7.
 
 ### Phase 6: CI + Review Polling (main session) or Handoff (subagent)
 
@@ -220,15 +220,13 @@ See `CLAUDE.md` → Shipping conventions for the PR #347 case study that motivat
 
 20h. Continue to Phase 10.
 
-20i. `/log-progress TASK_WAITING_FOR_UAT` with UAT doc location, preview URL, test instructions.
+20i. Progress is tracked in git commits (every commit carries the task `#id`); no `TASK_WAITING_FOR_UAT` Update here — the `Waiting for UAT` status change (step 20c) is the signal, and the single summary posts at Phase 7.
 
-### Phase 7: Monday.com Update + Completion
+### Phase 7: Monday.com Update + Completion (the ONE routine Update)
 
 22. Refresh preview URL via `mcp__vercel__list_deployments`; update `previewUrl` in state + `demoUrl` on Monday if changed.
 
-23. Post `[PIPELINE_COMPLETE] Agent Progress Update` via `createUpdate` with PR URL, preview URL, CI status, `reviewAddressed` value.
-
-24. `/log-progress PIPELINE_COMPLETE`.
+23. Post the `[PIPELINE_COMPLETE]` summary exactly once by calling `/log-progress PIPELINE_COMPLETE` (which internally does a single `createUpdate`). The summary must include: PR URL, preview URL, merge SHA, CI status, `reviewAddressed` value, and a "what shipped" synthesized from `git log`. Do NOT also post a separate `createUpdate` — that would double-post.
 
 ### Phase 8: Version Linkage Check (informational)
 
@@ -244,7 +242,7 @@ See `CLAUDE.md` → Shipping conventions for the PR #347 case study that motivat
 
 27. Present to user as `## Acceptance Testing Checklist — PR #{N}` with grouped checkboxes and preview URL.
 
-28. Post the same (HTML-formatted) via `createUpdate` on the task.
+28. Present the checklist to the user only — do NOT post it as a separate `createUpdate`. The acceptance-testing detail belongs in the task's UAT doc (`doc_mm3adfdg`, written in Phase 4.5 — STATE, kept); the single routine Update is the Phase 7 `[PIPELINE_COMPLETE]` summary. Per v0.22.0 this avoids a second routine post per ship.
 
 ### Phase 10: Post-Merge Task Completion
 
@@ -261,13 +259,13 @@ Hotfix flow: parent still at `In Progress`. Phase 10 sets `Done` directly.
        ```
        Then append `$mergedSHA` to `.claude/active-task.json` `mondayReconciledShas[]` (initialize as `[]` if absent). Do this BEFORE the state-file delete in step 4. The marker unlocks `protect-active-task-state`.
     4. Immediately `rm .claude/active-task.json` — BEFORE any Edit/Write.
-    5. Post final updates via `createUpdate`.
+    5. No separate completion Update here — the Phase 7 `[PIPELINE_COMPLETE]` summary is the single routine Update for the default flow. Progress is tracked in git commits (every commit carries the task `#id`); the `Done`/`Waiting for UAT` STATE is the signal.
     
     In worktree sessions, `ExitWorktree({ action: "remove" })` in step 31 deletes the state file implicitly.
     
     Read PR base via `gh pr view --json baseRefName --jq .baseRefName`:
-    - `$defaultBase`: leave task at `Waiting for UAT`. Post `[TASK_COMPLETED]` update noting next transitions (Waiting for UAT → Pending Deploy to Prod by human; Pending Deploy to Prod → Done by `/release-version`).
-    - `$hotfixBase`: BEFORE posting "verified on prod" — wait for the production deploy to complete (poll your deploy platform's status: `mcp__vercel__list_deployments` filtered by merge SHA, `gh run watch`, `flyctl status`, etc.) AND cache-bust the verification URL (`?_t=$(date +%s)` or an incognito tab — Service Worker caches survive plain refresh). The same stale-cache + in-flight-deploy gotcha that caught PR #347 (retro #2926719311) applies to hotfix releases. Then `updateTask({status: "Done"})` and post `[TASK_COMPLETED]`.
+    - `$defaultBase`: leave task at `Waiting for UAT`. No `[TASK_COMPLETED]` narrative post — the status (already at `Waiting for UAT` from Phase 6.5) carries the next-transition signal (Waiting for UAT → Pending Deploy to Prod by human; Pending Deploy to Prod → Done by `/release-version`).
+    - `$hotfixBase`: BEFORE marking done — wait for the production deploy to complete (poll your deploy platform's status: `mcp__vercel__list_deployments` filtered by merge SHA, `gh run watch`, `flyctl status`, etc.) AND cache-bust the verification URL (`?_t=$(date +%s)` or an incognito tab — Service Worker caches survive plain refresh). The same stale-cache + in-flight-deploy gotcha that caught PR #347 (retro #2926719311) applies to hotfix releases. Then `updateTask({status: "Done"})` (STATE — kept). For the hotfix flow this `Done` transition replaces the default flow's Phase 6.5/Phase 7 path, so post the single `[PIPELINE_COMPLETE]` summary here via `/log-progress PIPELINE_COMPLETE` if it wasn't already posted at Phase 7.
 
 31. Worktree cleanup: if `git rev-parse --git-common-dir` differs from `git rev-parse --git-dir`, call `ExitWorktree({ action: "remove" })`. If refused (uncommitted/unreachable), inspect leftovers, commit/stash, then `ExitWorktree({ action: "remove", discard_changes: true })` only with user confirmation.
 

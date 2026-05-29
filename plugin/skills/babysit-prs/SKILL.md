@@ -99,7 +99,7 @@ For each freshly-merged PR (if MCP up):
    - Missing UAT doc → `createTaskUatDoc({ taskId, markdown })` from PR body + AC
    - Flip subtasks Done via `manageSubtasks({ parentItemId, operations })` with `actualHours`
    - Monday automation auto-flips parent when all subtasks Done
-5. Post `createUpdate({ itemId, body: HTML })` summarizing merge.
+5. Post the single per-PR final summary via `createUpdate({ itemId, body: HTML })` (the orchestrator-side analog of `/ship-pr`'s `[PIPELINE_COMPLETE]` — one summary per merged PR, not a per-step narrative stream). Skip per-step narrative event posts (no `CI_PASSED` / `REVIEW_ACCEPTED` Updates) — progress is tracked in git commits (every commit carries the task `#id`).
 6. **Record the merge SHA as reconciled** (required when `stop-monday-reconciled-check` is enabled in the orchestrator session — else the hook fires at orchestrator session-end because merges landed without their SHAs appearing in `.claude/active-task.json` `mondayReconciledShas[]`). Emit the marker first, then append:
    ```bash
    bash ${CLAUDE_PLUGIN_ROOT}/scripts/emit-state-marker.sh mondayReconciledShas

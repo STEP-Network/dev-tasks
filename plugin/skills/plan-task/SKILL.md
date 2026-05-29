@@ -76,9 +76,9 @@ If invoked: write reconciled plan, `ExitPlanMode` for review. Pushback → Stuck
 
 If NOT invoked → Step 6 without waiting for approval.
 
-### Step 6 — Post the reconciled plan
+### Step 6 — Apply the reconciled plan (no narrative post)
 
-If non-trivial drift found, post via `createUpdate` with reconciled plan + drift items + how addressed. Skip if zero drift (no signal worth recording).
+If non-trivial drift found, fold the reconciled plan + drift items into the task's subtasks via `manageSubtasks` (Monday state — kept) so the plan record lives on the board. Progress is tracked in git commits once work starts (every commit carries the task `#id`); do NOT post a `PLAN_CREATED` Update — the single pipeline summary posts at the end of `/ship-pr`.
 
 ### Step 7 — Continue with implementation
 

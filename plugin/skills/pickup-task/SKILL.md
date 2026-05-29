@@ -64,18 +64,16 @@ A task ready-to-start today may have been silently superseded by a recently-merg
 
 6. **Sprint auto-assignment** (must run before claim — `claimTask` refuses tasks outside active sprint):
     - Get active sprint via `getSprint`.
-    - No sprint: `updateTask(itemId, sprintId: <active>)` + `updateTask(itemId, unplanned: true)`. Note in TASK_CLAIMED.
+    - No sprint: `updateTask(itemId, sprintId: <active>)` + `updateTask(itemId, unplanned: true)`. Note in the proceed-message.
     - Already in active sprint: do nothing.
-    - Different sprint: reassign to active + `unplanned: true`. Note "Moved from sprint X to Y (unplanned)".
+    - Different sprint: reassign to active + `unplanned: true`. Note "Moved from sprint X to Y (unplanned)" in the proceed-message.
 
 7. **Claim**: `claimTask`. MCP validates: status `Ready to Start`, in active sprint, all `dependencyIds` Done, no other agent owns. On rejection, fix the named field and retry.
 8. Status set to `In Progress` by `claimTask` — only needed manually if bypassed.
 9. Set first subtask "In Progress" via `manageSubtasks` (triggers `started_date`).
 10. Rename worktree branch to canonical: `git branch -M feat/<task-slug>` (or `hotfix/<slug>`). If Step 4.5 skipped: `git fetch origin && git checkout $defaultBase && git pull && git checkout -b feat/<task-slug>`.
 
-11. **Post TASK_CLAIMED event** (do this BEFORE creating state file — response provides `claimToken`):
-    `createUpdate` with structured format including branch, sprint (note if unplanned), version (or "Not linked"), subtask count + estimated hours.
-    Save returned update ID — this is the `claimToken`.
+11. **Mint the `claimToken`** (token-source only — NOT a narrative progress post): post a single minimal `createUpdate` on the task and save the returned update ID as the `claimToken`. This exists solely because `task-state-guard.sh` requires `claimToken` to be a real Monday update ID to prove the claim went through MCP (without it the edit guard HARD BLOCKS all file edits). Keep the body terse (claim marker only) — do NOT narrate plan/branch/subtask detail. Per the v0.22.0 Updates policy, no `TASK_CLAIMED` narrative stream: progress is tracked in git commits (every commit carries the task `#id`), the `claimTask` state change is the signal, and the single result summary posts at the end of `/ship-pr`.
 
 12. **Create state file** (uses `claimToken` from step 11):
     - Write target is WORKTREE-LOCAL: `$PWD/.claude/active-task.json`. Do NOT prefix with `$CLAUDE_PROJECT_DIR` — that variable was frozen at session start and points at the main checkout. The `resolve-project-root.sh` helper reads from the worktree's `.claude/`.
@@ -124,5 +122,5 @@ A task ready-to-start today may have been silently superseded by a recently-merg
 - Task in active sprint (Unplanned? set if wasn't already there)
 - First subtask `In Progress`
 - Feature branch created, worktree entered
-- TASK_CLAIMED posted (with sprint/unplanned info)
+- No `TASK_CLAIMED` narrative Update (progress tracked in git commits; claim state change is the signal). The only claim-time `createUpdate` is the minimal token-source for `claimToken` required by `task-state-guard.sh`.
 - `.claude/active-task.json` created with subtasks + `claimToken`

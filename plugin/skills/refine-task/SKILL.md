@@ -35,7 +35,7 @@ Tasks decay. A task filed weeks ago may cite functions that have been renamed, a
 5. **Apply subtasks**: `manageSubtasks` with `create` per new, `delete`/`update` for obsolete (rescoping is fine).
 6. **Optional dependency**: set `dependencyIds` via `updateTask` (column `dependency_mm0pwbxn`).
 7. **Promote status** if all prereqs satisfied: `updateTask` with `status: "Ready to Start"`. MCP validates; on rejection lists missing.
-8. **Post PLAN_CREATED**: `createUpdate` with subtask list + total estimate.
+8. **No narrative post.** The refined subtasks + the `Ready to Start` status change (steps 5–7) ARE the record (Monday state — kept). Progress is tracked in git commits once work starts (every commit carries the task `#id`); do NOT post a `PLAN_CREATED` Update — the single pipeline summary posts at the end of `/ship-pr`.
 
 9. **Conditional plan depth-check** — invoke `/dev-tasks:holistic-thinking` BEFORE claim if ANY:
     - Plan touches ≥2 unrelated subsystems
