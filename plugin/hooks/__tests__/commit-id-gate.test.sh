@@ -4,11 +4,28 @@
 # Covers format enforcement (always-on) + board validation (mocked Monday API).
 # curl is mocked via a PATH shim that emits a canned body + HTTP code chosen by
 # the MOCK_SCENARIO env var, so the board-membership branches run offline.
+#
+# Each board-validation case uses a UNIQUE task id so the hook's /tmp validated-id
+# cache can't carry a "valid" verdict from one case into the next (the bug that
+# made the prior version fail 2/11). All ids used here are cleared up front; the
+# explicit cache test sets its own marker.
 
 set -u
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 HOOK="$SCRIPT_DIR/../commit-id-gate.sh"
+
+# Unique ids per case (8+ digits so they clear the format floor).
+ID_NOCREDS=29511720001
+ID_TASKS=29511720002
+ID_WRONG=29511720003
+ID_NOTFOUND=29511720004
+ID_HTTP500=29511720005
+ID_CACHE=29511720006
+
+for _id in $ID_NOCREDS $ID_TASKS $ID_WRONG $ID_NOTFOUND $ID_HTTP500 $ID_CACHE; do
+  rm -f "/tmp/.claude-commit-id-ok-${_id}"
+done
 
 PASS=0
 FAIL=0
@@ -29,8 +46,8 @@ cat > "$MOCKBIN/curl" <<'MOCK'
 #!/bin/bash
 # Emits "<body>\n<http_code>" to match the hook's `-w '\n%{http_code}'`.
 case "$MOCK_SCENARIO" in
-  tasks_board)   printf '%s\n200' '{"data":{"items":[{"id":"123","board":{"id":"5091706356"}}]}}' ;;
-  wrong_board)   printf '%s\n200' '{"data":{"items":[{"id":"123","board":{"id":"9999999999"}}]}}' ;;
+  tasks_board)   printf '%s\n200' '{"data":{"items":[{"id":"1","board":{"id":"5091706356"}}]}}' ;;
+  wrong_board)   printf '%s\n200' '{"data":{"items":[{"id":"1","board":{"id":"9999999999"}}]}}' ;;
   not_found)     printf '%s\n200' '{"data":{"items":[]}}' ;;
   http_500)      printf '%s\n500' 'upstream error' ;;
   *)             printf '%s\n200' '{"data":{"items":[]}}' ;;
@@ -72,19 +89,19 @@ check "no id → block" 2 "$(run "$CFG_ON" "" "" '"git commit -m \"fix: thing\""
 check "short PR ref #60 → block" 2 "$(run "$CFG_ON" "" "" '"git commit -m \"fix (#60)\""')"
 
 # 3. Valid format, no creds → warn + allow
-check "valid format, no creds → allow" 0 "$(run "$CFG_ON" "" "" '"git commit -m \"x\\n\\nMonday: #2951172177\""')"
+check "valid format, no creds → allow" 0 "$(run "$CFG_ON" "" "" "\"git commit -m \\\"x #${ID_NOCREDS}\\\"\"")"
 
 # 4. Valid task id, API says Tasks board → allow
-check "task id on Tasks board → allow" 0 "$(run "$CFG_ON" "key" "tasks_board" '"git commit -m \"x #2951172177\""')"
+check "task id on Tasks board → allow" 0 "$(run "$CFG_ON" "key" "tasks_board" "\"git commit -m \\\"x #${ID_TASKS}\\\"\"")"
 
 # 5. Id resolves to a different board → block
-check "id on wrong board → block" 2 "$(run "$CFG_ON" "key" "wrong_board" '"git commit -m \"x #2951172177\""')"
+check "id on wrong board → block" 2 "$(run "$CFG_ON" "key" "wrong_board" "\"git commit -m \\\"x #${ID_WRONG}\\\"\"")"
 
 # 6. Id not found on any board → block
-check "id not found → block" 2 "$(run "$CFG_ON" "key" "not_found" '"git commit -m \"x #2951172177\""')"
+check "id not found → block" 2 "$(run "$CFG_ON" "key" "not_found" "\"git commit -m \\\"x #${ID_NOTFOUND}\\\"\"")"
 
 # 7. API HTTP 500 but format valid → warn + allow (don't brick on network)
-check "API 500, format valid → allow" 0 "$(run "$CFG_ON" "key" "http_500" '"git commit -m \"x #2951172177\""')"
+check "API 500, format valid → allow" 0 "$(run "$CFG_ON" "key" "http_500" "\"git commit -m \\\"x #${ID_HTTP500}\\\"\"")"
 
 # 8. amend --no-edit → skip
 check "amend --no-edit → skip" 0 "$(run "$CFG_ON" "key" "tasks_board" '"git commit --amend --no-edit"')"
@@ -95,14 +112,17 @@ check "non-commit git → skip" 0 "$(run "$CFG_ON" "" "" '"git push origin main"
 # 10. hook disabled in project-config → skip (no id, would otherwise block)
 check "hook disabled → skip" 0 "$(run "$CFG_OFF" "" "" '"git commit -m \"no id here\""')"
 
-# 11. cache: a fresh /tmp marker lets a Tasks id pass even if API would 500
-CACHE_ID="2951172177"
-touch "/tmp/.claude-commit-id-ok-${CACHE_ID}"
-check "fresh cache hit → allow despite API 500" 0 "$(run "$CFG_ON" "key" "http_500" '"git commit -m \"x #2951172177\""')"
-rm -f "/tmp/.claude-commit-id-ok-${CACHE_ID}"
+# 11. fresh cache marker lets an id pass even when the API would 500
+touch "/tmp/.claude-commit-id-ok-${ID_CACHE}"
+check "fresh cache hit → allow despite API 500" 0 "$(run "$CFG_ON" "key" "http_500" "\"git commit -m \\\"x #${ID_CACHE}\\\"\"")"
 
 # --- cleanup ----------------------------------------------------------------
-rm -rf "$MOCKBIN" "$CFG_ON" "$CFG_OFF"
+rm -f "$MOCKBIN/curl"
+rmdir "$MOCKBIN" 2>/dev/null || true
+rm -rf "$CFG_ON" "$CFG_OFF"
+for _id in $ID_NOCREDS $ID_TASKS $ID_WRONG $ID_NOTFOUND $ID_HTTP500 $ID_CACHE; do
+  rm -f "/tmp/.claude-commit-id-ok-${_id}"
+done
 
 echo ""
 echo "  Total: $((PASS + FAIL)) — Passed: $PASS, Failed: $FAIL"

@@ -4,26 +4,56 @@
       {
         "matcher": "Edit|Write|MultiEdit|NotebookEdit",
         "hooks": [
-          { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/hooks/rule-autoload.sh" },
-          { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/hooks/task-state-guard.sh" },
-          { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/hooks/worktree-required.sh" },
-          { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/hooks/worktree-path-boundary.sh" },
-          { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/hooks/protect-active-task-state.sh" },
-          { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/hooks/branch-task-match.sh" },
-          { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/hooks/subtask-reminder.sh" }
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/rule-autoload.sh"
+          },
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/task-state-guard.sh"
+          },
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/worktree-required.sh"
+          },
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/worktree-path-boundary.sh"
+          },
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/protect-active-task-state.sh"
+          },
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/branch-task-match.sh"
+          },
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/subtask-reminder.sh"
+          }
         ]
       },
       {
         "matcher": "mcp__plugin_dev-tasks_dev-tasks__updateTask",
         "hooks": [
-          { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/hooks/dev-tasks-update-guard.sh" },
-          { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/hooks/demo-url-required.sh" }
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/dev-tasks-update-guard.sh"
+          },
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/demo-url-required.sh"
+          }
         ]
       },
       {
         "matcher": "mcp__plugin_dev-tasks_dev-tasks__claimTask",
         "hooks": [
-          { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/hooks/refinement-gate.sh" }
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/refinement-gate.sh"
+          }
         ]
       },
       {
@@ -58,6 +88,11 @@
             "type": "command",
             "if": "Bash(git push *)",
             "command": "${CLAUDE_PLUGIN_ROOT}/hooks/subtask-progress-gate.sh"
+          },
+          {
+            "type": "command",
+            "if": "Bash(git commit *)",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/commit-id-gate.sh"
           }
         ]
       }
@@ -96,53 +131,89 @@
       {
         "matcher": "Edit|Write",
         "hooks": [
-          { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/hooks/pipeline-reminder.sh" },
-          { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/hooks/ui-change-test-reminder.sh" }
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/pipeline-reminder.sh"
+          },
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/ui-change-test-reminder.sh"
+          }
         ]
       },
       {
         "matcher": "Task",
         "hooks": [
-          { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/hooks/post-self-review.sh" }
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/post-self-review.sh"
+          }
         ]
       }
     ],
     "Stop": [
       {
         "hooks": [
-          { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/hooks/stop-task-check.sh" },
-          { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/hooks/stop-ci-green-check.sh" },
-          { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/hooks/stop-waiting-for-uat-stage.sh" },
-          { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/hooks/stop-monday-reconciled-check.sh" }
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/stop-task-check.sh"
+          },
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/stop-ci-green-check.sh"
+          },
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/stop-waiting-for-uat-stage.sh"
+          },
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/stop-monday-reconciled-check.sh"
+          }
         ]
       }
     ],
     "PreCompact": [
       {
         "hooks": [
-          { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/hooks/pre-compact-task-snapshot.sh" }
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/pre-compact-task-snapshot.sh"
+          }
         ]
       }
     ],
     "UserPromptSubmit": [
       {
         "hooks": [
-          { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/hooks/user-prompt-task-context.sh" }
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/user-prompt-task-context.sh"
+          }
         ]
       }
     ],
     "Notification": [
       {
         "hooks": [
-          { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/hooks/subprocess-failure.sh" }
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/subprocess-failure.sh"
+          }
         ]
       }
     ],
     "SessionStart": [
       {
         "hooks": [
-          { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/hooks/worktree-janitor.sh" },
-          { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/hooks/active-task-recon.sh" }
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/worktree-janitor.sh"
+          },
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/active-task-recon.sh"
+          }
         ]
       }
     ]

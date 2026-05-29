@@ -9,7 +9,13 @@
     "autoMergePolicy": {
       "main": "never"
     },
-    "protectedBranches": ["main", "staging", "master", "production", "prod"]
+    "protectedBranches": [
+      "main",
+      "staging",
+      "master",
+      "production",
+      "prod"
+    ]
   },
   "monday": {
     "productId": "2924964797",
@@ -25,7 +31,10 @@
   },
   "ci": {
     "provider": "github-actions",
-    "requiredChecks": ["Vercel", "Vercel Preview Comments"]
+    "requiredChecks": [
+      "Vercel",
+      "Vercel Preview Comments"
+    ]
   },
   "rules": {
     "extraRules": []
@@ -48,7 +57,8 @@
       "pre-compact-task-snapshot",
       "user-prompt-task-context",
       "subprocess-failure",
-      "protect-active-task-state"
+      "protect-active-task-state",
+      "commit-id-gate"
     ]
   }
 }
