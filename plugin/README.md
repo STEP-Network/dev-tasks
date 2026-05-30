@@ -84,6 +84,14 @@ Without Corridor, those skills degrade to "Corridor unavailable" mode (still fun
 
 `.claude/project-config.json` shape (see `schemas/project-config.schema.json` for the authoritative version):
 
+For editor validation, reference the schema by its **GitHub raw URL** rather than a relative local path (a relative path breaks across consumer repo layouts, since the `dev-tasks` checkout isn't a fixed distance away):
+
+```jsonc
+"$schema": "https://raw.githubusercontent.com/STEP-Network/dev-tasks/main/plugin/schemas/project-config.schema.json"
+```
+
+Pin `main` to a release tag (e.g. `.../v0.22.1/...`) if you want validation frozen to a specific plugin version. The starter template (`templates/starter-project-config.json`) already uses this URL.
+
 ```jsonc
 {
   "version": "1",
