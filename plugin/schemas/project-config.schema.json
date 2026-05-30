@@ -133,6 +133,11 @@
           "description": "Monday board for the people directory. Username → person ID lookup uses this board. Defaults to STEP Network's *People board (1612664689).",
           "type": "number",
           "default": 1612664689
+        },
+        "tasksBoardId": {
+          "description": "Monday Tasks-board ID (numeric string). Optional — defaults to the STEP Tasks board (5091706356). Read by the commit-id-gate hook to validate that commit-message #ids reference Tasks-board items.",
+          "type": "string",
+          "pattern": "^[1-9][0-9]*$"
         }
       }
     },
@@ -328,7 +333,8 @@
               "stop-waiting-for-uat-stage",
               "stop-monday-reconciled-check",
               "pre-merge-review-gate",
-              "protect-active-task-state"
+              "protect-active-task-state",
+              "commit-id-gate"
             ]
           },
           "uniqueItems": true
