@@ -40,7 +40,8 @@ export async function createBug(args) {
           board_id: ${BOARDS.BUGS},
           group_id: "topics",
           item_name: ${JSON.stringify(name)},
-          column_values: ${buildColumnValues(columnValues)}
+          column_values: ${buildColumnValues(columnValues)},
+          create_labels_if_missing: true
         ) {
           id
           name
