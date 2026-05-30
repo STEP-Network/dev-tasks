@@ -50,8 +50,7 @@ export async function createBug(args: CreateBugInput): Promise<string> {
           board_id: ${BOARDS.BUGS},
           group_id: "topics",
           item_name: ${JSON.stringify(name)},
-          column_values: ${buildColumnValues(columnValues)},
-          create_labels_if_missing: true
+          column_values: ${buildColumnValues(columnValues)}
         ) {
           id
           name
