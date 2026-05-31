@@ -58,7 +58,8 @@
       "user-prompt-task-context",
       "subprocess-failure",
       "protect-active-task-state",
-      "commit-id-gate"
+      "commit-id-gate",
+      "stop-goal-persistence"
     ]
   }
 }

@@ -7,10 +7,10 @@ For non-STEP projects, this plugin will fail at first contact (hard-coded board 
 ## What ships
 
 - **MCP server** — 44 stdio tools wrapping Monday's GraphQL API (backlog, tasks, sprints, epics, bugs, versions, products, feedback, retros, public roadmap, structured changelog, UAT docs, version timeline).
-- **Skills (14)** — workflow: `pickup-task`, `create-task`, `refine-task`, `log-progress`, `self-review`, `ship-pr`, `release-version`, `audit-versions`, `doctor`; posture: `holistic-thinking`, `production-quality-ownership`, `design-consistency`, `triage-feedback`; orchestration: `babysit-prs`. Invoked as `/dev-tasks:<skill>`.
+- **Skills (15)** — workflow: `pickup-task`, `create-task`, `refine-task`, `log-progress`, `self-review`, `ship-pr`, `release-version`, `audit-versions`, `doctor`; posture: `holistic-thinking`, `production-quality-ownership`, `design-consistency`, `triage-feedback`, `goal` (persistent completion condition — see below); orchestration: `babysit-prs`. Invoked as `/dev-tasks:<skill>`.
 - **Rules (9)** — auto-injected on Edit/Write via the `rule-autoload.sh` PreToolUse hook based on file globs in `rules-routing.json`.
 - **Agents (4)** — `codebase-researcher`, `self-reviewer`, `doc-updater`, `e2e-tester`. Spawned via subagent.
-- **Hooks (33)** — STEP-wide policy hooks (always-on, non-overridable) + opt-in workflow hooks gated by `project-config.hooks.enabled[]` + always-on rule-autoload/janitor. Includes `commit-id-gate` (every commit must reference a Monday Tasks-board `#id`).
+- **Hooks (34)** — STEP-wide policy hooks (always-on, non-overridable) + opt-in workflow hooks gated by `project-config.hooks.enabled[]` + always-on rule-autoload/janitor. Includes `commit-id-gate` (every commit must reference a Monday Tasks-board `#id`) and `stop-goal-persistence` (refuses premature autonomous stops while a `/goal` is unmet — see below).
 - **Per-project config** — `.claude/project-config.json` validated against `schemas/project-config.schema.json`.
 
 ## Requirements
@@ -135,6 +135,49 @@ Pin `main` to a release tag (e.g. `.../v0.22.1/...`) if you want validation froz
 }
 ```
 
+## Persistent goal — `/goal` + `stop-goal-persistence`
+
+A project-agnostic, **persistent** analogue of Claude Code's built-in `/goal`
+(v2.1.139+). It kills the failure mode where an agent in autonomous mode stops
+PREMATURELY because it *thinks* the session is "too long / context-bloated /
+laggy" while real session-scoped work remains — invalid, because context
+auto-compacts and durable state lives in Monday + memory + the PR + git.
+
+Two pieces:
+
+- **`/goal` skill** — set / show / clear a natural-language completion CONDITION,
+  stored in a session-scoped, gitignored marker `.claude/active-goal.json`
+  (`{ goal, setAt, consecutiveBlocks, maxBlocks }`).
+  - `/goal "<condition>"` (or `/goal set …`) — set the condition.
+  - `/goal` (no args) / `/goal show` — print the current goal.
+  - `/goal clear` — remove the marker (releases the hook cleanly).
+- **`stop-goal-persistence` Stop hook** — on every Stop, if a goal marker exists
+  and the condition is **unmet**, it BLOCKS the stop (exit 2) and feeds back a
+  "keep working — `<next step>`" message so the agent continues. When the goal is
+  **met**, it clears the marker and allows the stop.
+
+**Evaluation.** Prefers a MODEL check when an `ANTHROPIC_API_KEY` is exported (a
+fast model judges met/not-met from the goal + the recent transcript tail).
+Falls back to a DETERMINISTIC check otherwise (block while the active-task
+pipeline is incomplete OR claimable Ready-to-Start tasks remain in the active
+sprint via the Monday API). Claude Code's OAuth sessions usually have no raw
+key, so the deterministic path is the common one.
+
+**Safety — it never traps the agent.** The hook respects the 3 legitimate pause
+reasons via the existing `reviewAddressed` escape vocabulary in
+`active-task.json` (`handoff-to-orchestrator` | `stuck:*` | `timeout:*` → clean
+release), enforces a max-consecutive-blocks escape hatch (`maxBlocks`, default 3
+— after N blocks it allows the stop and warns so a bug can't infinite-loop the
+session), honors Claude Code's own `stop_hook_active` flag as a secondary guard,
+and fails OPEN on every error path. `/goal clear` or a met goal releases cleanly.
+
+**Opt-in** like the other workflow Stop hooks: add `"stop-goal-persistence"` to
+`project-config.json` `hooks.enabled[]`. Silent no-op when not enabled. Even
+with NO goal set, when source files changed this branch the hook surfaces a
+one-time SELF-CHECK reminder on Stop (the fake-tiredness nudge), without blocking.
+
+See `plugin/skills/goal/SKILL.md` for the full contract.
+
 ## Skill overlay convention
 
 Each plugin skill ends with a directive to read `<consumer>/.claude/skills/<name>/SKILL.md.local` (if present) and append its content as additional project-specific instructions. **Extend-only** — overlay can append checks/steps but cannot replace plugin behavior.
@@ -222,8 +265,8 @@ plugin/
 │   └── register-tools.ts        # shared between stdio + HTTP transports
 ├── rules/                       # 9 universal lifecycle rules
 ├── rules-routing.json           # file-glob → rule-file mapping
-├── skills/                      # 14 skills (workflow + posture + doctor)
-├── hooks/                       # 33 hooks (policy + opt-in/auto, incl. workflow-enforcement gates + commit-id-gate)
+├── skills/                      # 15 skills (workflow + posture + doctor + goal)
+├── hooks/                       # 34 hooks (policy + opt-in/auto, incl. workflow-enforcement gates + commit-id-gate + stop-goal-persistence)
 ├── agents/                      # 4 subagent definitions
 ├── schemas/                     # project-config.schema.json
 └── templates/                   # starter-project-config.json

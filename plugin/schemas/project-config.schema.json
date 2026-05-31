@@ -334,7 +334,8 @@
               "stop-monday-reconciled-check",
               "pre-merge-review-gate",
               "protect-active-task-state",
-              "commit-id-gate"
+              "commit-id-gate",
+              "stop-goal-persistence"
             ]
           },
           "uniqueItems": true

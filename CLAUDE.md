@@ -288,6 +288,41 @@ Five hooks shipped in plugin v0.15.0; v0.16.0 added gate (f) to `bash-guard` (al
 - **`stop-waiting-for-uat-stage`** — refuses session exit when subtasks all Done but parent not at Waiting for UAT (escape: `reviewAddressed: handoff-to-orchestrator`)
 - **`stop-monday-reconciled-check`** — refuses session exit when merge commit landed during session but its SHA isn't in active-task.json `mondayReconciledShas[]` (escape: `reviewAddressed: handoff-to-orchestrator`)
 - **`commit-id-gate`** *(v0.22.0)* — refuses `git commit` whose message lacks a Monday Tasks-board `#id` (`#` + 7+ digits, so PR refs like `#60` don't count). Offline-safe format check always runs; when `MONDAY_API_KEY` is set it also validates the id resolves to a Tasks-board item (override the board via `project-config.monday.tasksBoardId`). API-unreachable → warn-and-allow (never bricks an offline commit). No exemptions — infra/docs commits use the catch-all maintenance task id.
+- **`stop-goal-persistence`** *(v0.24.0)* — refuses session exit while a `/goal` (persistent completion condition in `.claude/active-goal.json`) is **unmet**, so an autonomous-mode agent can't stop PREMATURELY on fake-tiredness ("session too long/laggy/context-bloated") while real session-scoped work remains. See "Persistent goal" below. Escapes: `reviewAddressed: handoff-to-orchestrator | stuck:* | timeout:*`, `maxBlocks` counter, `/goal clear`, goal-met; fails open on every error.
+
+## Persistent goal — `/goal` + `stop-goal-persistence` (v0.24.0)
+
+A project-agnostic, persistent analogue of Claude Code's built-in `/goal`
+(v2.1.139+). It targets the exact failure mode in `autonomous-by-default.md`:
+an agent stopping because it *thinks* the session is too long / context-bloated
+/ laggy. That is **not** a valid reason — context auto-compacts and durable
+state persists in Monday + memory + the PR + git. Only the 3 legitimate pause
+reasons justify a stop (external blocker / irreversible human decision /
+session-scoped queue exhausted).
+
+- **`/goal` skill** writes a natural-language completion CONDITION to
+  `.claude/active-goal.json` (`{ goal, setAt, consecutiveBlocks, maxBlocks }`);
+  verbs: `set` (`/goal "<condition>"`), `show` (`/goal`), `clear` (`/goal clear`).
+- **`stop-goal-persistence` Stop hook** evaluates the condition on every Stop —
+  unmet → exit 2 with a "keep working — `<next step>`" message + the SELF-CHECK
+  fake-tiredness reminder; met → clears the marker and allows the stop.
+
+**Evaluation** prefers a fast MODEL check when `ANTHROPIC_API_KEY` is exported
+(judges met/not-met from the goal + recent transcript tail); otherwise a
+DETERMINISTIC fallback blocks while the active-task pipeline is incomplete OR
+claimable Ready-to-Start tasks remain in the active sprint (Monday API). Claude
+Code OAuth sessions usually lack a raw key, so the deterministic path is common.
+
+**Safety** (must never trap the agent): honors the `reviewAddressed` escape
+vocabulary (`handoff-to-orchestrator` | `stuck:*` | `timeout:*`), a
+max-consecutive-blocks escape hatch (`maxBlocks`, default 3 — allows the stop +
+warns after N blocks so a bug can't infinite-loop the session), Claude Code's
+own `stop_hook_active` flag as a secondary guard, and fails OPEN on every error.
+
+Opt-in via `project-config.json` `hooks.enabled[]` (enabled here in the dogfood
+config). Even with no goal set, the hook surfaces a one-time SELF-CHECK on Stop
+when source files changed this branch, without blocking. Full contract:
+`plugin/skills/goal/SKILL.md`.
 
 ## Active-task.json drift reconciliation
 
