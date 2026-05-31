@@ -6,7 +6,7 @@ For non-STEP projects, this plugin will fail at first contact (hard-coded board 
 
 ## What ships
 
-- **MCP server** — 38 stdio tools wrapping Monday's GraphQL API (backlog, tasks, sprints, epics, bugs, versions, products, feedback, retros, public roadmap, structured changelog, UAT docs, version timeline).
+- **MCP server** — 44 stdio tools wrapping Monday's GraphQL API (backlog, tasks, sprints, epics, bugs, versions, products, feedback, retros, public roadmap, structured changelog, UAT docs, version timeline).
 - **Skills (14)** — workflow: `pickup-task`, `create-task`, `refine-task`, `log-progress`, `self-review`, `ship-pr`, `release-version`, `audit-versions`, `doctor`; posture: `holistic-thinking`, `production-quality-ownership`, `design-consistency`, `triage-feedback`; orchestration: `babysit-prs`. Invoked as `/dev-tasks:<skill>`.
 - **Rules (9)** — auto-injected on Edit/Write via the `rule-autoload.sh` PreToolUse hook based on file globs in `rules-routing.json`.
 - **Agents (4)** — `codebase-researcher`, `self-reviewer`, `doc-updater`, `e2e-tester`. Spawned via subagent.
@@ -209,7 +209,7 @@ plugin/
 │   ├── monday-client.ts         # GraphQL client (env or ALS-scoped Bearer)
 │   ├── auth-context.ts          # AsyncLocalStorage for hosted-MCP per-request auth
 │   ├── constants.ts             # board / column / status maps
-│   ├── schemas.ts               # Zod schemas for all 38 tools
+│   ├── schemas.ts               # Zod schemas for all 44 tools
 │   ├── tools/                   # one file per tool + utils
 │   ├── services/
 │   │   ├── people.ts            # *People-board lookup with cache
