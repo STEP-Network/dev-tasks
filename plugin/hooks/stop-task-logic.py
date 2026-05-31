@@ -10,6 +10,7 @@ All output goes to stderr to avoid feeding back into the conversation loop.
 Blocking is controlled by exit code (0 = allow, 2 = block).
 """
 import json
+import os
 import subprocess
 import sys
 
@@ -17,6 +18,19 @@ import sys
 def err(*args):
     """Print to stderr so messages show in terminal but don't feed back as conversation."""
     print(*args, file=sys.stderr)
+
+
+def running_in_ci():
+    """True when executing inside a CI runner (GitHub Actions or any CI provider).
+
+    `GITHUB_ACTIONS=true` is set by every GitHub Actions runner; `CI=true` is the
+    de-facto standard set by virtually every CI provider. Either signal is enough.
+    Used ONLY to relax the Stage-3 previewUrl gate (see main()) — a CI runner
+    spawned by the autonomous fix-loop has no Vercel access and can never obtain a
+    real preview URL, so the gate would otherwise hang the session to the
+    workflow's timeout. No other stage is influenced by this signal.
+    """
+    return os.environ.get("GITHUB_ACTIONS") == "true" or os.environ.get("CI") == "true"
 
 
 def main():
@@ -79,16 +93,32 @@ def main():
         sys.exit(2)
 
     # Stage 3: Preview URL must be posted to Monday.com
+    #
+    # CI BYPASS (2026-05-31): a CI runner spawned by the autonomous fix-loop has
+    # NO Vercel access, so it can never obtain/set a real previewUrl. Without this
+    # relaxation the gate hard-blocks session-stop and the run hangs to the
+    # workflow's timeout-minutes on every tick. Under CI we log a note and fall
+    # through to Stage 4 instead of exit(2). The gate stays fully intact for
+    # local/dev sessions, where a real Vercel preview URL IS obtainable. Stages
+    # 1+2 already ran above (a CI session still needs self-review + a PR); Stages
+    # 4+5 still run below. This only governs the SELF-stop convenience gate — the
+    # merge gate (pre-merge-review-gate.py) is separate and unaffected, so no
+    # production boundary is crossed.
     preview_url = state.get("previewUrl")
     if not preview_url:
-        err('BLOCKED: PR exists but preview URL has NOT been posted to Monday.com for task "{}".'.format(task_name))
-        err("The pipeline requires a demo/preview URL before stopping:")
-        err("  1. Fetch Vercel preview URL via mcp__vercel__list_deployments")
-        err("  2. Post to Monday.com via mcp__plugin_dev-tasks_dev-tasks__updateTask with demoUrl field")
-        err("  3. Save previewUrl in .claude/active-task.json")
-        err("")
-        err("Run /ship-pr to complete the pipeline, or do these steps manually.")
-        sys.exit(2)
+        if running_in_ci():
+            err('NOTE: previewUrl unset but running under CI (GITHUB_ACTIONS/CI) — '
+                'relaxing Stage 3 for task "{}". CI runners have no Vercel access; '
+                "this unblocks autonomous-loop sessions. Stages 4+5 still apply.".format(task_name))
+        else:
+            err('BLOCKED: PR exists but preview URL has NOT been posted to Monday.com for task "{}".'.format(task_name))
+            err("The pipeline requires a demo/preview URL before stopping:")
+            err("  1. Fetch Vercel preview URL via mcp__vercel__list_deployments")
+            err("  2. Post to Monday.com via mcp__plugin_dev-tasks_dev-tasks__updateTask with demoUrl field")
+            err("  3. Save previewUrl in .claude/active-task.json")
+            err("")
+            err("Run /ship-pr to complete the pipeline, or do these steps manually.")
+            sys.exit(2)
 
     # Stage 4: CI checks must be green (LIVE verification — cannot be faked)
     # ESCAPE HATCHES:
