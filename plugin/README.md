@@ -10,7 +10,7 @@ For non-STEP projects, this plugin will fail at first contact (hard-coded board 
 - **Skills (14)** — workflow: `pickup-task`, `create-task`, `refine-task`, `log-progress`, `self-review`, `ship-pr`, `release-version`, `audit-versions`, `doctor`; posture: `holistic-thinking`, `production-quality-ownership`, `design-consistency`, `triage-feedback`; orchestration: `babysit-prs`. Invoked as `/dev-tasks:<skill>`.
 - **Rules (9)** — auto-injected on Edit/Write via the `rule-autoload.sh` PreToolUse hook based on file globs in `rules-routing.json`.
 - **Agents (4)** — `codebase-researcher`, `self-reviewer`, `doc-updater`, `e2e-tester`. Spawned via subagent.
-- **Hooks (19)** — 2 STEP-wide policy hooks (always-on, non-overridable), 16 opt-in workflow hooks gated by `project-config.hooks.enabled[]`, 1 always-on rule-autoload.
+- **Hooks (33)** — STEP-wide policy hooks (always-on, non-overridable) + opt-in workflow hooks gated by `project-config.hooks.enabled[]` + always-on rule-autoload/janitor. Includes `commit-id-gate` (every commit must reference a Monday Tasks-board `#id`).
 - **Per-project config** — `.claude/project-config.json` validated against `schemas/project-config.schema.json`.
 
 ## Requirements
@@ -223,7 +223,7 @@ plugin/
 ├── rules/                       # 9 universal lifecycle rules
 ├── rules-routing.json           # file-glob → rule-file mapping
 ├── skills/                      # 14 skills (workflow + posture + doctor)
-├── hooks/                       # 24 hooks (2 policy + 22 opt-in/auto, incl. 5 workflow-enforcement gates)
+├── hooks/                       # 33 hooks (policy + opt-in/auto, incl. workflow-enforcement gates + commit-id-gate)
 ├── agents/                      # 4 subagent definitions
 ├── schemas/                     # project-config.schema.json
 └── templates/                   # starter-project-config.json
