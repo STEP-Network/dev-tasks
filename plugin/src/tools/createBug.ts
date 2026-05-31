@@ -5,7 +5,7 @@ import { buildColumnValues, resolveMaintenanceEpicId, formatError } from "./util
 
 export async function createBug(args: CreateBugInput): Promise<string> {
   try {
-    const { name, description, priority, productId, epicId, reporter } = args;
+    const { name, description, priority, productId, epicId, reporter, filedByAgent } = args;
 
     // Resolve epic: explicit epicId > product's maintenance epic
     let resolvedEpicId: number | undefined = epicId;
@@ -43,6 +43,18 @@ export async function createBug(args: CreateBugInput): Promise<string> {
       };
     }
 
+    // Source Tool: a bug filed via this MCP tool is agent-sourced (the
+    // observability webhook bridge writes checkly/sentry/posthog/etc. through a
+    // different path). Always set "agent" — label-based so create_labels_if_missing
+    // registers it if absent.
+    columnValues[BUG_COLUMNS.sourceTool] = { label: "agent" };
+
+    // Optional: Filed By Agent — which agent filed it (triage signal). Mirrors
+    // updateBug; label-based dropdown write + create_labels_if_missing.
+    if (filedByAgent) {
+      columnValues[BUG_COLUMNS.filedByAgent] = { labels: [filedByAgent] };
+    }
+
     // Create bug on the Bugs board, group "topics" (Incoming Bugs)
     const createQuery = `
       mutation {
@@ -50,7 +62,8 @@ export async function createBug(args: CreateBugInput): Promise<string> {
           board_id: ${BOARDS.BUGS},
           group_id: "topics",
           item_name: ${JSON.stringify(name)},
-          column_values: ${buildColumnValues(columnValues)}
+          column_values: ${buildColumnValues(columnValues)},
+          create_labels_if_missing: true
         ) {
           id
           name

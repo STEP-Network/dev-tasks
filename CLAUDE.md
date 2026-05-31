@@ -138,6 +138,8 @@ Used in `claimTask` (required), `createTask`, `createEpic`, `updateEpic`, `creat
 **Feedback Source:** User, Internal, Support, Partner
 **Bug Status (Option C, v0.12.0):** Awaiting Review (default) → Triaged → (Converted to Task | Declined | Cannot Reproduce | Duplicated | Missing Info | Known Bug). Bugs are **intake-only** — once `Converted to Task`, all dev work happens on the linked Task (type: Fix). `convertBugToTask` sets `Converted to Task` automatically. **DO NOT write legacy values (Ready for Dev, Fixing, Fixed, Pending Deploy, Move to Sprints) via the plugin going forward** — they remain readable for historical items but new transitions belong in the intake-only set. `getBugs` filtering on the new statuses (Triaged, Converted to Task, Declined, Cannot Reproduce) returns 0 results until Monday has actually registered each label (first write via `updateBug` or `convertBugToTask` registers them).
 **Bug Priority:** Critical, High, Medium, Low
+**Bug Source Tool (`color_mm3bqre`):** checkly, agent, corridor, posthog, autonoma, manual, sentry, vercel, github. The observability webhook bridge writes the tool labels (sentry/checkly/posthog/vercel/etc.); `createBug` always sets **`agent`** — a bug filed via the MCP tool is agent-sourced.
+**Bug Filed By Agent (`dropdown_mm3fq2hs`):** optional `filedByAgent` on `createBug`/`updateBug` (Agent-ID enum: Claude Code CLI / Claude Desktop Cloud / Codex Local / Claude Desktop Local / Codex Cloud), label-based + `create_labels_if_missing`. Omit for human-relayed bugs.
 **Retro Type:** Discussion, Keep, Improve (existing — separate from workflow status)
 **Retro Status (v0.12.0):** New (default) → Accepted (team agreed, owner assigned) → Implemented (PR merged, `implementedBy` + `resolvedInVersionId` populated) → Validated. Off-ramp: Declined (terminal).
 **Agent ID:** Claude Code CLI, Claude Desktop Cloud, Codex Local, Claude Desktop Local, Codex Cloud
@@ -285,6 +287,7 @@ Five hooks shipped in plugin v0.15.0; v0.16.0 added gate (f) to `bash-guard` (al
 - **`demo-url-required`** — refuses `updateTask(status='Waiting for UAT')` without `demoUrl` matching `project-config.ci.previewUrlPattern` (default permits any HTTPS URL)
 - **`stop-waiting-for-uat-stage`** — refuses session exit when subtasks all Done but parent not at Waiting for UAT (escape: `reviewAddressed: handoff-to-orchestrator`)
 - **`stop-monday-reconciled-check`** — refuses session exit when merge commit landed during session but its SHA isn't in active-task.json `mondayReconciledShas[]` (escape: `reviewAddressed: handoff-to-orchestrator`)
+- **`commit-id-gate`** *(v0.22.0)* — refuses `git commit` whose message lacks a Monday Tasks-board `#id` (`#` + 7+ digits, so PR refs like `#60` don't count). Offline-safe format check always runs; when `MONDAY_API_KEY` is set it also validates the id resolves to a Tasks-board item (override the board via `project-config.monday.tasksBoardId`). API-unreachable → warn-and-allow (never bricks an offline commit). No exemptions — infra/docs commits use the catch-all maintenance task id.
 
 ## Active-task.json drift reconciliation
 

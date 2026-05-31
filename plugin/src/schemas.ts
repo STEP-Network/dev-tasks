@@ -341,6 +341,7 @@ export const CreateBugSchema = z.object({
   productId: z.number().optional().describe("Product this bug affects — use listProducts to find the ID"),
   epicId: z.number().optional().describe("Epic to link the bug to — use listEpics to find the ID. If omitted and productId is set, auto-assigns the product's maintenance epic"),
   reporter: z.number().optional().describe("Reporter person ID"),
+  filedByAgent: AgentIdEnum.optional().describe("Which agent filed this bug (omit for human-relayed). Sets the Filed By Agent dropdown. Source Tool is always set to 'agent' for MCP-filed bugs."),
 });
 
 // updateBug — Option C intake-workflow tool. Lets agents move bugs through
