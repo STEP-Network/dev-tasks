@@ -19,6 +19,8 @@ node_modules/
 # Track: .claude/project-config.json (shared, committed)
 # Ignore: everything else under .claude/
 .claude/active-task.json
+.claude/active-goal.json
+.claude/active-task.snapshot.json
 .claude/worktrees/
 .claude/review-memory/
 .claude/plans/

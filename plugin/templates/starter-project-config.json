@@ -52,7 +52,8 @@
       "demo-url-required",
       "stop-waiting-for-uat-stage",
       "stop-monday-reconciled-check",
-      "protect-active-task-state"
+      "protect-active-task-state",
+      "stop-goal-persistence"
     ]
   },
   "e2e": {
