@@ -136,6 +136,7 @@ export const BUG_COLUMNS = {
   epic: "board_relation_mm0ws076",
   fixedDate: "date_mm0nbxeb",
   filedByAgent: "dropdown_mm3fq2hs",     // which agent filed (added v0.12.0). Labels NOT pre-configured — tools use `{ labels: [name] }` + create_labels_if_missing. If you later pre-populate labels with numeric IDs matching AGENT_ID (mirroring the Tasks board's dropdown_mm0mrcex), switch writes to `{ ids: [String(AGENT_ID[x])] }` for ID-based stability.
+  sourceTool: "color_mm3bqre",           // who/what filed the bug. Observability webhook bridge writes checkly/sentry/posthog/vercel/etc.; createBug sets "agent" (label index 1) for MCP-tool-filed bugs.
   creationLog: "pulse_log_mm0nb308",
   lastUpdated: "pulse_updated_mm0nh785",
 } as const;
