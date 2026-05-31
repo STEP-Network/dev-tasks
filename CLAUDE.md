@@ -76,7 +76,7 @@ Products (5091839409) [read-only]
 
 Subtasks board: 5091706366 (linked from Tasks).
 
-## Tools (37)
+## Tools (44)
 
 The plugin's MCP server registers 44 tools (registered in `plugin/src/register-tools.ts`; entry points: `plugin/src/server.ts` for stdio, `plugin/src/api/mcp.ts` for HTTP). See `register-tools.ts` for current names, descriptions, and Zod schemas. High-level phases:
 
