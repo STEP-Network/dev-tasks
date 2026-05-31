@@ -184,6 +184,10 @@ PreToolUse (mcp__plugin_dev-tasks_dev-tasks__updateTask):
 
 Stop:
   plugin: stop-task-check (stages 1-5: selfReview, PR, previewUrl, CI, reviewAddressed)
+    └─ Stage 3 (previewUrl) is RELAXED under CI (GITHUB_ACTIONS/CI env): a CI
+       runner has no Vercel access, so it can't obtain a preview URL. Logs a
+       note + falls through to Stage 4 instead of blocking. Local/dev sessions
+       still require a real previewUrl. Unblocks autonomous-loop CI sessions.
   plugin: stop-ci-green-check
   plugin (opt-in): stop-waiting-for-uat-stage (stage 6: parent at Waiting for UAT when subtasks all done)
   plugin (opt-in): stop-monday-reconciled-check (merged-PR has Monday update mentioning the SHA)
