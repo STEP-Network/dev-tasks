@@ -282,7 +282,7 @@ Full detail in `plugin/rules/agent-orchestration.md` "Quality-over-speed loop in
 Five hooks shipped in plugin v0.15.0; v0.16.0 added gate (f) to `bash-guard` (always-on, no opt-in) plus the `protect-active-task-state` integrity hook (opt-in). All other hooks below are opt-in via `project-config.json` → `hooks.enabled[]`:
 
 - **`bash-guard` gate (f)** *(always-on, v0.16.0)* — hard-refuses `git push` to any branch in `project-config.git.protectedBranches[]` (default: `main, staging, master, production, prod`). No marker bypass. Set the list to `[]` to disable just this gate.
-- **`protect-active-task-state`** *(v0.16.0)* — refuses `Edit/Write/MultiEdit` on `.claude/active-task.json` that mutates protected fields (`selfReviewPassed`, `reviewAddressed`, `parentStatus`, `mondayReconciledShas`, `allowMainCheckout`) without a corresponding skill-emission marker in `/tmp`. Closes the 2026-05-27 polads-style bypass where an agent wrote the state file directly. `allowMainCheckout: true` is always blocked (no marker path). **Requires `post-self-review` to be co-enabled** — that hook is the sole emitter of the `selfReviewPassed` marker. See `plugin/rules/agent-orchestration.md` "Protected state fields" for the full marker contract and the GitHub branch protection complement.
+- **`protect-active-task-state`** *(v0.16.0)* — refuses `Edit/Write/MultiEdit` on `.claude/active-task.json` that mutates protected fields (`selfReviewPassed`, `reviewAddressed`, `parentStatus`, `mondayReconciledShas`, `allowMainCheckout`, `ciGate` since v0.26.0) without a corresponding skill-emission marker in `/tmp`. Closes the 2026-05-27 polads-style bypass where an agent wrote the state file directly. `allowMainCheckout: true` is always blocked (no marker path). **Requires `post-self-review` to be co-enabled** — that hook is the sole emitter of the `selfReviewPassed` marker. See `plugin/rules/agent-orchestration.md` "Protected state fields" for the full marker contract and the GitHub branch protection complement.
 - **`refinement-gate`** — refuses `claimTask` on Bugs-board items, un-refined tasks, or under-refined subtasks
 - **`subtask-progress-gate`** — refuses `git push` when subtasks exist but none Done-with-actualHours (escape: `allowPushWithoutSubtaskProgress: true` in active-task.json)
 - **`demo-url-required`** — refuses `updateTask(status='Waiting for UAT')` without `demoUrl` matching `project-config.ci.previewUrlPattern` (default permits any HTTPS URL)
@@ -356,7 +356,11 @@ auto-merge fires; hotfix-base PRs never honor a skip; denylist paths
 requires the SHA-scoped marker (`emit-state-marker.sh ciGate`) emitted by the
 legitimate skill paths (`/pickup-task` step 12 mirror, `/ship-pr` Phase 2
 auto-skip). Reverting to Full never needs a marker. Agents never write
-`Skip (human)`.
+`Skip (human)`. Honest caveat: the local-mirror guard is only as strong as
+`protect-active-task-state` being enabled in `hooks.enabled[]` — consumers
+without it have no local barrier against direct JSON writes when Monday is
+unreachable. The server-side Monday column remains the authority whenever the
+API is reachable, and the board's activity log is the unforgeable audit trail.
 
 ## Active-task.json drift reconciliation
 

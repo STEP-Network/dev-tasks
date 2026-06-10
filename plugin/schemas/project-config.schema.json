@@ -128,10 +128,10 @@
               "default": []
             },
             "pathDenylist": {
-              "description": "fnmatch-style globs; ANY changed path matching one makes the diff ineligible. A configured list REPLACES the default — re-state the defaults if you extend. Default: [\"**/migrations/**\", \"**/db/**\", \"**/auth/**\", \"**/api/**\", \"*.sql\"].",
+              "description": "fnmatch-style globs; ANY changed path matching one makes the diff ineligible. A configured list REPLACES the default — re-state the defaults if you extend. NOTE: `**/x/**` does NOT match root-level `x/...` under fnmatch; carry both forms (`x/**` and `**/x/**`) per guarded directory, as the default does.",
               "type": "array",
               "items": { "type": "string" },
-              "default": ["**/migrations/**", "**/db/**", "**/auth/**", "**/api/**", "*.sql"]
+              "default": ["migrations/**", "**/migrations/**", "db/**", "**/db/**", "auth/**", "**/auth/**", "api/**", "**/api/**", "*.sql"]
             }
           }
         }

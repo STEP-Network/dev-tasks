@@ -217,6 +217,7 @@ staging, all gates skipped, by manually editing this file). The
 | `parentStatus` | `"Waiting for UAT"` | `/tmp/.claude-state-marker-parentStatus-<HEAD_SHA>` | `/ship-pr` Phase 6.5 after the WfUAT transition succeeds |
 | `mondayReconciledShas` | array grew (append) | `/tmp/.claude-state-marker-mondayReconciledShas-<HEAD_SHA>` | `/ship-pr` Phase 10 + `/babysit-prs` Phase 3 after `gh pr merge` succeeds |
 | `allowMainCheckout` | `true` | **none — always blocked** | direct user authorization only |
+| `ciGate` *(v0.26.0)* | changes to a value starting with `Skip` | `/tmp/.claude-state-marker-ciGate-<HEAD_SHA>` | `/pickup-task` step 12 (mirror a board-side Skip at claim) + `/ship-pr` Phase 2 step 6.3 (auto-skip after `ci-skip-eval.sh` ELIGIBLE). Reverting to `Full` needs no marker |
 
 **Marker contract**:
 - Markers are SHA-scoped — they unlock at the current `HEAD` only. New commits

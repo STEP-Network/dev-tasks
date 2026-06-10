@@ -70,7 +70,7 @@ defeating every hook in one shot. The fix lives at three layers:
 2. **`protect-active-task-state`** (local, opt-in) — refuses Edit/Write/MultiEdit
    on `.claude/active-task.json` that flips protected fields
    (`selfReviewPassed`, `reviewAddressed`, `parentStatus`, `mondayReconciledShas`,
-   `allowMainCheckout`) to bypass values without a corresponding
+   `allowMainCheckout`, `ciGate`) to bypass values without a corresponding
    `/tmp/.claude-state-marker-<field>-<HEAD_SHA>` marker. Markers are emitted by
    `post-self-review.sh` and the relevant `/ship-pr` + `/babysit-prs` phases.
    `allowMainCheckout` is always blocked (no marker path — user-explicit only).

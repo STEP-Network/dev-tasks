@@ -173,12 +173,23 @@ fi
 # Pending checks block — unless the per-task CI Gate authorizes skipping the
 # wait. The marker stays in place so a later Stop re-checks (the gate may have
 # been revoked, and a FAILED check must still block).
+#
+# FAILS is computed BEFORE the pending branch on purpose: in a mixed state
+# (some checks failed, others still running — matrix builds, fast-fail lanes)
+# the skip path must NOT allow the stop. Skip removes the wait, never the
+# never-bypass-red-CI policy. The unacked-failure block below still fires.
 PENDING=$(echo "$STATUS" | jq -r '[.[] | select(.bucket == "pending") | .name] | join(", ")' 2>/dev/null)
+FAILS=$(echo "$STATUS" | jq -r '[.[] | select(.bucket == "fail") | .name] | join(", ")' 2>/dev/null)
 if [ -n "$PENDING" ]; then
-  if [ "$CI_GATE_SKIP" = "true" ]; then
+  if [ "$CI_GATE_SKIP" = "true" ] && { [ -z "$FAILS" ] || [ -f "$ACK_FILE" ]; }; then
     echo "INFO: CI Gate '$CI_GATE' — pending checks on PR #$PR not awaited: $PENDING" >&2
     echo "Merge remains server-gated on green (pre-merge gate + branch protection unchanged)." >&2
     exit 0
+  fi
+  if [ "$CI_GATE_SKIP" = "true" ] && [ -n "$FAILS" ]; then
+    echo "BLOCKED: CI Gate '$CI_GATE' skips the wait, but checks have already FAILED on PR #$PR: $FAILS" >&2
+    echo "Fix the failures or ack a documented flake via $ACK_FILE — red CI is never skippable." >&2
+    exit 2
   fi
   echo "BLOCKED: CI checks still pending on PR #$PR ($BRANCH): $PENDING" >&2
   echo "" >&2
@@ -189,8 +200,8 @@ if [ -n "$PENDING" ]; then
   exit 2
 fi
 
-# Failed checks block unless explicitly acknowledged.
-FAILS=$(echo "$STATUS" | jq -r '[.[] | select(.bucket == "fail") | .name] | join(", ")' 2>/dev/null)
+# Failed checks block unless explicitly acknowledged. (FAILS computed above,
+# before the pending branch.)
 if [ -n "$FAILS" ]; then
   if [ -f "$ACK_FILE" ]; then
     REASON=$(head -1 "$ACK_FILE" 2>/dev/null)

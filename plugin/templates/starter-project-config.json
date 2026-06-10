@@ -29,7 +29,7 @@
       "enabled": false,
       "maxChangedLines": 50,
       "pathAllowlist": [],
-      "pathDenylist": ["**/migrations/**", "**/db/**", "**/auth/**", "**/api/**", "*.sql"]
+      "pathDenylist": ["migrations/**", "**/migrations/**", "db/**", "**/db/**", "auth/**", "**/auth/**", "api/**", "**/api/**", "*.sql"]
     }
   },
   "rules": {

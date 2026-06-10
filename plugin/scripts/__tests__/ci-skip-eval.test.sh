@@ -89,6 +89,14 @@ git add src/api/route.ts && git commit -qm "api change"
 run_case "default-denylisted api path → NOT_ELIGIBLE" 1 "NOT_ELIGIBLE: denylisted path(s)"
 git revert --no-edit HEAD >/dev/null 2>&1
 
+# 5b. ROOT-LEVEL denylisted path (api/x.ts — `**/api/**` alone would miss it;
+#     the default carries `api/**` too)
+mkdir -p api
+echo "export {}" > api/root-route.ts
+git add api/root-route.ts && git commit -qm "root api change"
+run_case "root-level api path → NOT_ELIGIBLE (default denylist)" 1 "NOT_ELIGIBLE: denylisted path(s)"
+git revert --no-edit HEAD >/dev/null 2>&1
+
 # 6. Path outside allowlist → not eligible
 echo "notes" > notes.txt
 git add notes.txt && git commit -qm "notes"

@@ -23,6 +23,10 @@
 #
 # Glob semantics: python fnmatch — `*` crosses directory separators, so
 # `*.css` matches `src/a/b.css` and `**/api/**` matches `src/api/x.ts`.
+# CAVEAT: `**/api/**` does NOT match root-level `api/x.ts` (no prefix to
+# consume the leading `**/`). The default denylist therefore carries both
+# forms (`api/**` AND `**/api/**`) for each guarded directory — do the same
+# when configuring pathDenylist in project-config.
 #
 # Renames are evaluated with --no-renames (full add+delete) — conservative on
 # purpose: a rename "costs" its full line count. Binary files count 0 lines
@@ -62,11 +66,13 @@ import os
 import subprocess
 import sys
 
+# Both forms per directory: `**/x/**` misses root-level `x/...` under fnmatch
+# (the leading `**/` must consume at least a prefix), so `x/**` covers it.
 DEFAULT_DENYLIST = [
-    "**/migrations/**",
-    "**/db/**",
-    "**/auth/**",
-    "**/api/**",
+    "migrations/**", "**/migrations/**",
+    "db/**", "**/db/**",
+    "auth/**", "**/auth/**",
+    "api/**", "**/api/**",
     "*.sql",
 ]
 

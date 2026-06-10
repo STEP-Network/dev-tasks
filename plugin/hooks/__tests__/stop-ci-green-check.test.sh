@@ -51,6 +51,7 @@ export PATH="$TEST_DIR/bin:$PATH"
 
 PENDING_CHECKS='[{"name":"Vercel","bucket":"pending"}]'
 FAILED_CHECKS='[{"name":"Test","bucket":"fail"}]'
+MIXED_CHECKS='[{"name":"Vercel","bucket":"pending"},{"name":"Test","bucket":"fail"}]'
 CANCELLED_CHECKS='[{"name":"Vercel","bucket":"cancel"}]'
 GREEN_CHECKS='[{"name":"Vercel","bucket":"pass"}]'
 
@@ -98,6 +99,25 @@ run_case "local Skip (human) + pending, offline → ALLOW" 0 "$PENDING_CHECKS" "
 
 # 3. Skip gate + FAILED checks → still block (red is never skippable)
 run_case "Skip (human) + failed → BLOCK" 2 "$FAILED_CHECKS" "Skip (human)" "" ""
+
+# 3b. Mixed state: pending AND failed under Skip → still block (the pending
+# skip-allow must not mask an already-red check — matrix builds / fast-fail lanes)
+run_case "Skip (human) + pending+failed mixed → BLOCK" 2 "$MIXED_CHECKS" "Skip (human)" "" ""
+
+# 3c. Mixed state with the failure ACKed → skip-allow may proceed
+: > "$MARKER"
+write_state "Skip (human)"
+echo "acked flake" > "$ACK_FILE"
+out=$(echo "{\"cwd\":\"$TEST_DIR/repo\"}" | MOCK_CHECKS="$MIXED_CHECKS" MONDAY_API_KEY="" MOCK_CURL_RESPONSE="" bash "$HOOK" 2>&1)
+if [ $? = 0 ]; then
+  echo "  PASS: Skip + pending+ACKed-failure → ALLOW"
+  PASS=$((PASS+1))
+else
+  echo "  FAIL: Skip + pending+ACKed-failure should ALLOW"
+  echo "         output: $out"
+  FAIL=$((FAIL+1))
+fi
+rm -f "$ACK_FILE"
 
 # 4. Live Monday says Full, stale local mirror says Skip → live wins → block
 run_case "live Full overrides local Skip → BLOCK" 2 "$PENDING_CHECKS" "Skip (human)" "dummy" "$(gate_response "Full")"
