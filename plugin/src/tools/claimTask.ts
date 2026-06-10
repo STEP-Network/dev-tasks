@@ -1,5 +1,5 @@
 import { executeMondayQuery } from "../monday-client.ts";
-import { BOARDS, TASK_COLUMNS, TASK_STATUS, AGENT_ID } from "../constants.ts";
+import { BOARDS, TASK_COLUMNS, TASK_STATUS, AGENT_ID, CI_GATE, isCiGateSkip } from "../constants.ts";
 import { getPersonByUsername } from "../services/people.ts";
 import type { ClaimTaskInput } from "../schemas.ts";
 import {
@@ -23,6 +23,7 @@ export async function claimTask(args: ClaimTaskInput): Promise<string> {
       TASK_COLUMNS.status,
       TASK_COLUMNS.agentId,
       TASK_COLUMNS.sprint,
+      TASK_COLUMNS.ciGate,
     ].map(c => `"${c}"`).join(", ");
 
     const fetchQuery = `
@@ -141,6 +142,11 @@ export async function claimTask(args: ClaimTaskInput): Promise<string> {
     await executeMondayQuery<any>(mutation);
 
     // Step 4: Return success
+    // CI Gate read at claim time so pickup-task can mirror it into
+    // active-task.json (the stop-ci-green-check fallback when Monday is
+    // unreachable at Stop time). Empty column = Full.
+    const ciGate = getColumnText(colMap, TASK_COLUMNS.ciGate) || CI_GATE.FULL;
+
     const lines: string[] = [
       `# Task Claimed`,
       ``,
@@ -148,6 +154,7 @@ export async function claimTask(args: ClaimTaskInput): Promise<string> {
       `**Agent:** ${agentId}`,
       `**Status:** In Progress`,
       `**Started:** ${todayDate()}`,
+      `**CI Gate:** ${ciGate}${isCiGateSkip(ciGate) ? " — mirror into active-task.json ciGate (emit-state-marker.sh ciGate first); CI wait + e2e gates skipped, RED checks still block merge" : ""}`,
     ];
 
     if (planId) {
