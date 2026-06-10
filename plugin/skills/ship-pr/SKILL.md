@@ -27,7 +27,11 @@ Read `.claude/project-config.json`. Extract `git.defaultBase`, `git.hotfixBase`,
 ### Phase 2: Push Gate
 5. `touch /tmp/.claude-prepush-$(git rev-parse --abbrev-ref HEAD | tr '/' '-')` — allows `bash-guard.sh` to permit push.
 6. Stage and commit if uncommitted changes exist.
-6.5. **Local-spec gate (autonomous-UAT pre-flight)**: if `project-config.json → e2e.enabled` is `true` AND the diff classifier (per [`write-uat-spec`](../write-uat-spec/SKILL.md)) says a spec applies to this task: run `pnpm playwright test e2e/<area>/<slug>.spec.ts --reporter=line` with `BASE_URL=<e2e.baseUrl.local>` (default `http://localhost:3000`). Block push on red unless `/tmp/.claude-playwright-ack-<slug>` exists. If no spec exists yet, defer creation to Phase 4.6 (preview URL is more meaningful for first-write) and skip this step. Classifier "skip / defer-api / defer-integration" → no run.
+6.3. **CI Gate evaluation (per-push, v0.26.0)** — resolve the task's CI Gate (`getTask` → `ciGate`; the Monday column is authoritative). Hotfix-base PRs NEVER honor a skip — treat as `Full` and tell the user if the column says otherwise.
+   - **Gate is `Skip (human)`**: honor it. Note in the PR body ("CI Gate: Skip (human) — wait + e2e gates skipped by board authorization").
+   - **Gate is `Skip (agent)` (from a previous push)**: re-run `bash $CLAUDE_PLUGIN_ROOT/scripts/ci-skip-eval.sh`. `NOT_ELIGIBLE` → **scope creep revokes the skip**: `updateTask({ ciGate: "Full" })` + set `ciGate: "Full"` in active-task.json (no marker needed — tightening is always allowed), surface the revocation. `ELIGIBLE` → keep.
+   - **Gate is `Full`/empty AND `ci.autoSkip.enabled`**: run `ci-skip-eval.sh`. If `ELIGIBLE` AND you judge the diff visual/copy-only with no behavior change (the LLM confirm — when in doubt, DON'T): (1) `updateTask({ ciGate: "Skip (agent)" })` — the board write is the audit trail; (2) `bash $CLAUDE_PLUGIN_ROOT/scripts/emit-state-marker.sh ciGate`; (3) set `ciGate: "Skip (agent)"` in active-task.json. Never write `Skip (human)` — that label is reserved for humans on the board.
+6.5. **Local-spec gate (autonomous-UAT pre-flight)**: skip this step entirely when the CI Gate is a Skip value (record "local spec gate skipped — CI Gate: <value>"). Otherwise: if `project-config.json → e2e.enabled` is `true` AND the diff classifier (per [`write-uat-spec`](../write-uat-spec/SKILL.md)) says a spec applies to this task: run `pnpm playwright test e2e/<area>/<slug>.spec.ts --reporter=line` with `BASE_URL=<e2e.baseUrl.local>` (default `http://localhost:3000`). Block push on red unless `/tmp/.claude-playwright-ack-<slug>` exists. If no spec exists yet, defer creation to Phase 4.6 (preview URL is more meaningful for first-write) and skip this step. Classifier "skip / defer-api / defer-integration" → no run.
 7. `git push -u origin {branch}`.
 
 ### Phase 3: PR Management
@@ -64,7 +68,7 @@ When `e2e.enabled: false`: skip the agent-verified section; UAT doc reads "auton
 
 ### Phase 4.6: Autonomous UAT (default flow only; hotfix skips)
 
-NEW gate between UAT doc generation and the `Waiting for UAT` transition. Runs the per-task Playwright spec against the preview URL as a HARD gate. Skip when `project-config.json → e2e.enabled: false` — UAT doc records "autonomous UAT skipped (disabled in project-config)."
+NEW gate between UAT doc generation and the `Waiting for UAT` transition. Runs the per-task Playwright spec against the preview URL as a HARD gate. Skip when `project-config.json → e2e.enabled: false` — UAT doc records "autonomous UAT skipped (disabled in project-config)." Also skip when the task's **CI Gate is a Skip value** (Phase 2 step 6.3) — UAT doc records "autonomous UAT skipped — CI Gate: <value> (authorized by <board column / ci-skip-eval>)" so the human knows which gate didn't run.
 
 14e. **Classifier check**: read task `type` + `git diff $defaultBase...HEAD --stat`. Per [`write-uat-spec`](../write-uat-spec/SKILL.md) classifier table:
 - Feature / Bug-fix-extends / Bug-fix-new → spec applies, continue to 14f
@@ -92,6 +96,8 @@ NEW gate between UAT doc generation and the `Waiting for UAT` transition. Runs t
 ### Phase 6: CI + Review Polling (main session) or Handoff (subagent)
 
 Branch on execution context per `.claude/rules/agent-autonomy.md`. Quick check: is `Monitor` in your tool surface?
+
+**CI Gate Skip path (either context, v0.26.0)**: when the task's CI Gate is `Skip (human)` / `Skip (agent)` (and the PR base is NOT `$hotfixBase`), do NOT sit in the CI polling loop. Instead: (1) run ONE review-triage pass over whatever findings already exist (Corridor + bot review if present — don't wait for them); (2) arm server-side merge with `gh pr merge {prNumber} --auto --squash` IF `git.autoMergePolicy` allows agent merges for the base branch — otherwise leave the PR for `/babysit-prs`/human; (3) emit the reviewAddressed marker and set `reviewAddressed: "handoff-to-orchestrator"`; (4) continue to Phase 6.5. GitHub's branch protection still requires green checks before the auto-merge fires — skip removes the agent's WAIT, never the green-merge requirement. `stop-ci-green-check` allows the session to end with checks pending under this gate; a check that already FAILED still blocks the stop (fix it or ack the flake).
 
 **Subagent handoff path** (no `Monitor`):
 1. PR pushed (Phases 2–3).

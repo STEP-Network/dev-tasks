@@ -143,6 +143,7 @@ Used in `claimTask` (required), `createTask`, `createEpic`, `updateEpic`, `creat
 **Retro Type:** Discussion, Keep, Improve (existing — separate from workflow status)
 **Retro Status (v0.12.0):** New (default) → Accepted (team agreed, owner assigned) → Implemented (PR merged, `implementedBy` + `resolvedInVersionId` populated) → Validated. Off-ramp: Declined (terminal).
 **Agent ID:** Claude Code CLI, Claude Desktop Cloud, Codex Local, Claude Desktop Local, Codex Cloud
+**CI Gate (`color_mm46jxc`, v0.26.0):** Full (default — empty column reads as Full) | Skip (human) — human-set on the board only | Skip (agent) — agent-set only after `ci-skip-eval.sh` ELIGIBLE. Label-based writes via `updateTask({ ciGate })`; read via `getTask`/`claimTask`. See "Per-task CI Gate" below.
 
 ## Status transition gates
 
@@ -324,6 +325,38 @@ Opt-in via `project-config.json` `hooks.enabled[]` (enabled here in the dogfood
 config). Even with no goal set, the hook surfaces a one-time SELF-CHECK on Stop
 when source files changed this branch, without blocking. Full contract:
 `plugin/skills/goal/SKILL.md`.
+
+## Per-task CI Gate — "CI Gate" column + bounded auto-skip (v0.26.0)
+
+Per-task control over the CI **wait** (never CI safety). The Monday Tasks-board
+status column **CI Gate** (`color_mm46jxc`) carries who authorized the skip:
+
+- **Full** (default; empty column reads as Full) — current behavior, unchanged.
+- **Skip (human)** — a human set it on the board. The label itself is the audit.
+- **Skip (agent)** — the agent auto-determined it, and may ONLY do so after
+  `plugin/scripts/ci-skip-eval.sh` prints `ELIGIBLE` for the committed diff
+  against `project-config.json → ci.autoSkip { enabled, maxChangedLines,
+  pathAllowlist[], pathDenylist[] }` (deterministic bounds around the LLM's
+  visual/copy-only judgment). Re-evaluated on every push by `/ship-pr` Phase 2
+  step 6.3 — scope creep reverts the column to Full.
+
+**What Skip changes**: `stop-ci-green-check.sh` allows session exit while
+checks are pending / unregistered / cancelled (resolution: live Monday column
+→ `active-task.json.ciGate` mirror → Full); `/ship-pr` skips the Phase 2
+local-spec gate + Phase 4.6 preview e2e gate (UAT doc records the skip) and
+arms `gh pr merge --auto` instead of polling CI (Phase 6).
+
+**What Skip never changes**: a FAILED check still blocks (flake-ack path
+unchanged); GitHub branch protection still requires green before the
+auto-merge fires; hotfix-base PRs never honor a skip; denylist paths
+(migrations/db/auth/api/sql by default) are never auto-skip eligible.
+
+**Tamper-proofing**: `ciGate` is a protected field in
+`protect-active-task-state.sh` — writing a Skip value into active-task.json
+requires the SHA-scoped marker (`emit-state-marker.sh ciGate`) emitted by the
+legitimate skill paths (`/pickup-task` step 12 mirror, `/ship-pr` Phase 2
+auto-skip). Reverting to Full never needs a marker. Agents never write
+`Skip (human)`.
 
 ## Active-task.json drift reconciliation
 

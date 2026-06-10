@@ -1,5 +1,5 @@
 import { executeMondayQuery } from "../monday-client.js";
-import { BOARDS, TASK_COLUMNS, SUBTASK_COLUMNS } from "../constants.js";
+import { BOARDS, TASK_COLUMNS, SUBTASK_COLUMNS, CI_GATE } from "../constants.js";
 import { evaluatePublicVisibility, getColumnText, getColumnValue, getLinkedItems, getMirrorDisplayValue, getLinkUrl, mondayItemUrl, parseMondayDate, formatSubtask, formatError, } from "./utils.js";
 import { extractDocObjectId, readDocAsMarkdown, resolveDocPrimaryId, } from "../services/doc-utils.js";
 export async function getTask(args) {
@@ -26,6 +26,7 @@ export async function getTask(args) {
             TASK_COLUMNS.agentId,
             TASK_COLUMNS.planId,
             TASK_COLUMNS.unplanned,
+            TASK_COLUMNS.ciGate,
             TASK_COLUMNS.taskId,
             TASK_COLUMNS.attachments,
             TASK_COLUMNS.product,
@@ -118,6 +119,8 @@ export async function getTask(args) {
         const planId = getColumnText(colMap, TASK_COLUMNS.planId);
         const unplannedVal = getColumnValue(colMap, TASK_COLUMNS.unplanned);
         const unplanned = unplannedVal?.checked === true || unplannedVal?.checked === "true";
+        // Empty CI Gate column = full gating (the safe default; no backfill).
+        const ciGate = getColumnText(colMap, TASK_COLUMNS.ciGate) || CI_GATE.FULL;
         // Subitems
         const subitems = (item.subitems || []).map((sub) => formatSubtask(sub));
         const visibility = evaluatePublicVisibility(colMap);
@@ -139,6 +142,7 @@ export async function getTask(args) {
             estimatedHours,
             actualHours,
             unplanned,
+            ciGate,
             description: description || undefined,
             owner,
             startedDate,
@@ -178,6 +182,7 @@ export async function getTask(args) {
             lines.push(`- **Actual Hours:** ${detail.actualHours}`);
         if (detail.unplanned)
             lines.push(`- **Unplanned:** Yes`);
+        lines.push(`- **CI Gate:** ${detail.ciGate}${detail.ciGate === CI_GATE.FULL ? "" : " — CI wait + e2e gates skipped; a RED check still blocks merge"}`);
         lines.push("");
         lines.push("## Assignment & Dates");
         lines.push(`- **Owner:** ${detail.owner}`);

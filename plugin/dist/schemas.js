@@ -49,6 +49,13 @@ const BugPriorityEnum = z.enum([
 const AgentIdEnum = z.enum([
     "Claude Code CLI", "Claude Desktop Cloud", "Codex Local", "Claude Desktop Local", "Codex Cloud",
 ]);
+// Per-task CI-gate policy (CI Gate column, v0.26.0). "Skip (human)" is
+// human-set on the board; agents may only write "Skip (agent)" (after
+// ci-skip-eval.sh ELIGIBLE) or revert to "Full". Skip removes the CI wait
+// + optional e2e gates — a RED check still blocks merge.
+const CiGateEnum = z.enum([
+    "Full", "Skip (human)", "Skip (agent)",
+]);
 // `owner` accepts any whoami-style username (or numeric Monday person ID).
 // Resolved at call time by services/people.ts against the Monday *People board.
 const SystemUserSchema = z.string().min(1);
@@ -192,6 +199,7 @@ export const UpdateTaskSchema = z.object({
     branch: z.string().optional().describe("Git branch name"),
     acceptanceCriteria: z.string().optional().describe("Machine-readable acceptance criteria"),
     dependencyIds: z.array(z.number()).optional().describe("Blocked-by relationships: task IDs that must be Done before this one can start. Stored in Monday's dependency_mm0pwbxn column. claimTask refuses to start a task whose dependencies aren't all Done. Pass an empty array [] to clear."),
+    ciGate: CiGateEnum.optional().describe("Per-task CI-gate policy (CI Gate column). 'Full' = full gating (same as empty). 'Skip (human)' is reserved for humans setting it on the board. Agents may only write 'Skip (agent)' — and only after plugin/scripts/ci-skip-eval.sh prints ELIGIBLE for the current diff — or revert to 'Full'. Skip removes the CI wait + e2e gates; a RED check still blocks merge."),
 });
 // =============================================================================
 // Tool 8: manageSubtasks

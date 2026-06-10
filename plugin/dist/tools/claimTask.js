@@ -1,5 +1,5 @@
 import { executeMondayQuery } from "../monday-client.js";
-import { BOARDS, TASK_COLUMNS, TASK_STATUS, AGENT_ID } from "../constants.js";
+import { BOARDS, TASK_COLUMNS, TASK_STATUS, AGENT_ID, CI_GATE, isCiGateSkip } from "../constants.js";
 import { getPersonByUsername } from "../services/people.js";
 import { getColumnText, getDropdownValues, getColumnValue, getLinkedItems, checkDependenciesResolved, planActiveSprintPull, buildColumnValues, todayDate, formatError, } from "./utils.js";
 export async function claimTask(args) {
@@ -10,6 +10,7 @@ export async function claimTask(args) {
             TASK_COLUMNS.status,
             TASK_COLUMNS.agentId,
             TASK_COLUMNS.sprint,
+            TASK_COLUMNS.ciGate,
         ].map(c => `"${c}"`).join(", ");
         const fetchQuery = `
       query {
@@ -105,6 +106,10 @@ export async function claimTask(args) {
     `;
         await executeMondayQuery(mutation);
         // Step 4: Return success
+        // CI Gate read at claim time so pickup-task can mirror it into
+        // active-task.json (the stop-ci-green-check fallback when Monday is
+        // unreachable at Stop time). Empty column = Full.
+        const ciGate = getColumnText(colMap, TASK_COLUMNS.ciGate) || CI_GATE.FULL;
         const lines = [
             `# Task Claimed`,
             ``,
@@ -112,6 +117,7 @@ export async function claimTask(args) {
             `**Agent:** ${agentId}`,
             `**Status:** In Progress`,
             `**Started:** ${todayDate()}`,
+            `**CI Gate:** ${ciGate}${isCiGateSkip(ciGate) ? " — mirror into active-task.json ciGate (emit-state-marker.sh ciGate first); CI wait + e2e gates skipped, RED checks still block merge" : ""}`,
         ];
         if (planId) {
             lines.push(`**Plan:** ${planId}`);

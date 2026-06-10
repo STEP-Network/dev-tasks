@@ -49,6 +49,10 @@ export const TASK_COLUMNS = {
     acceptanceCriteria: "long_text_mm0pqaxy",
     uatDoc: "doc_mm3adfdg",
     branch: "text_mm0pvs3n",
+    // Per-task CI-gate policy (added v0.26.0). Empty = Full. Skip values remove
+    // the CI WAIT (stop-ci-green-check pending block, ship-pr e2e gates) — a RED
+    // check still blocks merge regardless. Label-based writes only.
+    ciGate: "color_mm46jxc",
     bugs: "task_bugs",
     feedback: "board_relation_mm0wvysr",
     lastUpdated: "pulse_updated_mm0nxzxb",
@@ -373,6 +377,22 @@ export const RETRO_TYPE = {
     "Improve": 1,
     "Keep": 2,
 };
+// CI Gate (color_mm46jxc column on Tasks board, added v0.26.0).
+// Per-task CI-gate policy. Empty column = "Full" semantics (full gating —
+// the safe default; no backfill needed). "Skip (human)" is set by a human on
+// the board; "Skip (agent)" may only be written by the agent after
+// ci-skip-eval.sh prints ELIGIBLE. Skip removes the CI WAIT (pending-check
+// stop block + optional e2e gates) — a RED check still blocks merge.
+// Always write label-based ({ label }) — never by index.
+export const CI_GATE = {
+    FULL: "Full",
+    SKIP_HUMAN: "Skip (human)",
+    SKIP_AGENT: "Skip (agent)",
+};
+/** True when a CI Gate label authorizes skipping the CI wait. */
+export function isCiGateSkip(value) {
+    return value === CI_GATE.SKIP_HUMAN || value === CI_GATE.SKIP_AGENT;
+}
 // =============================================================================
 // Agent ID Dropdown (dropdown_mm0mrcex on Tasks board)
 // =============================================================================
