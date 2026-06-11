@@ -216,6 +216,45 @@ else
 fi
 
 # -------------------------------------------------------------------
+echo "==> Test 13: localReview POLISH with declinedInPrBody → allows merge (v0.28.0)"
+STATE="$WORK/test13/active-task.json"
+write_state "$STATE" '{"taskId":"123","reviewAddressed":{"status":"fixed","triagedAt":"2026-05-25T14:00:00Z","sources":{"localReview":{"blockers":0,"improvements":1,"polish":2,"replies":[],"declinedInPrBody":true,"lenses":["correctness","security"],"rounds":2}}}}'
+
+ec=0
+out=$(run_gate "$STATE" "$WORK/test13" "" "localReview") || ec=$?
+if [ $ec -eq 0 ]; then
+  pass "localReview POLISH + declinedInPrBody allowed"
+else
+  fail "expected exit 0 for localReview declinedInPrBody (got ec=$ec, out=$out)"
+fi
+
+# -------------------------------------------------------------------
+echo "==> Test 14: localReview POLISH without declinedInPrBody or replies → blocks"
+STATE="$WORK/test14/active-task.json"
+write_state "$STATE" '{"taskId":"123","reviewAddressed":{"status":"fixed","triagedAt":"2026-05-25T14:00:00Z","sources":{"localReview":{"blockers":0,"improvements":0,"polish":1,"replies":[]}}}}'
+
+ec=0
+out=$(run_gate "$STATE" "$WORK/test14" "" "localReview") || ec=$?
+if [ $ec -eq 2 ] && echo "$out" | grep -q "declinedInPrBody"; then
+  pass "localReview POLISH without decline record blocks"
+else
+  fail "expected exit 2 with declinedInPrBody hint (got ec=$ec, out=$out)"
+fi
+
+# -------------------------------------------------------------------
+echo "==> Test 15: localReview POLISH with non-empty replies → allows (replies also valid)"
+STATE="$WORK/test15/active-task.json"
+write_state "$STATE" '{"taskId":"123","reviewAddressed":{"status":"fixed","triagedAt":"2026-05-25T14:00:00Z","sources":{"localReview":{"blockers":0,"improvements":0,"polish":1,"replies":["IC_xyz789"]}}}}'
+
+ec=0
+out=$(run_gate "$STATE" "$WORK/test15" "" "localReview") || ec=$?
+if [ $ec -eq 0 ]; then
+  pass "localReview POLISH with replies allowed"
+else
+  fail "expected exit 0 for localReview with replies (got ec=$ec, out=$out)"
+fi
+
+# -------------------------------------------------------------------
 echo ""
 echo "Results: $PASS passed, $FAIL failed"
 [ $FAIL -eq 0 ] || exit 1
