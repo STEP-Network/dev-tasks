@@ -155,7 +155,7 @@ The `reviewAddressed` field is not just guidance — it is **hook-enforced** by 
 1. `reviewAddressed` is missing from active-task.json
 2. `reviewAddressed.status` is not `"fixed"` or `"accepted"`
 3. `reviewAddressed.triagedAt` is older than the latest review comment's `createdAt` (race prevention — catches "triage ran before the reviewer posted")
-4. Any configured source (per `project-config.review.sources[]`) has `polish > 0` but empty `replies[]` (POLISH items not declined via PR comment)
+4. Any configured source (per `project-config.review.sources[]`) has `polish > 0` but empty `replies[]` (POLISH items not declined via PR comment). Exception (v0.28.0): `localReview` — the pre-push panel has no PR comments to reply to, so it satisfies this gate with `declinedInPrBody: true` (its POLISH declines live in the PR body's "Local review: declined as POLISH" section) OR non-empty `replies[]`.
 5. GitHub API unreachable when verifying review timestamps (refuses rather than silent-passing)
 
 **There is no bypass flag.** The escape hatch for stuck situations is to fix the underlying issue (run the triage, post the decline comments, re-push) — not to skip the gate.
@@ -173,6 +173,8 @@ Four minutes between review and merge. The near-blocker was never addressed. Non
 ### Configured sources
 
 Projects declare which review sources they use in `project-config.json` → `review.sources[]`. Default: `["claudeBot", "corridor", "selfReview"]`. The hook only validates POLISH-reply completeness for declared sources. Undeclared sources are ignored.
+
+`localReview` (v0.28.0) declares the `/ship-pr` Phase 2 step 6.7 local multi-lens panel. Pair it with `review.cloudBot: "final-push"` ONLY after the panel passes the quality-parity benchmark for the project (covers all GitHub-bot BLOCKERs on ≥5 historical bot-reviewed PRs — the hard bar set 2026-06-12: local review must be at least GitHub-Claude-review quality, or higher).
 
 ## Anti-patterns
 

@@ -296,6 +296,32 @@ Five hooks shipped in plugin v0.15.0; v0.16.0 added gate (f) to `bash-guard` (al
 - **`stop-ci-green-check` requiredChecks-aware wait** *(v0.27.0, always-on hook)* — when `project-config.ci.requiredChecks[]` is non-empty AND at least one of those names appears on the PR, only required checks gate the **pending/cancelled** wait; optional lanes pending alone allow the stop with an INFO line. Empty/missing list = unchanged conservative default (any pending blocks). A **FAILED check blocks regardless** of the list (ack path unchanged). Misconfig guard: a list matching none of the PR's checks gates on everything + prints a config hint, so a typo can't silently disable the wait. Per-task CI Gate Skip (v0.26.0) is evaluated first and unchanged.
 - **`/log-progress` per-subtask micro-review** *(v0.27.0)* — `SUBTASK_COMPLETED` on tasks with ≥3 subtasks runs a diff-scoped (commits since previous subtask completion), **BLOCKER-only** review via a fresh `dev-tasks:self-reviewer` subagent before promoting the next subtask. Catches blockers while context is hot so the final `/self-review` converges in one round; no push, no CI, no Monday Update involved. Skips for docs-only diffs and `Documentation` subtasks.
 
+## Local review panel — `/ship-pr` Phase 2 step 6.7 + `review.cloudBot` (v0.28.0)
+
+Moves the review-fix iteration LOCAL (pre-push) so fix rounds stop paying the
+push → CI → cloud-bot round-trip (15–30 min on a multi-round task + Actions
+runner contention). Opt-in: add `localReview` to `project-config.review.sources[]`.
+
+- **Panel** (ship-pr step 6.7): 2–3 FRESH `dev-tasks:self-reviewer` subagents —
+  correctness / security / (tests, on High-Critical). "Fresh" = no author
+  context, **not** diff-only: each reviewer gets **full repo read access** and
+  MUST read changed files in full + grep for **sibling call-sites** (other
+  routes/schemas sharing the changed pattern). Triage with the ship-readiness
+  rubric, fix BLOCKERs, re-run until clean, push once.
+- **`review.cloudBot`** governs the GitHub Claude bot: `always` (default —
+  bot reviews every push), `final-push` (local panel carries the rounds, bot
+  reviews once on the final state), `off` (no bot). `pre-merge-review-gate`
+  accepts `reviewAddressed.sources.localReview` with `declinedInPrBody: true`
+  (the panel's POLISH declines live in the PR body, not PR comments).
+- **HARD GATE for `final-push`**: the panel must cover ALL GitHub-bot BLOCKERs
+  on ≥5 historical PRs (the quality bar — "at least bot quality"). **The
+  dev-tasks benchmark (2026-06-12) did NOT pass cleanly** (diff-only 2-lens:
+  2/5; repo-access + sibling-sweep flipped #397 to a clean pass and caught the
+  sibling-route BLOCKER on #398 the diff-only run missed, but the hardest
+  regulatory/legacy-migration PRs still need a 3rd lens). So `cloudBot` stays
+  `always` by default — the restructure ships gated-off until a repo-access
+  panel re-runs the benchmark green. Full results in task #2988065489's UAT doc.
+
 ## Persistent goal — `/goal` + `stop-goal-persistence` (v0.24.0)
 
 A project-agnostic, persistent analogue of Claude Code's built-in `/goal`

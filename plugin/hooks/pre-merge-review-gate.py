@@ -162,7 +162,10 @@ def main():
                 except (ValueError, TypeError) as e:
                     block(f"cannot parse timestamps for race check: {e}")
 
-        # Gate 4: POLISH findings must have decline replies for configured sources
+        # Gate 4: POLISH findings must have decline replies for configured sources.
+        # localReview (v0.28.0) is the pre-push panel — its POLISH declines live
+        # in the PR body (no PR comments exist pre-push), so it may satisfy the
+        # gate with declinedInPrBody: true instead of comment-ID replies.
         for source_name in CONFIGURED_SOURCES:
             source_data = sources.get(source_name)
             if source_data is None:
@@ -170,6 +173,16 @@ def main():
             polish_count = source_data.get("polish", 0)
             replies = source_data.get("replies", [])
             if polish_count > 0 and len(replies) == 0:
+                if source_name == "localReview" and source_data.get("declinedInPrBody") is True:
+                    continue
+                if source_name == "localReview":
+                    block(
+                        f"Source \"localReview\" has {polish_count} POLISH finding(s) "
+                        f"but neither replies[] nor declinedInPrBody: true recorded.\n"
+                        "  The local panel's POLISH declines belong in the PR body's\n"
+                        "  'Local review: declined as POLISH' section — add it, then set\n"
+                        "  reviewAddressed.sources.localReview.declinedInPrBody = true."
+                    )
                 block(
                     f"Source \"{source_name}\" has {polish_count} POLISH finding(s) "
                     f"but no decline replies recorded.\n"

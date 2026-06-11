@@ -35,6 +35,10 @@
   "rules": {
     "extraRules": []
   },
+  "review": {
+    "sources": ["claudeBot", "corridor", "selfReview", "localReview"],
+    "cloudBot": "always"
+  },
   "hooks": {
     "enabled": [
       "task-state-guard",

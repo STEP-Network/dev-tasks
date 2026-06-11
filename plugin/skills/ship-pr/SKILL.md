@@ -32,6 +32,13 @@ Read `.claude/project-config.json`. Extract `git.defaultBase`, `git.hotfixBase`,
    - **Gate is `Skip (agent)` (from a previous push)**: re-run `bash $CLAUDE_PLUGIN_ROOT/scripts/ci-skip-eval.sh`. `NOT_ELIGIBLE` → **scope creep revokes the skip**: `updateTask({ ciGate: "Full" })` + set `ciGate: "Full"` in active-task.json (no marker needed — tightening is always allowed), surface the revocation. `ELIGIBLE` → keep.
    - **Gate is `Full`/empty AND `ci.autoSkip.enabled`**: run `ci-skip-eval.sh`. If `ELIGIBLE` AND you judge the diff visual/copy-only with no behavior change (the LLM confirm — when in doubt, DON'T): (1) `updateTask({ ciGate: "Skip (agent)" })` — the board write is the audit trail; (2) `bash $CLAUDE_PLUGIN_ROOT/scripts/emit-state-marker.sh ciGate`; (3) set `ciGate: "Skip (agent)"` in active-task.json. Never write `Skip (human)` — that label is reserved for humans on the board.
 6.5. **Local-spec gate (autonomous-UAT pre-flight)**: skip this step entirely when the CI Gate is a Skip value (record "local spec gate skipped — CI Gate: <value>"). Otherwise: if `project-config.json → e2e.enabled` is `true` AND the diff classifier (per [`write-uat-spec`](../write-uat-spec/SKILL.md)) says a spec applies to this task: run `pnpm playwright test e2e/<area>/<slug>.spec.ts --reporter=line` with `BASE_URL=<e2e.baseUrl.local>` (default `http://localhost:3000`). Block push on red unless `/tmp/.claude-playwright-ack-<slug>` exists. If no spec exists yet, defer creation to Phase 4.6 (preview URL is more meaningful for first-write) and skip this step. Classifier "skip / defer-api / defer-integration" → no run.
+6.7. **Local review panel (v0.28.0)** — runs when `project-config.review.sources[]` includes `localReview`. The review-fix iteration happens HERE, pre-push, instead of paying push → CI → cloud-bot round-trips per round (15–30 min on a 3-round task).
+   - **Panel**: spawn 2–3 FRESH review subagents in parallel via `dev-tasks:self-reviewer` (it has Read/Glob/Grep/Bash). "Fresh/independent" means **no author context** — the reviewer must NOT inherit this session's implementation conversation/rationale — NOT "diff only". Each reviewer gets the diff (`git diff $defaultBase...HEAD`), the task AC, the project rules, AND **full repo read access** — it MUST read the changed files in full and grep for sibling call-sites (other routes/components/schemas that share the changed pattern). The 2026-06-12 parity benchmark (task #2988065489 UAT doc) proved diff-only review misses the bot's class of finding: "the same validation gap exists in another unpatched route" and full-file control-flow/runtime-API-behavior bugs. Repo access is the lever that closes that gap — the GitHub bot has it; the panel must too.
+   - **Lenses**: **correctness** (logic, edge cases, regressions, runtime-API-contract behavior), **security** (injection, authz, secrets, gate-bypass), and — when the diff touches test files or test-worthy surface — **tests/coverage**. Each lens MUST include a **sibling-call-site sweep**: grep the repo for other code paths that need the same change (the diff under review may patch only 1 of N sites). Effort scales with task priority: Critical/High → 3 lenses; Medium/Low → 2 (correctness + security).
+   - **Quality bar (Nate, 2026-06-12) — HARD GATE**: the panel must be at least GitHub-Claude-code-review quality. A project may set `review.cloudBot: "final-push"` ONLY after the panel passes the parity benchmark — panel covers ALL bot BLOCKERs on ≥5 historical bot-reviewed PRs (record the run in the adopting project's docs; the dev-tasks benchmark lives in task #2988065489's UAT doc). **As of 2026-06-12 the dev-tasks benchmark has NOT passed (2/5) — so `cloudBot` stays `"always"` by default and this restructure ships gated-off until a repo-access + sibling-sweep panel re-runs the benchmark green.**
+   - **Triage** all panel findings with the ship-readiness.md rubric (BLOCKER / IMPROVEMENT / POLISH). Fix BLOCKERs + cheap IMPROVEMENTs → re-run the panel on the updated diff (fresh subagents again). Loop until zero BLOCKERs. These local rounds don't count toward Phase 6's 5-round cap (they're cheap); cap local rounds at 5 all the same — persistent new-BLOCKER churn at round 5 → `stuck:regression-loop` per ship-readiness.md.
+   - **Record** into active-task.json `reviewAddressed.sources.localReview`: `{ blockers: <fixed count>, improvements: <n>, polish: <n>, replies: [], lenses: ["correctness", ...], rounds: <n> }` (emit the `reviewAddressed` marker first if writing the full structured object now; otherwise record panel results in memory and write once at Phase 6 step 8 as usual). POLISH findings from the local panel are declined in the PR body's review section (no PR comments exist pre-push) — list them under "Local review: declined as POLISH" so the human sees them.
+   - **Skip** when `review.sources` lacks `localReview` (default for existing projects — behavior unchanged).
 7. `git push -u origin {branch}`.
 
 ### Phase 3: PR Management
@@ -110,10 +117,16 @@ Branch on execution context per `.claude/rules/agent-autonomy.md`. Quick check: 
 4. Trigger Phase 10 cleanup. End.
 
 **Autonomous merge path** (main session, has `Monitor`):
+
+**cloudBot mode (v0.28.0)** — `project-config.review.cloudBot` governs step 3's bot wait:
+- `"always"` (default): wait for + triage the bot review on EVERY push (today's behavior, below unchanged).
+- `"final-push"`: the local panel (Phase 2 step 6.7) carried the iteration rounds — do NOT wait for a bot review per round. Wait for exactly ONE bot review on the current (final) push, triage it; if it surfaces a real BLOCKER, the fix push becomes the new final push (wait once again — round cap applies as usual). Requires the parity benchmark to have passed for this project (schema description has the contract).
+- `"off"`: skip step 3 entirely (no bot installed). Steps 1–2 + 4–9 unchanged — CI green, Corridor, and the local panel still gate.
+
 1. Poll CI via a `Monitor` that watches `gh pr checks {prNumber}` and emits terminal transitions. Restart the Monitor on each new push — stale events from previous commit confuse triage. See [`monitor-predicate-pattern.md`](../../rules/monitor-predicate-pattern.md) for transition-only emission + immediate-action-on-success patterns.
 2. Poll Corridor findings via `mcp__plugin_corridor_corridor__getFindings({ cwd, branch, state: "open", excludeAIFalsePositives: true })`. Retry up to 3× with 60s delay if empty.
-3. Fetch GitHub bot review comments: `gh pr view {prNumber} --json comments` → filter for `author.login == "claude"` and body contains `"## Code Review"`.
-4. Triage ALL findings (GitHub bot review + Corridor + /self-review) per `ship-readiness.md` (BLOCKER / IMPROVEMENT / POLISH).
+3. Fetch GitHub bot review comments per the cloudBot mode above: `gh pr view {prNumber} --json comments` → filter for `author.login == "claude"` and body contains `"## Code Review"`.
+4. Triage ALL findings (GitHub bot review + Corridor + /self-review + local panel results from Phase 2 step 6.7) per `ship-readiness.md` (BLOCKER / IMPROVEMENT / POLISH).
 5. For each POLISH finding: post a PR-reply declining it (category + reason). Capture the GitHub comment ID returned.
 6. For Corridor declines: call `mcp__plugin_corridor_corridor__updateFindingState({ findingId, state: "closed", closedReasonCategory, closedReason })`.
 7. Loop: fix BLOCKERs + cheap IMPROVEMENTs → re-push → restart Monitors → re-poll Corridor → re-triage. **Hard cap at 5 rounds — see "Round cap" below.** Early escalation if 3 consecutive rounds each introduce a NEW BLOCKER (regression-loop signal) → `TASK_STUCK` with `reviewAddressed: "stuck:regression-loop"` per `ship-readiness.md`.
@@ -169,10 +182,21 @@ The cap is intentional. Without it, the agent chases bot-mislabeled "Critical" f
       "improvements": 0,
       "polish": 0,
       "replies": []
+    },
+    "localReview": {
+      "blockers": 0,
+      "improvements": 1,
+      "polish": 2,
+      "replies": [],
+      "declinedInPrBody": true,
+      "lenses": ["correctness", "security", "tests"],
+      "rounds": 2
     }
   }
 }
 ```
+
+`localReview` (v0.28.0) records the Phase 2 step 6.7 panel outcome: `blockers` = count found-and-FIXED across local rounds (0 outstanding by definition — the panel loops until clean), `rounds` = local iterations, `lenses` = which reviewers ran. Its POLISH declines live in the PR body's "Local review: declined as POLISH" section rather than PR-comment `replies[]` (no comments exist pre-push) — set `declinedInPrBody: true` when that section exists. `pre-merge-review-gate` accepts EITHER non-empty `replies[]` OR `declinedInPrBody: true` for localReview POLISH; other sources still require comment-ID replies.
 
 Field semantics:
 - `status`: `"fixed"` (BLOCKERs existed and were resolved), `"accepted"` (only POLISH/IMPROVEMENT, all declined or cheap-fixed), `"pending"` (triage incomplete), `"blocker_unaddressed"` (BLOCKERs remain open).
