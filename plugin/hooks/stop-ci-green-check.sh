@@ -36,6 +36,14 @@ exec >&2
 #   (the ack path above is the only failure escape). Resolution: live Monday
 #   column → active-task.json `ciGate` mirror → "Full". See CLAUDE.md
 #   "Per-task CI Gate" for the full contract.
+#
+# requiredChecks-aware wait (v0.27.0):
+#   When project-config ci.requiredChecks[] is non-empty AND at least one of
+#   those names appears on the PR, only required checks gate the pending /
+#   cancelled WAIT — optional lanes pending alone allow the stop with an INFO
+#   line. Empty list = any pending blocks (unchanged default). A FAILED check
+#   blocks regardless of the list. List-matches-nothing = misconfig guard:
+#   gate on everything + print a config hint.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/lib/resolve-agent-cwd.sh"
@@ -170,6 +178,25 @@ if [ -z "$STATUS" ] || [ "$STATUS" = "[]" ]; then
   exit 0
 fi
 
+# requiredChecks-aware WAIT (v0.27.0): when project-config ci.requiredChecks[]
+# is configured non-empty, only those checks gate the pending/cancelled WAIT —
+# optional lanes (e.g. preview comments, advisory scanners) pending alone no
+# longer hold the session open. Empty/missing list keeps the conservative
+# default: ANY pending blocks. A FAILED check always blocks regardless of the
+# list (red is red — required or not). Misconfig guard: if a non-empty list
+# matches NONE of the PR's check names, gate on everything and say so — a
+# typo'd check name must not silently disable the wait.
+REQUIRED_CHECKS=$(jq -c '(.ci.requiredChecks // []) | map(tostring)' "$PROJECT_ROOT/.claude/project-config.json" 2>/dev/null || echo "[]")
+REQ_COUNT=$(echo "$REQUIRED_CHECKS" | jq 'length' 2>/dev/null || echo 0)
+REQ_PRESENT=0
+REQ_MISCONFIG_NOTE=""
+if [ "$REQ_COUNT" -gt 0 ]; then
+  REQ_PRESENT=$(echo "$STATUS" | jq --argjson req "$REQUIRED_CHECKS" '[.[] | select(.name as $n | $req | index($n))] | length' 2>/dev/null || echo 0)
+  if [ "$REQ_PRESENT" -eq 0 ]; then
+    REQ_MISCONFIG_NOTE="NOTE: ci.requiredChecks $REQUIRED_CHECKS matches none of this PR's checks — gating on ALL checks instead. Fix the names in project-config to enable the required-only wait."
+  fi
+fi
+
 # Pending checks block — unless the per-task CI Gate authorizes skipping the
 # wait. The marker stays in place so a later Stop re-checks (the gate may have
 # been revoked, and a FAILED check must still block).
@@ -191,6 +218,22 @@ if [ -n "$PENDING" ]; then
     echo "Fix the failures or ack a documented flake via $ACK_FILE — red CI is never skippable." >&2
     exit 2
   fi
+  # Required-only wait: with a configured-and-present requiredChecks list, only
+  # required pendings hold the stop. Failures (any check) still block below.
+  if [ "$REQ_COUNT" -gt 0 ] && [ "$REQ_PRESENT" -gt 0 ] && [ -z "$FAILS" ]; then
+    PENDING_REQ=$(echo "$STATUS" | jq -r --argjson req "$REQUIRED_CHECKS" '[.[] | select(.bucket == "pending") | select(.name as $n | $req | index($n)) | .name] | join(", ")' 2>/dev/null)
+    if [ -z "$PENDING_REQ" ]; then
+      echo "INFO: only non-required checks still pending on PR #$PR: $PENDING" >&2
+      echo "All configured required checks ($REQUIRED_CHECKS) have completed without failure — not holding the session." >&2
+      exit 0
+    fi
+    echo "BLOCKED: required CI checks still pending on PR #$PR ($BRANCH): $PENDING_REQ" >&2
+    echo "" >&2
+    echo "You pushed code in this session and required checks haven't reached terminal state yet." >&2
+    echo "Wait for them to settle before ending (Monitor: gh pr checks $PR --watch)." >&2
+    exit 2
+  fi
+  [ -n "$REQ_MISCONFIG_NOTE" ] && echo "$REQ_MISCONFIG_NOTE" >&2
   echo "BLOCKED: CI checks still pending on PR #$PR ($BRANCH): $PENDING" >&2
   echo "" >&2
   echo "You pushed code in this session and CI hasn't reached terminal state yet." >&2
@@ -234,6 +277,20 @@ if [ -n "$CANCELS" ]; then
     echo "INFO: CI Gate '$CI_GATE' — cancelled checks on PR #$PR not awaited: $CANCELS" >&2
     exit 0
   fi
+  # Required-only wait applies to cancellations too: a cancelled optional lane
+  # shouldn't hold the session when every required check is green.
+  if [ "$REQ_COUNT" -gt 0 ] && [ "$REQ_PRESENT" -gt 0 ]; then
+    CANCELS_REQ=$(echo "$STATUS" | jq -r --argjson req "$REQUIRED_CHECKS" '[.[] | select(.bucket == "cancel" or .bucket == "cancelled") | select(.name as $n | $req | index($n)) | .name] | join(", ")' 2>/dev/null)
+    if [ -z "$CANCELS_REQ" ]; then
+      echo "INFO: only non-required checks cancelled on PR #$PR: $CANCELS" >&2
+      echo "All configured required checks ($REQUIRED_CHECKS) completed without failure — not holding the session." >&2
+      exit 0
+    fi
+    echo "BLOCKED: required CI checks cancelled on PR #$PR ($BRANCH): $CANCELS_REQ" >&2
+    echo "Likely superseded by a newer push. Wait for the new run to complete." >&2
+    exit 2
+  fi
+  [ -n "$REQ_MISCONFIG_NOTE" ] && echo "$REQ_MISCONFIG_NOTE" >&2
   echo "BLOCKED: CI checks cancelled on PR #$PR ($BRANCH): $CANCELS" >&2
   echo "Likely superseded by a newer push. Wait for the new run to complete." >&2
   exit 2
