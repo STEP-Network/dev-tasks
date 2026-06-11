@@ -156,6 +156,59 @@ else
   FAIL=$((FAIL+1))
 fi
 
+# --- requiredChecks-aware wait (v0.27.0) --------------------------------------
+echo ""
+echo "requiredChecks-aware wait:"
+
+write_req_config() {
+  # write_req_config '<json-array-or-absent>'
+  if [ "$1" = "absent" ]; then
+    rm -f .claude/project-config.json
+  else
+    printf '{"version":"1","monday":{"productId":"1"},"ci":{"requiredChecks":%s}}\n' "$1" > .claude/project-config.json
+  fi
+}
+
+REQ_OPT_PENDING='[{"name":"Test","bucket":"pass"},{"name":"Vercel","bucket":"pending"}]'
+REQ_REQ_PENDING='[{"name":"Test","bucket":"pending"},{"name":"Vercel","bucket":"pass"}]'
+REQ_FAIL_OPT_PENDING='[{"name":"Test","bucket":"pass"},{"name":"Vercel","bucket":"fail"},{"name":"Other","bucket":"pending"}]'
+REQ_OPT_CANCEL='[{"name":"Test","bucket":"pass"},{"name":"Vercel","bucket":"cancel"}]'
+REQ_REQ_CANCEL='[{"name":"Test","bucket":"cancel"},{"name":"Vercel","bucket":"pass"}]'
+
+# 11. Required check done, only optional pending → allow
+write_req_config '["Test"]'
+run_case "required green + optional pending → ALLOW" 0 "$REQ_OPT_PENDING" "" "" ""
+
+# 12. Required check itself pending → block
+write_req_config '["Test"]'
+run_case "required pending → BLOCK" 2 "$REQ_REQ_PENDING" "" "" ""
+
+# 13. Misconfig guard: required list matches no check on the PR → block on all
+write_req_config '["Ghost Check"]'
+run_case "requiredChecks matches nothing + pending → BLOCK (misconfig guard)" 2 "$PENDING_CHECKS" "" "" ""
+
+# 14. A FAILED optional check still blocks even with required green
+write_req_config '["Test"]'
+run_case "required green + optional FAILED + pending → BLOCK (red is red)" 2 "$REQ_FAIL_OPT_PENDING" "" "" ""
+
+# 15. Only optional cancelled → allow
+write_req_config '["Test"]'
+run_case "required green + optional cancelled → ALLOW" 0 "$REQ_OPT_CANCEL" "" "" ""
+
+# 16. Required cancelled → block
+write_req_config '["Test"]'
+run_case "required cancelled → BLOCK" 2 "$REQ_REQ_CANCEL" "" "" ""
+
+# 17. Empty requiredChecks list → unchanged conservative default (any pending blocks)
+write_req_config '[]'
+run_case "empty requiredChecks + pending → BLOCK (default unchanged)" 2 "$REQ_OPT_PENDING" "" "" ""
+
+# 18. CI Gate Skip still wins over requiredChecks blocking (required pending, gate skip)
+write_req_config '["Test"]'
+run_case "Skip (human) overrides required pending → ALLOW" 0 "$REQ_REQ_PENDING" "Skip (human)" "" ""
+
+write_req_config absent
+
 # --- Cleanup ------------------------------------------------------------------
 rm -f "$MARKER" "$ACK_FILE"
 cd /

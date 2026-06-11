@@ -203,16 +203,49 @@ async function deleteAllDocBlocks(docId: number): Promise<number> {
 }
 
 /**
+ * Defensive markdown normalization for Monday doc writes (v0.27.0).
+ *
+ * Monday's `add_content_to_doc_from_markdown` parses markdown line-by-line —
+ * a payload whose newlines arrived as LITERAL backslash-n sequences (double-
+ * escaped tool args, typically from claude.ai / Desktop MCP sessions) becomes
+ * ONE unparsed paragraph of raw markdown syntax ("the doc doesn't render").
+ * Verified 2026-06-12 on a scratch doc: all create/overwrite/append paths
+ * produce correctly-typed blocks when real newlines are present, so newline
+ * loss is the failure mode worth guarding, not the API itself.
+ *
+ * Rules:
+ *  - CRLF → LF always (Monday treats lone CR as text).
+ *  - Literal-\n rescue ONLY when the payload contains zero real newlines but
+ *    does contain literal \n sequences. Multi-line payloads are never touched,
+ *    so legitimate literal "\n" inside code fences survives. The only false-
+ *    positive surface is a genuinely single-line doc that wants a literal \n
+ *    in prose — acceptably rare vs. the whole-doc-unrendered failure.
+ *
+ * Known upstream artifact this does NOT fix: `export_markdown_from_doc`
+ * mangles bold-containing-inline-code into `**bold ****`code`**** rest**`.
+ * Monday re-imports its own mangle correctly; it only pollutes exported text.
+ */
+export function normalizeDocMarkdown(markdown: string): string {
+  let md = markdown.replace(/\r\n/g, "\n");
+  if (!md.includes("\n") && md.includes("\\n")) {
+    md = md.replace(/\\r\\n/g, "\n").replace(/\\n/g, "\n").replace(/\\t/g, "\t");
+  }
+  return md;
+}
+
+/**
  * Internal: run the add_content mutation and surface Monday's `success: false`
  * as a thrown Error. Both writeDocContentReplacing and appendDocContent
- * delegate here so failure detection is consistent.
+ * delegate here so failure detection is consistent — and content normalization
+ * (normalizeDocMarkdown) happens here so EVERY doc write path (UAT doc,
+ * description doc, changelog) is covered by the single choke point.
  */
 async function addContentToDocOrThrow(docId: number, markdown: string): Promise<void> {
   const mutation = `
     mutation {
       add_content_to_doc_from_markdown(
         docId: ${docId},
-        markdown: ${JSON.stringify(markdown)}
+        markdown: ${JSON.stringify(normalizeDocMarkdown(markdown))}
       ) { success error }
     }
   `;

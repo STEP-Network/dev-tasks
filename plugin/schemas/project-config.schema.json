@@ -96,7 +96,7 @@
           "enum": ["github-actions", "gitlab-ci", "circleci", "vercel", "other"]
         },
         "requiredChecks": {
-          "description": "CI check names that must be green before merge.",
+          "description": "Names of CI checks that gate the session-stop wait in stop-ci-green-check (v0.27.0): when non-empty and ≥1 name matches the PR's checks, only these checks block the pending/cancelled wait — optional lanes pending alone no longer hold the session. Empty/missing = any pending check blocks (conservative default). Does NOT affect the merge gate (GitHub branch protection governs merges), and a FAILED check always blocks regardless of this list.",
           "type": "array",
           "items": { "type": "string" }
         },
