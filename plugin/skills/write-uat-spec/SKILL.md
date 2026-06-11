@@ -23,6 +23,8 @@ Human UAT becomes lighter: agent-verified items live in the UAT doc's "Agent-ver
 
 The classifier runs against the diff (`git diff $defaultBase...HEAD --stat`) plus the task's `type` field. When unclear, prefer "write a spec" — over-coverage is cheap; under-coverage erodes the gate's value.
 
+**CI Gate interaction (v0.26.0)**: when the task's CI Gate is `Skip (human)` / `Skip (agent)`, `/ship-pr` skips Phase 4.6 entirely and this skill is not invoked — the UAT doc records the skip and its authorization instead. The classifier table above only governs tasks under `Full` gating.
+
 ## Tool surface
 
 Delegate the actual spec authoring to `dev-tasks:e2e-tester` (existing read-only subagent with Read / Glob / Grep / Bash / WebSearch + claude-in-chrome MCP). The subagent inspects the rendered DOM on the preview URL to choose stable selectors, then writes the file. This skill's job is to:

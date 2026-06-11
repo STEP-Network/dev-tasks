@@ -28,6 +28,14 @@ exec >&2
 #     /tmp/.claude-ci-ack-{branch}
 #   The hook will then allow Stop. The ack file is per-branch and per-session
 #   (in /tmp), so it doesn't accidentally carry over between unrelated PRs.
+#
+# Per-task CI Gate (v0.26.0):
+#   The Monday "CI Gate" column (color_mm46jxc) can authorize skipping the
+#   WAIT: under "Skip (human)" / "Skip (agent)" this hook allows Stop while
+#   checks are pending / unregistered / cancelled. FAILED checks still block
+#   (the ack path above is the only failure escape). Resolution: live Monday
+#   column → active-task.json `ciGate` mirror → "Full". See CLAUDE.md
+#   "Per-task CI Gate" for the full contract.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/lib/resolve-agent-cwd.sh"
@@ -79,6 +87,43 @@ if [ -f "$ACTIVE_TASK" ]; then
   esac
 fi
 
+# CI GATE (v0.26.0): per-task skip of the CI WAIT, authorized via the Monday
+# "CI Gate" status column (color_mm46jxc on the Tasks board). "Skip (human)" /
+# "Skip (agent)" allow session exit while checks are PENDING (or not yet
+# registered, or cancelled). A check that has already FAILED still blocks —
+# skip removes the wait, never the never-bypass-red-CI policy.
+#
+# Resolution order: live Monday column (the server-side authority — a human
+# flipping the column mid-task, or a revoked auto-skip, takes effect at the
+# next Stop) → active-task.json `ciGate` mirror (offline fallback, written by
+# /pickup-task via the protected-field marker contract) → "Full".
+CI_GATE="Full"
+if [ -f "$ACTIVE_TASK" ]; then
+  LOCAL_GATE=$(jq -r '.ciGate // ""' "$ACTIVE_TASK" 2>/dev/null)
+  [ -n "$LOCAL_GATE" ] && CI_GATE="$LOCAL_GATE"
+
+  TASK_ID=$(jq -r '.taskId // ""' "$ACTIVE_TASK" 2>/dev/null)
+  if [ -n "$TASK_ID" ] && [ -n "${MONDAY_API_KEY:-}" ] && command -v curl >/dev/null 2>&1 && command -v jq >/dev/null 2>&1; then
+    GATE_PAYLOAD=$(jq -n --arg id "$TASK_ID" \
+      '{query: "query($id: [ID!]) { items(ids: $id) { column_values(ids: [\"color_mm46jxc\"]) { id text } } }", variables: {id: [$id]}}')
+    GATE_RESPONSE=$(curl -sS -X POST "https://api.monday.com/v2" \
+      -H "Authorization: $MONDAY_API_KEY" \
+      -H "Content-Type: application/json" \
+      --max-time 5 \
+      --data "$GATE_PAYLOAD" 2>/dev/null)
+    if [ -n "$GATE_RESPONSE" ] && echo "$GATE_RESPONSE" | jq -e '.data.items[0]' >/dev/null 2>&1; then
+      # Live read succeeded — it wins, including "empty column" (= Full), so a
+      # revoked skip can't survive via a stale local mirror.
+      LIVE_GATE=$(echo "$GATE_RESPONSE" | jq -r '.data.items[0].column_values[]? | select(.id == "color_mm46jxc") | .text // empty' 2>/dev/null)
+      CI_GATE="${LIVE_GATE:-Full}"
+    fi
+  fi
+fi
+CI_GATE_SKIP=false
+case "$CI_GATE" in
+  "Skip (human)"|"Skip (agent)") CI_GATE_SKIP=true ;;
+esac
+
 # Find PR for this branch
 PR=$(cd "$PROJECT_ROOT" && gh pr list --head "$BRANCH" --json number --jq '.[0].number' 2>/dev/null)
 if [ -z "$PR" ] || [ "$PR" = "null" ]; then
@@ -110,6 +155,10 @@ if [ -z "$STATUS" ] || [ "$STATUS" = "[]" ]; then
   if [ -n "$MARKER_MTIME" ]; then
     AGE=$((NOW - MARKER_MTIME))
     if [ "$AGE" -lt 60 ]; then
+      if [ "$CI_GATE_SKIP" = "true" ]; then
+        echo "INFO: CI Gate '$CI_GATE' — checks not yet registered on PR #$PR, but the wait is skipped. Merge stays gated on green." >&2
+        exit 0
+      fi
       echo "BLOCKED: pushed ${AGE}s ago to PR #$PR — CI checks not yet registered by GitHub." >&2
       echo "Wait ~30–60s and retry. The marker stays in place; this hook will re-check on next Stop attempt." >&2
       exit 2
@@ -121,9 +170,27 @@ if [ -z "$STATUS" ] || [ "$STATUS" = "[]" ]; then
   exit 0
 fi
 
-# Pending checks always block — wait for terminal state.
+# Pending checks block — unless the per-task CI Gate authorizes skipping the
+# wait. The marker stays in place so a later Stop re-checks (the gate may have
+# been revoked, and a FAILED check must still block).
+#
+# FAILS is computed BEFORE the pending branch on purpose: in a mixed state
+# (some checks failed, others still running — matrix builds, fast-fail lanes)
+# the skip path must NOT allow the stop. Skip removes the wait, never the
+# never-bypass-red-CI policy. The unacked-failure block below still fires.
 PENDING=$(echo "$STATUS" | jq -r '[.[] | select(.bucket == "pending") | .name] | join(", ")' 2>/dev/null)
+FAILS=$(echo "$STATUS" | jq -r '[.[] | select(.bucket == "fail") | .name] | join(", ")' 2>/dev/null)
 if [ -n "$PENDING" ]; then
+  if [ "$CI_GATE_SKIP" = "true" ] && { [ -z "$FAILS" ] || [ -f "$ACK_FILE" ]; }; then
+    echo "INFO: CI Gate '$CI_GATE' — pending checks on PR #$PR not awaited: $PENDING" >&2
+    echo "Merge remains server-gated on green (pre-merge gate + branch protection unchanged)." >&2
+    exit 0
+  fi
+  if [ "$CI_GATE_SKIP" = "true" ] && [ -n "$FAILS" ]; then
+    echo "BLOCKED: CI Gate '$CI_GATE' skips the wait, but checks have already FAILED on PR #$PR: $FAILS" >&2
+    echo "Fix the failures or ack a documented flake via $ACK_FILE — red CI is never skippable." >&2
+    exit 2
+  fi
   echo "BLOCKED: CI checks still pending on PR #$PR ($BRANCH): $PENDING" >&2
   echo "" >&2
   echo "You pushed code in this session and CI hasn't reached terminal state yet." >&2
@@ -133,8 +200,8 @@ if [ -n "$PENDING" ]; then
   exit 2
 fi
 
-# Failed checks block unless explicitly acknowledged.
-FAILS=$(echo "$STATUS" | jq -r '[.[] | select(.bucket == "fail") | .name] | join(", ")' 2>/dev/null)
+# Failed checks block unless explicitly acknowledged. (FAILS computed above,
+# before the pending branch.)
 if [ -n "$FAILS" ]; then
   if [ -f "$ACK_FILE" ]; then
     REASON=$(head -1 "$ACK_FILE" 2>/dev/null)
@@ -163,6 +230,10 @@ fi
 # `cancelled` (defensive).
 CANCELS=$(echo "$STATUS" | jq -r '[.[] | select(.bucket == "cancel" or .bucket == "cancelled") | .name] | join(", ")' 2>/dev/null)
 if [ -n "$CANCELS" ]; then
+  if [ "$CI_GATE_SKIP" = "true" ]; then
+    echo "INFO: CI Gate '$CI_GATE' — cancelled checks on PR #$PR not awaited: $CANCELS" >&2
+    exit 0
+  fi
   echo "BLOCKED: CI checks cancelled on PR #$PR ($BRANCH): $CANCELS" >&2
   echo "Likely superseded by a newer push. Wait for the new run to complete." >&2
   exit 2

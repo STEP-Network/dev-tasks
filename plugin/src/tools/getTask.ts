@@ -1,5 +1,5 @@
 import { executeMondayQuery } from "../monday-client.ts";
-import { BOARDS, TASK_COLUMNS, SUBTASK_COLUMNS } from "../constants.ts";
+import { BOARDS, TASK_COLUMNS, SUBTASK_COLUMNS, CI_GATE } from "../constants.ts";
 import type { GetTaskInput } from "../schemas.ts";
 import {
   evaluatePublicVisibility,
@@ -46,6 +46,8 @@ interface TaskDetail {
   estimatedHours?: string;
   actualHours?: string;
   unplanned: boolean;
+  /** Per-task CI-gate policy. Empty column reads as "Full" (full gating). */
+  ciGate: string;
   description?: string;
   owner: string;
   startedDate?: string;
@@ -87,6 +89,7 @@ export async function getTask(args: GetTaskInput): Promise<string> {
       TASK_COLUMNS.agentId,
       TASK_COLUMNS.planId,
       TASK_COLUMNS.unplanned,
+      TASK_COLUMNS.ciGate,
       TASK_COLUMNS.taskId,
       TASK_COLUMNS.attachments,
       TASK_COLUMNS.product,
@@ -188,6 +191,8 @@ export async function getTask(args: GetTaskInput): Promise<string> {
     const planId = getColumnText(colMap, TASK_COLUMNS.planId);
     const unplannedVal = getColumnValue(colMap, TASK_COLUMNS.unplanned);
     const unplanned = unplannedVal?.checked === true || unplannedVal?.checked === "true";
+    // Empty CI Gate column = full gating (the safe default; no backfill).
+    const ciGate = getColumnText(colMap, TASK_COLUMNS.ciGate) || CI_GATE.FULL;
 
     // Subitems
     const subitems = (item.subitems || []).map((sub: any) => formatSubtask(sub));
@@ -213,6 +218,7 @@ export async function getTask(args: GetTaskInput): Promise<string> {
       estimatedHours,
       actualHours,
       unplanned,
+      ciGate,
       description: description || undefined,
       owner,
       startedDate,
@@ -251,6 +257,7 @@ export async function getTask(args: GetTaskInput): Promise<string> {
     if (detail.estimatedHours) lines.push(`- **Estimated Hours:** ${detail.estimatedHours}`);
     if (detail.actualHours) lines.push(`- **Actual Hours:** ${detail.actualHours}`);
     if (detail.unplanned) lines.push(`- **Unplanned:** Yes`);
+    lines.push(`- **CI Gate:** ${detail.ciGate}${detail.ciGate === CI_GATE.FULL ? "" : " — CI wait + e2e gates skipped; a RED check still blocks merge"}`);
     lines.push("");
 
     lines.push("## Assignment & Dates");

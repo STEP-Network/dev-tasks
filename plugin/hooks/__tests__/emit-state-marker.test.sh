@@ -52,7 +52,7 @@ clean_markers() { rm -f /tmp/.claude-state-marker-*-"$HEAD_SHA"; }
 # ============================================================
 echo "## valid fields emit marker"
 
-for FIELD in selfReviewPassed reviewAddressed parentStatus mondayReconciledShas; do
+for FIELD in selfReviewPassed reviewAddressed parentStatus mondayReconciledShas ciGate; do
   clean_markers
   run_test "emit $FIELD → exit 0" 0 "$FIELD"
   if [ ! -f "/tmp/.claude-state-marker-${FIELD}-${HEAD_SHA}" ]; then

@@ -242,6 +242,13 @@ export async function updateTask(args) {
                 ? `Dependencies -> [${args.dependencyIds.join(", ")}]`
                 : `Dependencies -> cleared`);
         }
+        // Label-based write (never index): labels are pre-configured on the
+        // column; create_labels_if_missing on the mutation covers consumer boards
+        // where the column was added without the full label set.
+        if (args.ciGate !== undefined) {
+            columnValues[TASK_COLUMNS.ciGate] = { label: args.ciGate };
+            changes.push(`CI Gate -> ${args.ciGate}`);
+        }
         // Execute column value update if there are changes
         if (Object.keys(columnValues).length > 0) {
             const mutation = `
@@ -249,7 +256,8 @@ export async function updateTask(args) {
           change_multiple_column_values(
             item_id: ${itemId},
             board_id: ${BOARDS.TASKS},
-            column_values: ${buildColumnValues(columnValues)}
+            column_values: ${buildColumnValues(columnValues)},
+            create_labels_if_missing: true
           ) {
             id
           }

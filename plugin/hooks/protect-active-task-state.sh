@@ -10,6 +10,8 @@
 #   parentStatus         ← stop-waiting-for-uat-stage
 #   mondayReconciledShas ← stop-monday-reconciled-check
 #   allowMainCheckout    ← worktree-required
+#   ciGate               ← stop-ci-green-check (offline fallback for the
+#                          per-task CI-gate skip; live Monday column wins)
 #
 # An agent that writes the file directly via Edit/Write/MultiEdit can flip
 # all of these and sail past every gate. This hook intercepts those tool
@@ -189,6 +191,23 @@ if not cur_amc and prop_amc:
         "Setting allowMainCheckout=true bypasses worktree-required (the discipline that\n"
         "prevents parallel sessions from clobbering each other). NO marker can unlock this.\n"
         "Surface the situation to the user and ask them to set the flag manually."
+    ))
+
+# ciGate (v0.26.0): transitioning to a Skip value requires the marker — the
+# legitimate writers are /pickup-task step 12 (mirroring a board-side Skip)
+# and /ship-pr Phase 2 auto-skip (after ci-skip-eval ELIGIBLE + Monday column
+# write). Reverting to Full/empty is always allowed — tightening the gate
+# never needs authorization. stop-ci-green-check prefers the live Monday
+# column anyway, so this guards the offline-fallback path from self-grants.
+cur_gate = current.get('ciGate') or ''
+prop_gate = proposed.get('ciGate') or ''
+if prop_gate.startswith('Skip') and prop_gate != cur_gate and not marker_exists('ciGate'):
+    blocks.append((
+        'ciGate',
+        f"Setting ciGate='{prop_gate}' requires marker {marker_path('ciGate')}.\n"
+        "Legitimate paths: /pickup-task step 12 (mirror a board-side Skip at claim)\n"
+        "or /ship-pr Phase 2 auto-skip (ci-skip-eval.sh ELIGIBLE + updateTask ciGate\n"
+        "first, then emit-state-marker.sh ciGate). Reverting to 'Full' needs no marker."
     ))
 
 if blocks:

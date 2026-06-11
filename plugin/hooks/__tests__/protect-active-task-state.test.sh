@@ -252,6 +252,100 @@ touch "/tmp/.claude-state-marker-allowMainCheckout-$HEAD_SHA"
 run_test "allowMainCheckout=true WITH marker → still BLOCK (no marker path)" 2 "$PAYLOAD" "allowMainCheckout"
 
 # ============================================================
+# ciGate (v0.26.0)
+# ============================================================
+echo "## ciGate"
+
+write_baseline
+clean_markers
+PAYLOAD=$(python3 -c "
+import json
+print(json.dumps({
+  'tool_name': 'Edit',
+  'tool_input': {
+    'file_path': '$STATE_FILE',
+    'old_string': '\"mondayReconciledShas\": []',
+    'new_string': '\"mondayReconciledShas\": [],\n  \"ciGate\": \"Skip (agent)\"',
+  },
+}))
+")
+run_test "ciGate → 'Skip (agent)' without marker → BLOCK" 2 "$PAYLOAD" "ciGate"
+
+write_baseline
+clean_markers
+touch "/tmp/.claude-state-marker-ciGate-$HEAD_SHA"
+run_test "ciGate → 'Skip (agent)' with marker → PASS" 0 "$PAYLOAD"
+
+write_baseline
+clean_markers
+PAYLOAD=$(python3 -c "
+import json
+print(json.dumps({
+  'tool_name': 'Edit',
+  'tool_input': {
+    'file_path': '$STATE_FILE',
+    'old_string': '\"mondayReconciledShas\": []',
+    'new_string': '\"mondayReconciledShas\": [],\n  \"ciGate\": \"Skip (human)\"',
+  },
+}))
+")
+run_test "ciGate → 'Skip (human)' without marker → BLOCK" 2 "$PAYLOAD" "ciGate"
+
+# Reverting to Full never needs a marker (tightening is always allowed).
+cat > "$STATE_FILE" <<JSON
+{
+  "taskId": "111",
+  "taskName": "test task",
+  "claimToken": "tok",
+  "branch": "feat/test",
+  "selfReviewPassed": false,
+  "selfReviewPassedAt": null,
+  "mondayReconciledShas": [],
+  "ciGate": "Skip (agent)"
+}
+JSON
+clean_markers
+PAYLOAD=$(python3 -c "
+import json
+print(json.dumps({
+  'tool_name': 'Edit',
+  'tool_input': {
+    'file_path': '$STATE_FILE',
+    'old_string': '\"ciGate\": \"Skip (agent)\"',
+    'new_string': '\"ciGate\": \"Full\"',
+  },
+}))
+")
+run_test "ciGate Skip → Full without marker → PASS (tightening)" 0 "$PAYLOAD"
+
+# Same Skip value rewritten unchanged → no transition → pass.
+cat > "$STATE_FILE" <<JSON
+{
+  "taskId": "111",
+  "taskName": "test task",
+  "claimToken": "tok",
+  "branch": "feat/test",
+  "selfReviewPassed": false,
+  "selfReviewPassedAt": null,
+  "mondayReconciledShas": [],
+  "ciGate": "Skip (human)"
+}
+JSON
+clean_markers
+PAYLOAD=$(python3 -c "
+import json
+print(json.dumps({
+  'tool_name': 'Edit',
+  'tool_input': {
+    'file_path': '$STATE_FILE',
+    'old_string': '\"taskName\": \"test task\"',
+    'new_string': '\"taskName\": \"renamed\"',
+  },
+}))
+")
+run_test "unrelated edit while ciGate already Skip → PASS (no transition)" 0 "$PAYLOAD"
+
+# ============================================================
 # Non-protected field edits pass through
 # ============================================================
 echo "## non-protected fields"

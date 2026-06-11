@@ -24,7 +24,13 @@
   "ci": {
     "provider": "github-actions",
     "requiredChecks": ["build", "test", "lint"],
-    "previewUrlPattern": "^https://"
+    "previewUrlPattern": "^https://",
+    "autoSkip": {
+      "enabled": false,
+      "maxChangedLines": 50,
+      "pathAllowlist": [],
+      "pathDenylist": ["migrations/**", "**/migrations/**", "db/**", "**/db/**", "auth/**", "**/auth/**", "api/**", "**/api/**", "*.sql"]
+    }
   },
   "rules": {
     "extraRules": []

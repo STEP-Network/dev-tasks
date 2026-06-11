@@ -96,9 +96,11 @@ A task ready-to-start today may have been silently superseded by a recently-merg
       }
       ```
     - `claimToken` is REQUIRED by `task-state-guard.sh` — without it, the edit guard HARD BLOCKS all file edits. The token proves the task was claimed via MCP, not manually.
+    - **`ciGate` mirror (v0.26.0)**: the `claimTask` response includes the task's CI Gate. If it's `Skip (human)` / `Skip (agent)`, FIRST run `bash $CLAUDE_PLUGIN_ROOT/scripts/emit-state-marker.sh ciGate`, then include `"ciGate": "<value>"` in the state file (`protect-active-task-state` blocks an unmarked Skip write). If the gate is `Full`/empty, omit the field. The mirror is the offline fallback for `stop-ci-green-check` — the live Monday column always wins when reachable.
     - Optional fields written by later skills (do NOT initialize here; absence is the correct default state):
       - `parentStatus` — mirror of Monday parent status. Written by `/ship-pr` Phase 6.5 after the `Waiting for UAT` transition. Read by `stop-waiting-for-uat-stage` to avoid false-positives.
       - `mondayReconciledShas: []` — merge SHAs that have been reconciled to Monday. Appended by `/ship-pr` Phase 10 + `/babysit-prs` Phase 3 after `gh pr merge`. Read by `stop-monday-reconciled-check`.
+      - `ciGate` — per-task CI-gate mirror, also re-written by `/ship-pr` Phase 2 step 6.3 (auto-skip grant via marker, or revert-to-Full on scope creep — no marker needed for Full).
 
 13. Glob/Grep for related files.
 14. Output context summary: task details, related files, subtask plan.

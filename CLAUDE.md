@@ -143,6 +143,7 @@ Used in `claimTask` (required), `createTask`, `createEpic`, `updateEpic`, `creat
 **Retro Type:** Discussion, Keep, Improve (existing — separate from workflow status)
 **Retro Status (v0.12.0):** New (default) → Accepted (team agreed, owner assigned) → Implemented (PR merged, `implementedBy` + `resolvedInVersionId` populated) → Validated. Off-ramp: Declined (terminal).
 **Agent ID:** Claude Code CLI, Claude Desktop Cloud, Codex Local, Claude Desktop Local, Codex Cloud
+**CI Gate (`color_mm46jxc`, v0.26.0):** Full (default — empty column reads as Full) | Skip (human) — human-set on the board only | Skip (agent) — agent-set only after `ci-skip-eval.sh` ELIGIBLE. Label-based writes via `updateTask({ ciGate })`; read via `getTask`/`claimTask`. See "Per-task CI Gate" below.
 
 ## Status transition gates
 
@@ -281,7 +282,7 @@ Full detail in `plugin/rules/agent-orchestration.md` "Quality-over-speed loop in
 Five hooks shipped in plugin v0.15.0; v0.16.0 added gate (f) to `bash-guard` (always-on, no opt-in) plus the `protect-active-task-state` integrity hook (opt-in). All other hooks below are opt-in via `project-config.json` → `hooks.enabled[]`:
 
 - **`bash-guard` gate (f)** *(always-on, v0.16.0)* — hard-refuses `git push` to any branch in `project-config.git.protectedBranches[]` (default: `main, staging, master, production, prod`). No marker bypass. Set the list to `[]` to disable just this gate.
-- **`protect-active-task-state`** *(v0.16.0)* — refuses `Edit/Write/MultiEdit` on `.claude/active-task.json` that mutates protected fields (`selfReviewPassed`, `reviewAddressed`, `parentStatus`, `mondayReconciledShas`, `allowMainCheckout`) without a corresponding skill-emission marker in `/tmp`. Closes the 2026-05-27 polads-style bypass where an agent wrote the state file directly. `allowMainCheckout: true` is always blocked (no marker path). **Requires `post-self-review` to be co-enabled** — that hook is the sole emitter of the `selfReviewPassed` marker. See `plugin/rules/agent-orchestration.md` "Protected state fields" for the full marker contract and the GitHub branch protection complement.
+- **`protect-active-task-state`** *(v0.16.0)* — refuses `Edit/Write/MultiEdit` on `.claude/active-task.json` that mutates protected fields (`selfReviewPassed`, `reviewAddressed`, `parentStatus`, `mondayReconciledShas`, `allowMainCheckout`, `ciGate` since v0.26.0) without a corresponding skill-emission marker in `/tmp`. Closes the 2026-05-27 polads-style bypass where an agent wrote the state file directly. `allowMainCheckout: true` is always blocked (no marker path). **Requires `post-self-review` to be co-enabled** — that hook is the sole emitter of the `selfReviewPassed` marker. See `plugin/rules/agent-orchestration.md` "Protected state fields" for the full marker contract and the GitHub branch protection complement.
 - **`refinement-gate`** — refuses `claimTask` on Bugs-board items, un-refined tasks, or under-refined subtasks
 - **`subtask-progress-gate`** — refuses `git push` when subtasks exist but none Done-with-actualHours (escape: `allowPushWithoutSubtaskProgress: true` in active-task.json)
 - **`demo-url-required`** — refuses `updateTask(status='Waiting for UAT')` without `demoUrl` matching `project-config.ci.previewUrlPattern` (default permits any HTTPS URL)
@@ -324,6 +325,42 @@ Opt-in via `project-config.json` `hooks.enabled[]` (enabled here in the dogfood
 config). Even with no goal set, the hook surfaces a one-time SELF-CHECK on Stop
 when source files changed this branch, without blocking. Full contract:
 `plugin/skills/goal/SKILL.md`.
+
+## Per-task CI Gate — "CI Gate" column + bounded auto-skip (v0.26.0)
+
+Per-task control over the CI **wait** (never CI safety). The Monday Tasks-board
+status column **CI Gate** (`color_mm46jxc`) carries who authorized the skip:
+
+- **Full** (default; empty column reads as Full) — current behavior, unchanged.
+- **Skip (human)** — a human set it on the board. The label itself is the audit.
+- **Skip (agent)** — the agent auto-determined it, and may ONLY do so after
+  `plugin/scripts/ci-skip-eval.sh` prints `ELIGIBLE` for the committed diff
+  against `project-config.json → ci.autoSkip { enabled, maxChangedLines,
+  pathAllowlist[], pathDenylist[] }` (deterministic bounds around the LLM's
+  visual/copy-only judgment). Re-evaluated on every push by `/ship-pr` Phase 2
+  step 6.3 — scope creep reverts the column to Full.
+
+**What Skip changes**: `stop-ci-green-check.sh` allows session exit while
+checks are pending / unregistered / cancelled (resolution: live Monday column
+→ `active-task.json.ciGate` mirror → Full); `/ship-pr` skips the Phase 2
+local-spec gate + Phase 4.6 preview e2e gate (UAT doc records the skip) and
+arms `gh pr merge --auto` instead of polling CI (Phase 6).
+
+**What Skip never changes**: a FAILED check still blocks (flake-ack path
+unchanged); GitHub branch protection still requires green before the
+auto-merge fires; hotfix-base PRs never honor a skip; denylist paths
+(migrations/db/auth/api/sql by default) are never auto-skip eligible.
+
+**Tamper-proofing**: `ciGate` is a protected field in
+`protect-active-task-state.sh` — writing a Skip value into active-task.json
+requires the SHA-scoped marker (`emit-state-marker.sh ciGate`) emitted by the
+legitimate skill paths (`/pickup-task` step 12 mirror, `/ship-pr` Phase 2
+auto-skip). Reverting to Full never needs a marker. Agents never write
+`Skip (human)`. Honest caveat: the local-mirror guard is only as strong as
+`protect-active-task-state` being enabled in `hooks.enabled[]` — consumers
+without it have no local barrier against direct JSON writes when Monday is
+unreachable. The server-side Monday column remains the authority whenever the
+API is reachable, and the board's activity log is the unforgeable audit trail.
 
 ## Active-task.json drift reconciliation
 

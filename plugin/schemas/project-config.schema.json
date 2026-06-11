@@ -104,6 +104,36 @@
           "description": "Python regex pattern that validates the `demoUrl` passed to updateTask when transitioning to Waiting for UAT (read by demo-url-required hook). Default `^https://` permits any HTTPS URL. Tighten per deploy platform (e.g. `^https://.*\\.vercel\\.app(/.*)?$`, `^https://test\\.example\\.com`).",
           "type": "string",
           "default": "^https://"
+        },
+        "autoSkip": {
+          "description": "Deterministic bounds for the per-task CI-gate auto-skip (Monday 'CI Gate' column → 'Skip (agent)'). plugin/scripts/ci-skip-eval.sh evaluates the committed diff against these bounds; only an ELIGIBLE verdict permits the agent to set 'Skip (agent)'. Skip removes the CI WAIT (pending-check stop block + e2e gates) — a RED check still blocks merge. Absent block = auto-skip never eligible ('Skip (human)' on the board still works).",
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {
+              "description": "Master switch for agent auto-skip eligibility. Default false — projects opt in explicitly.",
+              "type": "boolean",
+              "default": false
+            },
+            "maxChangedLines": {
+              "description": "Cap on total added+deleted lines across the diff (binary files count 0; renames count full add+delete).",
+              "type": "integer",
+              "minimum": 1,
+              "default": 50
+            },
+            "pathAllowlist": {
+              "description": "fnmatch-style globs (`*` crosses directory separators). EVERY changed path must match at least one. Empty/absent = nothing eligible — allowlists are explicit opt-in (e.g. [\"*.css\", \"*.md\", \"**/copy/**\"]).",
+              "type": "array",
+              "items": { "type": "string" },
+              "default": []
+            },
+            "pathDenylist": {
+              "description": "fnmatch-style globs; ANY changed path matching one makes the diff ineligible. A configured list REPLACES the default — re-state the defaults if you extend. NOTE: `**/x/**` does NOT match root-level `x/...` under fnmatch; carry both forms (`x/**` and `**/x/**`) per guarded directory, as the default does.",
+              "type": "array",
+              "items": { "type": "string" },
+              "default": ["migrations/**", "**/migrations/**", "db/**", "**/db/**", "auth/**", "**/auth/**", "api/**", "**/api/**", "*.sql"]
+            }
+          }
         }
       }
     },
