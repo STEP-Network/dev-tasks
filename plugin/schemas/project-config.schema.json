@@ -299,7 +299,7 @@
       "additionalProperties": false,
       "properties": {
         "sources": {
-          "description": "Which review sources this project uses. The pre-merge-review-gate hook only enforces POLISH-decline-reply checks for listed sources. \"localReview\" (v0.28.0) is the /ship-pr Phase 2.7 local multi-lens panel — its findings are recorded in reviewAddressed.sources.localReview with the same shape as the bot sources. Default: [\"claudeBot\", \"corridor\", \"selfReview\"].",
+          "description": "Which review sources this project uses. The pre-merge-review-gate hook only enforces POLISH-decline-reply checks for listed sources. \"localReview\" (v0.28.0) is the /ship-pr Phase 2 step 6.7 local multi-lens panel — its findings are recorded in reviewAddressed.sources.localReview with the same shape as the bot sources. Default: [\"claudeBot\", \"corridor\", \"selfReview\"].",
           "type": "array",
           "items": {
             "type": "string",
@@ -309,7 +309,7 @@
           "default": ["claudeBot", "corridor", "selfReview"]
         },
         "cloudBot": {
-          "description": "When the GitHub Claude review bot runs relative to the /ship-pr loop (v0.28.0). \"always\" = today's behavior — the bot reviews every push and Phase 6 waits for it each round. \"final-push\" = the local review panel (Phase 2.7) carries the iteration rounds and the bot reviews ONCE on the final pushed state as a safety net — Phase 6 waits for exactly one bot review on the last push. \"off\" = no bot wait at all (repos without the bot installed). QUALITY GATE: a project may only move from \"always\" to \"final-push\" after the local panel passes the parity benchmark (covers all bot BLOCKERs on ≥5 historical PRs — see ship-pr SKILL.md \"Local review panel\"). The pre-merge review gate and CI-green requirements are unaffected by this setting.",
+          "description": "When the GitHub Claude review bot runs relative to the /ship-pr loop (v0.28.0). \"always\" = today's behavior — the bot reviews every push and Phase 6 waits for it each round. \"final-push\" = the local review panel (Phase 2 step 6.7) carries the iteration rounds and the bot reviews ONCE on the final pushed state as a safety net — Phase 6 waits for exactly one bot review on the last push. \"off\" = no bot wait at all (repos without the bot installed). QUALITY GATE: a project may only move from \"always\" to \"final-push\" after the local panel passes the parity benchmark (covers all bot BLOCKERs on ≥5 historical PRs — see ship-pr SKILL.md \"Local review panel\"). The pre-merge review gate and CI-green requirements are unaffected by this setting.",
           "type": "string",
           "enum": ["always", "final-push", "off"],
           "default": "always"

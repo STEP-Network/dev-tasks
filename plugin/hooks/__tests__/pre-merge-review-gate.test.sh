@@ -255,6 +255,19 @@ else
 fi
 
 # -------------------------------------------------------------------
+echo "==> Test 16: declinedInPrBody is NAME-GATED — claudeBot cannot use it to bypass"
+STATE="$WORK/test16/active-task.json"
+write_state "$STATE" '{"taskId":"123","reviewAddressed":{"status":"fixed","triagedAt":"2026-05-25T14:00:00Z","sources":{"claudeBot":{"commentsFound":1,"blockers":0,"improvements":0,"polish":1,"replies":[],"declinedInPrBody":true}}}}'
+
+ec=0
+out=$(run_gate "$STATE" "$WORK/test16" "" "claudeBot") || ec=$?
+if [ $ec -eq 2 ] && echo "$out" | grep -q "no decline replies"; then
+  pass "claudeBot declinedInPrBody does NOT bypass (localReview-only escape)"
+else
+  fail "expected exit 2 — declinedInPrBody must not help non-localReview sources (got ec=$ec, out=$out)"
+fi
+
+# -------------------------------------------------------------------
 echo ""
 echo "Results: $PASS passed, $FAIL failed"
 [ $FAIL -eq 0 ] || exit 1
