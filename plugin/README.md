@@ -51,7 +51,7 @@ These hooks run for every consumer regardless of config:
 | No destructive bash (incl. `--force`) | `bash-guard.sh` gate (a) | `git push --force`, `rm -rf`, `git reset --hard`, `git checkout .`, `git clean -f`, `git branch -D` |
 | Self-review before commit | `bash-guard.sh` gate (b) | `git commit` when `.claude/active-task.json.selfReviewPassed != true` |
 | Pre-push validation marker | `bash-guard.sh` gate (c) | `git push` without a fresh `/tmp/.claude-prepush-<branch>` marker matching HEAD |
-| CI green before session exit | `stop-ci-green-check.sh` | `Stop` while a push has happened and CI is not all-green. Per-task exception (v0.26.0): the Monday "CI Gate" column (`color_mm46jxc`) at `Skip (human)` / `Skip (agent)` allows Stop on *pending/unregistered/cancelled* checks — a FAILED check still blocks. Resolution: live Monday column → `active-task.json.ciGate` mirror → Full. See CLAUDE.md "Per-task CI Gate". |
+| CI green before session exit | `stop-ci-green-check.sh` | `Stop` while a push has happened and CI is not all-green. Per-task exception (v0.26.0): the Monday "CI Gate" column (`color_mm46jxc`) at `Skip (human)` / `Skip (agent)` allows Stop on *pending/unregistered/cancelled* checks — a FAILED check still blocks. Resolution: live Monday column → `active-task.json.ciGate` mirror → Full. See CLAUDE.md "Per-task CI Gate". Per-project relaxation (v0.27.0): non-empty `ci.requiredChecks[]` makes only required checks gate the pending/cancelled wait (optional lanes don't hold the session); FAILED checks block regardless; list-matches-nothing falls back to gating on everything. |
 
 Plus the session-level expectation (not hook-enforced): always run Corridor `analyzePlan` before generating code (declared in user-level `~/.claude/CLAUDE.md`).
 
