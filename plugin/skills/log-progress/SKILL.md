@@ -31,8 +31,14 @@ All other former event types are no-ops — do not post them. If invoked with a 
 2. Find the active subtask (`status = "in_progress"`). None → error "No in-progress subtask found" and ABORT.
 3. Fetch the subtask `started_date` from Monday via `getTask` (canonical source).
 4. `actualHours = (now − started_date)` in hours, rounded to 1 decimal.
+4.5. **Micro-review (conditional, v0.27.0)** — catch BLOCKERs while the context is hot so the final `/self-review` converges in one round, instead of discovering a round of fixes after all subtasks are "done".
+   - **Run when** the task has ≥3 subtasks AND the completing subtask produced non-docs code changes (skip for `<3` subtasks, `Documentation`-type subtasks, or a diff touching only `*.md`/`.claude/`).
+   - **Scope**: ONLY the commits since the previous subtask completion — `git log --oneline <prev-subtask-completion-or-branch-base>..HEAD` (track the boundary SHA in active-task.json `subtasks[].completedAtSha`; first subtask uses the branch base).
+   - **How**: spawn a FRESH `dev-tasks:self-reviewer` subagent (no implementation context — diff + the subtask description + task AC only) with a **BLOCKER-only bar**: report concrete production/correctness/security harm; explicitly suppress IMPROVEMENT/POLISH findings (those wait for the final `/self-review` — mid-task style churn is noise).
+   - **On BLOCKERs**: fix them NOW, before step 5 — the subtask isn't Done with a known blocker in it. Re-run the micro-review once after fixing; still-red → keep fixing (this is the cheap loop; no push, no CI involved).
+   - **On clean**: proceed. Do NOT post any Update, do NOT set `selfReviewPassed` (that field belongs exclusively to the full `/self-review` via its marker path).
 5. Update the subtask: status `Done` + `actualHours` via `manageSubtasks`.
-6. Update state file: subtask `status: "done"`, add `completedAt`, `actualHours`.
+6. Update state file: subtask `status: "done"`, add `completedAt`, `actualHours`, `completedAtSha` (current HEAD — the next micro-review's diff boundary).
 7. Promote the next subtask → `In Progress` via `manageSubtasks` (sets `started_date`).
 8. Update state file: next subtask `status: "in_progress"` with `mondayStartedDate`.
 9. **Do NOT call `createUpdate`.** The commit(s) that completed this subtask already carry the `#id` and the narrative in their messages.
