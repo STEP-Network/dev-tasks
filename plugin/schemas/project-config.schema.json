@@ -41,7 +41,7 @@
           "default": ".claude/worktrees"
         },
         "autoMergePolicy": {
-          "description": "Per-branch auto-merge policy. Keys are branch names, values are policies.",
+          "description": "Per-branch auto-merge policy, enforced by the opt-in `auto-merge-policy-gate` hook (add it to hooks.enabled[] to activate). Keys are branch names, matched against a PR's TARGET (base) branch. Values: `never` / `manual-only` BLOCK an agent `gh pr merge` to that branch (a human must merge); `auto-after-checks-and-review` PERMITS the agent to merge — the review + CI gates still decide readiness, this only lifts the branch-level block. Branches absent from the map are unconstrained. An unrecognized value blocks (fail-safe), so a typo such as \"manual\"/\"auto\" can't silently disable the gate.",
           "type": "object",
           "additionalProperties": {
             "type": "string",

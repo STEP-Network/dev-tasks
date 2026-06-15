@@ -77,6 +77,11 @@
           {
             "type": "command",
             "if": "Bash(gh pr merge *)",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/auto-merge-policy-gate.sh"
+          },
+          {
+            "type": "command",
+            "if": "Bash(gh pr merge *)",
             "command": "${CLAUDE_PLUGIN_ROOT}/hooks/pre-merge-review-gate.sh"
           },
           {
