@@ -99,7 +99,12 @@ For each merged PR (one PR at a time):
 
 After running this checklist, the task is "delivered" from the orchestrator's
 perspective. UAT runs on the consumer's UAT environment per their
-`project-config.json` `environments.uat.url` + `autoMergePolicy`.
+`project-config.json` `environments.uat.url`. Per-branch merge authority is set
+by `git.autoMergePolicy` and enforced by the `auto-merge-policy-gate` hook:
+`never`/`manual-only` branches require a human merge (the agent's `gh pr merge`
+is blocked); `auto-after-checks-and-review` lets the agent merge once the review
++ CI gates pass. This gate fires even for orchestrator/babysit merges with no
+`active-task.json`, unlike `pre-merge-review-gate`.
 
 ## Worktree discipline (mandatory)
 

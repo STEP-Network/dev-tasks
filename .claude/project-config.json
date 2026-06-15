@@ -59,7 +59,8 @@
       "subprocess-failure",
       "protect-active-task-state",
       "commit-id-gate",
-      "stop-goal-persistence"
+      "stop-goal-persistence",
+      "auto-merge-policy-gate"
     ]
   }
 }

@@ -63,7 +63,8 @@
       "stop-waiting-for-uat-stage",
       "stop-monday-reconciled-check",
       "protect-active-task-state",
-      "stop-goal-persistence"
+      "stop-goal-persistence",
+      "auto-merge-policy-gate"
     ]
   },
   "e2e": {
