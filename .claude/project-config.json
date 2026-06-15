@@ -5,7 +5,6 @@
     "defaultBase": "main",
     "hotfixBase": "main",
     "branchConvention": "feat/<slug>",
-    "worktreeRoot": ".claude/worktrees",
     "autoMergePolicy": {
       "main": "never"
     },
@@ -30,7 +29,6 @@
     "enabled": false
   },
   "ci": {
-    "provider": "github-actions",
     "requiredChecks": [
       "Vercel",
       "Vercel Preview Comments"
