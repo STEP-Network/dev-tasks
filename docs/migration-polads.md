@@ -24,7 +24,6 @@ Replace the file's content with:
     "defaultBase": "staging",
     "hotfixBase": "main",
     "branchConvention": "feat/<slug>",
-    "worktreeRoot": ".claude/worktrees",
     "autoMergePolicy": {
       "main": "never"
     }
@@ -34,8 +33,7 @@ Replace the file's content with:
     "v1MilestoneEpicIds": ["2833952138", "2738006659"]
   },
   "environments": {
-    "uat": { "url": "https://test.polads.eu" },
-    "prod": { "url": "https://polads.eu" }
+    "uat": { "url": "https://test.polads.eu" }
   },
   "i18n": {
     "enabled": true,
@@ -45,7 +43,6 @@ Replace the file's content with:
     "parityHookMode": "block"
   },
   "ci": {
-    "provider": "github-actions",
     "requiredChecks": ["build", "test", "lint"]
   },
   "rules": {

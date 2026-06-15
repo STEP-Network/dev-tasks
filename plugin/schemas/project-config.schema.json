@@ -35,11 +35,6 @@
           "type": "string",
           "default": "feat/<slug>"
         },
-        "worktreeRoot": {
-          "description": "Path (relative to repo root) where worktrees live.",
-          "type": "string",
-          "default": ".claude/worktrees"
-        },
         "autoMergePolicy": {
           "description": "Per-branch auto-merge policy, enforced by the opt-in `auto-merge-policy-gate` hook (add it to hooks.enabled[] to activate). Keys are branch names, matched against a PR's TARGET (base) branch. Values: `never` / `manual-only` BLOCK an agent `gh pr merge` to that branch (a human must merge); `auto-after-checks-and-review` PERMITS the agent to merge — the review + CI gates still decide readiness, this only lifts the branch-level block. Branches absent from the map are unconstrained. An unrecognized value blocks (fail-safe), so a typo such as \"manual\"/\"auto\" can't silently disable the gate.",
           "type": "object",
@@ -91,10 +86,6 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "provider": {
-          "type": "string",
-          "enum": ["github-actions", "gitlab-ci", "circleci", "vercel", "other"]
-        },
         "requiredChecks": {
           "description": "Names of CI checks that gate the session-stop wait in stop-ci-green-check (v0.27.0): when non-empty and ≥1 name matches the PR's checks, only these checks block the pending/cancelled wait — optional lanes pending alone no longer hold the session. Empty/missing = any pending check blocks (conservative default). Does NOT affect the merge gate (GitHub branch protection governs merges), and a FAILED check always blocks regardless of this list.",
           "type": "array",
@@ -143,11 +134,6 @@
       "additionalProperties": false,
       "required": ["productId"],
       "properties": {
-        "workspaceUrl": {
-          "description": "Monday workspace URL (informational).",
-          "type": "string",
-          "format": "uri"
-        },
         "productId": {
           "description": "Monday Products-board item ID for this product (numeric string, e.g. \"2723505568\"). Used by skills to scope listEpics/getBacklog calls. Required.",
           "type": "string",
@@ -158,11 +144,6 @@
           "type": "array",
           "items": { "type": "string" },
           "default": []
-        },
-        "peopleBoardId": {
-          "description": "Monday board for the people directory. Username → person ID lookup uses this board. Defaults to STEP Network's *People board (1612664689).",
-          "type": "number",
-          "default": 1612664689
         },
         "tasksBoardId": {
           "description": "Monday Tasks-board ID (numeric string). Optional — defaults to the STEP Tasks board (5091706356). Read by the commit-id-gate hook to validate that commit-message #ids reference Tasks-board items.",
@@ -186,17 +167,6 @@
               "format": "uri"
             }
           }
-        },
-        "prod": {
-          "type": "object",
-          "additionalProperties": false,
-          "properties": {
-            "url": {
-              "description": "Production environment URL.",
-              "type": "string",
-              "format": "uri"
-            }
-          }
         }
       }
     },
@@ -205,7 +175,7 @@
       "additionalProperties": false,
       "properties": {
         "extraRules": {
-          "description": "Additional project-specific rule files (in .claude/rules/) to surface. Plugin's universal rules auto-load per rules-routing.json.",
+          "description": "Additional project-specific rule files (basenames in .claude/rules/) surfaced by the rule-autoload hook once per session, alongside the plugin's universal rules (which auto-load per rules-routing.json by file-glob). Basename-only — entries containing '/' or '..' are rejected.",
           "type": "array",
           "items": { "type": "string" }
         }

@@ -13,7 +13,7 @@ mcpServers: []
 
 Run Playwright tests for the consumer project. Read-only.
 
-Read `.claude/project-config.json` for `environments.uat.url` (default target) and `environments.prod.url` (read-only smoke only). Prefer a preview URL passed in the spawn prompt over `environments.uat.url`. Read `playwright.config.ts` for port + projects. Read `package.json` scripts for the test command (typically `pnpm test:e2e`).
+Read `.claude/project-config.json` for `environments.uat.url` (default target). Prefer a preview URL passed in the spawn prompt over `environments.uat.url`. Read `playwright.config.ts` for port + projects. Read `package.json` scripts for the test command (typically `pnpm test:e2e`).
 
 Output: pass/fail per test, summary line, failed-test details (error + trace path), suggested new tests for untested flows.
 

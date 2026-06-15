@@ -135,7 +135,6 @@ After implementation, follow with:
 |---|---|---|
 | `git` | `defaultBase` | branch new PRs target (default: `main`) |
 | `git` | `hotfixBase` | branch hotfix PRs target (default: `main`) |
-| `git` | `worktreeRoot` | where new worktrees go (default: `.claude/worktrees`) |
 | `i18n` | `enabled` | whether i18n parity checks run on commit (default: `false`) |
 | `i18n` | `locales` | array of all supported locale codes |
 | `i18n` | `defaultLocale` | source-of-truth locale (default: `en`) |

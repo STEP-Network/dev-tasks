@@ -101,12 +101,10 @@ Pin `main` to a release tag (e.g. `.../v0.22.1/...`) if you want validation froz
   },
   "monday": {
     "productId": "2723505568",         // Monday Products-board item ID
-    "v1MilestoneEpicIds": ["...", "..."], // epics that gate v1.0.0; empty = no gate
-    "peopleBoardId": 1612664689         // override only if not using the default STEP People board
+    "v1MilestoneEpicIds": ["...", "..."]  // epics that gate v1.0.0; empty = no gate
   },
   "environments": {
-    "uat": { "url": "https://test.example.com" },
-    "prod": { "url": "https://example.com" }
+    "uat": { "url": "https://test.example.com" }
   },
   "i18n": {                              // optional, per-product
     "enabled": false,
@@ -116,7 +114,6 @@ Pin `main` to a release tag (e.g. `.../v0.22.1/...`) if you want validation froz
     "parityHookMode": "block"
   },
   "ci": {
-    "provider": "github-actions",
     "requiredChecks": ["build", "test", "lint"]
   },
   "rules": {
@@ -202,7 +199,7 @@ See `docs/migration-polads.md` for a complete worked example (PolAds overlays fo
 
 ## People resolution
 
-The plugin no longer hardcodes a `username → person ID` map. `src/services/people.ts` queries Monday board `1612664689` (or `monday.peopleBoardId` if overridden) at runtime, with a 5-min TTL cache. Match priority:
+The plugin no longer hardcodes a `username → person ID` map. `src/services/people.ts` queries the STEP People board (`1612664689`) at runtime, with a 5-min TTL cache. Match priority:
 
 1. Email local-part (e.g. `naref@stepnetwork.dk` → `naref`)
 2. Person display name (lowercased exact match)
