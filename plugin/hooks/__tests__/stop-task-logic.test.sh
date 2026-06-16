@@ -71,6 +71,34 @@ run_local() {
 # previewUrl — the exact state an autonomous-loop CI runner lands in at Stage 3.
 STATE_NO_PREVIEW='{"taskId":"1","taskName":"CI task","claimToken":"t","selfReviewPassed":true,"prUrl":"https://github.com/o/r/pull/1"}'
 
+# --- Stage-4 (CI bucket) test harness -----------------------------------------
+# A stub `gh` that emits a controllable bucket JSON for `pr checks --json
+# name,bucket` (read from $GH_CHECKS_JSON) and an OPEN state for `pr view` so
+# Stage 2 passes. Prepended to PATH so it wins over a real `gh`; real PATH is
+# kept so python3 still resolves.
+CHECKS_STUB_BIN="$TMP/checks-stubbin"
+mkdir -p "$CHECKS_STUB_BIN"
+cat > "$CHECKS_STUB_BIN/gh" <<'STUB'
+#!/bin/sh
+case "$*" in
+  *"pr checks"*) printf '%s' "$GH_CHECKS_JSON" ;;
+  *"pr view"*)   printf '%s' '{"state":"OPEN"}' ;;
+  *) exit 0 ;;
+esac
+STUB
+chmod +x "$CHECKS_STUB_BIN/gh"
+
+# Run the helper with the bucket stub active. $1 = bucket JSON, $2 = changes.
+# Non-CI env so Stage 3 is enforced (STATE_S4 below carries previewUrl to pass it).
+run_with_checks() {
+  env -u GITHUB_ACTIONS -u CI GH_CHECKS_JSON="$1" PATH="$CHECKS_STUB_BIN:$PATH" \
+    "$PY3" "$LOGIC" "$STATE" "$PROJECT_ROOT" "$2" 2>&1
+}
+
+# State past Stages 1-3 (selfReview + prUrl + previewUrl); reviewAddressed unset
+# so a fall-through to Stage 5 is detectable in the assertions below.
+STATE_S4='{"taskId":"1","taskName":"S4 task","claimToken":"t","selfReviewPassed":true,"prUrl":"https://github.com/o/r/pull/1","previewUrl":"https://preview.example.com"}'
+
 # -----------------------------------------------------------------------------
 # Stage 3 — the core of this change.
 # -----------------------------------------------------------------------------
@@ -157,6 +185,53 @@ assert "CI=true alone (no GITHUB_ACTIONS) → clean stop exit 0" "$EXIT" "0"
 write_state "$STATE_NO_PREVIEW"
 OUTPUT=$(env -u CI GITHUB_ACTIONS=false "$PY3" "$LOGIC" "$STATE" "$PROJECT_ROOT" "src/foo.ts" 2>&1); EXIT=$?
 assert "GITHUB_ACTIONS=false + no CI → BLOCK exit 2" "$EXIT" "2"
+
+# -----------------------------------------------------------------------------
+# Stage 4 — CI classification via gh's `bucket` field (the busy-wait-loop fix).
+# Regression guard: the previous state-based pending set
+# (QUEUED/IN_PROGRESS/PENDING/WAITING) mis-read a still-queued claude-review
+# check as terminal, so Stage 4 fell through and Stage 5 fired a FALSE
+# "code review has NOT been addressed". These cases pin the bucket-based
+# classification so a revert to state-matching fails the suite.
+# -----------------------------------------------------------------------------
+
+# Test 12: pending bucket → BLOCK "still PENDING" at Stage 4, NOT Stage 5.
+write_state "$STATE_S4"
+OUTPUT=$(run_with_checks '[{"name":"Build","bucket":"pass"},{"name":"claude-review","bucket":"pending"}]' "src/foo.ts"); EXIT=$?
+assert "Stage 4 pending bucket → BLOCK exit 2" "$EXIT" "2"
+assert_contains "pending block says 'still PENDING'" "$OUTPUT" "still PENDING"
+assert_contains "pending block lists the pending check" "$OUTPUT" "claude-review"
+assert_contains "pending does NOT fall through to Stage 5" "$(echo "$OUTPUT" | grep -c 'code review has NOT been addressed')" "0"
+
+# Test 13: all checks pass + reviewAddressed unset → Stage 4 passes, Stage 5 fires.
+write_state "$STATE_S4"
+OUTPUT=$(run_with_checks '[{"name":"Build","bucket":"pass"},{"name":"claude-review","bucket":"pass"}]' "src/foo.ts"); EXIT=$?
+assert "all pass + no reviewAddressed → Stage 5 BLOCK exit 2" "$EXIT" "2"
+assert_contains "Stage 5 message reached when truly green" "$OUTPUT" "code review has NOT been addressed"
+
+# Test 14: fail bucket → "CI checks FAILING" (and takes precedence over pending).
+write_state "$STATE_S4"
+OUTPUT=$(run_with_checks '[{"name":"Build","bucket":"fail"},{"name":"claude-review","bucket":"pending"}]' "src/foo.ts"); EXIT=$?
+assert "Stage 4 fail bucket → BLOCK exit 2" "$EXIT" "2"
+assert_contains "fail block message" "$OUTPUT" "CI checks FAILING"
+
+# Test 15: cancel bucket → "CANCELLED" (superseded, not silently green).
+write_state "$STATE_S4"
+OUTPUT=$(run_with_checks '[{"name":"Build","bucket":"cancel"}]' "src/foo.ts"); EXIT=$?
+assert "Stage 4 cancel bucket → BLOCK exit 2" "$EXIT" "2"
+assert_contains "cancel block message" "$OUTPUT" "CANCELLED"
+
+# Test 16: 'Vercel Agent Review' pending is excluded — must not gate Stage 4.
+write_state "$STATE_S4"
+OUTPUT=$(run_with_checks '[{"name":"Vercel Agent Review","bucket":"pending"},{"name":"Build","bucket":"pass"}]' "src/foo.ts"); EXIT=$?
+assert "Vercel Agent Review pending excluded → not held at Stage 4" "$EXIT" "2"
+assert_contains "excluded check → falls through to Stage 5" "$OUTPUT" "code review has NOT been addressed"
+assert_contains "excluded check not reported as pending" "$(echo "$OUTPUT" | grep -c 'still PENDING')" "0"
+
+# Test 17: all pass + reviewAddressed=accepted → clean stop exit 0 (end-to-end).
+write_state '{"taskId":"1","taskName":"S4 task","claimToken":"t","selfReviewPassed":true,"prUrl":"https://github.com/o/r/pull/1","previewUrl":"https://preview.example.com","reviewAddressed":"accepted"}'
+OUTPUT=$(run_with_checks '[{"name":"Build","bucket":"pass"},{"name":"claude-review","bucket":"pass"}]' "src/foo.ts"); EXIT=$?
+assert "all pass + reviewAddressed=accepted → clean stop exit 0" "$EXIT" "0"
 
 echo ""
 echo "==================================================="
