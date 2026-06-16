@@ -138,9 +138,20 @@ def main():
     if ra == "handoff-to-orchestrator" or ra.startswith("stuck:") or ra.startswith("timeout:"):
         sys.exit(0)
 
+    # Classify checks via gh's canonical `bucket` field (pass | fail | pending |
+    # skipping | cancel) — the SAME normalization the sibling Stop hook
+    # stop-ci-green-check.sh uses. The previous implementation hand-rolled this
+    # from the raw `state`/`conclusion` fields with an incomplete pending set
+    # (QUEUED/IN_PROGRESS/PENDING/WAITING), which omitted non-terminal states like
+    # REQUESTED (check-run) and EXPECTED (commit-status). A still-queued check —
+    # notably the `claude-review` GitHub App, which reports as a commit status —
+    # was then mis-read as terminal, Stage 4 fell through, and Stage 5 fired a
+    # FALSE "CI green but review not addressed" on every Stop → busy-wait loop.
+    # `bucket` is gh's job to compute correctly across check-runs AND statuses, so
+    # there is one source of truth for "pending" across both Stop hooks.
     try:
         ci_result = subprocess.run(
-            ["gh", "pr", "checks", "--json", "name,state,conclusion"],
+            ["gh", "pr", "checks", "--json", "name,bucket"],
             capture_output=True,
             text=True,
             cwd=project_root,
@@ -148,10 +159,14 @@ def main():
         )
         if ci_result.returncode == 0:
             checks = json.loads(ci_result.stdout)
-            failing = [c for c in checks if c.get("conclusion") == "FAILURE"]
-            pending = [c for c in checks if c.get("state") in ("QUEUED", "IN_PROGRESS", "PENDING", "WAITING")]
-            # Filter out non-blocking checks (Vercel Agent Review is always skipping)
-            pending = [c for c in pending if c.get("name") not in ("Vercel Agent Review",)]
+            # Non-blocking lanes that never reach a terminal pass (always skipping).
+            checks = [c for c in checks if c.get("name") not in ("Vercel Agent Review",)]
+            failing = [c for c in checks if c.get("bucket") == "fail"]
+            pending = [c for c in checks if c.get("bucket") == "pending"]
+            # `cancel`/`cancelled` = superseded by a newer push; the replacement
+            # run produces fresh entries, so treat as not-yet-terminal (block,
+            # don't silently fall through to "green"). Mirrors stop-ci-green-check.sh.
+            cancelled = [c for c in checks if c.get("bucket") in ("cancel", "cancelled")]
 
             if failing:
                 names = ", ".join(c.get("name", "?") for c in failing)
@@ -165,6 +180,12 @@ def main():
                 err("Wait for CI to complete (including claude-review). Poll with: gh pr checks")
                 err("")
                 err("You MUST wait for ALL checks including claude-review before stopping.")
+                sys.exit(2)
+
+            if cancelled:
+                names = ", ".join(c.get("name", "?") for c in cancelled)
+                err('BLOCKED: CI checks CANCELLED on task "{}": {}'.format(task_name, names))
+                err("Likely superseded by a newer push. Wait for the new run to complete.")
                 sys.exit(2)
     except Exception as e:
         err("WARNING: Could not verify CI status: {}. Skipping CI gate.".format(e))
