@@ -76,15 +76,15 @@ Products (5091839409) [read-only]
 
 Subtasks board: 5091706366 (linked from Tasks).
 
-## Tools (44)
+## Tools (45)
 
-The plugin's MCP server registers 44 tools (registered in `plugin/src/register-tools.ts`; entry points: `plugin/src/server.ts` for stdio, `plugin/src/api/mcp.ts` for HTTP). See `register-tools.ts` for current names, descriptions, and Zod schemas. High-level phases:
+The plugin's MCP server registers 45 tools (registered in `plugin/src/register-tools.ts`; entry points: `plugin/src/server.ts` for stdio, `plugin/src/api/mcp.ts` for HTTP). See `register-tools.ts` for current names, descriptions, and Zod schemas. High-level phases:
 
 | Phase | Tools |
 |---|---|
 | Discovery | `getBacklog`, `getBugs`, `listFeedback` |
 | Context | `getTask`, `getSprint`, `listSprints`, `getEpic`, `listEpics`, `listProducts`, `getFeedback`, `listVersions`, `getVersion`, `getUpdates`, `getTaskUatDoc`, `getStructuredChangelog`, `getPublicRoadmap`, `listRetros` |
-| Execution | `claimTask`, `updateTask`, `manageSubtasks`, `updateEpic`, `updateFeedback`, `updateVersion`, `updateRetro`, `setPublicTaskName`, `updateStructuredChangelog`, `createTaskUatDoc`, `updateTaskUatDoc` |
+| Execution | `claimTask`, `updateTask`, `manageSubtasks`, `updateEpic`, `updateFeedback`, `updateVersion`, `updateRetro`, `setPublicTaskName`, `updateStructuredChangelog`, `createTaskUatDoc`, `updateTaskUatDoc`, `appendTaskVisualSnapshots` |
 | Creation | `createTask`, `convertBugToTask`, `createBug`, `createEpic`, `createFeedback`, `convertFeedbackToTask`, `createRetro`, `createVersion` |
 | Shipping | `generateChangelog`, `migrateStructuredChangelog` |
 | Communication | `createUpdate` |
@@ -359,6 +359,50 @@ Opt-in via `project-config.json` `hooks.enabled[]` (enabled here in the dogfood
 config). Even with no goal set, the hook surfaces a one-time SELF-CHECK on Stop
 when source files changed this branch, without blocking. Full contract:
 `plugin/skills/goal/SKILL.md`.
+
+## Before/after UI screenshots in a Monday Doc — visualDiff (v0.33.0)
+
+For UI-changing tasks, `/ship-pr` captures the changed routes on **staging** and
+embeds before/after screenshots into a dedicated **"Visual Changes" Monday doc**
+column (`doc_mm4jkk92`) on the task — so a reviewer eyeballs the visual delta
+without digging through the diff. **On by default (opt-out)** via
+`project-config.json → visualDiff` (`enabled: false` to disable).
+
+**Two passes, spanning the merge** (the column is **append-only** — a dedicated
+doc, NOT the drain-and-replace UAT doc, so neither pass wipes the other):
+
+1. **Before** — `/ship-pr` Phase 2 (pre-push). Staging still shows the
+   pre-change state. Screenshots the changed routes at `environments.uat.url`.
+2. **After** — Phase 6.6, after the post-merge staging deploy reaches `READY`
+   (reuses the deploy-poll + cache-bust wait). When the agent doesn't perform/
+   await the merge (human-merge-only base, or a Phase 6.5 handoff), the after
+   pass is **deferred** (`active-task.json visualDiff.afterPending`) — the doc
+   shows the before pass until `/babysit-prs` or a follow-up completes it.
+
+**Mechanism.** The `appendTaskVisualSnapshots({ taskId, phase, captures[] })`
+tool uploads each PNG to Monday via a new multipart helper
+(`uploadFileToMonday` → `add_file_to_column` on the task's attachments column),
+minting a **permanent `asset_id`**, then embeds it with `create_doc_blocks`
+`image_block { asset_id }`. Embedding is by `asset_id`, never URL —
+`Asset.public_url` expires ~1h. (`monday-client.ts` + `doc-utils.ts`.)
+
+**Route selection** is agent-reasons-from-the-diff with a `visualDiff.routeMap`
+fallback for dynamic/`[param]` routes; capped at `visualDiff.maxRoutes`
+(default 8, drops logged). **Viewports** default desktop + mobile.
+
+**Security.** The headless browser only navigates to the `environments.uat.url`
+origin (SSRF allowlist — never a host from task/PR text); `uploadFileToMonday`
+allowlists local screenshot paths to tmp/cwd + image extensions before reading.
+**Auth** for authenticated routes reuses `e2e.personas[].storageState` via
+`visualDiff.authPersona`; routes needing auth with no persona are **skipped with
+a noted reason**, never guessed. When there's no UI change or no resolvable
+staging URL, the whole step **skips with a one-line note — it never errors**.
+
+Complements `/visual-diff` (ad-hoc local before/after during self-review) and
+`/write-uat-spec` (codified Playwright `toHaveScreenshot` regression gate): this
+one is the durable, human-facing before/after record on the Monday task itself.
+Full operational detail in `plugin/skills/ship-pr/SKILL.md` (Phase 2 step 6.8 +
+Phase 6.6 step 20f.7).
 
 ## Per-task CI Gate — "CI Gate" column + bounded auto-skip (v0.26.0)
 

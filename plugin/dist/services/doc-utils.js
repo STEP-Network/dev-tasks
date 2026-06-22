@@ -16,8 +16,11 @@
  *
  * Used by both UAT-doc handling and (soon) Description-doc handling.
  */
-import { DOC_API_VERSION, executeMondayQuery } from "../monday-client.js";
+import { DOC_API_VERSION, DOC_BLOCKS_API_VERSION, executeMondayQuery } from "../monday-client.js";
 const DOC_OPTS = { apiVersion: DOC_API_VERSION };
+// Image blocks use the typed create_doc_blocks API, which only exists on a
+// newer version than the rest of the doc ops (see DOC_BLOCKS_API_VERSION).
+const DOC_BLOCKS_OPTS = { apiVersion: DOC_BLOCKS_API_VERSION };
 /**
  * Rename a Monday doc. Idempotent — repeated calls with the same name are
  * harmless. Errors are surfaced to the caller so they can decide whether
@@ -259,6 +262,29 @@ export async function writeDocContentReplacing(docId, markdown) {
  */
 export async function appendDocContent(docId, markdown) {
     await addContentToDocOrThrow(docId, markdown);
+}
+/**
+ * Append an image block to a doc, referencing a Monday asset by its permanent
+ * id. Markdown (`add_content_to_doc_from_markdown`) can't embed images, so
+ * image blocks go through the typed `create_doc_blocks` mutation instead. This
+ * is APPEND-only (no drain) — the block lands at the end of the doc, after any
+ * existing content, which is why interleaving label-markdown then image works
+ * and why images survive across the two-pass (before/after) write.
+ *
+ * Embedding via `asset_id` (not a URL) is deliberate: `Asset.public_url`
+ * expires ~1h after upload, but the asset id is permanent and Monday re-signs
+ * the URL on render.
+ */
+export async function appendImageBlock(docId, assetId, opts) {
+    const imageBlock = { asset_id: assetId };
+    if (opts?.width)
+        imageBlock.width = opts.width;
+    const mutation = `
+    mutation AppendImage($docId: ID!, $blocks: [CreateBlockInput!]!) {
+      create_doc_blocks(docId: $docId, blocksInput: $blocks) { id }
+    }
+  `;
+    await executeMondayQuery(mutation, { docId, blocks: [{ image_block: imageBlock }] }, DOC_BLOCKS_OPTS);
 }
 /**
  * Export a doc's content as a markdown string. Throws on Monday export

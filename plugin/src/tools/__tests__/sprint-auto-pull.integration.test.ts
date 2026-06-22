@@ -27,6 +27,7 @@ vi.mock("../../monday-client.ts", () => ({
   // transitively by updateTask). Mock returns the same string the real module
   // exports — only the executeMondayQuery call is mocked.
   DOC_API_VERSION: "2025-10",
+  DOC_BLOCKS_API_VERSION: "2026-07",
 }));
 
 // People lookup is needed by claimTask for owner assignment. The specific

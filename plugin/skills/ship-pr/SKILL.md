@@ -39,6 +39,16 @@ Read `.claude/project-config.json`. Extract `git.defaultBase`, `git.hotfixBase`,
    - **Triage** all panel findings with the ship-readiness.md rubric (BLOCKER / IMPROVEMENT / POLISH). Fix BLOCKERs + cheap IMPROVEMENTs → re-run the panel on the updated diff (fresh subagents again). Loop until zero BLOCKERs. These local rounds don't count toward Phase 6's 5-round cap (they're cheap); cap local rounds at 5 all the same — persistent new-BLOCKER churn at round 5 → `stuck:regression-loop` per ship-readiness.md.
    - **Record** into active-task.json `reviewAddressed.sources.localReview`: `{ blockers: <fixed count>, improvements: <n>, polish: <n>, replies: [], lenses: ["correctness", ...], rounds: <n> }` (emit the `reviewAddressed` marker first if writing the full structured object now; otherwise record panel results in memory and write once at Phase 6 step 8 as usual). POLISH findings from the local panel are declined in the PR body's review section (no PR comments exist pre-push) — list them under "Local review: declined as POLISH" so the human sees them.
    - **Skip** when `review.sources` lacks `localReview` (default for existing projects — behavior unchanged).
+6.8. **VisualDiff BEFORE pass (v0.33.0)** — captures the changed UI on staging *before* this change ships, so the human gets a before/after pair in a Monday doc. Runs HERE (pre-push) because staging still shows the pre-change state until the PR merges + deploys.
+   - **Gate** — run only when ALL hold; otherwise skip with a one-line note (in the PR body + active-task.json `visualDiff.skipReason`) and NEVER error:
+     1. `project-config.json → visualDiff.enabled` is not `false` (ON by default — opt-out).
+     2. A UI signal: the task has a `UX-UI` subtask OR the diff touches UI files (`components/**`, app routes, `*.css`/styling, email templates).
+     3. `environments.uat.url` resolves to an `https://` URL (this is the staging base). No staging URL → skip ("visualDiff skipped — no environments.uat.url").
+   - **Changed routes** — the agent reasons from the diff which routes render the changed components/files and maps them to paths under the staging origin. For routes it can't infer (dynamic/`[param]`), consult `visualDiff.routeMap` (glob → concrete route(s) with real sample params). Cap at `visualDiff.maxRoutes` (default 8); if more routes qualify, capture the top N and LOG which were dropped (don't silently truncate).
+   - **SSRF guard** — before navigating, assert each target URL's origin EQUALS the `environments.uat.url` origin; only ever navigate to that host. Never navigate to a host derived from task/PR/user text. (The upload tool independently allowlists local screenshot paths.)
+   - **Auth** — public routes need none. For authed routes use `visualDiff.authPersona`'s e2e `storageState` (`e2e.personas[]`). If an authed route needs auth and no persona/storageState is available, SKIP that route with a noted reason (`note: "skipped — auth required, no persona"`) — never guess a login (same contract as `write-uat-spec`).
+   - **Capture** — per route × viewport (`visualDiff.viewports`, default desktop 1440×900 + mobile 390×844, full page) via `mcp__claude-in-chrome__*` / `chrome-devtools-mcp` `take_screenshot` (Playwright fallback). Save PNGs under a temp dir (e.g. `mktemp -d` or `.claude/visual-snapshots/<taskId>/before/`). A route that 404s on staging (new route) → record a note-only capture (`note: "no before state — new route"`, no imagePath).
+   - **Persist** — call `mcp__plugin_dev-tasks_dev-tasks__appendTaskVisualSnapshots({ taskId, phase: "before", environmentLabel: "staging", captures: [{ route, viewport, imagePath, note? }, …] })`. Record the captured route list in active-task.json `visualDiff.routes` so the AFTER pass re-shoots the SAME routes. Skipped/failed shots never block the push.
 7. `git push -u origin {branch}`.
 
 ### Phase 3: PR Management
@@ -236,6 +246,9 @@ See `CLAUDE.md` → Shipping conventions for the PR #347 case study that motivat
    ```
    Then set `stagingDeployReady: true` in `.claude/active-task.json`. `staging-deploy-ready-gate` reads this to allow the Phase 6.7 transition; the field is marker-protected by `protect-active-task-state` so it can't be self-granted by a direct edit. **Under CI** (`GITHUB_ACTIONS`/`CI`) a runner has no Vercel access — skip the poll; the gate relaxes automatically (no flag needed). Do NOT fabricate `stagingDeployReady` outside CI to dodge the wait — that's the exact lie this gate exists to prevent.
 
+20f.7. **VisualDiff AFTER pass (v0.33.0)** — only when a BEFORE pass ran this task (active-task.json `visualDiff.routes` is non-empty). Once the staging deploy is verified `READY` (step 20f.6) and the URL is cache-busted, re-screenshot the SAME recorded routes × viewports against staging (now showing the change), then call `appendTaskVisualSnapshots({ taskId, phase: "after", environmentLabel: "staging", captures: [...] })`. The doc now holds the before/after pair. Reuse the same SSRF origin-allowlist + auth-persona rules as the before pass. Capture failures are noted in the doc, never block.
+   - **Deferred-after caveat**: when the agent does NOT perform/await the merge+deploy in-session (e.g. base is human-merge-only per `git.autoMergePolicy`, or the session handed off at Phase 6.7), the after pass can't run yet. Leave active-task.json `visualDiff.afterPending: true`; the doc shows the before pass plus an implicit gap. `/babysit-prs` or a follow-up captures the after pass once the deploy is verified. Never block the session waiting for a human merge.
+
 20g. Hotfix exception: skip merge — human merges `$hotfixBase` PRs. No `Waiting for UAT` flip; Phase 10 sets `Done` directly.
 
 ### Phase 6.7: Transition task → `Waiting for UAT` (default flow only; hotfix skips)
@@ -265,7 +278,7 @@ See `CLAUDE.md` → Shipping conventions for the PR #347 case study that motivat
 
 22. Refresh preview URL via `mcp__vercel__list_deployments`; update `previewUrl` in state + `demoUrl` on Monday if changed.
 
-23. Post the `[PIPELINE_COMPLETE]` summary exactly once by calling `/log-progress PIPELINE_COMPLETE` (which internally does a single `createUpdate`). The summary must include: PR URL, preview URL, merge SHA, CI status, `reviewAddressed` value, and a "what shipped" synthesized from `git log`. Do NOT also post a separate `createUpdate` — that would double-post.
+23. Post the `[PIPELINE_COMPLETE]` summary exactly once by calling `/log-progress PIPELINE_COMPLETE` (which internally does a single `createUpdate`). The summary must include: PR URL, preview URL, merge SHA, CI status, `reviewAddressed` value, and a "what shipped" synthesized from `git log`. When the VisualDiff feature ran, also note the before/after **Visual Changes doc** (column `doc_mm4jkk92`) and whether the after pass is complete or deferred (`visualDiff.afterPending`). Do NOT also post a separate `createUpdate` — that would double-post.
 
 ### Phase 8: Version Linkage Check (informational)
 
