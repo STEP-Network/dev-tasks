@@ -1,6 +1,6 @@
 ---
 name: write-uat-spec
-description: Write a Playwright spec that walks the current task like a UAT human would. Runs as the HARD gate before /ship-pr Phase 6.5 (Waiting for UAT). Auth-agnostic — refuses if persona storageState is missing rather than guessing.
+description: Write a Playwright spec that walks the current task like a UAT human would. Runs as the HARD gate before /ship-pr Phase 6.7 (Waiting for UAT). Auth-agnostic — refuses if persona storageState is missing rather than guessing.
 user_invocable: true
 ---
 

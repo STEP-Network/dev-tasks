@@ -97,7 +97,8 @@ For each freshly-merged PR (if MCP up):
 3. Set missing links: `updateTask({ itemId, prLink, branch, githubLink, demoUrl })`.
 4. If parent status not `Waiting for UAT`:
    - Missing UAT doc → `createTaskUatDoc({ taskId, markdown })` from PR body + AC
-   - Flip subtasks Done via `manageSubtasks({ parentItemId, operations })` with `actualHours`
+   - **Verify the staging deploy is `READY` FIRST.** Flipping the last subtask Done auto-flips the parent to `Waiting for UAT`, and that status is a lie until the post-merge deploy is live (PR #347 / retro #2926719311). Poll `mcp__vercel__list_deployments` filtered by `meta.githubCommitSha = <merge SHA from Phase 2 step 6>` until a production-target deployment reaches `READY` (non-Vercel: `gh run watch` / `flyctl status` / your platform's check). Under CI (`GITHUB_ACTIONS`/`CI`) a runner can't reach Vercel — skip the poll. Do this BEFORE flipping the final subtask.
+   - Flip subtasks Done via `manageSubtasks({ parentItemId, operations })` with `actualHours` — flip the LAST one only after the deploy is `READY`.
    - Monday automation auto-flips parent when all subtasks Done
 5. Post the single per-PR final summary via `createUpdate({ itemId, body: HTML })` (the orchestrator-side analog of `/ship-pr`'s `[PIPELINE_COMPLETE]` — one summary per merged PR, not a per-step narrative stream). Skip per-step narrative event posts (no `CI_PASSED` / `REVIEW_ACCEPTED` Updates) — progress is tracked in git commits (every commit carries the task `#id`).
 6. **Record the merge SHA as reconciled** (required when `stop-monday-reconciled-check` is enabled in the orchestrator session — else the hook fires at orchestrator session-end because merges landed without their SHAs appearing in `.claude/active-task.json` `mondayReconciledShas[]`). Emit the marker first, then append:

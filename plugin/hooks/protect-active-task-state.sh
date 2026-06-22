@@ -12,6 +12,7 @@
 #   allowMainCheckout    ← worktree-required
 #   ciGate               ← stop-ci-green-check (offline fallback for the
 #                          per-task CI-gate skip; live Monday column wins)
+#   stagingDeployReady   ← staging-deploy-ready-gate (the WfUAT updateTask gate)
 #
 # An agent that writes the file directly via Edit/Write/MultiEdit can flip
 # all of these and sail past every gate. This hook intercepts those tool
@@ -21,8 +22,9 @@
 #
 #   selfReviewPassed     ← post-self-review.sh on validator PASS
 #   reviewAddressed      ← /ship-pr Phase 6.2 (handoff) or Phase 6 (structured)
-#   parentStatus         ← /ship-pr Phase 6.5 (after WfUAT transition succeeds)
+#   parentStatus         ← /ship-pr Phase 6.7 (after WfUAT transition succeeds)
 #   mondayReconciledShas ← /ship-pr Phase 10 + /babysit-prs Phase 3 (after gh pr merge)
+#   stagingDeployReady   ← /ship-pr Phase 6.6 (after the post-merge deploy polls READY)
 #
 # allowMainCheckout has NO marker path — it's a user-explicit escape hatch and
 # must be set by direct user authorization, never by an agent.
@@ -167,7 +169,7 @@ if prop_ps == 'Waiting for UAT' and cur_ps != 'Waiting for UAT' and not marker_e
     blocks.append((
         'parentStatus',
         f"Setting parentStatus='Waiting for UAT' requires marker {marker_path('parentStatus')}.\n"
-        "Run /ship-pr Phase 6.5 — the skill emits the marker after the WfUAT transition\n"
+        "Run /ship-pr Phase 6.7 — the skill emits the marker after the WfUAT transition\n"
         "on the Monday task succeeds."
     ))
 
@@ -208,6 +210,23 @@ if prop_gate.startswith('Skip') and prop_gate != cur_gate and not marker_exists(
         "Legitimate paths: /pickup-task step 12 (mirror a board-side Skip at claim)\n"
         "or /ship-pr Phase 2 auto-skip (ci-skip-eval.sh ELIGIBLE + updateTask ciGate\n"
         "first, then emit-state-marker.sh ciGate). Reverting to 'Full' needs no marker."
+    ))
+
+# stagingDeployReady (v0.32.0): flipping false→true is what unlocks the
+# 'Waiting for UAT' transition under staging-deploy-ready-gate. The legitimate
+# writer is /ship-pr Phase 6.6, which emits the marker only AFTER the post-merge
+# Vercel deploy is polled to state READY. Without the marker an agent could
+# self-grant "deploy ready" and flip the task early — exactly the lie the gate
+# prevents. Reverting to false never needs a marker (tightening is always safe).
+cur_sdr = bool(current.get('stagingDeployReady'))
+prop_sdr = bool(proposed.get('stagingDeployReady'))
+if not cur_sdr and prop_sdr and not marker_exists('stagingDeployReady'):
+    blocks.append((
+        'stagingDeployReady',
+        f"Setting stagingDeployReady=true requires marker {marker_path('stagingDeployReady')}.\n"
+        "Run /ship-pr Phase 6.6 — it emits the marker ONLY after polling the post-merge\n"
+        "deploy (mcp__vercel__list_deployments by merge SHA) to state READY. This is the\n"
+        "evidence that 'Waiting for UAT' is honest; don't self-grant it."
     ))
 
 if blocks:

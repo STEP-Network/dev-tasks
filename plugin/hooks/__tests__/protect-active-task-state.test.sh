@@ -346,6 +346,63 @@ print(json.dumps({
 run_test "unrelated edit while ciGate already Skip → PASS (no transition)" 0 "$PAYLOAD"
 
 # ============================================================
+# stagingDeployReady (v0.32.0)
+# ============================================================
+echo "## stagingDeployReady"
+
+write_baseline
+clean_markers
+PAYLOAD=$(python3 -c "
+import json
+print(json.dumps({
+  'tool_name': 'Edit',
+  'tool_input': {
+    'file_path': '$STATE_FILE',
+    'old_string': '\"mondayReconciledShas\": []',
+    'new_string': '\"mondayReconciledShas\": [],\n  \"stagingDeployReady\": true',
+  },
+}))
+")
+run_test "stagingDeployReady false→true without marker → BLOCK" 2 "$PAYLOAD" "stagingDeployReady"
+
+write_baseline
+clean_markers
+touch "/tmp/.claude-state-marker-stagingDeployReady-$HEAD_SHA"
+run_test "stagingDeployReady false→true with marker → PASS" 0 "$PAYLOAD"
+
+write_baseline
+clean_markers
+touch "/tmp/.claude-state-marker-stagingDeployReady-DIFFERENT_SHA"
+run_test "stagingDeployReady marker for different SHA → BLOCK (stale)" 2 "$PAYLOAD" "stagingDeployReady"
+
+# Reverting true→false never needs a marker (tightening is always allowed).
+cat > "$STATE_FILE" <<JSON
+{
+  "taskId": "111",
+  "taskName": "test task",
+  "claimToken": "tok",
+  "branch": "feat/test",
+  "selfReviewPassed": false,
+  "selfReviewPassedAt": null,
+  "mondayReconciledShas": [],
+  "stagingDeployReady": true
+}
+JSON
+clean_markers
+PAYLOAD=$(python3 -c "
+import json
+print(json.dumps({
+  'tool_name': 'Edit',
+  'tool_input': {
+    'file_path': '$STATE_FILE',
+    'old_string': '\"stagingDeployReady\": true',
+    'new_string': '\"stagingDeployReady\": false',
+  },
+}))
+")
+run_test "stagingDeployReady true→false without marker → PASS (tightening)" 0 "$PAYLOAD"
+
+# ============================================================
 # Non-protected field edits pass through
 # ============================================================
 echo "## non-protected fields"

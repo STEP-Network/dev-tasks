@@ -44,6 +44,10 @@
           {
             "type": "command",
             "command": "${CLAUDE_PLUGIN_ROOT}/hooks/demo-url-required.sh"
+          },
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/staging-deploy-ready-gate.sh"
           }
         ]
       },
