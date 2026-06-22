@@ -600,7 +600,7 @@ export const UpdateTaskUatDocSchema = z.object({
     overwrite: z.boolean().optional().default(true).describe("true (default) replaces the doc; false appends to existing content"),
 });
 // =============================================================================
-// Visual Changes Doc tool (column doc_mm4jkk92 on Tasks board, v0.32.0)
+// Visual Changes Doc tool (column doc_mm4jkk92 on Tasks board, v0.33.0)
 // =============================================================================
 export const AppendTaskVisualSnapshotsSchema = z.object({
     taskId: z.number().describe("Task item ID whose 'Visual Changes' doc to append to (the doc is created on first use)."),

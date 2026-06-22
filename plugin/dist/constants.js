@@ -48,7 +48,7 @@ export const TASK_COLUMNS = {
     dependencies: "dependency_mm0pwbxn",
     acceptanceCriteria: "long_text_mm0pqaxy",
     uatDoc: "doc_mm3adfdg",
-    // Before/after UI screenshots embedded by the visualDiff feature (v0.32.0).
+    // Before/after UI screenshots embedded by the visualDiff feature (v0.33.0).
     // Dedicated doc (NOT the UAT doc) because it's written append-only across two
     // passes spanning the merge — the UAT doc's drain-and-replace would wipe images.
     visualChangesDoc: "doc_mm4jkk92",

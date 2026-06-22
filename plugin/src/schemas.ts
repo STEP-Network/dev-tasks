@@ -711,7 +711,7 @@ export const UpdateTaskUatDocSchema = z.object({
 });
 
 // =============================================================================
-// Visual Changes Doc tool (column doc_mm4jkk92 on Tasks board, v0.32.0)
+// Visual Changes Doc tool (column doc_mm4jkk92 on Tasks board, v0.33.0)
 // =============================================================================
 
 export const AppendTaskVisualSnapshotsSchema = z.object({

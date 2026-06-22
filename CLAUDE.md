@@ -165,6 +165,8 @@ Used in `claimTask` (required), `createTask`, `createEpic`, `updateEpic`, `creat
 
   …and warns (but doesn't block) when missing GitHub link, branch (`text_mm0pvs3n`), demo URL, or PR link.
 
+  **Client-side (v0.32.0):** the opt-in `staging-deploy-ready-gate` hook ALSO refuses this transition unless the post-merge staging deploy is verified `READY` (recorded as `stagingDeployReady: true` in `active-task.json` by `/ship-pr` Phase 6.6, relaxed under CI). This is why `/ship-pr` merges + polls the deploy to `READY` (Phase 6.6) BEFORE flipping the status (Phase 6.7) — "Waiting for UAT" must mean the change is actually testable on staging, not just merged. The server-side gate above can't see deploy state; this hook is the enforcement.
+
 - **Sprint auto-pull (any status leaving the refinement phase):** any transition to a status other than "Ready to Start", "Needs Refinement", or "Declined" requires active-sprint membership. That includes `In Progress`, `Waiting for UAT`, `Pending Deploy to Prod`, `Done`, and `Stuck`. If the task isn't in the active sprint AND the same `updateTask`/`claimTask` call didn't explicitly pass `sprintId`, the plugin auto-pulls the task into the active sprint and sets the `unplanned` checkbox to `true`. Both column writes land atomically in the same `change_multiple_column_values` mutation as the status change. The tool response surfaces the action so the agent is aware. Hard error only when no active sprint exists.
   - Note on `Done`: usually fires via Monday automation when subtasks complete (no auto-pull involved). A direct `updateTask({status:"Done"})` call DOES trigger auto-pull if the task is out-of-sprint — same rule as every other non-refinement status.
   - Note on `Declined`: terminal off-ramp (task superseded mid-sprint, no work shipped). Exempt from auto-pull — declining a task should not drag it into the active sprint.
@@ -285,10 +287,11 @@ Five hooks shipped in plugin v0.15.0; v0.16.0 added gate (f) to `bash-guard` (al
 
 - **`bash-guard` gate (f)** *(always-on, v0.16.0)* — hard-refuses `git push` to any branch in `project-config.git.protectedBranches[]` (default: `main, staging, master, production, prod`). No marker bypass. Set the list to `[]` to disable just this gate.
 - **`auto-merge-policy-gate`** *(v0.29.0)* — refuses `gh pr merge` when the PR's TARGET (base) branch has a `git.autoMergePolicy` of `never` or `manual-only` (a human must merge); `auto-after-checks-and-review` is permitted (the review + CI gates still decide readiness — this only lifts the branch-level block). Complements `bash-guard` gate (f): that blocks direct `git push` to protected branches, this blocks `gh pr merge` to them. **State-file-independent** — unlike `pre-merge-review-gate` it ALSO fires for orchestrator/babysit merges that have no `active-task.json` (the gap that previously let unwanted auto-merges through). Branch absent from the policy → no opinion; unrecognized value (e.g. a `"manual"`/`"auto"` typo) → blocks (fail-safe); `gh`-unreachable → fails open (the merge needs GitHub anyway). Opt-in via `hooks.enabled[]`.
-- **`protect-active-task-state`** *(v0.16.0)* — refuses `Edit/Write/MultiEdit` on `.claude/active-task.json` that mutates protected fields (`selfReviewPassed`, `reviewAddressed`, `parentStatus`, `mondayReconciledShas`, `allowMainCheckout`, `ciGate` since v0.26.0) without a corresponding skill-emission marker in `/tmp`. Closes the 2026-05-27 polads-style bypass where an agent wrote the state file directly. `allowMainCheckout: true` is always blocked (no marker path). **Requires `post-self-review` to be co-enabled** — that hook is the sole emitter of the `selfReviewPassed` marker. See `plugin/rules/agent-orchestration.md` "Protected state fields" for the full marker contract and the GitHub branch protection complement.
+- **`protect-active-task-state`** *(v0.16.0)* — refuses `Edit/Write/MultiEdit` on `.claude/active-task.json` that mutates protected fields (`selfReviewPassed`, `reviewAddressed`, `parentStatus`, `mondayReconciledShas`, `allowMainCheckout`, `ciGate` since v0.26.0, `stagingDeployReady` since v0.32.0) without a corresponding skill-emission marker in `/tmp`. Closes the 2026-05-27 polads-style bypass where an agent wrote the state file directly. `allowMainCheckout: true` is always blocked (no marker path). **Requires `post-self-review` to be co-enabled** — that hook is the sole emitter of the `selfReviewPassed` marker. See `plugin/rules/agent-orchestration.md` "Protected state fields" for the full marker contract and the GitHub branch protection complement.
 - **`refinement-gate`** — refuses `claimTask` on Bugs-board items, un-refined tasks, or under-refined subtasks
 - **`subtask-progress-gate`** — refuses `git push` when subtasks exist but none Done-with-actualHours (escape: `allowPushWithoutSubtaskProgress: true` in active-task.json)
 - **`demo-url-required`** — refuses `updateTask(status='Waiting for UAT')` without `demoUrl` matching `project-config.ci.previewUrlPattern` (default permits any HTTPS URL)
+- **`staging-deploy-ready-gate`** *(v0.32.0)* — refuses `updateTask(status='Waiting for UAT')` unless the post-merge staging deploy is verified `READY` (`stagingDeployReady: true` in `active-task.json`, written by `/ship-pr` Phase 6.6 after polling the deploy by merge SHA; marker-protected by `protect-active-task-state`). **Relaxed under CI** (`GITHUB_ACTIONS`/`CI`) — a runner can't reach Vercel, mirroring the `stop-task-check` Stage-3 relaxation. Enforces "Waiting for UAT means testable on staging, not just merged" — see the Phase 6.6 → 6.7 ordering in `/ship-pr`.
 - **`stop-waiting-for-uat-stage`** — refuses session exit when subtasks all Done but parent not at Waiting for UAT (escape: `reviewAddressed: handoff-to-orchestrator`)
 - **`stop-monday-reconciled-check`** — refuses session exit when merge commit landed during session but its SHA isn't in active-task.json `mondayReconciledShas[]` (escape: `reviewAddressed: handoff-to-orchestrator`)
 - **`commit-id-gate`** *(v0.22.0)* — refuses `git commit` whose message lacks a Monday Tasks-board `#id` (`#` + 7+ digits, so PR refs like `#60` don't count). Offline-safe format check always runs; when `MONDAY_API_KEY` is set it also validates the id resolves to a Tasks-board item (override the board via `project-config.monday.tasksBoardId`). API-unreachable → warn-and-allow (never bricks an offline commit). No exemptions — infra/docs commits use the catch-all maintenance task id.
@@ -357,7 +360,7 @@ config). Even with no goal set, the hook surfaces a one-time SELF-CHECK on Stop
 when source files changed this branch, without blocking. Full contract:
 `plugin/skills/goal/SKILL.md`.
 
-## Before/after UI screenshots in a Monday Doc — visualDiff (v0.32.0)
+## Before/after UI screenshots in a Monday Doc — visualDiff (v0.33.0)
 
 For UI-changing tasks, `/ship-pr` captures the changed routes on **staging** and
 embeds before/after screenshots into a dedicated **"Visual Changes" Monday doc**
@@ -399,7 +402,7 @@ Complements `/visual-diff` (ad-hoc local before/after during self-review) and
 `/write-uat-spec` (codified Playwright `toHaveScreenshot` regression gate): this
 one is the durable, human-facing before/after record on the Monday task itself.
 Full operational detail in `plugin/skills/ship-pr/SKILL.md` (Phase 2 step 6.8 +
-Phase 6.6 step 20f.6).
+Phase 6.6 step 20f.7).
 
 ## Per-task CI Gate — "CI Gate" column + bounded auto-skip (v0.26.0)
 
