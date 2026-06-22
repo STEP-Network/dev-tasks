@@ -263,6 +263,58 @@
         }
       }
     },
+    "visualDiff": {
+      "description": "Before/after UI-screenshot capture (v0.32.0), consumed by /ship-pr. When a UI-changing task ships, the agent screenshots the changed routes on staging BEFORE the change (pre-merge, Phase 2) and AFTER it deploys (post-merge, Phase 6.6), embedding both passes into a dedicated 'Visual Changes' Monday doc on the task (via the appendTaskVisualSnapshots tool). ON by default (opt-out): runs whenever a UI change is detected AND a staging URL resolves; otherwise it skips with a one-line note (never errors). The staging base URL is read from environments.uat.url; authenticated routes reuse e2e.personas[].storageState.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "description": "Master switch. ON by default — set false to opt OUT. When false, /ship-pr skips both visualDiff passes entirely.",
+          "type": "boolean",
+          "default": true
+        },
+        "viewports": {
+          "description": "Viewports captured per route. Mirrors the /visual-diff defaults: desktop (1440x900) + mobile (390x844), full page.",
+          "type": "array",
+          "items": { "type": "string", "enum": ["desktop", "mobile"] },
+          "uniqueItems": true,
+          "default": ["desktop", "mobile"]
+        },
+        "maxRoutes": {
+          "description": "Safety cap on how many changed routes are screenshotted per task. When the diff implicates more routes, the skill captures the top maxRoutes and logs which were dropped (silent truncation reads as full coverage).",
+          "type": "integer",
+          "minimum": 1,
+          "default": 8
+        },
+        "authPersona": {
+          "description": "e2e persona id (from e2e.personas[].id) whose storageState authenticates the headless browser for authed routes. null = public/unauthenticated capture only; authed routes are skipped with a noted reason rather than guessing a login.",
+          "type": ["string", "null"],
+          "default": null
+        },
+        "routeMap": {
+          "description": "Optional fallback for routes the agent can't infer from the diff alone (dynamic/[param] routes). Each entry maps a changed-file glob to the concrete route path(s) to screenshot, with params resolved to real sample values. The agent reasons from the diff by default and only consults this map when present.",
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["glob", "routes"],
+            "properties": {
+              "glob": {
+                "description": "fnmatch-style glob matched against changed file paths.",
+                "type": "string"
+              },
+              "routes": {
+                "description": "Concrete route paths to screenshot when the glob matches (e.g. ['/posts/sample-slug']).",
+                "type": "array",
+                "items": { "type": "string" },
+                "minItems": 1
+              }
+            }
+          },
+          "default": []
+        }
+      }
+    },
     "review": {
       "description": "Review-gate configuration for the pre-merge-review-gate hook and the /ship-pr review loop.",
       "type": "object",

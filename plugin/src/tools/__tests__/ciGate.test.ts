@@ -15,6 +15,7 @@ const executeMondayQueryMock = vi.fn();
 vi.mock("../../monday-client.ts", () => ({
   executeMondayQuery: (...args: unknown[]) => executeMondayQueryMock(...args),
   DOC_API_VERSION: "2026-01",
+  DOC_BLOCKS_API_VERSION: "2026-07",
 }));
 vi.mock("../../services/people.ts", () => ({
   getPersonByUsername: vi.fn().mockResolvedValue(424242),

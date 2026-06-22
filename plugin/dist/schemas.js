@@ -600,6 +600,34 @@ export const UpdateTaskUatDocSchema = z.object({
     overwrite: z.boolean().optional().default(true).describe("true (default) replaces the doc; false appends to existing content"),
 });
 // =============================================================================
+// Visual Changes Doc tool (column doc_mm4jkk92 on Tasks board, v0.32.0)
+// =============================================================================
+export const AppendTaskVisualSnapshotsSchema = z.object({
+    taskId: z.number().describe("Task item ID whose 'Visual Changes' doc to append to (the doc is created on first use)."),
+    phase: z
+        .enum(["before", "after"])
+        .describe("'before' = staging pre-change (captured pre-merge); 'after' = staging post-deploy (captured once the change is live). Each call appends a new pass-grouped section — it never drains existing blocks, so before + after accumulate."),
+    environmentLabel: z.string().optional().describe("Environment name shown in the section heading. Defaults to 'staging'."),
+    capturedAt: z.string().optional().describe("ISO date (YYYY-MM-DD) shown in the heading. Defaults to today."),
+    captures: z
+        .array(z.object({
+        route: z.string().describe("Route path or screen label, e.g. '/dashboard'."),
+        label: z.string().optional().describe("Override the displayed label (defaults to route)."),
+        viewport: z.enum(["desktop", "mobile"]).optional().describe("Viewport the screenshot was taken at."),
+        imagePath: z
+            .string()
+            .optional()
+            .describe("Absolute local path to the screenshot image (png/jpg/jpeg/webp/gif). Omit for a note-only entry, e.g. a new route with no 'before' state."),
+        note: z
+            .string()
+            .optional()
+            .describe("Italic note shown under the label, e.g. 'no before state — new route' or 'skipped — auth required, no persona'."),
+    }))
+        .min(1)
+        .max(24)
+        .describe("Per-route captures to append, in display order. Cap of 24 keeps the doc readable; the /ship-pr skill enforces maxRoutes upstream."),
+});
+// =============================================================================
 // Description Doc tools (column doc_mm3sg1kr on Tasks board)
 // =============================================================================
 export const GetTaskDescriptionDocSchema = z.object({

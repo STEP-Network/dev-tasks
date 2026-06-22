@@ -45,6 +45,7 @@ import {
   GetTaskDescriptionDocSchema,
   CreateTaskDescriptionDocSchema,
   UpdateTaskDescriptionDocSchema,
+  AppendTaskVisualSnapshotsSchema,
 } from "./schemas.ts";
 import {
   getBacklog,
@@ -90,12 +91,13 @@ import {
   getTaskDescriptionDoc,
   createTaskDescriptionDoc,
   updateTaskDescriptionDoc,
+  appendTaskVisualSnapshots,
   getVersionTimeline,
 } from "./tools/index.ts";
 
 
 /**
- * Register all 38 Monday MCP tools on the given McpServer. Shared by the
+ * Register all 39 Monday MCP tools on the given McpServer. Shared by the
  * stdio entry (server.ts) and the HTTP entry (api/mcp.ts).
  */
 export function registerAllTools(server: McpServer): void {
@@ -588,6 +590,20 @@ server.tool(
   UpdateTaskDescriptionDocSchema.shape,
   async (args) => {
     const result = await updateTaskDescriptionDoc(args);
+    return { content: [{ type: "text", text: result }] };
+  }
+);
+
+// =========================================================================
+// Visual Changes Doc (Monday Doc column doc_mm4jkk92) — before/after UI shots
+// =========================================================================
+
+server.tool(
+  "appendTaskVisualSnapshots",
+  "Append a pass-grouped section of before/after UI screenshots to a task's 'Visual Changes' Monday doc (column doc_mm4jkk92). phase='before' (staging pre-change, captured pre-merge) or 'after' (staging post-deploy). Each capture is a route with an optional absolute imagePath; images are uploaded as Monday assets and embedded by permanent asset_id (URLs expire). Append-only — before + after accumulate; the doc is created on first call. Used by /ship-pr's visualDiff passes. Note-only entries (no imagePath) record skips, e.g. 'new route, no before state'.",
+  AppendTaskVisualSnapshotsSchema.shape,
+  async (args) => {
+    const result = await appendTaskVisualSnapshots(args);
     return { content: [{ type: "text", text: result }] };
   }
 );

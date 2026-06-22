@@ -11,6 +11,7 @@ import { describe, it, expect, vi } from "vitest";
 vi.mock("../../monday-client.ts", () => ({
   executeMondayQuery: vi.fn(),
   DOC_API_VERSION: "2026-01",
+  DOC_BLOCKS_API_VERSION: "2026-07",
 }));
 
 import { normalizeDocMarkdown } from "../doc-utils.ts";

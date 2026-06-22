@@ -88,5 +88,12 @@
       "Cross-browser parity beyond Playwright's default Chromium (Safari, Firefox)"
     ],
     "flakyDir": "e2e/flaky"
+  },
+  "visualDiff": {
+    "enabled": true,
+    "viewports": ["desktop", "mobile"],
+    "maxRoutes": 8,
+    "authPersona": null,
+    "routeMap": []
   }
 }

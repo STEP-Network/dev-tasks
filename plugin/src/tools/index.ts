@@ -39,4 +39,5 @@ export {
   createTaskDescriptionDoc,
   updateTaskDescriptionDoc,
 } from "./taskDescriptionDoc.ts";
+export { appendTaskVisualSnapshots } from "./taskVisualDiff.ts";
 export { getVersionTimeline } from "./getVersionTimeline.ts";
