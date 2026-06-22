@@ -17,7 +17,7 @@ Needs Refinement → Ready to Start → In Progress → Waiting for UAT → Pend
 | **Needs Refinement** | Default at `createTask` | None |
 | **Ready to Start** | `createTask`/`updateTask` after refinement | `type` + `priority` + `epicId` + `description` + `acceptanceCriteria` + ≥1 subtask with `name`+`description`+`type`+`estimatedHours` |
 | **In Progress** | `claimTask` | Task in active sprint; all `dependencyIds` (column `dependency_mm0pwbxn`) `Done` |
-| **Waiting for UAT** | `/ship-pr` Phase 6.5 after review loop | All subtasks `Done` + UAT doc set via `createTaskUatDoc` on column `doc_mm3adfdg` (warns on missing GitHub / branch / demo / PR links) |
+| **Waiting for UAT** | `/ship-pr` Phase 6.7 after merge + staging deploy `READY` | All subtasks `Done` + UAT doc set via `createTaskUatDoc` on column `doc_mm3adfdg` (warns on missing GitHub / branch / demo / PR links). Client-side `staging-deploy-ready-gate` also requires the post-merge deploy verified `READY` (relaxed under CI) |
 | **Pending Deploy to Prod** | Human after UAT sign-off on `test.polads.eu` | All subtasks `Done` |
 | **Done** | `/release-version` (default) or `/ship-pr` Phase 10 (hotfix-to-`main` only) | Agents never set directly under staging flow |
 | **Stuck** | Any skill, on unresolvable blocker | None |
@@ -101,7 +101,7 @@ When a task requires a human-only action (admin-panel click, OAuth grant, signin
 
 NOT for: actions doable via API/MCP (use regular Backend subtask); UAT itself (`Waiting for UAT` covers it); one-time non-recurring setup (regular subtask). `[HUMAN]` is for ongoing/repeating user dependencies.
 
-Skill coordination: `/ship-pr` Phase 6.5 → if ANY `[HUMAN]` subtask not Done, set parent `Stuck` instead of `Waiting for UAT`. `/log-progress SUBTASK_COMPLETED` → if completing last non-Done `[HUMAN]`, suggest flipping parent to `Waiting for UAT`. `/pickup-task` → skip tasks Stuck on "human action pending."
+Skill coordination: `/ship-pr` Phase 6.7 → if ANY `[HUMAN]` subtask not Done, set parent `Stuck` instead of `Waiting for UAT`. `/log-progress SUBTASK_COMPLETED` → if completing last non-Done `[HUMAN]`, suggest flipping parent to `Waiting for UAT`. `/pickup-task` → skip tasks Stuck on "human action pending."
 
 ## Cross-references
 

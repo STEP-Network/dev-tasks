@@ -219,10 +219,11 @@ staging, all gates skipped, by manually editing this file). The
 |---|---|---|---|
 | `selfReviewPassed` | `true` | `/tmp/.claude-state-marker-selfReviewPassed-<HEAD_SHA>` | `post-self-review.sh` on `Self-Review PASSED` in the self-reviewer subagent's output |
 | `reviewAddressed` | any non-empty value | `/tmp/.claude-state-marker-reviewAddressed-<HEAD_SHA>` | `/ship-pr` Phase 6 (structured) or Phase 6.2 (handoff-to-orchestrator) |
-| `parentStatus` | `"Waiting for UAT"` | `/tmp/.claude-state-marker-parentStatus-<HEAD_SHA>` | `/ship-pr` Phase 6.5 after the WfUAT transition succeeds |
+| `parentStatus` | `"Waiting for UAT"` | `/tmp/.claude-state-marker-parentStatus-<HEAD_SHA>` | `/ship-pr` Phase 6.7 after the WfUAT transition succeeds |
 | `mondayReconciledShas` | array grew (append) | `/tmp/.claude-state-marker-mondayReconciledShas-<HEAD_SHA>` | `/ship-pr` Phase 10 + `/babysit-prs` Phase 3 after `gh pr merge` succeeds |
 | `allowMainCheckout` | `true` | **none — always blocked** | direct user authorization only |
 | `ciGate` *(v0.26.0)* | changes to a value starting with `Skip` | `/tmp/.claude-state-marker-ciGate-<HEAD_SHA>` | `/pickup-task` step 12 (mirror a board-side Skip at claim) + `/ship-pr` Phase 2 step 6.3 (auto-skip after `ci-skip-eval.sh` ELIGIBLE). Reverting to `Full` needs no marker |
+| `stagingDeployReady` *(v0.32.0)* | `true` | `/tmp/.claude-state-marker-stagingDeployReady-<HEAD_SHA>` | `/ship-pr` Phase 6.6 after the post-merge deploy polls `READY`. Read by `staging-deploy-ready-gate` to allow the WfUAT flip (relaxed under CI). Reverting to `false` needs no marker |
 
 **Marker contract**:
 - Markers are SHA-scoped — they unlock at the current `HEAD` only. New commits

@@ -51,7 +51,7 @@ Read `.claude/project-config.json`. Extract `git.defaultBase`, `git.hotfixBase`,
 
 12. Wait for Vercel deployment via `mcp__vercel__list_deployments` filtered by `meta.githubCommitRef`. Retry up to 3× with 30s delay.
 
-13. Post to Monday via `mcp__plugin_dev-tasks_dev-tasks__updateTask` with `itemId`, `demoUrl` (column `link_mm0mtyf4`), `prLink` (column `link_mm0m817p`), `branch` (column `text_mm0pvs3n`), `githubLink` (derive from `git remote get-url origin`, strip `.git`, append `/tree/<branch>` — column `link`). The `Waiting for UAT` gate (Phase 6.5) warns but doesn't block if any are missing.
+13. Post to Monday via `mcp__plugin_dev-tasks_dev-tasks__updateTask` with `itemId`, `demoUrl` (column `link_mm0mtyf4`), `prLink` (column `link_mm0m817p`), `branch` (column `text_mm0pvs3n`), `githubLink` (derive from `git remote get-url origin`, strip `.git`, append `/tree/<branch>` — column `link`). The `Waiting for UAT` gate (Phase 6.7) warns but doesn't block if any are missing.
 
 14. Persist to `.claude/active-task.json`: `previewUrl` + `prUrl`. Stop hook blocks session end if `previewUrl` missing.
 
@@ -104,7 +104,7 @@ NEW gate between UAT doc generation and the `Waiting for UAT` transition. Runs t
 
 Branch on execution context per `.claude/rules/agent-autonomy.md`. Quick check: is `Monitor` in your tool surface?
 
-**CI Gate Skip path (either context, v0.26.0)**: when the task's CI Gate is `Skip (human)` / `Skip (agent)` (and the PR base is NOT `$hotfixBase`), do NOT sit in the CI polling loop. Instead: (1) run ONE review-triage pass over whatever findings already exist (Corridor + bot review if present — don't wait for them); (2) arm server-side merge with `gh pr merge {prNumber} --auto --squash` IF `git.autoMergePolicy` allows agent merges for the base branch — otherwise leave the PR for `/babysit-prs`/human; (3) emit the reviewAddressed marker and set `reviewAddressed: "handoff-to-orchestrator"`; (4) continue to Phase 6.5. GitHub's branch protection still requires green checks before the auto-merge fires — skip removes the agent's WAIT, never the green-merge requirement. `stop-ci-green-check` allows the session to end with checks pending under this gate; a check that already FAILED still blocks the stop (fix it or ack the flake).
+**CI Gate Skip path (either context, v0.26.0)**: when the task's CI Gate is `Skip (human)` / `Skip (agent)` (and the PR base is NOT `$hotfixBase`), do NOT sit in the CI polling loop. Instead: (1) run ONE review-triage pass over whatever findings already exist (Corridor + bot review if present — don't wait for them); (2) arm server-side merge with `gh pr merge {prNumber} --auto --squash` IF `git.autoMergePolicy` allows agent merges for the base branch — otherwise leave the PR for `/babysit-prs`/human; (3) emit the reviewAddressed marker and set `reviewAddressed: "handoff-to-orchestrator"`; (4) continue to Phase 6.6. GitHub's branch protection still requires green checks before the auto-merge fires — skip removes the agent's WAIT, never the green-merge requirement. `stop-ci-green-check` allows the session to end with checks pending under this gate; a check that already FAILED still blocks the stop (fix it or ack the flake).
 
 **Subagent handoff path** (no `Monitor`):
 1. PR pushed (Phases 2–3).
@@ -212,25 +212,9 @@ Field semantics:
 
 **Stop hook gates**: `stop-task-check.sh` requires `reviewAddressed` set; `stop-ci-green-check.sh` requires CI green or the escape-hatch value.
 
-### Phase 6.5: Transition task → `Waiting for UAT` (default flow only; hotfix skips)
+### Phase 6.6: Autonomous merge + verify staging deploy READY (default-flow PRs)
 
-20a. If PR base is `$hotfixBase` → skip to Phase 7.
-
-20b. Verify gate prereqs (the MCP enforces server-side):
-- All subtasks `done` with `actualHours`.
-- UAT doc set on `doc_mm3adfdg` (re-run Phase 4.5 if absent).
-- `demoUrl`, `prLink`, `branch`, `githubLink` set on task.
-- Phase 4.6 autonomous-UAT gate PASSED or skipped per project-config (when `e2e.enabled: true` AND classifier said spec applies, the Playwright run must be `PASS` or `ACK_FLAKY` — not unrun, not FAIL).
-
-20c. `mcp__plugin_dev-tasks_dev-tasks__updateTask({ itemId: taskId, status: "Waiting for UAT" })`. On rejection, fix the named field and retry.
-
-20c.1. **Mirror parent status to active-task.json** (required when `stop-waiting-for-uat-stage` is enabled — else the hook fires at session-end because subtasks are all `done` but local state still shows the parent at "In Progress"). Emit the parentStatus marker first, then write the field:
-   ```bash
-   bash ${CLAUDE_PLUGIN_ROOT}/scripts/emit-state-marker.sh parentStatus
-   ```
-   Then set `parentStatus: "Waiting for UAT"` in `.claude/active-task.json`. Single jq-style edit; no other fields change.
-
-### Phase 6.6: Autonomous merge (default-flow PRs)
+The merge and the staging-deploy-READY verification both happen HERE, **before** the `Waiting for UAT` flip in Phase 6.7. "Waiting for UAT" tells a human the change is testable on staging — flipping it before the post-merge deploy finishes points reviewers at the pre-deploy version (PR #347 / retro #2926719311). So Phase 6.7 is hard-gated on the READY evidence recorded in step 20f.6.
 
 20d. Preconditions: base is `$defaultBase`; CI all-green (or failures acked via `/tmp/.claude-ci-ack-<branch>`); review BLOCKERs resolved.
 
@@ -238,7 +222,7 @@ Field semantics:
 
 20f. Verify: `gh pr view {N} --json state --jq .state` returns `"MERGED"`. If `"OPEN"`, diagnose via `gh pr view {N} --json mergeStateStatus,mergeable`.
 
-20f.5. **Wait for the post-merge deploy before any "verified" / "live" claim.** `gh pr merge` returning success means the commit landed on `$defaultBase`, NOT that the change is live. The Vercel redeploy triggered by the merge takes additional time, and browser caches routinely show the pre-deploy version for several minutes. Before posting anything implying verification:
+20f.5. **Wait for the post-merge staging deploy to reach `READY` — this gates the `Waiting for UAT` flip, not just a "verified" caveat.** `gh pr merge` returning success means the commit landed on `$defaultBase`, NOT that the change is live. The Vercel redeploy triggered by the merge takes additional time, and browser caches routinely show the pre-deploy version for several minutes.
 - Capture the merge SHA: `mergedSHA=$(gh pr view {N} --json mergeCommit --jq .mergeCommit.oid)`
 - Poll `mcp__vercel__list_deployments` filtered by `meta.githubCommitSha = $mergedSHA` until a production-target deployment reaches state `READY`. Non-Vercel projects: substitute the platform's deploy-status check — `gh run watch` for GitHub Actions deploys, `flyctl status` for Fly, etc.
 - When inspecting through a browser, cache-bust the verification URL with `?_t=$(date +%s)` or use an incognito tab. Service Worker caches survive plain refresh.
@@ -246,11 +230,36 @@ Field semantics:
 
 See `CLAUDE.md` → Shipping conventions for the PR #347 case study that motivated this rule (retro #2926719311).
 
-20g. Hotfix exception: skip merge — human merges `$hotfixBase` PRs.
+20f.6. **Record the verified deploy (this is what unlocks Phase 6.7).** Once a production-target deploy for `$mergedSHA` is `READY`, emit the marker and write the flag:
+   ```bash
+   bash ${CLAUDE_PLUGIN_ROOT}/scripts/emit-state-marker.sh stagingDeployReady
+   ```
+   Then set `stagingDeployReady: true` in `.claude/active-task.json`. `staging-deploy-ready-gate` reads this to allow the Phase 6.7 transition; the field is marker-protected by `protect-active-task-state` so it can't be self-granted by a direct edit. **Under CI** (`GITHUB_ACTIONS`/`CI`) a runner has no Vercel access — skip the poll; the gate relaxes automatically (no flag needed). Do NOT fabricate `stagingDeployReady` outside CI to dodge the wait — that's the exact lie this gate exists to prevent.
 
-20h. Continue to Phase 10.
+20g. Hotfix exception: skip merge — human merges `$hotfixBase` PRs. No `Waiting for UAT` flip; Phase 10 sets `Done` directly.
 
-20i. Progress is tracked in git commits (every commit carries the task `#id`); no `TASK_WAITING_FOR_UAT` Update here — the `Waiting for UAT` status change (step 20c) is the signal, and the single summary posts at Phase 7.
+### Phase 6.7: Transition task → `Waiting for UAT` (default flow only; hotfix skips)
+
+20h. If PR base is `$hotfixBase` → skip to Phase 7.
+
+20i. Verify gate prereqs (MCP enforces server-side; hooks enforce client-side):
+- All subtasks `done` with `actualHours`.
+- UAT doc set on `doc_mm3adfdg` (re-run Phase 4.5 if absent).
+- `demoUrl`, `prLink`, `branch`, `githubLink` set on task.
+- Phase 4.6 autonomous-UAT gate PASSED or skipped per project-config (when `e2e.enabled: true` AND classifier said spec applies, the Playwright run must be `PASS` or `ACK_FLAKY` — not unrun, not FAIL).
+- **Staging deploy verified `READY`** — `stagingDeployReady: true` from step 20f.6 (or running under CI). `staging-deploy-ready-gate` hard-blocks this transition otherwise.
+
+20j. `mcp__plugin_dev-tasks_dev-tasks__updateTask({ itemId: taskId, status: "Waiting for UAT" })`. On rejection, fix the named field and retry. (`staging-deploy-ready-gate` + `demo-url-required` fire on this call.)
+
+20k. **Mirror parent status to active-task.json** (required when `stop-waiting-for-uat-stage` is enabled — else the hook fires at session-end because subtasks are all `done` but local state still shows the parent at "In Progress"). Emit the parentStatus marker first, then write the field:
+   ```bash
+   bash ${CLAUDE_PLUGIN_ROOT}/scripts/emit-state-marker.sh parentStatus
+   ```
+   Then set `parentStatus: "Waiting for UAT"` in `.claude/active-task.json`. Single jq-style edit; no other fields change.
+
+20l. Continue to Phase 10.
+
+20m. Progress is tracked in git commits (every commit carries the task `#id`); no `TASK_WAITING_FOR_UAT` Update here — the `Waiting for UAT` status change (step 20j) is the signal, and the single summary posts at Phase 7.
 
 ### Phase 7: Monday.com Update + Completion (the ONE routine Update)
 
@@ -276,7 +285,7 @@ See `CLAUDE.md` → Shipping conventions for the PR #347 case study that motivat
 
 ### Phase 10: Post-Merge Task Completion
 
-Default flow: parent already at `Waiting for UAT` from Phase 6.5. Phase 10 cleans up; `Done` is set by the release ceremony.
+Default flow: parent already at `Waiting for UAT` from Phase 6.7. Phase 10 cleans up; `Done` is set by the release ceremony.
 Hotfix flow: parent still at `In Progress`. Phase 10 sets `Done` directly.
 
 30. Post-merge sequence (order matters for `allowMainCheckout: true` — `gh pr merge` switches to `$defaultBase` and deletes local branch):
@@ -294,8 +303,8 @@ Hotfix flow: parent still at `In Progress`. Phase 10 sets `Done` directly.
     In worktree sessions, `ExitWorktree({ action: "remove" })` in step 31 deletes the state file implicitly.
     
     Read PR base via `gh pr view --json baseRefName --jq .baseRefName`:
-    - `$defaultBase`: leave task at `Waiting for UAT`. No `[TASK_COMPLETED]` narrative post — the status (already at `Waiting for UAT` from Phase 6.5) carries the next-transition signal (Waiting for UAT → Pending Deploy to Prod by human; Pending Deploy to Prod → Done by `/release-version`).
-    - `$hotfixBase`: BEFORE marking done — wait for the production deploy to complete (poll your deploy platform's status: `mcp__vercel__list_deployments` filtered by merge SHA, `gh run watch`, `flyctl status`, etc.) AND cache-bust the verification URL (`?_t=$(date +%s)` or an incognito tab — Service Worker caches survive plain refresh). The same stale-cache + in-flight-deploy gotcha that caught PR #347 (retro #2926719311) applies to hotfix releases. Then `updateTask({status: "Done"})` (STATE — kept). For the hotfix flow this `Done` transition replaces the default flow's Phase 6.5/Phase 7 path, so post the single `[PIPELINE_COMPLETE]` summary here via `/log-progress PIPELINE_COMPLETE` if it wasn't already posted at Phase 7.
+    - `$defaultBase`: leave task at `Waiting for UAT`. No `[TASK_COMPLETED]` narrative post — the status (already at `Waiting for UAT` from Phase 6.7) carries the next-transition signal (Waiting for UAT → Pending Deploy to Prod by human; Pending Deploy to Prod → Done by `/release-version`).
+    - `$hotfixBase`: BEFORE marking done — wait for the production deploy to complete (poll your deploy platform's status: `mcp__vercel__list_deployments` filtered by merge SHA, `gh run watch`, `flyctl status`, etc.) AND cache-bust the verification URL (`?_t=$(date +%s)` or an incognito tab — Service Worker caches survive plain refresh). The same stale-cache + in-flight-deploy gotcha that caught PR #347 (retro #2926719311) applies to hotfix releases. Then `updateTask({status: "Done"})` (STATE — kept). For the hotfix flow this `Done` transition replaces the default flow's Phase 6.7/Phase 7 path, so post the single `[PIPELINE_COMPLETE]` summary here via `/log-progress PIPELINE_COMPLETE` if it wasn't already posted at Phase 7.
 
 31. Worktree cleanup: if `git rev-parse --git-common-dir` differs from `git rev-parse --git-dir`, call `ExitWorktree({ action: "remove" })`. If refused (uncommitted/unreachable), inspect leftovers, commit/stash, then `ExitWorktree({ action: "remove", discard_changes: true })` only with user confirmation.
 
