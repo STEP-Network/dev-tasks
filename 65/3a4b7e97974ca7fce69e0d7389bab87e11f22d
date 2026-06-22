@@ -1,0 +1,62 @@
+plugin/skills/write-uat-spec/SKILL.md
+  s_1460aa71b1431d::t_d0b3c61e35f5f3 3
+plugin/rules/workflow-pipeline.md
+  s_1460aa71b1431d::t_d0b3c61e35f5f3 22-30,51-52,113
+plugin/schemas/project-config.schema.json
+  s_1460aa71b1431d::t_d0b3c61e35f5f3 165
+plugin/hooks/hooks.json
+  s_1460aa71b1431d::t_d0b3c61e35f5f3 47-50
+plugin/.claude-plugin/plugin.json
+  s_1460aa71b1431d::t_a49dc504139d79 4
+  s_1460aa71b1431d::t_ba6442f4130507 3
+CLAUDE.md
+  s_1460aa71b1431d::t_f216c9dfe424ff 363
+  s_1460aa71b1431d::t_d0b3c61e35f5f3 168-169,290,294
+  s_1460aa71b1431d::t_fc06ed2935c9a4 405
+plugin/hooks/__tests__/protect-active-task-state.test.sh
+  s_1460aa71b1431d::t_d0b3c61e35f5f3 349-405
+plugin/hooks/protect-active-task-state.sh
+  s_1460aa71b1431d::t_d0b3c61e35f5f3 15,25,27,172,215-229
+plugin/src/constants.ts
+  s_1460aa71b1431d::t_b337e3d4aa2124 54
+plugin/src/schemas.ts
+  s_1460aa71b1431d::t_884cf339ea6500 714
+plugin/skills/pickup-task/SKILL.md
+  s_1460aa71b1431d::t_d0b3c61e35f5f3 101,104
+plugin/dist/constants.js
+  s_1460aa71b1431d::t_f2c0652544219c 51
+plugin/dist/schemas.js
+  s_1460aa71b1431d::t_f2c0652544219c 603
+plugin/skills/ship-pr/SKILL.md
+  s_1460aa71b1431d::t_673e832814c300 42,249
+  s_1460aa71b1431d::t_d0b3c61e35f5f3 64,117,225,227,235,243-247,251-265,267-271,273,275,301,319-320
+  s_1460aa71b1431d::t_b894b3b1e6484e 248,250
+plugin/rules/task-lifecycle.md
+  s_1460aa71b1431d::t_d0b3c61e35f5f3 20,104
+plugin/skills/babysit-prs/SKILL.md
+  s_1460aa71b1431d::t_d0b3c61e35f5f3 100-101
+plugin/hooks/staging-deploy-ready-gate.sh
+  s_1460aa71b1431d::t_d0b3c61e35f5f3 1-121
+plugin/scripts/emit-state-marker.sh
+  s_1460aa71b1431d::t_d0b3c61e35f5f3 12,19-20,27-28,40,48
+plugin/hooks/__tests__/staging-deploy-ready-gate.test.sh
+  s_1460aa71b1431d::t_d0b3c61e35f5f3 1-121
+plugin/rules/agent-orchestration.md
+  s_1460aa71b1431d::t_d0b3c61e35f5f3 222,226
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.9",
+  "base_commit_sha": "653a4b7e97974ca7fce69e0d7389bab87e11f22d",
+  "prompts": {},
+  "sessions": {
+    "s_1460aa71b1431d": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "8bffbfa2-7493-47b6-a477-fe6643277b83",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Tomas Soucek <tomassoucek@Tomass-MacBook-Pro.local>"
+    }
+  }
+}
