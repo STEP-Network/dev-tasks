@@ -1,0 +1,23 @@
+plugin/README.md
+  s_586604d14df0e5::t_b8015d80f37aed 135-183
+  s_586604d14df0e5::t_76b7a032e7eb06 10
+plugin/templates/playwright/README.md
+  s_586604d14df0e5::t_c6b8ea1d693060 72-91
+  s_586604d14df0e5::t_b6f72ac51dca80 42
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.9",
+  "base_commit_sha": "dac2fa53ca9d99d77fb4a504c7cfa90c41d3b01f",
+  "prompts": {},
+  "sessions": {
+    "s_586604d14df0e5": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "0cacc4a9-74fc-45a8-94e3-1338aba45572",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Tomas Soucek <tomassoucek@Tomass-MacBook-Pro.local>"
+    }
+  }
+}
