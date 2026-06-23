@@ -87,7 +87,14 @@
       "Business logic correctness on novel edge cases not covered by AC",
       "Cross-browser parity beyond Playwright's default Chromium (Safari, Firefox)"
     ],
-    "flakyDir": "e2e/flaky"
+    "flakyDir": "e2e/flaky",
+    "fullSuite": {
+      "enabled": true,
+      "target": "staging",
+      "workers": "50%",
+      "recordTo": ["uatDoc", "mondayUpdate"],
+      "onRed": "record"
+    }
   },
   "visualDiff": {
     "enabled": true,

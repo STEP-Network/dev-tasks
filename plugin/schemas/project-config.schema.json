@@ -260,6 +260,46 @@
           "description": "Path (relative to repo root) where chronically-flaky specs go. Specs here still run in CI but with a non-failing reporter — they catch eventual regressions without blocking PRs. Use sparingly; flaky-quarantine is maintenance debt.",
           "type": "string",
           "default": "e2e/flaky"
+        },
+        "fullSuite": {
+          "description": "In-session FULL Playwright-suite run (v0.34.0), consumed by /dev-tasks:run-full-e2e and /ship-pr Phase 6.6. Runs the consumer's ENTIRE existing Playwright suite locally (in-session, sharded via --workers) against the consumer's STAGING URL (environments.uat.url) as an ADVISORY step AFTER the post-merge staging deploy is READY — so the suite executes on the dev machine instead of a per-preview GitHub Actions lane, reclaiming CI minutes. ADVISORY ONLY: it records pass/fail/skip; it NEVER blocks push, merge, or the Waiting-for-UAT transition. ON by default (opt-out), mirroring visualDiff.enabled: it auto-engages once a staging URL AND a real Playwright suite both exist, and otherwise short-circuits to a recorded no-op (one-line note, never an error). Independent of e2e.enabled — running an existing suite is not the same as authoring per-task specs; the safe-skip preconditions gate it instead. Distinct from the per-task spec gate (Phase 4.6/6.5), which is unchanged. Auth is owned entirely by the consumer's own playwright.config setup projects (e.g. auth.setup.ts) — the plugin injects NO personas/credentials for this run; specs whose secrets are absent locally self-skip (recorded).",
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {
+              "description": "Master switch. ON by default — set false to opt OUT. When false, /dev-tasks:run-full-e2e and the /ship-pr Phase 6.6 advisory sub-step skip entirely (recorded no-op). True alone does NOT force a run — the safe-skip preconditions (resolvable https staging URL + a real Playwright suite + a runnable command + ensurable browsers) must also hold, otherwise the step records a no-op and never errors.",
+              "type": "boolean",
+              "default": true
+            },
+            "target": {
+              "description": "Where the suite runs. 'staging' resolves the BASE_URL to environments.uat.url (the only v1 value — staging is stable, already-deployed, and auth-reachable without a per-PR deployment-protection bypass). 'preview' is reserved for a future version and is not yet honored.",
+              "type": "string",
+              "enum": ["staging"],
+              "default": "staging"
+            },
+            "command": {
+              "description": "Test command run by the e2e-tester subagent (the --workers flag is appended by the skill). Optional — when absent the skill derives it from package.json scripts (prefers a 'test:e2e' script, typically `pnpm test:e2e`). The consumer's playwright.config MUST read BASE_URL/PLAYWRIGHT_BASE_URL from env — never hardcode the target — so the skill can point the suite at staging. No runnable command resolves → recorded safe-skip.",
+              "type": "string"
+            },
+            "workers": {
+              "description": "Playwright --workers value for the in-session run, trading machine cores for wall-clock (the whole point of running locally). Accepts a count (e.g. 4) or a percentage string (e.g. '50%'). v1 shards via --workers only; --shard=i/N is intentionally out of scope for a single in-session run.",
+              "type": ["string", "number"],
+              "default": "50%"
+            },
+            "recordTo": {
+              "description": "Where the advisory results land. 'uatDoc' appends a run summary to the task's UAT doc 'Agent-verified' section; 'mondayUpdate' posts a Monday update. Both are advisory records, never gates.",
+              "type": "array",
+              "items": { "type": "string", "enum": ["uatDoc", "mondayUpdate"] },
+              "uniqueItems": true,
+              "default": ["uatDoc", "mondayUpdate"]
+            },
+            "onRed": {
+              "description": "What happens when the suite goes red. 'record' (default) surfaces the failure loudly in the recorded results and continues. 'record+file-bug' ALSO files a follow-up bug via the plugin's auto-file path (createBug, source 'agent'). NEVER blocks — there is intentionally no 'block' value; this step cannot stall the pipeline.",
+              "type": "string",
+              "enum": ["record", "record+file-bug"],
+              "default": "record"
+            }
+          }
         }
       }
     },

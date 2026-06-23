@@ -398,7 +398,7 @@ allowlists local screenshot paths to tmp/cwd + image extensions before reading.
 a noted reason**, never guessed. When there's no UI change or no resolvable
 staging URL, the whole step **skips with a one-line note — it never errors**.
 
-**Enforcement (v0.34.0).** The "is this UI work?" gate is no longer an LLM
+**Enforcement (v0.35.0).** The "is this UI work?" gate is no longer an LLM
 judgment call — `plugin/scripts/ui-diff-eval.sh` classifies the committed diff
 deterministically via the shared `path_is_ui` globs (`plugin/hooks/lib/ui-globs.sh`,
 also used by the `ui-change-test-reminder` nudge). When the gate says UI,

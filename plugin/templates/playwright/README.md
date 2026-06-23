@@ -39,7 +39,7 @@ Copy-paste starters for STEP Network projects onboarding to the dev-tasks plugin
    }
    ```
 
-5. CI integration (GitHub Actions example):
+5. CI integration (GitHub Actions example) — **optional, and increasingly unnecessary** (see "Full-suite E2E in-session" below):
    ```yaml
    - name: Run Playwright tests
      run: pnpm test:e2e
@@ -68,6 +68,26 @@ When spawning `dev-tasks:e2e-tester`, it will:
 - Run tests via Bash and parse results
 
 If any of these is missing or non-standard, the subagent surfaces the issue rather than guessing.
+
+## Full-suite E2E in-session (on by default) — retire your per-preview CI lane
+
+Once your repo has a staging URL (`environments.uat.url`) and this Playwright suite,
+the plugin runs the **entire** suite **in-session against staging** as an ADVISORY step
+during `/ship-pr` (post-merge, after the staging deploy is `READY`) and `/babysit-prs`,
+via `/dev-tasks:run-full-e2e`. It is **ON by default** — no flag to set — and safely
+no-ops for projects without a staging URL + a real suite. It records pass/fail to the
+task's UAT doc + a Monday update and **never blocks** the ship or merge.
+
+Because of this, the **CI integration in step 5 above is no longer needed for the full
+suite** — once the in-session run engages for your repo, **delete your per-preview
+GitHub Actions E2E workflow** to avoid double-running (dev machines are typically faster
+than CI runners, and staging is already deployed). Keep only any narrower CI gate you
+still want (e.g. a staging→prod gate); the per-preview full-suite lane is what this
+replaces. The per-task spec gate (`/ship-pr` Phase 4.6, against the preview URL) is
+unchanged.
+
+Opt out per project with `e2e.fullSuite.enabled: false`. Full details: plugin
+`README.md` → "Full-suite E2E in-session (on by default)".
 
 ## Reference
 
