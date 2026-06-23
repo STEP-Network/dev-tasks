@@ -7,7 +7,7 @@ For non-STEP projects, this plugin will fail at first contact (hard-coded board 
 ## What ships
 
 - **MCP server** — 45 stdio tools wrapping Monday's GraphQL API (backlog, tasks, sprints, epics, bugs, versions, products, feedback, retros, public roadmap, structured changelog, UAT docs, before/after visual-diff docs, version timeline).
-- **Skills (15)** — workflow: `pickup-task`, `create-task`, `refine-task`, `log-progress`, `self-review`, `ship-pr`, `release-version`, `audit-versions`, `doctor`; posture: `holistic-thinking`, `production-quality-ownership`, `design-consistency`, `triage-feedback`, `goal` (persistent completion condition — see below); orchestration: `babysit-prs`. Invoked as `/dev-tasks:<skill>`.
+- **Skills (16)** — workflow: `pickup-task`, `create-task`, `refine-task`, `log-progress`, `self-review`, `ship-pr`, `release-version`, `audit-versions`, `doctor`, `run-full-e2e` (in-session full Playwright suite vs staging — see below); posture: `holistic-thinking`, `production-quality-ownership`, `design-consistency`, `triage-feedback`, `goal` (persistent completion condition — see below); orchestration: `babysit-prs`. Invoked as `/dev-tasks:<skill>`.
 - **Rules (9)** — auto-injected on Edit/Write via the `rule-autoload.sh` PreToolUse hook based on file globs in `rules-routing.json`.
 - **Agents (4)** — `codebase-researcher`, `self-reviewer`, `doc-updater`, `e2e-tester`. Spawned via subagent.
 - **Hooks (34)** — STEP-wide policy hooks (always-on, non-overridable) + opt-in workflow hooks gated by `project-config.hooks.enabled[]` + always-on rule-autoload/janitor. Includes `commit-id-gate` (every commit must reference a Monday Tasks-board `#id`) and `stop-goal-persistence` (refuses premature autonomous stops while a `/goal` is unmet — see below).
@@ -131,6 +131,55 @@ Pin `main` to a release tag (e.g. `.../v0.22.1/...`) if you want validation froz
   }
 }
 ```
+
+## Full-suite E2E in-session (on by default) — `e2e.fullSuite` + `/dev-tasks:run-full-e2e`
+
+The dev machine is usually faster than a CI runner, and your **staging** deployment
+is already up — so the plugin can run your ENTIRE Playwright suite **in-session**
+(sharded via `--workers`) against staging instead of paying for a per-preview GitHub
+Actions E2E lane. The run is **ADVISORY**: it records pass/fail to the task's UAT doc +
+a Monday update and **never blocks** push, merge, or the `Waiting for UAT` transition.
+
+**ON by default (opt-out)**, mirroring `visualDiff`. It auto-engages — with NO flag to
+set — once two things both exist: a resolvable `https://` `environments.uat.url`, AND a
+real Playwright suite (root `playwright.config.*` + specs in `e2e.specDir` + a runnable
+test command). When either is missing, it short-circuits to a **recorded safe-skip**
+(a one-line note, never an error, never a partial run), so it is a true no-op for any
+project not set up for it.
+
+**When it runs.** `/ship-pr` Phase 6.6 (step 20f.8) invokes it **post-merge, after the
+staging deploy is verified `READY`** — a pre-merge run would test the pre-change code.
+Orchestrator-merged PRs get the same run from `/babysit-prs` once their staging deploy is
+`READY`. You can also run it standalone any time staging is deployed:
+`/dev-tasks:run-full-e2e`.
+
+**Config** (`.claude/project-config.json → e2e.fullSuite`, all optional — absent block =
+all defaults):
+
+```jsonc
+"e2e": {
+  "fullSuite": {
+    "enabled": true,                 // opt-out: set false to disable entirely
+    "target": "staging",             // resolves BASE_URL to environments.uat.url (only v1 value)
+    "command": "pnpm test:e2e",      // optional; derived from package.json scripts if omitted
+    "workers": "50%",                // Playwright --workers (count or percent)
+    "recordTo": ["uatDoc", "mondayUpdate"],
+    "onRed": "record"                // or "record+file-bug" to auto-file a follow-up bug; never "block"
+  }
+}
+```
+
+**Auth is yours, not the plugin's.** The full-suite run does NOT inject `e2e.personas` /
+`storageState` — your own `playwright.config` setup projects (e.g. `auth.setup.ts` reading
+your local secrets) own auth. Specs whose secrets are absent locally self-skip; the
+recorded skipped count is the honesty signal. The runner only ever navigates to your
+configured staging origin (never a host from task/PR text).
+
+**Migration — retire your per-preview CI E2E lane.** Once this step engages for your repo,
+**remove the per-preview GitHub Actions E2E workflow** that ran the full suite on every
+PR — otherwise you double-run. Keep only narrower CI gates you still want (e.g. a
+staging→prod gate); the per-preview lane is what this replaces. The per-task spec HARD
+gate (`/ship-pr` Phase 4.6, preview URL) is unchanged and is NOT replaced by this.
 
 ## Persistent goal — `/goal` + `stop-goal-persistence`
 

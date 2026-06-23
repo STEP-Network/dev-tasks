@@ -20,7 +20,7 @@ Read `.claude/project-config.json`. Extract `git.defaultBase`, `git.hotfixBase`,
 1. `pnpm build` — must pass
 2. `pnpm lint` — must pass
 3. `pnpm test` — must pass
-4. `pnpm playwright test` — must pass (if UI/flow changes)
+4. `pnpm playwright test` — the per-task spec must pass (if UI/flow changes). The FULL suite is NOT a pre-push gate — it runs in-session advisory against staging post-merge (Phase 6.6 step 20f.8 → `/dev-tasks:run-full-e2e`).
 5. `pnpm validate-schema --env testing` (if migration files touched)
 6. Migrations: do NOT auto-apply to production. Consult consumer's `.claude/rules/database.md`. Generic pattern: apply locally during dev → ship migration on the PR → CI/CD applies to staging on merge → `/release-version` applies to production at release time.
 
@@ -105,7 +105,7 @@ NEW gate between UAT doc generation and the `Waiting for UAT` transition. Runs t
 
 14i. **Output to UAT doc** (consumed by Phase 4.5's agent-verified section): spec path, run target, run result, list of `expect()` assertions, screenshot milestones, selector breakdown, known tech debt. The skill's output contract documents the exact field shape.
 
-**Coordination with Phase 6**: existing CI polling (Phase 6) covers Vercel build + Vercel Preview Comments. The full `pnpm playwright test e2e/` should run as a separate CI lane (consumer-side responsibility — declared in `.github/workflows/...`). Phase 4.6 here runs ONLY the new task's spec against preview (fast); CI catches cross-feature regressions on every PR. Both gates must pass before merge.
+**Coordination with Phase 6**: existing CI polling (Phase 6) covers Vercel build + Vercel Preview Comments. Phase 4.6 here runs ONLY the new task's spec against preview (fast, HARD gate). The FULL Playwright suite no longer needs a separate per-preview CI lane: it runs **in-session against staging as an ADVISORY step in Phase 6.6** (post-merge, after the staging deploy is `READY`) via `/dev-tasks:run-full-e2e` — ON by default (opt-out), config-driven by `e2e.fullSuite`. Consumers adopting that step should retire their per-preview CI E2E workflow to avoid double-running (see README "Full-suite E2E in-session"). The advisory full-suite run never gates merge; the per-task spec gate (Phase 4.6) is the only E2E hard gate before merge.
 
 ### Phase 5: (no narrative post — PR link recorded as STATE)
 15. The PR link, branch, and demo URL are recorded on the Monday task via `updateTask` (state, not narrative) in Phase 4 step 13. Progress is tracked in git commits (every commit carries the task `#id`); no `PR_CREATED` / `REVIEW_FEEDBACK_FIXED` Update here — the single summary posts at Phase 7.
@@ -249,6 +249,9 @@ See `CLAUDE.md` → Shipping conventions for the PR #347 case study that motivat
 20f.7. **VisualDiff AFTER pass (v0.33.0)** — only when a BEFORE pass ran this task (active-task.json `visualDiff.routes` is non-empty). Once the staging deploy is verified `READY` (step 20f.6) and the URL is cache-busted, re-screenshot the SAME recorded routes × viewports against staging (now showing the change), then call `appendTaskVisualSnapshots({ taskId, phase: "after", environmentLabel: "staging", captures: [...] })`. The doc now holds the before/after pair. Reuse the same SSRF origin-allowlist + auth-persona rules as the before pass. Capture failures are noted in the doc, never block.
    - **Deferred-after caveat**: when the agent does NOT perform/await the merge+deploy in-session (e.g. base is human-merge-only per `git.autoMergePolicy`, or the session handed off at Phase 6.7), the after pass can't run yet. Leave active-task.json `visualDiff.afterPending: true`; the doc shows the before pass plus an implicit gap. `/babysit-prs` or a follow-up captures the after pass once the deploy is verified. Never block the session waiting for a human merge.
 
+20f.8. **Full-suite E2E advisory run (v0.34.0)** — runs the consumer's ENTIRE Playwright suite in-session against staging, ADVISORY (never gates this ship). Same post-deploy timing as the visualDiff after pass: invoke ONLY after the staging deploy is verified `READY` (step 20f.6) — a pre-merge run would test the pre-change code. Invoke `/dev-tasks:run-full-e2e --taskId=<id>`; the skill runs its OWN safe-skip gate first (`e2e.fullSuite.enabled`, an `https` `environments.uat.url`, a real Playwright suite + runnable command, ensurable browsers, CI-Gate not a Skip value) and short-circuits to a recorded no-op when any precondition fails — so this sub-step is a true no-op for projects not set up for it and NEVER errors. It records pass/fail/skip counts to the UAT doc *Agent-verified* section + a Monday update and CONTINUES regardless of the suite result; on red it surfaces loudly (and files a follow-up bug only when `e2e.fullSuite.onRed: "record+file-bug"`). It does NOT touch `reviewAddressed` and does NOT change the merge or the Phase 6.7 transition. Fold its output block (`fullSuiteE2E: { status, passed, failed, skipped, durationSec }`) into the Phase 7 summary.
+   - **Deferred caveat**: when the agent doesn't perform/await the merge+deploy in-session (human-merge-only base per `git.autoMergePolicy`, or a Phase 6.7 handoff), the advisory run can't execute yet — `/babysit-prs` runs it once the merged PR's staging deploy is `READY`. Never block on a human merge.
+
 20g. Hotfix exception: skip merge — human merges `$hotfixBase` PRs. No `Waiting for UAT` flip; Phase 10 sets `Done` directly.
 
 ### Phase 6.7: Transition task → `Waiting for UAT` (default flow only; hotfix skips)
@@ -278,7 +281,7 @@ See `CLAUDE.md` → Shipping conventions for the PR #347 case study that motivat
 
 22. Refresh preview URL via `mcp__vercel__list_deployments`; update `previewUrl` in state + `demoUrl` on Monday if changed.
 
-23. Post the `[PIPELINE_COMPLETE]` summary exactly once by calling `/log-progress PIPELINE_COMPLETE` (which internally does a single `createUpdate`). The summary must include: PR URL, preview URL, merge SHA, CI status, `reviewAddressed` value, and a "what shipped" synthesized from `git log`. When the VisualDiff feature ran, also note the before/after **Visual Changes doc** (column `doc_mm4jkk92`) and whether the after pass is complete or deferred (`visualDiff.afterPending`). Do NOT also post a separate `createUpdate` — that would double-post.
+23. Post the `[PIPELINE_COMPLETE]` summary exactly once by calling `/log-progress PIPELINE_COMPLETE` (which internally does a single `createUpdate`). The summary must include: PR URL, preview URL, merge SHA, CI status, `reviewAddressed` value, and a "what shipped" synthesized from `git log`. When the VisualDiff feature ran, also note the before/after **Visual Changes doc** (column `doc_mm4jkk92`) and whether the after pass is complete or deferred (`visualDiff.afterPending`). When the Phase 6.6 full-suite advisory run executed (step 20f.8), include its one-line result (`fullSuiteE2E` status + counts, or "skipped — <reason>" / "deferred to /babysit-prs"). Do NOT also post a separate `createUpdate` — that would double-post.
 
 ### Phase 8: Version Linkage Check (informational)
 

@@ -1,5 +1,5 @@
 {
   "name": "dev-tasks",
-  "version": "0.33.0",
-  "description": "STEP Network dev-tasks plugin: Monday-driven task-first development for products on GitHub + Node/TS + pnpm + Vercel. 45 Monday MCP tools (incl. before/after visual-diff docs), 15 skills, 9 rules, 36 hooks, per-project config, live People-board lookup. Task descriptions stored exclusively in Monday doc column (uncapped). Internal STEP only \u2014 not a generic plugin."
+  "version": "0.34.0",
+  "description": "STEP Network dev-tasks plugin: Monday-driven task-first development for products on GitHub + Node/TS + pnpm + Vercel. 45 Monday MCP tools (incl. before/after visual-diff docs), 16 skills (incl. in-session full-suite E2E vs staging), 9 rules, 36 hooks, per-project config, live People-board lookup. Task descriptions stored exclusively in Monday doc column (uncapped). Internal STEP only \u2014 not a generic plugin."
 }
