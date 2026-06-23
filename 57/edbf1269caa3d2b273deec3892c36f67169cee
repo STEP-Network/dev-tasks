@@ -1,0 +1,21 @@
+plugin/schemas/project-config.schema.json
+  s_586604d14df0e5::t_38999e3c1f01ce 263-302
+plugin/templates/starter-project-config.json
+  s_586604d14df0e5::t_05433edc2885f6 90-97
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.9",
+  "base_commit_sha": "57edbf1269caa3d2b273deec3892c36f67169cee",
+  "prompts": {},
+  "sessions": {
+    "s_586604d14df0e5": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "0cacc4a9-74fc-45a8-94e3-1338aba45572",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Tomas Soucek <tomassoucek@Tomass-MacBook-Pro.local>"
+    }
+  }
+}
