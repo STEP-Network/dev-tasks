@@ -1,0 +1,28 @@
+plugin/rules/e2e-masterplan.md
+  s_586604d14df0e5::t_26ad53e61df0d6 15-16
+plugin/agents/e2e-tester.md
+  s_586604d14df0e5::t_ec96f5cf034ba4 16,18-20
+plugin/skills/ship-pr/SKILL.md
+  s_586604d14df0e5::t_d11865903a5f3b 284
+  s_586604d14df0e5::t_7a5d591c7882f9 108
+  s_586604d14df0e5::t_8d53386f62e77f 23
+  s_586604d14df0e5::t_a35ee2ea33a8c9 252-254
+plugin/skills/babysit-prs/SKILL.md
+  s_586604d14df0e5::t_54b453fdc018fc 103
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.9",
+  "base_commit_sha": "7adbeef081879073a30e2ecd2952d3b10235a5e8",
+  "prompts": {},
+  "sessions": {
+    "s_586604d14df0e5": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "0cacc4a9-74fc-45a8-94e3-1338aba45572",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Tomas Soucek <tomassoucek@Tomass-MacBook-Pro.local>"
+    }
+  }
+}
