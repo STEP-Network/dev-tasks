@@ -126,11 +126,32 @@ Pin `main` to a release tag (e.g. `.../v0.22.1/...`) if you want validation froz
       "pre-commit-secrets-scan", "subtask-reminder", "auto-file-followup-nudge",
       "post-merge-postmortem", "post-push-track", "post-push-review-check",
       "post-self-review", "pre-compact-task-snapshot", "user-prompt-task-context",
-      "subprocess-failure"
+      "subprocess-failure", "ui-change-test-reminder", "stop-visual-diff-check"
     ]
   }
 }
 ```
+
+### Visual-diff enforcement (v0.35.0)
+
+If your project ships UI, enable **both** of these so a UI change can't reach
+"Waiting for UAT" with an empty Monday "Visual Changes" doc:
+
+- **`ui-change-test-reminder`** — PostToolUse nudge on UI edits. Now also points
+  at the Monday Visual Changes doc + `/ship-pr` Phase 6.8. (Many consumers omit
+  it; add it.)
+- **`stop-visual-diff-check`** — Stop gate. When the branch diff touches UI
+  source files (`components/**`, app routes, `*.css`/`*.scss`, email templates —
+  classified deterministically by `scripts/ui-diff-eval.sh`, the same globs the
+  reminder uses) AND `visualDiff.enabled !== false` AND an `https://` staging URL
+  resolves, it refuses session exit unless `.claude/active-task.json` records
+  EITHER `visualDiff.routes` (a before-pass ran) OR `visualDiff.skipReason` (an
+  explicit, recorded skip). `/ship-pr` Phase 6.8 writes those fields. Fails open
+  on parse errors, relaxes under CI, and passes through non-UI diffs.
+
+  Honest caveat: `visualDiff.skipReason` is self-attested — the gate forces a
+  *deliberate, recorded* decision (and the same note lands in the PR body), but
+  the durable proof is the Visual Changes doc itself, not a cryptographic marker.
 
 ## Full-suite E2E in-session (on by default) — `e2e.fullSuite` + `/dev-tasks:run-full-e2e`
 

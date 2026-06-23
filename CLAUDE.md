@@ -398,6 +398,20 @@ allowlists local screenshot paths to tmp/cwd + image extensions before reading.
 a noted reason**, never guessed. When there's no UI change or no resolvable
 staging URL, the whole step **skips with a one-line note — it never errors**.
 
+**Enforcement (v0.35.0).** The "is this UI work?" gate is no longer an LLM
+judgment call — `plugin/scripts/ui-diff-eval.sh` classifies the committed diff
+deterministically via the shared `path_is_ui` globs (`plugin/hooks/lib/ui-globs.sh`,
+also used by the `ui-change-test-reminder` nudge). When the gate says UI,
+`/ship-pr` Phase 6.8 MUST record EITHER `visualDiff.routes` (a before pass ran)
+OR `visualDiff.skipReason` (an explicit, honest skip) in `active-task.json`. The
+opt-in **`stop-visual-diff-check`** Stop hook reads exactly those two fields and
+refuses session exit on a UI diff with neither set (fails open on parse errors,
+relaxes under CI, passes through non-UI diffs and the `handoff/stuck/timeout`
+escapes). "No local build" is explicitly NOT a valid skip reason when an
+`https://` staging URL is configured — staging is screenshot-reachable via
+chrome-devtools-mcp. `skipReason` is self-attested (honest caveat); the durable
+proof is the Visual Changes doc itself.
+
 Complements `/visual-diff` (ad-hoc local before/after during self-review) and
 `/write-uat-spec` (codified Playwright `toHaveScreenshot` regression gate): this
 one is the durable, human-facing before/after record on the Monday task itself.
