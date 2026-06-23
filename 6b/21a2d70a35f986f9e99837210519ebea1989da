@@ -1,0 +1,45 @@
+plugin/README.md
+  s_742cc8353e86f0::t_d6c1c98c3c3ca5 129,135-154
+plugin/hooks/ui-change-test-reminder.sh
+  s_742cc8353e86f0::t_597e74d33bcb9a 21-23
+  s_742cc8353e86f0::t_0e5748ed9b0796 6
+  s_742cc8353e86f0::t_5d97cb6712ec62 42-49
+  s_742cc8353e86f0::t_bc20299da4c407 14-16
+plugin/hooks/hooks.json
+  s_742cc8353e86f0::t_642167b2d90286 184-185
+plugin/schemas/project-config.schema.json
+  s_742cc8353e86f0::t_b11ee4f15f4550 396-399
+plugin/scripts/__tests__/ui-diff-eval.test.sh
+  s_742cc8353e86f0::t_4007215ee26227 1-98
+CLAUDE.md
+  s_742cc8353e86f0::t_a00a67750e82de 401-414
+plugin/skills/ship-pr/SKILL.md
+  s_742cc8353e86f0::t_1ebd53c49d9984 42-43,45-48
+plugin/hooks/__tests__/stop-visual-diff-check.test.sh
+  s_742cc8353e86f0::t_dfd297843b3660 1-33,38-136
+  s_742cc8353e86f0::t_c3402924639662 34-37
+plugin/hooks/lib/ui-globs.sh
+  s_742cc8353e86f0::t_65dc1f940e9c4a 1-58
+plugin/scripts/ui-diff-eval.sh
+  s_742cc8353e86f0::t_95f2ca478c92f2 1-88
+plugin/.claude-plugin/plugin.json
+  s_742cc8353e86f0::t_3c1e47df55851e 3-4
+plugin/hooks/stop-visual-diff-check.sh
+  s_742cc8353e86f0::t_26447916c23ca5 1-159
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.10",
+  "base_commit_sha": "6b21a2d70a35f986f9e99837210519ebea1989da",
+  "prompts": {},
+  "sessions": {
+    "s_742cc8353e86f0": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b01b40c5-e4fc-4e92-aadc-644cc3e8e884",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Tomas Soucek <tomassoucek@Tomass-MacBook-Pro.local>"
+    }
+  }
+}
