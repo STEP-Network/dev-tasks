@@ -1,0 +1,25 @@
+plugin/src/__tests__/project-config-schema.test.ts
+  s_586604d14df0e5::t_4b836cf975f98a 1,4,12-30,36-37,59,62,70-79,81-91,95-98,102-103
+  s_586604d14df0e5::t_38aa2a13a34d02 2-3,5-11,38-58,60-61,63-69,80,92-94,99-101
+  s_586604d14df0e5::t_dc571d5cb12a49 31-35
+plugin/package.json
+  s_586604d14df0e5::t_6af372b1b9964b 22-23
+plugin/.claude-plugin/plugin.json
+  s_586604d14df0e5::t_48e0d928769ea7 3-4
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.9",
+  "base_commit_sha": "3a9f4505bfb258f993117e8b7ad4c664312556ce",
+  "prompts": {},
+  "sessions": {
+    "s_586604d14df0e5": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "0cacc4a9-74fc-45a8-94e3-1338aba45572",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Tomas Soucek <tomassoucek@Tomass-MacBook-Pro.local>"
+    }
+  }
+}
