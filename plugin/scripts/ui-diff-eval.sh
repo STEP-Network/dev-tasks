@@ -18,16 +18,25 @@
 #   NON_UI: <reason>              → exit 1   (could not evaluate — treated as non-UI)
 # Detail lines (matched UI files, base ref) follow the verdict.
 #
+# --force-ui: additive override for UX-UI work. When passed, the script still
+# runs every changed path through path_is_ui (the matched-files list is kept for
+# info) but ALWAYS emits the UI verdict + exit 0, even when no path matched. This
+# is how /ship-pr enforces "a UX-UI subtask forces UI even if the path classifier
+# says otherwise" (e.g. an i18n-only diff under messages/*.json). Path-based
+# classification stays the default; this only ever turns a NON_UI verdict into UI.
+#
 # Renames are evaluated with --no-renames (full add+delete) so a moved
 # component still classifies as UI. Mirrors ci-skip-eval.sh's diff handling.
 
 set -u
 
 BASE_OVERRIDE=""
+FORCE_UI=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --base) BASE_OVERRIDE="${2:-}"; shift 2 ;;
-    *) echo "NON_UI: unknown argument '$1' (usage: ui-diff-eval.sh [--base <ref>])"; exit 1 ;;
+    --force-ui) FORCE_UI=1; shift ;;
+    *) echo "NON_UI: unknown argument '$1' (usage: ui-diff-eval.sh [--base <ref>] [--force-ui])"; exit 1 ;;
   esac
 done
 
@@ -73,6 +82,13 @@ while IFS=$'\t' read -r _added _deleted path; do
 done <<< "$DIFF"
 
 if [ "${#UI_FILES[@]}" -eq 0 ]; then
+  if [ "$FORCE_UI" -eq 1 ]; then
+    # UX-UI subtask override: no path matched, but UI is forced.
+    echo "UI"
+    echo "  base: $DIFF_BASE"
+    echo "  forced: UX-UI subtask override (no path-matched UI files)"
+    exit 0
+  fi
   echo "NON_UI"
   echo "  base: $DIFF_BASE"
   echo "  no UI source files changed"
@@ -81,6 +97,7 @@ fi
 
 echo "UI"
 echo "  base: $DIFF_BASE"
+[ "$FORCE_UI" -eq 1 ] && echo "  forced: UX-UI subtask override"
 echo "  ui files: ${#UI_FILES[@]}"
 for f in "${UI_FILES[@]}"; do
   echo "  - $f"

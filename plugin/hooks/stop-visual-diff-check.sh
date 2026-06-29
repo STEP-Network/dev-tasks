@@ -17,6 +17,14 @@
 #   active-task.json visualDiff.skipReason  (an explicit, recorded skip)
 # before the session may stop. /ship-pr Phase 6.8 writes exactly those fields.
 #
+# UX-UI subtask override: "UI" here is not only the path classifier's verdict.
+# A task carrying a UX-UI-typed subtask (or an explicit visualDiff.forceUi flag
+# recorded by /ship-pr) forces the UI verdict even when the diff is NON_UI by
+# path — e.g. an i18n-only diff (messages/*.json) on UX-UI work. This mirrors
+# ui-diff-eval.sh --force-ui and makes the override real, not skill-prose. The
+# subtask types come from active-task.json (written by /pickup-task), so this
+# gate enforces independently of whether /ship-pr judged the override correctly.
+#
 # Honest caveat: visualDiff.skipReason is self-attested (the agent writes the
 # string; the PR body carries the same note as the human-visible audit). This
 # hook makes the omission visible and forces a deliberate, recorded decision —
@@ -98,18 +106,39 @@ if [ -f "$CONFIG" ]; then
   esac
 fi
 
-# Classify the branch diff deterministically. NON_UI → pass-through.
-EVAL_SCRIPT="$(dirname "${BASH_SOURCE[0]}")/../scripts/ui-diff-eval.sh"
-if [ ! -x "$EVAL_SCRIPT" ] && [ ! -f "$EVAL_SCRIPT" ]; then
-  # Classifier missing — can't determine UI-ness, fail open.
-  exit 0
-fi
+# UX-UI subtask override: a UX-UI-typed subtask in active-task.json (or an
+# explicit visualDiff.forceUi flag from /ship-pr) forces the UI verdict even when
+# the path classifier would say NON_UI. Derived locally from the validated state
+# file (path via env var — no shell interpolation of JSON content).
+FORCE_UI=$(STATE_FILE_PATH="$STATE_FILE" python3 <<'PY' 2>/dev/null
+import json, os
+with open(os.environ['STATE_FILE_PATH']) as f:
+    state = json.load(f)
+forced = bool((state.get('visualDiff') or {}).get('forceUi') is True)
+for st in (state.get('subtasks') or []):
+    if isinstance(st, dict) and str(st.get('type', '')).strip().upper() == 'UX-UI':
+        forced = True
+        break
+print("YES" if forced else "NO")
+PY
+)
 
-if ( cd "$PROJECT_ROOT" 2>/dev/null && bash "$EVAL_SCRIPT" >/dev/null 2>&1 ); then
-  : # exit 0 from ui-diff-eval.sh == UI verdict → keep checking below
+if [ "$FORCE_UI" = "YES" ]; then
+  : # UX-UI override → treat as UI regardless of path classifier; require a record.
 else
-  # NON_UI (exit 1) or eval error → pass-through (non-UI work isn't gated).
-  exit 0
+  # Classify the branch diff deterministically. NON_UI → pass-through.
+  EVAL_SCRIPT="$(dirname "${BASH_SOURCE[0]}")/../scripts/ui-diff-eval.sh"
+  if [ ! -x "$EVAL_SCRIPT" ] && [ ! -f "$EVAL_SCRIPT" ]; then
+    # Classifier missing — can't determine UI-ness, fail open.
+    exit 0
+  fi
+
+  if ( cd "$PROJECT_ROOT" 2>/dev/null && bash "$EVAL_SCRIPT" >/dev/null 2>&1 ); then
+    : # exit 0 from ui-diff-eval.sh == UI verdict → keep checking below
+  else
+    # NON_UI (exit 1) or eval error → pass-through (non-UI work isn't gated).
+    exit 0
+  fi
 fi
 
 # UI diff detected. Require a visual-diff record: routes captured OR an
@@ -136,10 +165,16 @@ TASK_NAME=$(jq -r '.taskName // "(unnamed)"' "$STATE_FILE" 2>/dev/null)
 
 echo "BLOCKED: UI changed on this branch but task #$TASK_ID '$TASK_NAME' has no visual-diff record."
 echo ""
-echo "This branch changed UI source files (components / app routes / stylesheets /"
-echo "email templates), but .claude/active-task.json records neither a captured"
-echo "before-pass route list (visualDiff.routes) nor an explicit skip"
-echo "(visualDiff.skipReason). The Monday 'Visual Changes' doc would ship empty."
+if [ "$FORCE_UI" = "YES" ]; then
+  echo "This task carries a UX-UI subtask (or visualDiff.forceUi), which forces UI"
+  echo "treatment even if the diff is NON_UI by path (e.g. an i18n-only change)."
+else
+  echo "This branch changed UI source files (components / app routes / stylesheets /"
+  echo "email templates)."
+fi
+echo "But .claude/active-task.json records neither a captured before-pass route"
+echo "list (visualDiff.routes) nor an explicit skip (visualDiff.skipReason)."
+echo "The Monday 'Visual Changes' doc would ship empty."
 echo ""
 echo "To unblock, do ONE of:"
 echo "  1. Run /ship-pr Phase 6.8 (VisualDiff BEFORE pass): screenshot the changed"

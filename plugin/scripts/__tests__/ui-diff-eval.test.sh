@@ -91,6 +91,30 @@ OUT=$( (cd "$TMP" && bash "$EVAL" --base main) ); RC=$?
 assert "mixed change → exit 0" "$RC" "0"
 rm -rf "$TMP"
 
+# Case E: i18n-only diff (messages/*.json) → NON_UI by path, but UI under --force-ui.
+TMP=$(make_repo)
+mkdir -p "$TMP/messages"
+echo '{"hello":"world"}' > "$TMP/messages/en.json"
+git -C "$TMP" add -A && git -C "$TMP" commit -q -m "i18n change #1"
+OUT=$( (cd "$TMP" && bash "$EVAL" --base main) ); RC=$?
+assert "i18n-only change → exit 1 (NON_UI)" "$RC" "1"
+assert_contains "i18n verdict NON_UI" "$OUT" "NON_UI"
+OUT=$( (cd "$TMP" && bash "$EVAL" --base main --force-ui) ); RC=$?
+assert "i18n-only + --force-ui → exit 0 (UI)" "$RC" "0"
+assert_contains "forced verdict UI" "$OUT" "UI"
+assert_contains "forced note present" "$OUT" "forced: UX-UI subtask override"
+rm -rf "$TMP"
+
+# Case F: --force-ui with a real UI file → still UI, lists the file + forced note.
+TMP=$(make_repo)
+echo "export const B = () => null" > "$TMP/src/components/Button.tsx"
+git -C "$TMP" add -A && git -C "$TMP" commit -q -m "ui + force #1"
+OUT=$( (cd "$TMP" && bash "$EVAL" --base main --force-ui) ); RC=$?
+assert "force-ui + UI file → exit 0" "$RC" "0"
+assert_contains "force-ui lists the component" "$OUT" "src/components/Button.tsx"
+assert_contains "force-ui note present" "$OUT" "forced: UX-UI subtask override"
+rm -rf "$TMP"
+
 echo ""
 echo "==================================================="
 echo "ui-diff-eval tests: $PASS_COUNT passed, $FAIL_COUNT failed"
