@@ -90,12 +90,13 @@ A task ready-to-start today may have been silently superseded by a recently-merg
         "selfReviewPassedAt": null,
         "sprintId": "...", "unplanned": false,
         "subtasks": [
-          {"id": "...", "name": "...", "status": "in_progress", "mondayStartedDate": "..."},
-          {"id": "...", "name": "...", "status": "pending"}
+          {"id": "...", "name": "...", "type": "UX-UI", "status": "in_progress", "mondayStartedDate": "..."},
+          {"id": "...", "name": "...", "type": "Backend", "status": "pending"}
         ]
       }
       ```
     - `claimToken` is REQUIRED by `task-state-guard.sh` — without it, the edit guard HARD BLOCKS all file edits. The token proves the task was claimed via MCP, not manually.
+    - **`type` on each subtask (v0.35.0+)**: record the Monday subtask type (`getTask` returns `subtask.type` — `To Do`/`Database`/`Backend`/`Documentation`/`Test`/`UX-UI`). A `UX-UI` subtask forces the VisualDiff gate to treat the change as UI even when the path classifier says NON_UI (e.g. an i18n-only diff) — `stop-visual-diff-check` reads these types directly, so the override enforces independently of `/ship-pr`. Omitting `type` simply means "no override" (older state files stay valid).
     - **`ciGate` mirror (v0.26.0)**: the `claimTask` response includes the task's CI Gate. If it's `Skip (human)` / `Skip (agent)`, FIRST run `bash $CLAUDE_PLUGIN_ROOT/scripts/emit-state-marker.sh ciGate`, then include `"ciGate": "<value>"` in the state file (`protect-active-task-state` blocks an unmarked Skip write). If the gate is `Full`/empty, omit the field. The mirror is the offline fallback for `stop-ci-green-check` — the live Monday column always wins when reachable.
     - Optional fields written by later skills (do NOT initialize here; absence is the correct default state):
       - `parentStatus` — mirror of Monday parent status. Written by `/ship-pr` Phase 6.7 after the `Waiting for UAT` transition. Read by `stop-waiting-for-uat-stage` to avoid false-positives.

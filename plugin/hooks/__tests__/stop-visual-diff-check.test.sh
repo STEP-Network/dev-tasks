@@ -60,6 +60,7 @@ run_hook() { ( cd "$TMP" && CLAUDE_PROJECT_DIR="$TMP" "$HOOK" <<<"$INPUT" 2>&1 )
 
 commit_ui() { echo "export const B = () => null" > "$TMP/src/components/Button.tsx"; git -C "$TMP" add -A; git -C "$TMP" commit -q -m "ui #1"; }
 commit_nonui() { echo "changed" > "$TMP/src/lib/util.ts"; git -C "$TMP" add -A; git -C "$TMP" commit -q -m "logic #1"; }
+commit_i18n() { mkdir -p "$TMP/messages"; echo '{"hello":"world"}' > "$TMP/messages/en.json"; git -C "$TMP" add -A; git -C "$TMP" commit -q -m "i18n #1"; }
 
 # Test 1: hook NOT enabled (no config) → pass-through.
 rm -f "$CONFIG"; write_state '{"taskId":"1"}'
@@ -128,6 +129,31 @@ assert "CI relaxation → pass" "$RC" "0"
 # Test 13: no active-task.json → pass-through.
 write_config; rm_state
 OUT=$(run_hook); assert "no state file → pass" "$?" "0"
+
+# ---------- UX-UI override: forces UI even on a NON_UI-by-path diff ----------
+# Fresh branch with ONLY an i18n diff (messages/en.json → NON_UI by path).
+git -C "$TMP" checkout -q main 2>/dev/null
+git -C "$TMP" checkout -q -b feat-i18n 2>/dev/null
+commit_i18n
+write_config
+i18n_hook() { ( cd "$TMP" && CLAUDE_PROJECT_DIR="$TMP" "$HOOK" <<<"$INPUT" 2>&1 ); }
+
+# Test 14: i18n-only diff + UX-UI subtask, no visualDiff record → BLOCK (forced UI).
+write_state '{"taskId":"77","taskName":"i18n copy","subtasks":[{"id":"1","name":"translate","type":"UX-UI","status":"in_progress"}]}'
+OUT=$(i18n_hook); assert "i18n + UX-UI subtask + no record → BLOCK" "$?" "2"
+assert_contains "BLOCK notes UX-UI override" "$OUT" "UX-UI"
+
+# Test 15: same diff + UX-UI subtask + skipReason recorded → pass.
+write_state '{"taskId":"77","subtasks":[{"id":"1","name":"translate","type":"UX-UI","status":"in_progress"}],"visualDiff":{"skipReason":"copy-only, no rendered route changed"}}'
+OUT=$(i18n_hook); assert "i18n + UX-UI subtask + skipReason → pass" "$?" "0"
+
+# Test 16: same diff + visualDiff.forceUi flag (no UX-UI subtask), no record → BLOCK.
+write_state '{"taskId":"77","visualDiff":{"forceUi":true}}'
+OUT=$(i18n_hook); assert "i18n + forceUi flag + no record → BLOCK" "$?" "2"
+
+# Test 17: same diff + only a non-UI subtask (Backend) → pass (no override, NON_UI by path).
+write_state '{"taskId":"77","subtasks":[{"id":"1","name":"api","type":"Backend","status":"in_progress"}]}'
+OUT=$(i18n_hook); assert "i18n + Backend subtask → pass (no override)" "$?" "0"
 
 echo ""
 echo "==================================================="
