@@ -74,7 +74,7 @@ The release ceremony FFs `$hotfixBase` from `$defaultBase`, applies prod migrati
 **Pre-flight verification** — refuse if any fail:
 1. Working tree clean: `git status --porcelain` empty.
 2. On `$defaultBase` with latest pull: `git checkout $defaultBase && git pull origin $defaultBase`.
-3. All linked tasks `Pending Deploy to Prod` (or `Done` from prior pass) with `actualHours`. Under staging-as-base, `Done` is set by tag-triggered Action.
+3. All linked tasks `Pending Deploy to Prod` (or `Done` from prior pass) with `actualHours`. Under staging-as-base, `Done` is set by the `complete-released-tasks` step if the consumer has adopted it (opt-in — see Step 6 below, not automatic just from installing the plugin).
 4. CI on `$defaultBase` green: `gh run list --branch $defaultBase --workflow ci.yml --limit 1`.
 5. `$hotfixBase` ancestor of `$defaultBase`: `git merge-base --is-ancestor origin/$hotfixBase origin/$defaultBase`.
 
@@ -86,7 +86,7 @@ If any pre-flight fails: stop, report, do NOT proceed.
 8. FF `$hotfixBase` from `$defaultBase`: `git push origin $defaultBase:$hotfixBase` (remote-only FF). If `$defaultBase === $hotfixBase`, skip. On non-fast-forward error: `$hotfixBase` diverged (hotfix landed there but not merged back) — stop, ask user, do NOT force-push.
 9. Apply migrations to production: `pnpm migrate:prod` against `DATABASE_URL_UNPOOLED` set to prod Neon. If fails: prod schema out-of-sync with `$hotfixBase` HEAD — roll back via `git push origin <prev-sha>:$hotfixBase --force-with-lease` (only if no intervening commits) OR fix forward. Escalate.
 10. `git tag -a v{versionNumber} -m "Release v{versionNumber}: {name}" && git push origin v{versionNumber}`.
-11. Tag push triggers `.github/workflows/release.yml`: Monday status → Released, GitHub Release, ISR revalidation.
+11. Tag push triggers `.github/workflows/release.yml`: Monday status → Released, GitHub Release, ISR revalidation. If the consumer has adopted `plugin/templates/github-workflows/complete-released-tasks-step.yml.example`, the same tag push also flips every task at `Pending Deploy to Prod` under this product to `Done` + posts a release note (same logic, runnable locally, at `plugin/scripts/complete-released-tasks.ts`). This is opt-in per consumer — it does not happen just because the plugin is installed.
 12. Do NOT update Monday status manually — tag push is the single trigger.
 
 ### Step 7: Verify release

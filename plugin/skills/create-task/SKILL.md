@@ -90,6 +90,6 @@ MCP rejects unless ALL present:
 1. `Ready to Start` → `/pickup-task` claims → `In Progress`
 2. `In Progress` → all subtasks `Done` + `/ship-pr` generates UAT doc → `Waiting for UAT`
 3. `Waiting for UAT` → human UAT signoff → `Pending Deploy to Prod`
-4. `Pending Deploy to Prod` → `/release-version` → `Done`
+4. `Pending Deploy to Prod` → `/release-version` cuts the release → `complete-released-tasks` sweep (opt-in per consumer) → `Done`
 
 See CLAUDE.md "Task Management Lifecycle" for the full table.

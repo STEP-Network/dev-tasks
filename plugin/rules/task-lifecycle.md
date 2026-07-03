@@ -10,7 +10,7 @@ Needs Refinement → Ready to Start → In Progress → Waiting for UAT → Pend
                                           └─→ Stuck (escapes on blockers)
 ```
 
-**Never set status to `Done` directly** — Monday automation does it when the last subtask flips Done (default flow), `/release-version` does (release ceremony), or `/ship-pr` Phase 10 does (hotfix-to-`main` only).
+**Never set status to `Done` directly** — Monday automation does it when the last subtask flips Done (default flow), the `complete-released-tasks` release-completion sweep does (release ceremony — see below), or `/ship-pr` Phase 10 does (hotfix-to-`main` only).
 
 | Status | Set by | Gate on `updateTask` |
 |---|---|---|
@@ -19,7 +19,7 @@ Needs Refinement → Ready to Start → In Progress → Waiting for UAT → Pend
 | **In Progress** | `claimTask` | Task in active sprint; all `dependencyIds` (column `dependency_mm0pwbxn`) `Done` |
 | **Waiting for UAT** | `/ship-pr` Phase 6.7 after merge + staging deploy `READY` | All subtasks `Done` + UAT doc set via `createTaskUatDoc` on column `doc_mm3adfdg` (warns on missing GitHub / branch / demo / PR links). Client-side `staging-deploy-ready-gate` also requires the post-merge deploy verified `READY` (relaxed under CI) |
 | **Pending Deploy to Prod** | Human after UAT sign-off on `test.polads.eu` | All subtasks `Done` |
-| **Done** | `/release-version` (default) or `/ship-pr` Phase 10 (hotfix-to-`main` only) | Agents never set directly under staging flow |
+| **Done** | The `complete-released-tasks` release-completion sweep (default — see below) or `/ship-pr` Phase 10 (hotfix-to-`main` only) | Agents never set directly under staging flow |
 | **Stuck** | Any skill, on unresolvable blocker | None |
 
 ## Subtask types
@@ -77,7 +77,7 @@ To clear a misfiled / resolved dependency: `updateTask(itemId, dependencyIds: []
 - `/ship-pr` auto-generates UAT doc, sets `demoUrl` + `prLink` + `branch` + `githubLink`, transitions to `Waiting for UAT`.
 - Agent auto-merges to `staging` when CI green + reviewAddressed set (`/ship-pr` Phase 6.6, effective 2026-05-13). Merge triggers Vercel rebuild of `test.polads.eu`.
 - Task stays at `Waiting for UAT`. Agent continues to next session-scoped task — does NOT wait for human UAT.
-- Human signs off → `Pending Deploy to Prod` → `/release-version` cuts release → task `Done` via tag-triggered GitHub Action.
+- Human signs off → `Pending Deploy to Prod` → `/release-version` cuts release (tags, GitHub Release, changelog) → the consumer's tag-triggered `release.yml` runs the `complete-released-tasks` step (`plugin/templates/github-workflows/complete-released-tasks-step.yml.example`), or a local run of `plugin/scripts/complete-released-tasks.ts`, flips the task to `Done`, and posts a release note. **Opt-in per consumer** — copy the template into your own `release.yml`; `/release-version` itself deliberately never sets task status (see `release-version/SKILL.md` Step 6).
 - Version linkage: `listVersions` → link task's epic to target version.
 
 **After finishing — hotfix flow (branched from `main`)**:
