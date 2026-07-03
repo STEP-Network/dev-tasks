@@ -26,14 +26,19 @@ repo ships the same logic as a tested, reusable script at
    updates the Monday Version item to `Released` (it already POSTs to
    `https://api.monday.com/v2` using a `MONDAY_API_TOKEN` secret).
 2. Paste the step from `complete-released-tasks-step.yml.example` immediately
-   after it, in the same job.
-3. Set `MONDAY_PRODUCT_ID` in the pasted step to this project's actual Monday
-   Products-board item ID (same value as `.claude/project-config.json` ->
-   `monday.productId`, if this repo also runs the dev-tasks plugin locally).
-   Find it via the plugin's `listProducts` tool if you don't have it handy.
-4. Confirm `MONDAY_API_TOKEN` is already available as a repo/environment
+   after it, in the same job — unmodified. It's product-agnostic: at
+   runtime it reads `monday.productId` straight from this repo's own
+   checked-out `.claude/project-config.json`, the same file/value
+   `plugin/scripts/complete-released-tasks.ts`'s `resolveDefaultProductId()`
+   already defaults from for local/interactive runs. Every dev-tasks plugin
+   consumer already has that file, so there's nothing to hardcode per-repo.
+3. Confirm `MONDAY_API_TOKEN` is already available as a repo/environment
    secret (it is, if the version-status step above already uses it) — no new
    secret to add.
+4. Optional: only if this repo doesn't run the dev-tasks plugin locally (no
+   `.claude/project-config.json`), or you want this one workflow to target a
+   different product, add a `MONDAY_PRODUCT_ID` repo/environment secret to
+   override the auto-resolved value.
 5. Push a real (or test) tag and confirm the step's log shows either
    `"Completed task #... "` lines or the clean `"nothing to complete"` /
    `"No epics found"` no-op message.

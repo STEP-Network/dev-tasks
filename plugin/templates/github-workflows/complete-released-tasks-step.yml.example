@@ -17,12 +17,19 @@
 # Released) in .github/workflows/release.yml — same job, same secrets.
 #
 # SETUP:
-#   1. Copy the step below into release.yml.
-#   2. Set MONDAY_PRODUCT_ID to this project's own Monday Products-board
-#      item ID (same value as this repo's .claude/project-config.json ->
-#      monday.productId, if this repo also uses the dev-tasks plugin).
-#   3. Confirm the job already exports MONDAY_API_TOKEN as a secret (it
+#   1. Copy the step below into release.yml. Nothing to fill in — it's
+#      product-agnostic. The product ID is resolved at runtime from THIS
+#      repo's own checked-out .claude/project-config.json -> monday.productId
+#      (the same file/value plugin/scripts/complete-released-tasks.ts itself
+#      defaults from — see resolveDefaultProductId there). Every dev-tasks
+#      plugin consumer already has that file, so there is nothing consumer-
+#      specific to hardcode into the workflow.
+#   2. Confirm the job already exports MONDAY_API_TOKEN as a secret (it
 #      does, if the version-status step above already uses it).
+#   3. Optional override: set a MONDAY_PRODUCT_ID repo/environment secret to
+#      skip the project-config.json read entirely (e.g. a consumer that
+#      doesn't run the dev-tasks plugin locally, or wants to point this one
+#      workflow at a different product). Leave it unset for the normal case.
 #
 # WHY PRODUCT-SCOPED (not optional): the Tasks board (5091706356) is ONE
 # board shared across every product in the workspace. Sweeping it unscoped
@@ -64,16 +71,29 @@
       - name: Complete released tasks on Monday.com
         env:
           MONDAY_API_TOKEN: ${{ secrets.MONDAY_API_TOKEN }}
-          # Monday Products-board item ID for THIS project. Required —
-          # never sweep the shared Tasks board unscoped. Find it via the
-          # dev-tasks plugin's listProducts tool, or this repo's own
-          # .claude/project-config.json -> monday.productId.
-          MONDAY_PRODUCT_ID: "0000000000" # <-- replace with this project's real Products-board item ID
+          # Optional override — see the "Optional override" setup note
+          # above. Leave unset to auto-resolve from project-config.json.
+          MONDAY_PRODUCT_ID: ${{ secrets.MONDAY_PRODUCT_ID }}
         run: |
           VERSION="${{ steps.version.outputs.version }}"
 
+          # Step 0: resolve the product ID. An explicit MONDAY_PRODUCT_ID
+          # secret wins if set; otherwise read monday.productId from THIS
+          # repo's own checked-out .claude/project-config.json — the same
+          # source plugin/scripts/complete-released-tasks.ts's
+          # resolveDefaultProductId() reads for local/interactive runs. Never
+          # sweep the shared Tasks board unscoped.
+          if [ -z "$MONDAY_PRODUCT_ID" ]; then
+            MONDAY_PRODUCT_ID=$(jq -r '.monday.productId // empty' .claude/project-config.json 2>/dev/null)
+          fi
+
+          if [ -z "$MONDAY_PRODUCT_ID" ]; then
+            echo "::warning::No MONDAY_PRODUCT_ID secret and no .claude/project-config.json monday.productId — skipping release-task completion sweep"
+            exit 0
+          fi
+
           # Step 1: resolve this product's epic IDs. Tasks can't be filtered
-          # by product directly (mirror column) -- scope via epic instead,
+          # by product directly (mirror column) — scope via epic instead,
           # same two-hop pattern the plugin's own getBacklog tool uses.
           EPICS_QUERY=$(jq -n --arg productId "$MONDAY_PRODUCT_ID" \
             '{query: "{ boards(ids: 5091706354) { items_page(limit: 500, query_params: { rules: [{ column_id: \"board_relation_mm0ms7sp\", compare_value: [\($productId)], operator: any_of }] }) { items { id } } } }"}')
