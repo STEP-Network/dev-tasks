@@ -50,9 +50,14 @@ describe("findPendingDeployTasks", () => {
     expect(tasks).toEqual([{ id: 3000000001, name: "Some shipped task" }]);
     const [query] = executeMondayQueryMock.mock.calls[0];
     expect(query).toContain("5091706356"); // BOARDS.TASKS
-    expect(query).toContain("task_status"); // TASK_COLUMNS.status
     expect(query).toContain("task_epic"); // TASK_COLUMNS.epic
     expect(query).toContain("2924897116"); // epic scoping
+    // Pin the resolved numeric status index (not just the column id) so a
+    // future edit that swaps in a different-but-still-valid TASK_STATUS key
+    // (e.g. "Waiting for UAT") — which validateMapping would NOT catch,
+    // since it's a real key — fails this test instead of silently changing
+    // what the sweep matches.
+    expect(query).toMatch(/column_id:\s*"task_status",\s*compare_value:\s*\[2\]/);
   });
 
   it("returns an empty array when no epics are given (never sweeps the whole board unscoped)", async () => {
@@ -106,6 +111,25 @@ describe("completeTask", () => {
     // every embedded `"` backslash-escaped — so the payload can never
     // terminate the GraphQL string literal early and inject sibling operations.
     expect(updateMutation).toContain(JSON.stringify(expectedBody));
+  });
+
+  it("reports notePosted:false (not a thrown error) when the status flip succeeds but posting the note fails", async () => {
+    executeMondayQueryMock
+      .mockResolvedValueOnce({}) // status mutation succeeds
+      .mockRejectedValueOnce(new Error("Monday API error: 500")); // note mutation fails
+
+    const result = await completeTask(3000000001, "v0.32.0");
+
+    expect(result).toEqual({
+      statusFlipped: true,
+      notePosted: false,
+      noteError: "Monday API error: 500",
+    });
+  });
+
+  it("reports notePosted:true when both mutations succeed", async () => {
+    const result = await completeTask(3000000001, "v0.32.0");
+    expect(result).toEqual({ statusFlipped: true, notePosted: true });
   });
 });
 
@@ -164,6 +188,26 @@ describe("run", () => {
     expect(summary.candidateCount).toBe(2);
     expect(summary.results).toEqual([
       { taskId: 3000000001, taskName: "Task A", outcome: "failed", error: "Monday API error: 500" },
+      { taskId: 3000000002, taskName: "Task B", outcome: "completed" },
+    ]);
+  });
+
+  it("distinguishes a status-flip-succeeded-but-note-failed task from a true failure", async () => {
+    executeMondayQueryMock
+      .mockResolvedValueOnce(EPICS_PAGE)
+      .mockResolvedValueOnce(TWO_TASKS_PAGE)
+      .mockResolvedValueOnce({}) // task A status mutation succeeds
+      .mockRejectedValueOnce(new Error("Monday API error: 500")) // task A note fails
+      .mockResolvedValueOnce({}) // task B status mutation
+      .mockResolvedValueOnce({}); // task B note
+
+    const summary = await run({ productId: 2924964797 });
+
+    // Task A must NOT be reported as "failed" -- it IS Done on the board; a
+    // retry sweep would find nothing (status filter excludes it) and silently
+    // never post its note, so this needs its own distinguishable outcome.
+    expect(summary.results).toEqual([
+      { taskId: 3000000001, taskName: "Task A", outcome: "completed-without-note", error: "Monday API error: 500" },
       { taskId: 3000000002, taskName: "Task B", outcome: "completed" },
     ]);
   });

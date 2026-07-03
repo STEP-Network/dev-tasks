@@ -65,16 +65,31 @@ export async function findPendingDeployTasks(
   return items.map((item: any) => ({ id: Number(item.id), name: String(item.name) }));
 }
 
+export interface CompleteTaskResult {
+  statusFlipped: boolean;
+  notePosted: boolean;
+  noteError?: string;
+}
+
 /**
  * Flip a single task to Done + post a release note. Two sequential mutations
  * (not one `change_multiple_column_values` + `create_update` combo — Monday's
  * API doesn't support compositing unrelated mutations against different
- * root fields in a single write here). Caller decides fail-soft handling.
+ * root fields in a single write here).
+ *
+ * The status mutation is the one that matters for idempotency/correctness —
+ * if it throws, the caller's fail-soft wrapper treats this task as untouched
+ * and reports a true failure. The note-posting mutation is best-effort: if
+ * it fails AFTER the status flip already succeeded, the task IS Done on the
+ * board (a retry sweep would find nothing — the status filter excludes it),
+ * so that must never be reported the same way as a true failure. Reporting
+ * `notePosted: false` lets the caller distinguish "Done but missing its
+ * note" from "still stuck, needs retry."
  */
 export async function completeTask(
   taskId: number,
   releaseId?: string,
-): Promise<void> {
+): Promise<CompleteTaskResult> {
   const columnValues = { [TASK_COLUMNS.status]: { label: "Done" } };
   const statusMutation = `
     mutation {
@@ -103,13 +118,22 @@ export async function completeTask(
       }
     }
   `;
-  await executeMondayQuery<unknown>(updateMutation);
+  try {
+    await executeMondayQuery<unknown>(updateMutation);
+    return { statusFlipped: true, notePosted: true };
+  } catch (error) {
+    return {
+      statusFlipped: true,
+      notePosted: false,
+      noteError: error instanceof Error ? error.message : String(error),
+    };
+  }
 }
 
 export interface CompletedTaskResult {
   taskId: number;
   taskName: string;
-  outcome: "completed" | "failed";
+  outcome: "completed" | "completed-without-note" | "failed";
   error?: string;
 }
 
@@ -136,8 +160,17 @@ export async function run(opts: { productId: number; releaseId?: string }): Prom
   const results: CompletedTaskResult[] = [];
   for (const task of candidates) {
     try {
-      await completeTask(task.id, releaseId);
-      results.push({ taskId: task.id, taskName: task.name, outcome: "completed" });
+      const result = await completeTask(task.id, releaseId);
+      if (result.notePosted) {
+        results.push({ taskId: task.id, taskName: task.name, outcome: "completed" });
+      } else {
+        results.push({
+          taskId: task.id,
+          taskName: task.name,
+          outcome: "completed-without-note",
+          error: result.noteError,
+        });
+      }
     } catch (error) {
       results.push({
         taskId: task.id,
@@ -213,9 +246,11 @@ async function main() {
   );
   for (const r of summary.results) {
     if (r.outcome === "completed") {
-      process.stdout.write(`  done    #${r.taskId} ${r.taskName}\n`);
+      process.stdout.write(`  done            #${r.taskId} ${r.taskName}\n`);
+    } else if (r.outcome === "completed-without-note") {
+      process.stdout.write(`  done (no note)  #${r.taskId} ${r.taskName} — ${r.error}\n`);
     } else {
-      process.stdout.write(`  FAILED  #${r.taskId} ${r.taskName} — ${r.error}\n`);
+      process.stdout.write(`  FAILED          #${r.taskId} ${r.taskName} — ${r.error}\n`);
     }
   }
   const failures = summary.results.filter((r) => r.outcome === "failed");

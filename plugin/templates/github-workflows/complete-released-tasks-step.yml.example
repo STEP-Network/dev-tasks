@@ -111,6 +111,11 @@
             TASK_ID=$(echo "$TASK_ROW" | jq -r '.id')
             TASK_NAME=$(echo "$TASK_ROW" | jq -r '.name')
 
+            if ! [[ "$TASK_ID" =~ ^[0-9]+$ ]]; then
+              echo "::warning::Skipping malformed task id from Monday response: '$TASK_ID'"
+              continue
+            fi
+
             STATUS_MUTATION=$(jq -n --arg taskId "$TASK_ID" \
               '{query: "mutation { change_multiple_column_values(board_id: 5091706356, item_id: \($taskId), column_values: \"{\\\"task_status\\\": {\\\"label\\\": \\\"Done\\\"}}\") { id } }"}')
 
@@ -130,11 +135,22 @@
             UPDATE_MUTATION=$(jq -n --arg taskId "$TASK_ID" --arg body "$NOTE_BODY" \
               '{query: "mutation { create_update(item_id: \($taskId), body: \($body|tojson)) { id } }"}')
 
-            curl -s -X POST https://api.monday.com/v2 \
+            UPDATE_RESPONSE=$(curl -s -X POST https://api.monday.com/v2 \
               -H "Content-Type: application/json" \
               -H "Authorization: $MONDAY_API_TOKEN" \
               -H "API-Version: 2023-10" \
-              -d "$UPDATE_MUTATION" > /dev/null
+              -d "$UPDATE_MUTATION")
+
+            UPDATE_ERRORS=$(echo "$UPDATE_RESPONSE" | jq -r '.errors // empty')
+            if [ -n "$UPDATE_ERRORS" ] && [ "$UPDATE_ERRORS" != "null" ]; then
+              # The status flip above already succeeded -- the task IS Done on
+              # the board. A retry sweep will find nothing (the status filter
+              # excludes it), so this must be a distinct, visible warning, not
+              # silently swallowed and not conflated with the task never
+              # having completed at all.
+              echo "::warning::Task $TASK_ID ($TASK_NAME) flipped to Done but posting its release note failed: $UPDATE_ERRORS"
+              continue
+            fi
 
             echo "Completed task $TASK_ID ($TASK_NAME)"
           done

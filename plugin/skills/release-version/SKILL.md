@@ -74,7 +74,7 @@ The release ceremony FFs `$hotfixBase` from `$defaultBase`, applies prod migrati
 **Pre-flight verification** — refuse if any fail:
 1. Working tree clean: `git status --porcelain` empty.
 2. On `$defaultBase` with latest pull: `git checkout $defaultBase && git pull origin $defaultBase`.
-3. All linked tasks `Pending Deploy to Prod` (or `Done` from prior pass) with `actualHours`. Under staging-as-base, `Done` is set by tag-triggered Action.
+3. All linked tasks `Pending Deploy to Prod` (or `Done` from prior pass) with `actualHours`. Under staging-as-base, `Done` is set by the `complete-released-tasks` step if the consumer has adopted it (opt-in — see Step 6 below, not automatic just from installing the plugin).
 4. CI on `$defaultBase` green: `gh run list --branch $defaultBase --workflow ci.yml --limit 1`.
 5. `$hotfixBase` ancestor of `$defaultBase`: `git merge-base --is-ancestor origin/$hotfixBase origin/$defaultBase`.
 

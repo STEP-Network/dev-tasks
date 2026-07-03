@@ -55,7 +55,7 @@ Agent flow (`/release-version` Step 1, `/ship-pr` Phase 8 step 25b):
 - **Planned** — created, epics linked, no active work
 - **In Development** — ≥1 linked task is In Progress / Waiting for UAT / Pending Deploy to Prod
 - **Release Candidate** — all linked tasks `Pending Deploy to Prod`, pending `/release-version`
-- **Released** — tag created, GH Action triggered, linked tasks → `Done`, Release Summary finalized
+- **Released** — tag created, GH Action triggered (Version status → Released, GitHub Release, ISR revalidation), Release Summary finalized. Linked tasks flip to `Done` too, but only if the consumer has adopted the opt-in `complete-released-tasks` step (`plugin/templates/github-workflows/`) — not automatic just from this Version-status transition. See `task-lifecycle.md`.
 
 ### Task status ↔ release ceremony
 
