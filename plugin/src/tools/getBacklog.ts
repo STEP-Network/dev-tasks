@@ -52,7 +52,9 @@ const ITEMS_PAGE_FRAGMENT = `
 
 // Resolve a product enum to the list of epic IDs linked to that product on Monday.
 // Tasks can't be filtered by product directly (mirror column) so we filter via epic.
-async function resolveProductEpicIds(productItemId: number): Promise<number[]> {
+// Exported: also reused by plugin/scripts/complete-released-tasks.ts, which needs
+// the same product -> epics resolution for its own Tasks-board scoping.
+export async function resolveProductEpicIds(productItemId: number): Promise<number[]> {
   const query = `
     query {
       boards(ids: [${BOARDS.EPICS}]) {

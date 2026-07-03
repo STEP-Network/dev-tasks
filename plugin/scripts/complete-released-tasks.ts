@@ -19,25 +19,15 @@
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { executeMondayQuery } from "../src/monday-client.ts";
-import { BOARDS, TASK_COLUMNS, EPIC_COLUMNS, TASK_STATUS } from "../src/constants.ts";
+import { BOARDS, TASK_COLUMNS, TASK_STATUS } from "../src/constants.ts";
 import { validateMapping, buildColumnValues } from "../src/tools/utils.ts";
+import { resolveProductEpicIds } from "../src/tools/getBacklog.ts";
 
-export async function resolveProductEpicIds(productId: number): Promise<number[]> {
-  const query = `
-    query {
-      boards(ids: [${BOARDS.EPICS}]) {
-        items_page(limit: 500, query_params: {
-          rules: [{ column_id: "${EPIC_COLUMNS.product}", compare_value: [${productId}], operator: any_of }]
-        }) {
-          items { id }
-        }
-      }
-    }
-  `;
-  const response = await executeMondayQuery<any>(query);
-  const items = response.boards?.[0]?.items_page?.items || [];
-  return items.map((item: any) => Number(item.id));
-}
+// Re-exported (not re-implemented) — getBacklog.ts already resolves
+// product -> epics for the exact same reason (mirror columns aren't
+// server-filterable); a second hand-written copy of that query would be
+// the kind of duplication this codebase's own conventions warn against.
+export { resolveProductEpicIds };
 
 export async function findPendingDeployTasks(
   epicIds: number[],

@@ -52,6 +52,14 @@
 # after any Tasks-board column reconfiguration). The completion MUTATION
 # below writes the target status by `{label: "Done"}`, so a Done write can
 # never drift even if the read-side index does.
+#
+# API-VERSION NOTE: pinned to "2023-10" (not this plugin's own default,
+# "2024-10" in plugin/src/monday-client.ts) to match the exact version the
+# adjacent "Update Monday.com version status" step already uses in this same
+# file — deliberate, not an oversight. Both versions support the operations
+# used here (basic items_page queries, change_multiple_column_values,
+# create_update) identically. If you bump that step's API-Version, bump this
+# one to match for the same reason.
 
       - name: Complete released tasks on Monday.com
         env:
