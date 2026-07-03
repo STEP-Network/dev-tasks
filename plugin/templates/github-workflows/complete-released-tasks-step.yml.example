@@ -75,6 +75,24 @@
           # above. Leave unset to auto-resolve from project-config.json.
           MONDAY_PRODUCT_ID: ${{ secrets.MONDAY_PRODUCT_ID }}
         run: |
+          # GitHub Actions runs `run:` steps with no `shell:` override as
+          # `bash --noprofile --norc -eo pipefail {0}` — errexit ON by
+          # default. Without disabling it, a bare `VAR=$(curl ...)` /
+          # `VAR=$(... | jq ...)` assignment whose command fails (e.g. a
+          # transient DNS/connection/TLS/timeout error hitting the Monday
+          # API) would abort THIS STEP immediately — and since "Create
+          # GitHub Release" / "Trigger ISR cache revalidation" / "Finalize
+          # Sentry release" in a consumer's own release.yml have no
+          # `if: always()`, GitHub Actions would then skip all of them for
+          # the whole release. That's exactly what "NON-BLOCKING BY DESIGN"
+          # above promises can never happen. Scoped to this step only — each
+          # `run:` block is its own subshell invocation, so this cannot leak
+          # into any other step or job. Every failure mode this script
+          # actually cares about is already handled by explicit content
+          # checks below (`-z`/`-n` on parsed API-response fields); this
+          # only stops a raw shell-level abort from pre-empting them.
+          set +e
+
           VERSION="${{ steps.version.outputs.version }}"
 
           # Step 0: resolve the product ID. An explicit MONDAY_PRODUCT_ID
