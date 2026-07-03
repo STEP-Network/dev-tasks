@@ -1,0 +1,140 @@
+# Copy-paste GitHub Actions step: flips this product's "Pending Deploy to
+# Prod" tasks to Done + posts a release note, on every tag push.
+#
+# WHY THIS EXISTS: the dev-tasks plugin's docs used to promise that a
+# tag-triggered GitHub Action would do this automatically. It never did —
+# nothing in a typical release.yml touches the Tasks board, only the
+# Versions board. This step is that missing mechanism, ported to plain
+# curl+jq so it has zero dependency on the plugin's TS module graph (this
+# plugin is private/unpublished — a foreign repo's CI runner can't `import`
+# from it). The plugin repo itself ships the same logic as a tested,
+# reusable TypeScript module at plugin/scripts/complete-released-tasks.ts
+# for local/interactive use; this file is that module's logic re-expressed
+# in the one dependency-free form a consumer's CI can actually run.
+#
+# WHERE TO ADD IT: immediately after your existing "Update Monday.com
+# version status" step (the one that flips the Versions-board item to
+# Released) in .github/workflows/release.yml — same job, same secrets.
+#
+# SETUP:
+#   1. Copy the step below into release.yml.
+#   2. Set MONDAY_PRODUCT_ID to this project's own Monday Products-board
+#      item ID (same value as this repo's .claude/project-config.json ->
+#      monday.productId, if this repo also uses the dev-tasks plugin).
+#   3. Confirm the job already exports MONDAY_API_TOKEN as a secret (it
+#      does, if the version-status step above already uses it).
+#
+# WHY PRODUCT-SCOPED (not optional): the Tasks board (5091706356) is ONE
+# board shared across every product in the workspace. Sweeping it unscoped
+# would flip an unrelated product's tasks to Done just because they also
+# happen to be sitting at "Pending Deploy to Prod" for a totally different,
+# unrelated release. Tasks can't be filtered by product directly (it's a
+# mirror column through the task's Epic) — so this resolves product -> the
+# product's epics -> tasks under those epics, same two-hop pattern the
+# plugin's own getBacklog tool uses server-side.
+#
+# NON-BLOCKING BY DESIGN: by the time this step runs, the release already
+# shipped (the tag is pushed, the GitHub Release + Sentry finalize steps
+# either already ran or are about to). A Monday hiccup here must never fail
+# the job over board bookkeeping — every failure path below warns and
+# continues rather than exiting non-zero, matching the version-status step
+# it follows.
+#
+# KNOWN DRIFT RISK (honest caveat): the numeric `2` below is the "Pending
+# Deploy to Prod" label index from plugin/src/constants.ts's TASK_STATUS map
+# at the time this template was written. Unlike the plugin's own TypeScript
+# tools (which always mutate status by `{label: "..."}` — immune to index
+# drift — this hand-rolled curl+jq step still has to SELECT by the numeric
+# index because Monday's `compare_value` filtering wants the index, not the
+# label text). If that index is ever reassigned on the Tasks board, this
+# step silently stops matching anything (fails safe — it just finds 0
+# candidates — but re-verify the index against plugin/src/constants.ts
+# after any Tasks-board column reconfiguration). The completion MUTATION
+# below writes the target status by `{label: "Done"}`, so a Done write can
+# never drift even if the read-side index does.
+
+      - name: Complete released tasks on Monday.com
+        env:
+          MONDAY_API_TOKEN: ${{ secrets.MONDAY_API_TOKEN }}
+          # Monday Products-board item ID for THIS project. Required —
+          # never sweep the shared Tasks board unscoped. Find it via the
+          # dev-tasks plugin's listProducts tool, or this repo's own
+          # .claude/project-config.json -> monday.productId.
+          MONDAY_PRODUCT_ID: "0000000000" # <-- replace with this project's real Products-board item ID
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+
+          # Step 1: resolve this product's epic IDs. Tasks can't be filtered
+          # by product directly (mirror column) -- scope via epic instead,
+          # same two-hop pattern the plugin's own getBacklog tool uses.
+          EPICS_QUERY=$(jq -n --arg productId "$MONDAY_PRODUCT_ID" \
+            '{query: "{ boards(ids: 5091706354) { items_page(limit: 500, query_params: { rules: [{ column_id: \"board_relation_mm0ms7sp\", compare_value: [\($productId)], operator: any_of }] }) { items { id } } } }"}')
+
+          EPICS_RESPONSE=$(curl -s -X POST https://api.monday.com/v2 \
+            -H "Content-Type: application/json" \
+            -H "Authorization: $MONDAY_API_TOKEN" \
+            -H "API-Version: 2023-10" \
+            -d "$EPICS_QUERY")
+
+          EPIC_IDS=$(echo "$EPICS_RESPONSE" | jq -r '[.data.boards[0].items_page.items[]?.id] | join(",")')
+
+          if [ -z "$EPIC_IDS" ]; then
+            echo "::warning::No epics found for Monday product $MONDAY_PRODUCT_ID -- skipping release-task completion sweep"
+            exit 0
+          fi
+
+          # Step 2: find every task on the shared Tasks board (5091706356) at
+          # "Pending Deploy to Prod" (label index 2 -- see the drift-risk note
+          # above) scoped to this product's epics.
+          TASKS_QUERY=$(jq -n --arg epicIds "$EPIC_IDS" \
+            '{query: "{ boards(ids: 5091706356) { items_page(limit: 500, query_params: { rules: [{ column_id: \"task_status\", compare_value: [2], operator: any_of }, { column_id: \"task_epic\", compare_value: [\($epicIds)], operator: any_of }], operator: and }) { items { id name } } } }"}')
+
+          TASKS_RESPONSE=$(curl -s -X POST https://api.monday.com/v2 \
+            -H "Content-Type: application/json" \
+            -H "Authorization: $MONDAY_API_TOKEN" \
+            -H "API-Version: 2023-10" \
+            -d "$TASKS_QUERY")
+
+          TASK_ROWS=$(echo "$TASKS_RESPONSE" | jq -c '.data.boards[0].items_page.items[]? // empty')
+
+          if [ -z "$TASK_ROWS" ]; then
+            echo "No tasks at \"Pending Deploy to Prod\" for product $MONDAY_PRODUCT_ID -- nothing to complete."
+            exit 0
+          fi
+
+          # Step 3: flip each match to Done ({label:...}, never {index:...} --
+          # avoids the index-drift failure mode this sweep's own read side is
+          # still subject to) and post a release note. Idempotent by
+          # construction: a task already Done was excluded by the status
+          # filter above, so re-running this step touches nothing new.
+          echo "$TASK_ROWS" | while IFS= read -r TASK_ROW; do
+            TASK_ID=$(echo "$TASK_ROW" | jq -r '.id')
+            TASK_NAME=$(echo "$TASK_ROW" | jq -r '.name')
+
+            STATUS_MUTATION=$(jq -n --arg taskId "$TASK_ID" \
+              '{query: "mutation { change_multiple_column_values(board_id: 5091706356, item_id: \($taskId), column_values: \"{\\\"task_status\\\": {\\\"label\\\": \\\"Done\\\"}}\") { id } }"}')
+
+            STATUS_RESPONSE=$(curl -s -X POST https://api.monday.com/v2 \
+              -H "Content-Type: application/json" \
+              -H "Authorization: $MONDAY_API_TOKEN" \
+              -H "API-Version: 2023-10" \
+              -d "$STATUS_MUTATION")
+
+            STATUS_ERRORS=$(echo "$STATUS_RESPONSE" | jq -r '.errors // empty')
+            if [ -n "$STATUS_ERRORS" ] && [ "$STATUS_ERRORS" != "null" ]; then
+              echo "::warning::Failed to complete task $TASK_ID ($TASK_NAME): $STATUS_ERRORS"
+              continue
+            fi
+
+            NOTE_BODY="<p>Completed by release automation (release ${VERSION}).</p>"
+            UPDATE_MUTATION=$(jq -n --arg taskId "$TASK_ID" --arg body "$NOTE_BODY" \
+              '{query: "mutation { create_update(item_id: \($taskId), body: \($body|tojson)) { id } }"}')
+
+            curl -s -X POST https://api.monday.com/v2 \
+              -H "Content-Type: application/json" \
+              -H "Authorization: $MONDAY_API_TOKEN" \
+              -H "API-Version: 2023-10" \
+              -d "$UPDATE_MUTATION" > /dev/null
+
+            echo "Completed task $TASK_ID ($TASK_NAME)"
+          done
