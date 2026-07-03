@@ -86,7 +86,7 @@ If any pre-flight fails: stop, report, do NOT proceed.
 8. FF `$hotfixBase` from `$defaultBase`: `git push origin $defaultBase:$hotfixBase` (remote-only FF). If `$defaultBase === $hotfixBase`, skip. On non-fast-forward error: `$hotfixBase` diverged (hotfix landed there but not merged back) — stop, ask user, do NOT force-push.
 9. Apply migrations to production: `pnpm migrate:prod` against `DATABASE_URL_UNPOOLED` set to prod Neon. If fails: prod schema out-of-sync with `$hotfixBase` HEAD — roll back via `git push origin <prev-sha>:$hotfixBase --force-with-lease` (only if no intervening commits) OR fix forward. Escalate.
 10. `git tag -a v{versionNumber} -m "Release v{versionNumber}: {name}" && git push origin v{versionNumber}`.
-11. Tag push triggers `.github/workflows/release.yml`: Monday status → Released, GitHub Release, ISR revalidation.
+11. Tag push triggers `.github/workflows/release.yml`: Monday status → Released, GitHub Release, ISR revalidation. If the consumer has adopted `plugin/templates/github-workflows/complete-released-tasks-step.yml.example`, the same tag push also flips every task at `Pending Deploy to Prod` under this product to `Done` + posts a release note (same logic, runnable locally, at `plugin/scripts/complete-released-tasks.ts`). This is opt-in per consumer — it does not happen just because the plugin is installed.
 12. Do NOT update Monday status manually — tag push is the single trigger.
 
 ### Step 7: Verify release
