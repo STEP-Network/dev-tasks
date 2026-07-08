@@ -6,7 +6,7 @@ For non-STEP projects, this plugin will fail at first contact (hard-coded board 
 
 ## What ships
 
-- **MCP server** — 45 stdio tools wrapping Monday's GraphQL API (backlog, tasks, sprints, epics, bugs, versions, products, feedback, retros, public roadmap, structured changelog, UAT docs, before/after visual-diff docs, version timeline).
+- **MCP server** — 47 stdio tools wrapping Monday's GraphQL API (backlog, tasks, sprints, epics, bugs, versions, products, feedback, retros, public roadmap, structured changelog, UAT docs, before/after visual-diff docs, task attachments (download + read files/screenshots), version timeline).
 - **Skills (16)** — workflow: `pickup-task`, `create-task`, `refine-task`, `log-progress`, `self-review`, `ship-pr`, `release-version`, `audit-versions`, `doctor`, `run-full-e2e` (in-session full Playwright suite vs staging — see below); posture: `holistic-thinking`, `production-quality-ownership`, `design-consistency`, `triage-feedback`, `goal` (persistent completion condition — see below); orchestration: `babysit-prs`. Invoked as `/dev-tasks:<skill>`.
 - **Rules (9)** — auto-injected on Edit/Write via the `rule-autoload.sh` PreToolUse hook based on file globs in `rules-routing.json`.
 - **Agents (4)** — `codebase-researcher`, `self-reviewer`, `doc-updater`, `e2e-tester`. Spawned via subagent.
@@ -305,6 +305,60 @@ bash plugin/scripts/worktree-audit.sh --auto       # what the hook runs
 To disable the janitor in a consumer project, remove the `SessionStart` block from your local `.claude/settings.json` overrides (the hook only runs when registered by the plugin).
 
 Tests in `plugin/scripts/__tests__/worktree-janitor.test.sh` cover: `--auto` accepts and reports, stale lock cleanup, fresh lock preservation, hook silence on no-op, and hook output on cleanup.
+
+## Task attachments — download & read (MCP)
+
+Two MCP tools pull the FILES attached to a Monday task (its file columns **and**, by
+default, the files posted inside its Updates — spec PDFs, mockups, screenshots, logs)
+down to a local path so the agent can Read them. This is the DOWN direction; the
+`appendTaskVisualSnapshots` tool is the UP direction (pushing before/after screenshots
+onto a task).
+
+- **`listTaskAttachments(itemId, { includeUpdates? })`** — enumerate a task's assets.
+  Returns non-sensitive metadata per file: `id`, `name`, extension, size, and `source`
+  (`task-file-column` or `update-<updateId>`). Signed download URLs are intentionally
+  NOT returned. `includeUpdates` defaults to `true`; pass `false` to list only the
+  item's own file columns.
+- **`downloadTaskAttachments(itemId, { includeUpdates?, destDir?, assetIds?, maxFileSizeMb?, timeoutMs? })`**
+  — download the files and return the local paths for you to Read.
+  - `destDir` — where to save. Defaults to a scratchpad dir under the OS temp dir
+    (`<tmp>/dev-tasks-attachments`). A supplied dir must resolve inside an allowed root
+    (OS temp dir, the current working directory, or `$DEV_TASKS_DOWNLOAD_DIR`) — a
+    realpath jail blocks `../` traversal and symlink escapes.
+  - `assetIds` — download only these ids (from `listTaskAttachments`). Omit for all.
+  - `maxFileSizeMb` — per-file size cap (default 25 MB); larger files are skipped, not
+    downloaded. `timeoutMs` — per-file download timeout (default 30000).
+  - Filenames are sanitized to a safe single segment and de-duplicated (`-1`, `-2`, …).
+    The Monday API token is never included in the output.
+
+**End-to-end: read a screenshot posted in an Update**
+
+```
+1. listTaskAttachments(itemId: 3050925742)
+     → # Attachments for … (#3050925742)
+       - **bug-repro.png** — .png · 512.0 KB · source: update-9001 · id: 774411
+       - **spec.pdf**      — .pdf · 1.2 MB  · source: task-file-column · id: 774410
+
+2. downloadTaskAttachments(itemId: 3050925742, assetIds: ["774411"])
+     → # Downloaded attachments …
+       **Destination:** /var/folders/…/dev-tasks-attachments
+       ## Local files (Read these paths)
+       - /var/folders/…/dev-tasks-attachments/bug-repro.png  (512.0 KB, source: update-9001)
+
+3. Read("/var/folders/…/dev-tasks-attachments/bug-repro.png")
+     → the image-aware Read tool renders the screenshot, so the agent can SEE it.
+```
+
+Download-URL resolution prefers Monday's short-lived signed `public_url` (no auth);
+it falls back to the authenticated `url` with an `Authorization` header only for that
+variant. All downloads are restricted to Monday-owned https hosts (SSRF guardrail).
+
+> **Local-filesystem tools.** `downloadTaskAttachments` writes to the machine
+> running the MCP server and returns local paths for the agent to Read — like the
+> local-path `appendTaskVisualSnapshots`/screenshot flow, it's meant for the
+> **stdio** transport (Claude Code CLI / Desktop Local). Over the hosted HTTP
+> transport the files land on the server's container, not the calling client, and
+> the default scratch dir is namespaced per item id under the OS temp dir.
 
 ## Layout
 

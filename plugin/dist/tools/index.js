@@ -37,3 +37,4 @@ export { getTaskUatDoc, createTaskUatDoc, updateTaskUatDoc } from "./taskDoc.js"
 export { getTaskDescriptionDoc, createTaskDescriptionDoc, updateTaskDescriptionDoc, } from "./taskDescriptionDoc.js";
 export { appendTaskVisualSnapshots } from "./taskVisualDiff.js";
 export { getVersionTimeline } from "./getVersionTimeline.js";
+export { listTaskAttachments, downloadTaskAttachments } from "./taskAttachments.js";
