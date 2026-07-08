@@ -11,4 +11,4 @@ registerAllTools(server);
 
 const transport = new StdioServerTransport();
 await server.connect(transport);
-process.stderr.write(`[dev-tasks] connected (stdio), 38 tools registered\n`);
+process.stderr.write(`[dev-tasks] connected (stdio), 47 tools registered\n`);

@@ -1,7 +1,8 @@
-import { readFile, realpath } from "node:fs/promises";
+import { mkdir, readFile, realpath, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { mondayAuthContext } from "./auth-context.js";
+import { ASSET_FIELDS, DEFAULT_DOWNLOAD_TIMEOUT_MS, DEFAULT_MAX_ASSET_BYTES, isAllowedMondayAssetUrl, normalizeItemAssetsPayload, selectAssetDownloadUrl, } from "./monday-assets.js";
 const MONDAY_API_URL = "https://api.monday.com/v2";
 // Monday's binary-upload endpoint (multipart/form-data). Distinct from the
 // JSON GraphQL endpoint above — file uploads cannot go through the JSON path.
@@ -153,4 +154,222 @@ export async function uploadFileToMonday(itemId, columnId, absPath, filename) {
         throw new Error(`Monday file upload returned no asset id: ${JSON.stringify(result.data ?? result)}`);
     }
     return { assetId: String(asset.id), publicUrl: String(asset.public_url ?? "") };
+}
+// =============================================================================
+// Asset download (the DOWN direction) — enumerate + pull a task's attachments.
+// =============================================================================
+//
+// Companion to uploadFileToMonday above: reads the FILES attached to a Monday
+// item (file columns) and, optionally, the files posted inside its Updates, then
+// downloads them locally so the agent can Read them (image-aware Read for
+// screenshots; PDFs/text/logs too). Pure normalization + URL-selection + the
+// SSRF host allowlist + filename safety live in monday-assets.ts.
+/** Max Updates fetched per item (Monday's page cap). */
+const UPDATES_PAGE_LIMIT = 100;
+/**
+ * Enumerate the assets on a Monday item's file columns and (when
+ * `includeUpdates`) on each of its Updates. Returns a flat, source-tagged list.
+ * Uses the shared JSON GraphQL path (`executeMondayQuery`).
+ */
+export async function fetchTaskAssets(itemId, opts) {
+    const updatesSelection = opts.includeUpdates
+        ? `updates(limit: ${UPDATES_PAGE_LIMIT}) { id assets { ${ASSET_FIELDS} } }`
+        : "";
+    const query = `
+    query {
+      items(ids: [${itemId}]) {
+        name
+        assets { ${ASSET_FIELDS} }
+        ${updatesSelection}
+      }
+    }
+  `;
+    const response = await executeMondayQuery(query);
+    const item = response.items?.[0];
+    if (!item) {
+        return { found: false, assets: [] };
+    }
+    // Surface a truncation warning: if Updates came back exactly at the page cap,
+    // older updates (and their attachments) may not have been scanned.
+    const warning = opts.includeUpdates && Array.isArray(item.updates) && item.updates.length >= UPDATES_PAGE_LIMIT
+        ? `Only the most recent ${UPDATES_PAGE_LIMIT} updates were scanned — older updates' attachments may be missing.`
+        : undefined;
+    return {
+        found: true,
+        itemName: item.name ?? undefined,
+        assets: normalizeItemAssetsPayload(item, opts),
+        warning,
+    };
+}
+// -----------------------------------------------------------------------------
+// Download destination — realpath jail (mirrors allowedUploadRoots above).
+// -----------------------------------------------------------------------------
+const DOWNLOAD_SUBDIR = "dev-tasks-attachments";
+/** Roots a download is permitted to land in. */
+async function allowedDownloadRoots() {
+    const candidates = [tmpdir(), process.cwd(), process.env.DEV_TASKS_DOWNLOAD_DIR].filter((p) => Boolean(p));
+    const roots = [];
+    for (const base of candidates) {
+        try {
+            roots.push(await realpath(base));
+        }
+        catch {
+            // Skip roots that don't resolve (e.g. an unset override dir).
+        }
+    }
+    return roots;
+}
+/** Nearest existing ancestor of an absolute path, symlink-resolved. */
+async function nearestExistingRealAncestor(absPath) {
+    let cur = absPath;
+    for (;;) {
+        try {
+            return await realpath(cur);
+        }
+        catch {
+            const parent = path.dirname(cur);
+            if (parent === cur)
+                return cur; // reached the filesystem root
+            cur = parent;
+        }
+    }
+}
+/** Reduce a default-dir leaf (e.g. an item id) to a safe single path segment. */
+function sanitizeDirLeaf(leaf) {
+    return leaf.replace(/[^a-zA-Z0-9._-]/g, "-").replace(/^\.+/, "") || "task";
+}
+/**
+ * Resolve (and create) the directory downloads land in. Defaults to a scratchpad
+ * dir under the OS temp dir (namespaced by `defaultLeaf`, e.g. the item id, so
+ * separate tasks don't overwrite each other's identically-named files). A
+ * caller-supplied `destDir` is used as-is (never namespaced) and REQUIRED to sit
+ * inside an allowed root (OS temp dir, cwd, or `$DEV_TASKS_DOWNLOAD_DIR`);
+ * traversal (`../`) and symlink escapes are defeated by realpath-checking the
+ * nearest existing ancestor before creating, then re-checking after mkdir.
+ * Returns the real (symlink-resolved) absolute directory path.
+ */
+export async function resolveDownloadDir(destDir, opts) {
+    let target;
+    if (destDir && destDir.trim()) {
+        target = path.resolve(destDir.trim());
+    }
+    else if (opts?.defaultLeaf) {
+        target = path.join(tmpdir(), DOWNLOAD_SUBDIR, sanitizeDirLeaf(opts.defaultLeaf));
+    }
+    else {
+        target = path.join(tmpdir(), DOWNLOAD_SUBDIR);
+    }
+    const roots = await allowedDownloadRoots();
+    const isInside = (p) => roots.some((r) => p === r || p.startsWith(r + path.sep));
+    const realAncestor = await nearestExistingRealAncestor(target);
+    if (!isInside(realAncestor)) {
+        throw new Error(`Refusing to write downloads outside allowed roots [${roots.join(", ")}]: ${target}`);
+    }
+    await mkdir(target, { recursive: true });
+    const real = await realpath(target);
+    if (!isInside(real)) {
+        throw new Error(`Refusing to write downloads outside allowed roots [${roots.join(", ")}]: ${real}`);
+    }
+    return real;
+}
+/** Read a fetch body into a Buffer, aborting if it exceeds `maxBytes`. */
+async function readCappedBody(response, maxBytes, asset) {
+    const body = response.body;
+    if (body && typeof body[Symbol.asyncIterator] === "function") {
+        const chunks = [];
+        let total = 0;
+        for await (const chunk of body) {
+            total += chunk.byteLength;
+            if (total > maxBytes) {
+                throw new Error(`Asset ${asset.assetId} (${asset.name}) exceeds the ${maxBytes}-byte cap mid-stream.`);
+            }
+            chunks.push(Buffer.from(chunk));
+        }
+        return Buffer.concat(chunks);
+    }
+    // Fallback when the body isn't a stream (e.g. a mocked fetch): buffer, then cap.
+    const buf = Buffer.from(await response.arrayBuffer());
+    if (buf.length > maxBytes) {
+        throw new Error(`Asset ${asset.assetId} (${asset.name}) is ${buf.length} bytes, over the ${maxBytes}-byte cap.`);
+    }
+    return buf;
+}
+/**
+ * Download a single asset to `destPath`. Resolves the download URL via
+ * `selectAssetDownloadUrl` (public_url preferred; else the authenticated url),
+ * sends `Authorization: <token>` ONLY for the authenticated variant (never for
+ * public_url, never logged), enforces an https Monday-host allowlist (SSRF),
+ * an AbortController timeout, and a size cap (Monday-reported size + response
+ * Content-Length pre-checks, then a streamed byte counter). Writes the bytes and
+ * returns the local path + size.
+ */
+export async function downloadMondayAsset(asset, destPath, opts) {
+    const timeoutMs = opts?.timeoutMs ?? DEFAULT_DOWNLOAD_TIMEOUT_MS;
+    const maxBytes = opts?.maxBytes ?? DEFAULT_MAX_ASSET_BYTES;
+    const selected = selectAssetDownloadUrl(asset);
+    if (!selected) {
+        throw new Error(`Asset ${asset.assetId} (${asset.name}) has no downloadable URL.`);
+    }
+    if (!isAllowedMondayAssetUrl(selected.url)) {
+        // Report the host only — never echo the full URL (may carry a signature).
+        let host = "unknown";
+        try {
+            host = new URL(selected.url).host;
+        }
+        catch {
+            /* keep "unknown" */
+        }
+        throw new Error(`Refusing to download asset ${asset.assetId} from a non-Monday host: ${host}`);
+    }
+    // Cheap pre-flight guard from Monday's reported size (avoids the fetch).
+    if (asset.fileSizeBytes != null && asset.fileSizeBytes > maxBytes) {
+        throw new Error(`Asset ${asset.assetId} (${asset.name}) is ${asset.fileSizeBytes} bytes, over the ${maxBytes}-byte cap.`);
+    }
+    const headers = {};
+    if (selected.needsAuth) {
+        headers.Authorization = resolveMondayApiKey();
+    }
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    let response;
+    try {
+        response = await fetch(selected.url, { headers, signal: controller.signal });
+    }
+    catch (err) {
+        clearTimeout(timer);
+        if (err?.name === "AbortError") {
+            throw new Error(`Download of asset ${asset.assetId} timed out after ${timeoutMs}ms.`);
+        }
+        throw new Error(`Download of asset ${asset.assetId} failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+    try {
+        if (!response.ok) {
+            throw new Error(`Download of asset ${asset.assetId} failed: HTTP ${response.status} ${response.statusText}`);
+        }
+        const declared = Number(response.headers.get("content-length"));
+        if (Number.isFinite(declared) && declared > maxBytes) {
+            throw new Error(`Asset ${asset.assetId} (${asset.name}) is ${declared} bytes, over the ${maxBytes}-byte cap.`);
+        }
+        const bytes = await readCappedBody(response, maxBytes, asset);
+        await writeFile(destPath, bytes);
+        return {
+            assetId: asset.assetId,
+            name: asset.name,
+            source: asset.source,
+            path: destPath,
+            bytes: bytes.length,
+        };
+    }
+    catch (err) {
+        // A timeout can fire mid-stream (after headers), surfacing as an AbortError
+        // from the body read — translate it to the same friendly message as the
+        // connect-phase timeout above.
+        if (err?.name === "AbortError") {
+            throw new Error(`Download of asset ${asset.assetId} timed out after ${timeoutMs}ms.`);
+        }
+        throw err;
+    }
+    finally {
+        clearTimeout(timer);
+    }
 }

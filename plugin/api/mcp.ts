@@ -2,7 +2,7 @@
  * Hosted MCP HTTP endpoint — Vercel Node Function.
  *
  * Companion to the stdio MCP at `src/server.ts`. Both transports register
- * the same 38 tools via `registerAllTools` from `src/register-tools.ts`.
+ * the same 47 tools via `registerAllTools` from `src/register-tools.ts`.
  *
  * - **Stdio (server.ts)**: for Claude Code CLI / Claude Desktop Local.
  *   Reads MONDAY_API_KEY from the parent shell.

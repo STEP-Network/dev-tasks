@@ -41,3 +41,4 @@ export {
 } from "./taskDescriptionDoc.ts";
 export { appendTaskVisualSnapshots } from "./taskVisualDiff.ts";
 export { getVersionTimeline } from "./getVersionTimeline.ts";
+export { listTaskAttachments, downloadTaskAttachments } from "./taskAttachments.ts";

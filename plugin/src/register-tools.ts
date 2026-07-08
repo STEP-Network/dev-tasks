@@ -46,6 +46,8 @@ import {
   CreateTaskDescriptionDocSchema,
   UpdateTaskDescriptionDocSchema,
   AppendTaskVisualSnapshotsSchema,
+  ListTaskAttachmentsSchema,
+  DownloadTaskAttachmentsSchema,
 } from "./schemas.ts";
 import {
   getBacklog,
@@ -93,11 +95,13 @@ import {
   updateTaskDescriptionDoc,
   appendTaskVisualSnapshots,
   getVersionTimeline,
+  listTaskAttachments,
+  downloadTaskAttachments,
 } from "./tools/index.ts";
 
 
 /**
- * Register all 39 Monday MCP tools on the given McpServer. Shared by the
+ * Register all 47 Monday MCP tools on the given McpServer. Shared by the
  * stdio entry (server.ts) and the HTTP entry (api/mcp.ts).
  */
 export function registerAllTools(server: McpServer): void {
@@ -604,6 +608,30 @@ server.tool(
   AppendTaskVisualSnapshotsSchema.shape,
   async (args) => {
     const result = await appendTaskVisualSnapshots(args);
+    return { content: [{ type: "text", text: result }] };
+  }
+);
+
+// =========================================================================
+// Task Attachments (DOWN direction — pull + read a task's files/screenshots)
+// =========================================================================
+
+server.tool(
+  "listTaskAttachments",
+  "Enumerate the files attached to a Monday task — both its file columns AND (by default) the files posted inside its Updates (spec PDFs, mockups, screenshots, logs). Returns non-sensitive metadata per asset: id, name, extension, size, and source ('task-file-column' or 'update-<id>'). Signed download URLs are intentionally NOT returned. Pass includeUpdates=false to list only the item's own file columns. Pair with downloadTaskAttachments to pull the bytes and Read them. This is the DOWN direction; appendTaskVisualSnapshots is the UP direction.",
+  ListTaskAttachmentsSchema.shape,
+  async (args) => {
+    const result = await listTaskAttachments(args);
+    return { content: [{ type: "text", text: result }] };
+  }
+);
+
+server.tool(
+  "downloadTaskAttachments",
+  "Download a Monday task's attachments (file columns + Update files) to a local directory and return the local file paths so you can Read them — image-aware Read for screenshots/mockups, plus PDFs/text/logs. destDir defaults to a scratchpad dir under the OS temp dir and must resolve inside an allowed root (OS temp dir, cwd, or $DEV_TASKS_DOWNLOAD_DIR). Pass assetIds (from listTaskAttachments) to download specific files, includeUpdates=false to skip Update files, maxFileSizeMb to change the per-file size cap (default 25MB), and timeoutMs for the per-file timeout (default 30000). Filenames are collision-safe; the API token is never included in output.",
+  DownloadTaskAttachmentsSchema.shape,
+  async (args) => {
+    const result = await downloadTaskAttachments(args);
     return { content: [{ type: "text", text: result }] };
   }
 );

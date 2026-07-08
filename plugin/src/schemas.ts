@@ -762,6 +762,47 @@ export const UpdateTaskDescriptionDocSchema = z.object({
 });
 
 // =============================================================================
+// Task Attachments (the DOWN direction — pull + read a task's files/screenshots)
+// =============================================================================
+
+export const ListTaskAttachmentsSchema = z.object({
+  itemId: z.number().describe("Monday.com item (task) ID whose attachments to enumerate."),
+  includeUpdates: z
+    .boolean()
+    .optional()
+    .default(true)
+    .describe("Also enumerate files attached inside the item's Updates, not just its file columns (default: true)."),
+});
+
+export const DownloadTaskAttachmentsSchema = z.object({
+  itemId: z.number().describe("Monday.com item (task) ID whose attachments to download."),
+  includeUpdates: z
+    .boolean()
+    .optional()
+    .default(true)
+    .describe("Also download files attached inside the item's Updates (default: true)."),
+  destDir: z
+    .string()
+    .optional()
+    .describe("Absolute directory to download into. Defaults to a scratchpad dir under the OS temp dir. Must resolve inside an allowed root (OS temp dir, the current working directory, or $DEV_TASKS_DOWNLOAD_DIR)."),
+  assetIds: z
+    .array(z.string())
+    .optional()
+    .describe("Only download these asset IDs (as listed by listTaskAttachments). Omit to download every attachment."),
+  maxFileSizeMb: z
+    .number()
+    .positive()
+    .optional()
+    .describe("Per-file size cap in MB (default: 25). Files larger than this are skipped, not downloaded."),
+  timeoutMs: z
+    .number()
+    .int()
+    .positive()
+    .optional()
+    .describe("Per-file download timeout in milliseconds (default: 30000)."),
+});
+
+// =============================================================================
 // Type Exports
 // =============================================================================
 
@@ -810,3 +851,5 @@ export type AppendTaskVisualSnapshotsInput = z.infer<typeof AppendTaskVisualSnap
 export type GetTaskDescriptionDocInput = z.infer<typeof GetTaskDescriptionDocSchema>;
 export type CreateTaskDescriptionDocInput = z.infer<typeof CreateTaskDescriptionDocSchema>;
 export type UpdateTaskDescriptionDocInput = z.input<typeof UpdateTaskDescriptionDocSchema>;
+export type ListTaskAttachmentsInput = z.input<typeof ListTaskAttachmentsSchema>;
+export type DownloadTaskAttachmentsInput = z.input<typeof DownloadTaskAttachmentsSchema>;
