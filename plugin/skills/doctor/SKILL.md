@@ -102,6 +102,18 @@ PASS: `corridor@*` in `enabledPlugins` AND MCP tools loaded.
 FAIL: missing — instruct user per Corridor's onboarding docs (install source varies). After install: `/plugin install corridor@corridor-plugins` → `/reload-plugins`.
 WARN: listed but MCP not loaded → restart Claude Code.
 
+### 12. Visual-diff wiring (v0.37.0)
+
+The visualDiff feature is ON by default, but its ENFORCEMENT hook is opt-in and its authed-capture inputs are consumer-declared — a consumer can silently run for weeks with UI tasks shipping no Visual Changes docs (the exact 2026-06-23→07-09 PolAds gap). Audit the wiring whenever `visualDiff.enabled` is not `false` AND `environments.uat.url` is an `https://` URL:
+
+1. **Enforcement hook**: `hooks.enabled[]` missing `stop-visual-diff-check` → WARN with the exact fix: add `"stop-visual-diff-check"` to `hooks.enabled[]` in `.claude/project-config.json` (without it, UI-diff sessions can exit with neither captured routes nor a recorded skip).
+2. **Personas for authed capture**: `e2e.personas[]` empty or absent → WARN: "every authed route will be skipped with 'auth required, no persona' — declare personas (id + storageState produced by your auth.setup.ts) and set `visualDiff.authPersona`".
+3. **storageState files exist**: for each persona with a non-null `storageState`, check the path exists on disk (repo-root-relative). Missing → WARN naming the file and the consumer's regeneration command (their `auth.setup.ts` / e2e setup project — e.g. `pnpm playwright test --project=setup` or the project's e2e gate script).
+4. **Persona references resolve**: `visualDiff.authPersona` and every `routeMap[].persona` must equal some `e2e.personas[].id` (JSON Schema can't cross-validate this). Dangling reference → FAIL with the offending id.
+5. **loginUrl sanity** (only when set): its origin must equal the `environments.uat.url` origin (SSRF contract), and if it contains `{secret}`, `visualDiff.loginSecretEnv` must be set AND that env var must resolve non-empty locally. Violation → FAIL (origin mismatch) / WARN (secret env unset).
+
+All five are config/disk reads — no network calls.
+
 ## Output
 
 ```

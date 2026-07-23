@@ -153,6 +153,31 @@ If your project ships UI, enable **both** of these so a UI change can't reach
   *deliberate, recorded* decision (and the same note lands in the PR body), but
   the durable proof is the Visual Changes doc itself, not a cryptographic marker.
 
+### Visual-diff capture contract + authed routes (v0.37.0)
+
+Enforcement alone produced prose-only docs: agents "captured" with browser tools
+whose screenshots land in model context, not on disk — and `appendTaskVisualSnapshots`
+embeds by absolute local `imagePath`, so nothing got uploaded. v0.37.0 hardens the
+contract and unblocks authed surfaces (where most real product UI lives):
+
+- **File-producing capture is mandatory for uploads.** Playwright CLI
+  (`npx playwright screenshot … --load-storage=<storageState>`) is the default and
+  the only path that consumes storageState; `chrome-devtools-mcp` may capture
+  public routes — or authed routes reached via a `loginUrl` login — when saving
+  to a file; `claude-in-chrome` can only verify visually — its routes are recorded
+  note-only. A pass without files on disk must record WHY, per route.
+- **Per-route personas**: `visualDiff.routeMap[].persona` overrides
+  `visualDiff.authPersona` (e.g. admin dashboard routes as `super-admin`, wizard
+  routes as `advertiser`). Both must reference `e2e.personas[].id`.
+- **`visualDiff.loginUrl` + `loginSecretEnv`**: for consumers exposing a
+  programmatic test-login route (mint a session by visiting a URL), MCP-browser
+  captures can authenticate by navigating there first. Same-origin with
+  `environments.uat.url` is enforced (SSRF guard); the secret lives in an env var —
+  only its NAME is in config, and the substituted URL is never logged.
+- **`/doctor` check 12** audits the wiring: enforcement hook enabled, personas
+  declared, storageState files present on disk, persona references resolve,
+  loginUrl origin + secret sanity.
+
 ## Full-suite E2E in-session (on by default) — `e2e.fullSuite` + `/dev-tasks:run-full-e2e`
 
 The dev machine is usually faster than a CI runner, and your **staging** deployment

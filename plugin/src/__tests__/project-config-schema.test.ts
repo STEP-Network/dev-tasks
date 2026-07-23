@@ -101,3 +101,133 @@ describe("project-config schema — e2e.fullSuite", () => {
     expect(validate(cfg)).toBe(false)
   })
 })
+
+// Minimal VALID instance exercising the v0.37.0 visualDiff capture-contract keys.
+function validVisualDiffConfig() {
+  return {
+    version: "1",
+    monday: { productId: "2924964797" },
+    environments: { uat: { url: "https://test.example.com" } },
+    e2e: {
+      personas: [
+        { id: "public-visitor", storageState: null },
+        { id: "advertiser", storageState: ".playwright/auth-state.json" },
+        { id: "super-admin", storageState: ".playwright/admin-auth-state.json" },
+      ],
+    },
+    visualDiff: {
+      authPersona: "super-admin",
+      loginUrl: "https://test.example.com/api/dev/test-login?persona={persona}&secret={secret}",
+      loginSecretEnv: "TEST_LOGIN_SECRET",
+      routeMap: [
+        { glob: "components/admin/**", routes: ["/en/admin"], persona: "super-admin" },
+        { glob: "components/registration/**", routes: ["/en/register"], persona: "advertiser" },
+        { glob: "app/[locale]/page.tsx", routes: ["/en"] },
+      ],
+    },
+  }
+}
+
+describe("project-config schema — visualDiff capture contract (v0.37.0)", () => {
+  it("accepts authPersona + loginUrl + loginSecretEnv + per-route personas", () => {
+    const validate = makeValidator()
+    const ok = validate(validVisualDiffConfig())
+    if (!ok) throw new Error(JSON.stringify(validate.errors, null, 2))
+    expect(ok).toBe(true)
+  })
+
+  it("accepts null loginUrl/loginSecretEnv (the defaults) and persona-less routeMap entries", () => {
+    const validate = makeValidator()
+    const cfg: any = validVisualDiffConfig()
+    cfg.visualDiff.loginUrl = null
+    cfg.visualDiff.loginSecretEnv = null
+    cfg.visualDiff.routeMap = [{ glob: "components/**", routes: ["/en"] }]
+    expect(validate(cfg)).toBe(true)
+  })
+
+  it("declares loginUrl/loginSecretEnv as nullable strings defaulting to null", () => {
+    const vd = schema.properties.visualDiff
+    expect(vd.additionalProperties).toBe(false)
+    expect(vd.properties.loginUrl.type).toEqual(["string", "null"])
+    expect(vd.properties.loginUrl.default).toBeNull()
+    expect(vd.properties.loginSecretEnv.type).toEqual(["string", "null"])
+    expect(vd.properties.loginSecretEnv.default).toBeNull()
+  })
+
+  it("routeMap entries accept an optional persona but no unknown keys", () => {
+    const validate = makeValidator()
+    const item = schema.properties.visualDiff.properties.routeMap.items
+    expect(item.properties.persona.type).toBe("string")
+    expect(item.required).toEqual(["glob", "routes"]) // persona stays optional
+
+    const cfg: any = validVisualDiffConfig()
+    cfg.visualDiff.routeMap[0].bogus = true
+    expect(validate(cfg)).toBe(false)
+  })
+
+  it("rejects a non-string routeMap persona and an unknown visualDiff key", () => {
+    const validate = makeValidator()
+    const badPersona: any = validVisualDiffConfig()
+    badPersona.visualDiff.routeMap[0].persona = 42
+    expect(validate(badPersona)).toBe(false)
+
+    const badKey: any = validVisualDiffConfig()
+    badKey.visualDiff.bogusField = true
+    expect(validate(badKey)).toBe(false)
+  })
+
+  it("starter template carries the new keys with null defaults", () => {
+    expect(starter.visualDiff.loginUrl).toBeNull()
+    expect(starter.visualDiff.loginSecretEnv).toBeNull()
+    expect(starter.visualDiff.routeMap).toEqual([])
+  })
+})
+
+// Docs-lockstep guard: the capture contract lives in skill prose — these greps
+// keep the retired claude-in-chrome-as-upload-capture instruction from silently
+// reappearing, and pin the file-producing contract across the three skills.
+describe("visualDiff capture contract — docs lockstep (v0.37.0)", () => {
+  const shipPr = readFileSync(
+    resolve(__dirname, "..", "..", "skills", "ship-pr", "SKILL.md"),
+    "utf-8",
+  )
+  const visualDiff = readFileSync(
+    resolve(__dirname, "..", "..", "skills", "visual-diff", "SKILL.md"),
+    "utf-8",
+  )
+  const doctor = readFileSync(
+    resolve(__dirname, "..", "..", "skills", "doctor", "SKILL.md"),
+    "utf-8",
+  )
+
+  it("ship-pr no longer offers MCP browsers as the primary upload capture", () => {
+    // The retired v0.33 instruction listed the MCP browsers first with
+    // Playwright as an afterthought — its exact phrasing must not return.
+    expect(shipPr).not.toContain(
+      "via `mcp__claude-in-chrome__*` / `chrome-devtools-mcp` `take_screenshot` (Playwright fallback)",
+    )
+    expect(shipPr).toContain("npx playwright screenshot")
+    expect(shipPr).toContain("--load-storage")
+    expect(shipPr).toContain("file-producing")
+  })
+
+  it("ship-pr wires the loginUrl fallback with the SSRF origin constraint", () => {
+    expect(shipPr).toContain("visualDiff.loginUrl")
+    expect(shipPr).toContain("loginSecretEnv")
+    expect(shipPr).toMatch(/loginUrl[\s\S]{0,700}origin EQUALS the `environments\.uat\.url` origin/)
+  })
+
+  it("visual-diff skill puts the file-producing Playwright path first", () => {
+    expect(visualDiff).toContain("npx playwright screenshot")
+    const playwrightIdx = visualDiff.indexOf("npx playwright screenshot")
+    const claudeInChromeIdx = visualDiff.indexOf("mcp__claude-in-chrome__")
+    expect(playwrightIdx).toBeGreaterThan(-1)
+    expect(claudeInChromeIdx).toBeGreaterThan(playwrightIdx)
+  })
+
+  it("doctor audits the visual-diff wiring", () => {
+    expect(doctor).toContain("Visual-diff wiring")
+    expect(doctor).toContain("stop-visual-diff-check")
+    expect(doctor).toContain("storageState")
+  })
+})
