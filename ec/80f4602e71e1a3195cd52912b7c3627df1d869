@@ -1,0 +1,45 @@
+plugin/skills/visual-diff/SKILL.md
+  s_78157b1d8014eb::t_4d4d10d26a57de 36-41
+  s_78157b1d8014eb::t_aaccdcdb27dbf2 122
+plugin/hooks/stop-visual-diff-check.sh
+  s_78157b1d8014eb::t_51f1dedb4d977d 181-184,190
+plugin/skills/ship-pr/SKILL.md
+  s_78157b1d8014eb::t_87538d62eb9673 51
+  s_78157b1d8014eb::t_728c5dfad8a63c 52,55-56
+  s_78157b1d8014eb::t_d1674d073d5b18 53-54
+  s_78157b1d8014eb::t_54dce2e5ffff55 48
+  s_78157b1d8014eb::t_179c67c916ac34 255
+plugin/README.md
+  s_78157b1d8014eb::t_ed961f26067a2b 165-166
+  s_78157b1d8014eb::t_605d648fc4a123 156-164,167-180
+plugin/templates/starter-project-config.json
+  s_78157b1d8014eb::t_1a39ed378df01e 104-105
+plugin/schemas/project-config.schema.json
+  s_78157b1d8014eb::t_646142bd96685b 307
+  s_78157b1d8014eb::t_ed46dd005f1495 361-364
+  s_78157b1d8014eb::t_831e76c8a30ac1 330-340
+plugin/src/__tests__/project-config-schema.test.ts
+  s_78157b1d8014eb::t_40a2ef7cdc7e57 104-233
+plugin/templates/playwright/README.md
+  s_78157b1d8014eb::t_161efae58cdd32 96
+plugin/skills/doctor/SKILL.md
+  s_78157b1d8014eb::t_9ed9998330e821 105-116
+plugin/.claude-plugin/plugin.json
+  s_78157b1d8014eb::t_4ee9f5aa36aedd 3
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "ec80f4602e71e1a3195cd52912b7c3627df1d869",
+  "prompts": {},
+  "sessions": {
+    "s_78157b1d8014eb": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "65869892-c3e3-4b1c-9062-955739a90ada",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Tomas Soucek <tomassoucek@Tomass-MacBook-Pro.local>"
+    }
+  }
+}
