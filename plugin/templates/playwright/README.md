@@ -93,5 +93,5 @@ Opt out per project with `e2e.fullSuite.enabled: false`. Full details: plugin
 
 - `.claude/rules/testing.md` — full test discipline (unit / integration / E2E / a11y / cross-browser / performance / visual regression)
 - `.claude/rules/e2e-masterplan.md` — the multi-phase plan toward selective-UAT autonomy
-- `.claude/skills/visual-diff/SKILL.md` — before/after visual verification (orthogonal to these templates; not Playwright-based)
+- `.claude/skills/visual-diff/SKILL.md` — before/after visual verification (orthogonal to these test templates; captures via `npx playwright screenshot` as of v0.37.0)
 - `.claude/agents/e2e-tester.md` — subagent that runs these tests

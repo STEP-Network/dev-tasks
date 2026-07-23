@@ -304,7 +304,7 @@
       }
     },
     "visualDiff": {
-      "description": "Before/after UI-screenshot capture (v0.32.0), consumed by /ship-pr. When a UI-changing task ships, the agent screenshots the changed routes on staging BEFORE the change (pre-merge, Phase 2) and AFTER it deploys (post-merge, Phase 6.6), embedding both passes into a dedicated 'Visual Changes' Monday doc on the task (via the appendTaskVisualSnapshots tool). ON by default (opt-out): runs whenever a UI change is detected AND a staging URL resolves; otherwise it skips with a one-line note (never errors). The staging base URL is read from environments.uat.url; authenticated routes reuse e2e.personas[].storageState.",
+      "description": "Before/after UI-screenshot capture (v0.32.0; capture contract hardened v0.37.0), consumed by /ship-pr. When a UI-changing task ships, the agent screenshots the changed routes on staging BEFORE the change (pre-merge, Phase 2) and AFTER it deploys (post-merge, Phase 6.6), embedding both passes into a dedicated 'Visual Changes' Monday doc on the task (via the appendTaskVisualSnapshots tool). ON by default (opt-out): runs whenever a UI change is detected AND a staging URL resolves; otherwise it skips with a one-line note (never errors). The staging base URL is read from environments.uat.url. CAPTURE CONTRACT (v0.37.0): appendTaskVisualSnapshots embeds by absolute local imagePath, so an upload REQUIRES a capture tool that writes a file to disk — Playwright (`npx playwright screenshot`, consumes e2e.personas[].storageState via --load-storage) is the REQUIRED path for authed routes and the default for uploads generally; MCP browsers whose screenshots land only in model context (claude-in-chrome) may verify visually but can never feed an upload (their captures are recorded note-only, with an explicit reason). Per-route personas via routeMap[].persona (falls back to authPersona); loginUrl is the MCP-browser login fallback for consumers exposing a programmatic test-login route.",
       "type": "object",
       "additionalProperties": false,
       "properties": {
@@ -327,7 +327,17 @@
           "default": 8
         },
         "authPersona": {
-          "description": "e2e persona id (from e2e.personas[].id) whose storageState authenticates the headless browser for authed routes. null = public/unauthenticated capture only; authed routes are skipped with a noted reason rather than guessing a login.",
+          "description": "DEFAULT e2e persona id (from e2e.personas[].id) whose storageState authenticates the headless browser for authed routes — a routeMap entry's `persona` overrides it per route (v0.37.0). null = public/unauthenticated capture only; authed routes without a resolvable persona are skipped with a noted reason rather than guessing a login.",
+          "type": ["string", "null"],
+          "default": null
+        },
+        "loginUrl": {
+          "description": "Optional programmatic test-login URL template (v0.37.0) for consumers that expose a mint-a-session-by-URL route (e.g. a non-prod /api/dev/test-login). Visited in the capture browser BEFORE an authed-route capture when the tool in use cannot consume Playwright storageState (MCP browsers); Playwright captures keep using e2e.personas[].storageState as the primary mechanism. HARD CONSTRAINT (SSRF guard): the URL's origin MUST equal the environments.uat.url origin — /ship-pr refuses to navigate anywhere else, and never to a host derived from task/PR text. Placeholders: {persona} → the resolving persona id; {secret} → the value of the env var named by loginSecretEnv, substituted AT NAVIGATION TIME and never written to config, logs, the PR, or the Monday doc. null = no login URL; an authed MCP-browser capture without one records a note-only entry.",
+          "type": ["string", "null"],
+          "default": null
+        },
+        "loginSecretEnv": {
+          "description": "Name of the environment variable holding the shared secret substituted for {secret} in loginUrl (v0.37.0). Only the VARIABLE NAME lives in config — the value stays in the consumer's env. If loginUrl contains {secret} but this is null or the variable is unset at capture time, the login URL is unusable and the capture skips with a note (never guesses, never errors).",
           "type": ["string", "null"],
           "default": null
         },
@@ -348,6 +358,10 @@
                 "type": "array",
                 "items": { "type": "string" },
                 "minItems": 1
+              },
+              "persona": {
+                "description": "Optional e2e persona id (from e2e.personas[].id) that authenticates THESE routes' captures, overriding visualDiff.authPersona (v0.37.0). Use when different surfaces need different roles — e.g. an admin dashboard route captured as an admin persona while a user-facing wizard route uses a regular-user persona. Omitted → authPersona applies.",
+                "type": "string"
               }
             }
           },

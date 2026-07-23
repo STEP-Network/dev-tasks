@@ -101,6 +101,8 @@
     "viewports": ["desktop", "mobile"],
     "maxRoutes": 8,
     "authPersona": null,
+    "loginUrl": null,
+    "loginSecretEnv": null,
     "routeMap": []
   }
 }
