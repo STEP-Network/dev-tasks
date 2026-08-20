@@ -115,6 +115,36 @@ assert_contains "force-ui lists the component" "$OUT" "src/components/Button.tsx
 assert_contains "force-ui note present" "$OUT" "forced: UX-UI subtask override"
 rm -rf "$TMP"
 
+# Case G: EMPTY diff → NON_UI even under --force-ui (#3173683437). The override
+# turns a NON_UI-by-path verdict into UI; it must not manufacture one where
+# nothing changed. A freshly claimed UX-UI task carries --force-ui from the
+# moment /pickup-task records its subtask types.
+TMP=$(make_repo)
+OUT=$( (cd "$TMP" && bash "$EVAL" --base main) ); RC=$?
+assert "empty diff → exit 1 (NON_UI)" "$RC" "1"
+assert_contains "empty diff verdict" "$OUT" "NON_UI: empty diff"
+OUT=$( (cd "$TMP" && bash "$EVAL" --base main --force-ui) ); RC=$?
+assert "empty diff + --force-ui → STILL exit 1 (NON_UI)" "$RC" "1"
+assert_contains "empty diff + force-ui verdict" "$OUT" "NON_UI: empty diff"
+# Negative control: one committed UI file on the same repo flips it back to UI,
+# proving the guard keys on emptiness and not on something else.
+echo "export const B = () => null" > "$TMP/src/components/Button.tsx"
+git -C "$TMP" add -A && git -C "$TMP" commit -q -m "ui after empty"
+OUT=$( (cd "$TMP" && bash "$EVAL" --base main --force-ui) ); RC=$?
+assert "non-empty again → exit 0 (UI)" "$RC" "0"
+rm -rf "$TMP"
+
+# Case H: a dash-leading --base is sanitized to main, never reaching git as an
+# option (git option injection). main..HEAD here is a real UI diff → UI.
+TMP=$(make_repo)
+echo "export const B = () => null" > "$TMP/src/components/Button.tsx"
+git -C "$TMP" add -A && git -C "$TMP" commit -q -m "ui for injection case"
+OUT=$( (cd "$TMP" && bash "$EVAL" --base "--output=$TMP/pwned") ); RC=$?
+assert "dash-leading --base → sanitized to main, exit 0 (UI)" "$RC" "0"
+assert_contains "sanitized base reported as main" "$OUT" "base: main"
+[ ! -e "$TMP/pwned" ]; assert "dash-leading --base wrote no file" "$?" "0"
+rm -rf "$TMP"
+
 echo ""
 echo "==================================================="
 echo "ui-diff-eval tests: $PASS_COUNT passed, $FAIL_COUNT failed"

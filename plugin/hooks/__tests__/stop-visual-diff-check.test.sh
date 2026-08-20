@@ -155,6 +155,56 @@ OUT=$(i18n_hook); assert "i18n + forceUi flag + no record → BLOCK" "$?" "2"
 write_state '{"taskId":"77","subtasks":[{"id":"1","name":"api","type":"Backend","status":"in_progress"}]}'
 OUT=$(i18n_hook); assert "i18n + Backend subtask → pass (no override)" "$?" "0"
 
+# ---------- empty branch diff: nothing changed, nothing to capture (#3173683437) ----------
+# A freshly-claimed UX-UI task has FORCE_UI=YES from the moment /pickup-task records
+# its subtask types, before a single line is written. The override used to be evaluated
+# INSTEAD OF the diff classifier, so an EMPTY diff was never detected and the gate
+# demanded a before-pass capture of a branch byte-identical to base.
+git -C "$TMP" checkout -q main 2>/dev/null
+git -C "$TMP" checkout -q -b feat-empty 2>/dev/null
+write_config
+empty_hook() { ( cd "$TMP" && CLAUDE_PROJECT_DIR="$TMP" "$HOOK" <<<"$INPUT" 2>&1 ); }
+
+# Test 18: THE BUG. UX-UI subtask + EMPTY branch diff + no record -> pass-through.
+write_state '{"taskId":"99","taskName":"claimed but unstarted","subtasks":[{"id":"1","name":"design","type":"UX-UI","status":"in_progress"}]}'
+OUT=$(empty_hook); assert "empty diff + UX-UI subtask -> pass (nothing to capture)" "$?" "0"
+
+# Test 19: same, via the visualDiff.forceUi flag rather than a subtask type.
+write_state '{"taskId":"99","visualDiff":{"forceUi":true}}'
+OUT=$(empty_hook); assert "empty diff + forceUi flag -> pass" "$?" "0"
+
+# Test 20: NEGATIVE CONTROL. The override is narrowed, not removed - a NON-EMPTY
+# NON_UI-by-path diff (i18n only) with a UX-UI subtask must STILL block.
+git -C "$TMP" checkout -q feat-i18n 2>/dev/null
+write_state '{"taskId":"77","subtasks":[{"id":"1","name":"translate","type":"UX-UI","status":"in_progress"}]}'
+OUT=$( ( cd "$TMP" && CLAUDE_PROJECT_DIR="$TMP" "$HOOK" <<<"$INPUT" 2>&1 ) ); RC=$?
+assert "non-empty i18n diff + UX-UI subtask -> still BLOCK (override intact)" "$RC" "2"
+
+# Test 21: an uncommitted-only working tree is still an empty COMMITTED diff -> pass.
+git -C "$TMP" checkout -q feat-empty 2>/dev/null
+mkdir -p "$TMP/src/components"
+echo "export const C = () => null" > "$TMP/src/components/Draft.tsx"
+write_state '{"taskId":"99","subtasks":[{"id":"1","name":"design","type":"UX-UI","status":"in_progress"}]}'
+OUT=$(empty_hook); assert "uncommitted-only change -> pass (no committed diff)" "$?" "0"
+rm -f "$TMP/src/components/Draft.tsx"
+
+# Test 22: a dash-leading git.defaultBase is sanitized and never reaches git as an
+# option (git option injection). Falls back to main; feat-empty is empty vs main -> pass.
+cat > "$CONFIG" <<'EOFC'
+{
+  "version": "1",
+  "git": { "defaultBase": "--output=/tmp/pwned" },
+  "monday": { "productId": "1" },
+  "environments": { "uat": { "url": "https://staging.example.com" } },
+  "visualDiff": { "enabled": true },
+  "hooks": { "enabled": ["stop-visual-diff-check"] }
+}
+EOFC
+write_state '{"taskId":"99","subtasks":[{"id":"1","name":"design","type":"UX-UI","status":"in_progress"}]}'
+OUT=$(empty_hook); assert "dash-leading defaultBase -> sanitized, no option injection" "$?" "0"
+[ ! -e /tmp/pwned ]; assert "dash-leading defaultBase wrote no file" "$?" "0"
+write_config
+
 echo ""
 echo "==================================================="
 echo "stop-visual-diff-check tests: $PASS_COUNT passed, $FAIL_COUNT failed"
