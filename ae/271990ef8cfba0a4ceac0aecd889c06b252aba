@@ -1,0 +1,27 @@
+plugin/hooks/__tests__/stop-visual-diff-check.test.sh
+  s_1e0addd4eb8ea0::t_d0ebd6e7c7af42 158-207
+plugin/hooks/stop-visual-diff-check.sh
+  s_1e0addd4eb8ea0::t_0ad6c49c4659f3 27-29,46-47,130-141,143-150
+plugin/scripts/__tests__/ui-diff-eval.test.sh
+  s_1e0addd4eb8ea0::t_91e0892925fdaf 118-147
+plugin/scripts/ui-diff-eval.sh
+  s_1e0addd4eb8ea0::t_69640172dd2a3d 23-25,28-35,71-79,87,93-101
+plugin/skills/ship-pr/SKILL.md
+  s_1e0addd4eb8ea0::t_90fce97c9224e9 45
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "ae271990ef8cfba0a4ceac0aecd889c06b252aba",
+  "prompts": {},
+  "sessions": {
+    "s_1e0addd4eb8ea0": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "8d09a760-777f-4534-9f37-00025240642b",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Tomas Soucek <tomassoucek@Tomass-MacBook-Pro.local>"
+    }
+  }
+}
