@@ -34,8 +34,33 @@ if ! STATE_FILE_PATH="$STATE_FILE" python3 -c "import json, os; json.load(open(o
   exit 0
 fi
 
-# Derive base branch dynamically (default to main)
-BASE_BRANCH=$(cd "$PROJECT_ROOT" && git rev-parse --verify origin/main >/dev/null 2>&1 && echo "origin/main" || echo "main")
+# Resolve the base branch from project-config git.defaultBase (default "main").
+# NEVER hardcode origin/main: on a project whose defaultBase is "staging",
+# origin/staging carries every merged-but-unreleased task, so diffing against
+# origin/main attributes that entire delta to a freshly claimed branch and blocks
+# the very first stop of every session. Prefer $PROJECT_ROOT's own config —
+# CLAUDE_PROJECT_DIR (what read_project_config reads) does not follow
+# EnterWorktree, and PROJECT_ROOT does.
+BASE_BRANCH_NAME=""
+PROJECT_CONFIG="$PROJECT_ROOT/.claude/project-config.json"
+if [ -f "$PROJECT_CONFIG" ]; then
+  BASE_BRANCH_NAME=$(jq -r '.git.defaultBase // empty' "$PROJECT_CONFIG" 2>/dev/null)
+fi
+[ -z "$BASE_BRANCH_NAME" ] && BASE_BRANCH_NAME=$(read_project_config '.git.defaultBase')
+
+# The value is interpolated into git commands, so constrain it to a branch-name
+# charset and reject a leading dash (git option injection). Anything else falls
+# back to "main" rather than reaching git.
+if ! printf '%s' "$BASE_BRANCH_NAME" | grep -Eq '^[A-Za-z0-9][A-Za-z0-9._/-]*$'; then
+  BASE_BRANCH_NAME="main"
+fi
+
+# Prefer the remote-tracking ref so a stale local base branch can't shrink the diff.
+if (cd "$PROJECT_ROOT" && git rev-parse --verify "origin/$BASE_BRANCH_NAME" >/dev/null 2>&1); then
+  BASE_BRANCH="origin/$BASE_BRANCH_NAME"
+else
+  BASE_BRANCH="$BASE_BRANCH_NAME"
+fi
 
 # Check for source file changes (exclude .claude/, CLAUDE.md, memory/, .gitignore)
 HAS_SOURCE_CHANGES=$(cd "$PROJECT_ROOT" && git diff "$BASE_BRANCH"...HEAD --name-only 2>/dev/null | grep -v '^\.\(claude\|gitignore\)' | grep -v '^CLAUDE\.md$' | grep -v '^memory/' | head -1)
