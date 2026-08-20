@@ -33,6 +33,7 @@ import {
   buildColumnValues,
   getColumnText,
   getLinkedItems,
+  resolveLinkedItems,
 } from "../tools/utils.ts";
 
 // Statuses that count as "release-completed" for the aggregate calculation.
@@ -189,24 +190,34 @@ export async function recomputeVersionStatus(versionId: number): Promise<string 
   const linkedTasks = getLinkedItems(versionColMap, VERSION_COLUMNS.connectedTasks);
   if (linkedTasks.length === 0) return null; // empty version, no change
 
-  // Read all linked tasks' statuses in one query
-  const taskIds = linkedTasks.map(t => Number(t.id));
-  const tasksQuery = `
-    query {
-      items(ids: [${taskIds.join(", ")}]) {
-        id
-        column_values(ids: ["${TASK_COLUMNS.status}"]) {
-          id
-          text
-        }
-      }
-    }
-  `;
-  const tasksRes = await executeMondayQuery<any>(tasksQuery);
-  const tasks: Array<{ id: string; status: string }> = (tasksRes.items || []).map((t: any) => {
+  // Read all linked tasks' statuses through the shared chunking resolver.
+  //
+  // This used to be a hand-rolled `items(ids: [...])` with every id inlined and
+  // no `limit`, which was wrong in two independent ways once a version grew:
+  //   - past 100 ids Monday rejects the query outright ("Argument 'ids'
+  //     exceeding the 100 limit"), surfacing as a recompute failure on EVERY
+  //     status transition touching that version;
+  //   - below 100 it was quietly worse — `items(ids:)` defaults to `limit: 25`
+  //     however many ids you pass, so a 40-task version computed its aggregate
+  //     from 25 tasks and could flip to Release Candidate while 15 were still
+  //     open.
+  // `resolveLinkedItems` chunks at 100 AND passes an explicit limit, so it fixes
+  // both. Do not re-inline this query.
+  const taskIds = linkedTasks
+    .map(t => Number(t.id))
+    .filter(id => Number.isInteger(id) && id > 0);
+  if (taskIds.length === 0) return null;
+  const taskItems = await resolveLinkedItems(taskIds, [TASK_COLUMNS.status]);
+  const tasks: Array<{ id: string; status: string }> = taskItems.map((t: any) => {
     const colMap = new Map<string, any>(t.column_values?.map((c: any) => [c.id, c]) || []);
     return { id: t.id, status: getColumnText(colMap, TASK_COLUMNS.status) || "" };
   });
+
+  // A truncated read must never drive a status flip: computing "all ready" from
+  // a short list is exactly how a version flips to Release Candidate early.
+  if (tasks.length !== taskIds.length) {
+    return `Version state: ${versionItem.name} (#${versionId}) recompute skipped — read ${tasks.length} of ${taskIds.length} linked tasks`;
+  }
 
   const readyCount = tasks.filter(t => RELEASE_COMPLETED_STATUSES.has(t.status)).length;
   const aggregate = `${readyCount}/${tasks.length} tasks at Pending Deploy / Done`;
