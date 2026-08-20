@@ -24,6 +24,9 @@
 # ui-diff-eval.sh --force-ui and makes the override real, not skill-prose. The
 # subtask types come from active-task.json (written by /pickup-task), so this
 # gate enforces independently of whether /ship-pr judged the override correctly.
+# The override is PASSED INTO the classifier as --force-ui, never evaluated in its
+# place: it turns a NON_UI-by-path verdict into UI, and cannot manufacture a UI
+# verdict for a branch with no diff at all.
 #
 # Honest caveat: visualDiff.skipReason is self-attested (the agent writes the
 # string; the PR body carries the same note as the human-visible audit). This
@@ -40,7 +43,8 @@
 #   - environments.uat.url is not an https:// URL (no staging to capture on)
 #   - running under CI (a runner can't reach a browser/staging — mirrors
 #     stop-task-check Stage 3 relaxation)
-#   - branch diff is NON_UI (ui-diff-eval.sh)
+#   - branch diff is NON_UI (ui-diff-eval.sh), which INCLUDES an empty diff even
+#     under the UX-UI override — nothing changed means nothing to capture
 #   - visualDiff.routes non-empty OR visualDiff.skipReason non-empty
 #   - any unexpected error
 
@@ -123,22 +127,27 @@ print("YES" if forced else "NO")
 PY
 )
 
-if [ "$FORCE_UI" = "YES" ]; then
-  : # UX-UI override → treat as UI regardless of path classifier; require a record.
-else
-  # Classify the branch diff deterministically. NON_UI → pass-through.
-  EVAL_SCRIPT="$(dirname "${BASH_SOURCE[0]}")/../scripts/ui-diff-eval.sh"
-  if [ ! -x "$EVAL_SCRIPT" ] && [ ! -f "$EVAL_SCRIPT" ]; then
-    # Classifier missing — can't determine UI-ness, fail open.
-    exit 0
-  fi
+# Classify the branch diff deterministically, ALWAYS — the UX-UI override is passed
+# INTO the classifier (--force-ui), never evaluated instead of it (#3173683437).
+# Evaluating the override in place of the diff meant an EMPTY diff was never
+# detected: /pickup-task records subtask types at claim time, so every UX-UI task
+# is FORCE_UI=YES before a line is written, and the gate demanded a before-pass
+# capture of a branch byte-identical to base. Delegating also keeps base
+# resolution and diff handling in ONE place rather than adding a second copy here.
+EVAL_SCRIPT="$(dirname "${BASH_SOURCE[0]}")/../scripts/ui-diff-eval.sh"
+if [ ! -x "$EVAL_SCRIPT" ] && [ ! -f "$EVAL_SCRIPT" ]; then
+  # Classifier missing — can't determine UI-ness, fail open.
+  exit 0
+fi
 
-  if ( cd "$PROJECT_ROOT" 2>/dev/null && bash "$EVAL_SCRIPT" >/dev/null 2>&1 ); then
-    : # exit 0 from ui-diff-eval.sh == UI verdict → keep checking below
-  else
-    # NON_UI (exit 1) or eval error → pass-through (non-UI work isn't gated).
-    exit 0
-  fi
+EVAL_ARGS=()
+[ "$FORCE_UI" = "YES" ] && EVAL_ARGS+=(--force-ui)
+
+if ( cd "$PROJECT_ROOT" 2>/dev/null && bash "$EVAL_SCRIPT" "${EVAL_ARGS[@]+"${EVAL_ARGS[@]}"}" >/dev/null 2>&1 ); then
+  : # exit 0 from ui-diff-eval.sh == UI verdict → keep checking below
+else
+  # NON_UI (exit 1, incl. an empty diff) or eval error → pass-through.
+  exit 0
 fi
 
 # UI diff detected. Require a visual-diff record: routes captured OR an
