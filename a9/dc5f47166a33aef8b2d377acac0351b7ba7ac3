@@ -1,0 +1,30 @@
+plugin/src/services/__tests__/version-aggregate-chunking.test.ts
+  s_d86d98cdfb662a::t_086288ac1f763b 1-151
+  s_d86d98cdfb662a::t_af3bf209c00693 152-161
+plugin/.claude-plugin/plugin.json
+  s_d86d98cdfb662a::t_3da8a382836c05 3
+plugin/dist/services/version-state-machine.js
+  s_d86d98cdfb662a::t_47b457bcd6bab5 26,166-185,189-193
+plugin/dist/tools/utils.js
+  s_d86d98cdfb662a::t_2828936ae80d13 105-119
+plugin/src/services/version-state-machine.ts
+  s_d86d98cdfb662a::t_eec533e2307e4e 36,193-211,216-221
+plugin/src/tools/utils.ts
+  s_d86d98cdfb662a::t_74c0d6ed56c50f 131-145,148
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "a9dc5f47166a33aef8b2d377acac0351b7ba7ac3",
+  "prompts": {},
+  "sessions": {
+    "s_d86d98cdfb662a": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "54008635-2e8b-4bcc-b37c-f2e8fae0a625",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Tomas Soucek <tomassoucek@Tomass-MacBook-Pro.local>"
+    }
+  }
+}
