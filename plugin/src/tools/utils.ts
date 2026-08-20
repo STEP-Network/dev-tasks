@@ -128,22 +128,24 @@ export async function checkDependenciesResolved(dependencyItemIds: number[]): Pr
     return { resolved: true, blockers: [] };
   }
 
-  const query = `
-    query {
-      items(ids: [${dependencyItemIds.join(",")}]) {
-        id
-        name
-        column_values(ids: ["${TASK_COLUMNS.status}"]) {
-          id
-          text
-        }
+  // Route through the chunking resolver rather than inlining every id: a bare
+  // `items(ids:)` silently defaults to `limit: 25` and hard-fails past 100.
+  // This is a GATE — a short read here reports `resolved: true` and lets a
+  // blocked task be claimed, so under-reading is worse than erroring.
+  const ids = dependencyItemIds.filter(id => Number.isInteger(id) && id > 0);
+  const items = await resolveLinkedItems(ids, [TASK_COLUMNS.status]);
+  const blockers: Array<{ id: number; name: string; status: string }> = [];
+
+  // Fail CLOSED on a short read: an id we could not resolve is treated as an
+  // unresolved blocker, never silently dropped from the check.
+  if (items.length !== ids.length) {
+    const seen = new Set(items.map((i: any) => String(i.id)));
+    for (const id of ids) {
+      if (!seen.has(String(id))) {
+        blockers.push({ id, name: `#${id}`, status: "Unreadable" });
       }
     }
-  `;
-
-  const response = await executeMondayQuery<any>(query);
-  const items = response.items || [];
-  const blockers: Array<{ id: number; name: string; status: string }> = [];
+  }
 
   for (const item of items) {
     const status = item.column_values?.[0]?.text?.trim() || "Unknown";
