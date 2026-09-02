@@ -330,8 +330,15 @@ print(target)
   done
 fi
 
-# (c) SHA-scoped pre-push gate: if command contains 'git push', check marker + SHA
-if echo "$ACTUAL_CMD" | grep -q "git push"; then
+# (c) SHA-scoped pre-push gate: if command contains 'git push', check marker + SHA.
+# Opt-out: project-config.git.prePushMarker = false, for consumers whose CI is
+# the validation authority (the PR runs the same build/lint/test within a
+# minute of the push). Default true keeps today's behaviour for everyone else.
+# NOTE: deliberately NOT `.git.prePushMarker // true` — jq's `//` treats a
+# literal `false` the same as `null`/absent, so that form always evaluates to
+# `true` and the opt-out could never fire. Use an explicit null check instead.
+PREPUSH_MARKER=$(read_project_config '(.git.prePushMarker | if . == null then true else . end) | tostring')
+if [ "$PREPUSH_MARKER" != "false" ] && echo "$ACTUAL_CMD" | grep -q "git push"; then
   BRANCH=$(cd "$PROJECT_ROOT" && git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "unknown")
   SAFE_BRANCH=$(echo "$BRANCH" | tr '/' '-')
   MARKER="/tmp/.claude-prepush-${SAFE_BRANCH}"

@@ -48,6 +48,11 @@
           "type": "array",
           "items": { "type": "string" },
           "default": ["main", "staging", "master", "production", "prod"]
+        },
+        "prePushMarker": {
+          "description": "Whether bash-guard gate (c) requires a fresh local build/lint/test marker before `git push`. Default true. Set false when CI is the validation authority (the PR runs the same checks within a minute of the push) — see the PolAds pipeline Wave 1 plan.",
+          "type": "boolean",
+          "default": true
         }
       }
     },
