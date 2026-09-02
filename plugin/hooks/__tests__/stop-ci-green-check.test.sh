@@ -209,6 +209,42 @@ run_case "Skip (human) overrides required pending → ALLOW" 0 "$REQ_REQ_PENDING
 
 write_req_config absent
 
+# --- ci.greenBeforeStop opt-out (pipeline Wave 1) -----------------------------
+echo ""
+echo "ci.greenBeforeStop opt-out:"
+
+: > "$MARKER"
+rm -f "$ACK_FILE"
+write_state ""
+printf '{"version":"1","monday":{"productId":"1"},"ci":{"greenBeforeStop":false,"requiredChecks":["Test"]}}\n' > .claude/project-config.json
+out=$(echo "{\"cwd\":\"$TEST_DIR/repo\"}" | MOCK_CHECKS="$PENDING_CHECKS" MONDAY_API_KEY="" MOCK_CURL_RESPONSE="" bash "$HOOK" 2>&1)
+code=$?
+if [ "$code" -eq 0 ] && echo "$out" | grep -q "greenBeforeStop"; then
+  echo "  PASS: greenBeforeStop=false exits 0 and says why, even with pending required checks"
+  PASS=$((PASS+1))
+else
+  echo "  FAIL: greenBeforeStop=false should exit 0 mentioning greenBeforeStop (exit $code)"
+  echo "         output: $out"
+  FAIL=$((FAIL+1))
+fi
+
+: > "$MARKER"
+rm -f "$ACK_FILE"
+write_state ""
+printf '{"version":"1","monday":{"productId":"1"},"ci":{"requiredChecks":["Test"]}}\n' > .claude/project-config.json
+out=$(echo "{\"cwd\":\"$TEST_DIR/repo\"}" | MOCK_CHECKS="$PENDING_CHECKS" MONDAY_API_KEY="" MOCK_CURL_RESPONSE="" bash "$HOOK" 2>&1)
+code=$?
+if [ "$code" -eq 2 ] && ! echo "$out" | grep -q "greenBeforeStop"; then
+  echo "  PASS: default still blocks on pending and never mentions the opt-out"
+  PASS=$((PASS+1))
+else
+  echo "  FAIL: default should BLOCK (exit 2) without mentioning greenBeforeStop (exit $code)"
+  echo "         output: $out"
+  FAIL=$((FAIL+1))
+fi
+
+rm -f .claude/project-config.json
+
 # --- Cleanup ------------------------------------------------------------------
 rm -f "$MARKER" "$ACK_FILE"
 cd /

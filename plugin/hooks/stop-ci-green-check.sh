@@ -1,12 +1,31 @@
 #!/bin/bash
 
-# STEP-wide policy: CI must be green before session exit (no opt-out). This
-# hook is always-on regardless of project-config.hooks.enabled[]. The previous
-# opt-in gate was lifted as part of the multi-project alignment (Phase 3).
+# STEP-wide policy: CI must be green before session exit. This hook is
+# always-on regardless of project-config.hooks.enabled[]. The previous opt-in
+# gate was lifted as part of the multi-project alignment (Phase 3).
+# Pipeline Wave 1 (2026-09) added a narrow opt-out — project-config
+# ci.greenBeforeStop = false — for consumers whose merge is already gated
+# server-side by a required-status-checks ruleset, where this hook's wait
+# adds nothing but latency. See the check immediately below.
 
 # Redirect stdout to stderr so block messages (exit 2) reach Claude Code
 # correctly. Per Claude Code hooks spec, block reasons must be on stderr.
 exec >&2
+
+source "$(dirname "${BASH_SOURCE[0]}")/lib/config-reader.sh"
+
+# Opt-out (pipeline Wave 1): consumers whose merge is gated SERVER-side by a
+# required-status-checks ruleset gain nothing from a client-side copy of the
+# same rule except a wait. Default true keeps the STEP-wide policy for
+# everyone who has not opted out.
+# NOTE: deliberately NOT `.ci.greenBeforeStop // true` — jq's `//` treats a
+# literal `false` the same as `null`/absent, so that form always evaluates to
+# `true` and the opt-out could never fire (same gotcha as bash-guard gate (c)'s
+# git.prePushMarker). Use an explicit null check instead.
+if [ "$(read_project_config '(.ci.greenBeforeStop | if . == null then true else . end) | tostring')" = "false" ]; then
+  echo "stop-ci-green-check: skipped — ci.greenBeforeStop is false (server-side ruleset is the gate)."
+  exit 0
+fi
 
 # Hook: Stop
 # HARD BLOCK: refuses session exit when a push happened in this session and CI
