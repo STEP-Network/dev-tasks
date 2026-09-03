@@ -28,9 +28,9 @@ Read `git.prePushMarker` from `.claude/project-config.json` (default `true`).
 1. `pnpm build` — must pass
 2. `pnpm lint` — must pass
 3. `pnpm test` — must pass
-4. `pnpm playwright test` — the per-task spec must pass (if UI/flow changes). The FULL suite is NOT a pre-push gate.
+4. `pnpm playwright test` — the per-task spec must pass (if UI/flow changes). The FULL suite is NOT a pre-push gate — it runs in-session advisory against staging post-merge (Phase 6.6 step 20f.8 → `/dev-tasks:run-full-e2e`).
 5. `pnpm validate-schema --env testing` (if migration files touched)
-6. Migrations: do NOT auto-apply to production. Consult the consumer's `.claude/rules/database.md`.
+6. Migrations: do NOT auto-apply to production. Consult the consumer's `.claude/rules/database.md`. Generic pattern: apply locally during dev → ship migration on the PR → CI/CD applies to staging on merge → `/release-version` applies to production at release time.
 
 ### Phase 2: Push Gate
 5. Only when `git.prePushMarker` is not `false`: `echo $(git rev-parse HEAD) > /tmp/.claude-prepush-$(git rev-parse --abbrev-ref HEAD | tr '/' '-')` — allows bash-guard gate (c) to permit the push. When it is `false` the gate is off and no marker is needed.
