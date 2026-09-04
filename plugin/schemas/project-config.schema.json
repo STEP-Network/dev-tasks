@@ -48,6 +48,11 @@
           "type": "array",
           "items": { "type": "string" },
           "default": ["main", "staging", "master", "production", "prod"]
+        },
+        "prePushMarker": {
+          "description": "Whether bash-guard gate (c) requires a fresh local build/lint/test marker before `git push`. Default true. Set false when CI is the validation authority (the PR runs the same checks within a minute of the push) — see the PolAds pipeline Wave 1 plan.",
+          "type": "boolean",
+          "default": true
         }
       }
     },
@@ -125,6 +130,11 @@
               "default": ["migrations/**", "**/migrations/**", "db/**", "**/db/**", "auth/**", "**/auth/**", "api/**", "**/api/**", "*.sql"]
             }
           }
+        },
+        "greenBeforeStop": {
+          "description": "Whether stop-ci-green-check refuses session exit while CI is red. Default true. Set false when a server-side required-status-checks ruleset already makes a red PR unmergeable.",
+          "type": "boolean",
+          "default": true
         }
       }
     },

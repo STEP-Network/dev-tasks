@@ -330,43 +330,54 @@ print(target)
   done
 fi
 
-# (c) SHA-scoped pre-push gate: if command contains 'git push', check marker + SHA
+# (c) SHA-scoped pre-push gate: if command contains 'git push', check marker + SHA.
+# Opt-out: project-config.git.prePushMarker = false, for consumers whose CI is
+# the validation authority (the PR runs the same build/lint/test within a
+# minute of the push). Default true keeps today's behaviour for everyone else.
+# The config read stays INSIDE the git-push branch so a non-push command keeps
+# the original cheap grep short-circuit and never spawns jq.
 if echo "$ACTUAL_CMD" | grep -q "git push"; then
-  BRANCH=$(cd "$PROJECT_ROOT" && git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "unknown")
-  SAFE_BRANCH=$(echo "$BRANCH" | tr '/' '-')
-  MARKER="/tmp/.claude-prepush-${SAFE_BRANCH}"
+  # NOTE: deliberately NOT `.git.prePushMarker // true` — jq's `//` treats a
+  # literal `false` the same as `null`/absent, so that form always evaluates to
+  # `true` and the opt-out could never fire. Use an explicit null check instead.
+  PREPUSH_MARKER=$(read_project_config '(.git.prePushMarker | if . == null then true else . end) | tostring')
+  if [ "$PREPUSH_MARKER" != "false" ]; then
+    BRANCH=$(cd "$PROJECT_ROOT" && git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "unknown")
+    SAFE_BRANCH=$(echo "$BRANCH" | tr '/' '-')
+    MARKER="/tmp/.claude-prepush-${SAFE_BRANCH}"
 
-  if [ ! -f "$MARKER" ]; then
-    echo "BLOCKED: Pre-push gate failed — no validation marker found."
-    echo "You must run /ship-pr (which runs build + lint + test + schema check) before pushing."
-    echo ""
-    echo "Alternatively, run: pnpm build && pnpm lint && pnpm test"
-    echo "Then create the marker: echo \$(git rev-parse HEAD) > $MARKER"
-    exit 2
-  fi
-
-  # Fix 5: Verify the marker SHA matches current HEAD
-  MARKER_SHA=$(cat "$MARKER" 2>/dev/null | tr -d '[:space:]')
-  HEAD_SHA=$(cd "$PROJECT_ROOT" && git rev-parse HEAD 2>/dev/null)
-
-  # If the marker contains a SHA (not empty, not just "touched"), verify it matches
-  if [ -n "$MARKER_SHA" ] && [ ${#MARKER_SHA} -ge 7 ]; then
-    if [ "$MARKER_SHA" != "$HEAD_SHA" ]; then
-      echo "BLOCKED: Pre-push gate failed — validation marker is STALE."
+    if [ ! -f "$MARKER" ]; then
+      echo "BLOCKED: Pre-push gate failed — no validation marker found."
+      echo "You must run /ship-pr (which runs build + lint + test + schema check) before pushing."
       echo ""
-      echo "Marker was created for commit: ${MARKER_SHA:0:7}"
-      echo "Current HEAD is:               ${HEAD_SHA:0:7}"
-      echo ""
-      echo "New commits were made after the last validation. Re-run:"
-      echo "  pnpm build && pnpm lint && pnpm test"
-      echo "  echo \$(git rev-parse HEAD) > $MARKER"
-      echo ""
-      echo "Or run /ship-pr to handle this automatically."
+      echo "Alternatively, run: pnpm build && pnpm lint && pnpm test"
+      echo "Then create the marker: echo \$(git rev-parse HEAD) > $MARKER"
       exit 2
     fi
-  fi
 
-  echo "Pre-push gate: PASSED (marker valid for branch: $BRANCH, SHA: ${HEAD_SHA:0:7})"
+    # Fix 5: Verify the marker SHA matches current HEAD
+    MARKER_SHA=$(cat "$MARKER" 2>/dev/null | tr -d '[:space:]')
+    HEAD_SHA=$(cd "$PROJECT_ROOT" && git rev-parse HEAD 2>/dev/null)
+
+    # If the marker contains a SHA (not empty, not just "touched"), verify it matches
+    if [ -n "$MARKER_SHA" ] && [ ${#MARKER_SHA} -ge 7 ]; then
+      if [ "$MARKER_SHA" != "$HEAD_SHA" ]; then
+        echo "BLOCKED: Pre-push gate failed — validation marker is STALE."
+        echo ""
+        echo "Marker was created for commit: ${MARKER_SHA:0:7}"
+        echo "Current HEAD is:               ${HEAD_SHA:0:7}"
+        echo ""
+        echo "New commits were made after the last validation. Re-run:"
+        echo "  pnpm build && pnpm lint && pnpm test"
+        echo "  echo \$(git rev-parse HEAD) > $MARKER"
+        echo ""
+        echo "Or run /ship-pr to handle this automatically."
+        exit 2
+      fi
+    fi
+
+    echo "Pre-push gate: PASSED (marker valid for branch: $BRANCH, SHA: ${HEAD_SHA:0:7})"
+  fi
 fi
 
 exit 0

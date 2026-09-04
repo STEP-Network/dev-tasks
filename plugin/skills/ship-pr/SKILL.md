@@ -17,15 +17,23 @@ Read `.claude/project-config.json`. Extract `git.defaultBase`, `git.hotfixBase`,
 4. All `done` subtasks must have `actualHours`. Missing → PROMPT.
 
 ### Phase 1: Validation
+
+Read `git.prePushMarker` from `.claude/project-config.json` (default `true`).
+
+**If `false`** — CI is the validation authority for this project: the PR runs lint, typecheck and the test shards within a minute of the push, and the Vercel build status is a required check. Skip steps 1–3 below. Still run:
+4. `pnpm playwright test <per-task spec>` — only if a per-task spec exists for UI/flow changes.
+5. `pnpm validate-schema --env testing` — only if migration files were touched.
+
+**If `true`** (default) — run all of:
 1. `pnpm build` — must pass
 2. `pnpm lint` — must pass
 3. `pnpm test` — must pass
 4. `pnpm playwright test` — the per-task spec must pass (if UI/flow changes). The FULL suite is NOT a pre-push gate — it runs in-session advisory against staging post-merge (Phase 6.6 step 20f.8 → `/dev-tasks:run-full-e2e`).
 5. `pnpm validate-schema --env testing` (if migration files touched)
-6. Migrations: do NOT auto-apply to production. Consult consumer's `.claude/rules/database.md`. Generic pattern: apply locally during dev → ship migration on the PR → CI/CD applies to staging on merge → `/release-version` applies to production at release time.
+6. Migrations: do NOT auto-apply to production. Consult the consumer's `.claude/rules/database.md`. Generic pattern: apply locally during dev → ship migration on the PR → CI/CD applies to staging on merge → `/release-version` applies to production at release time.
 
 ### Phase 2: Push Gate
-5. `touch /tmp/.claude-prepush-$(git rev-parse --abbrev-ref HEAD | tr '/' '-')` — allows `bash-guard.sh` to permit push.
+5. Only when `git.prePushMarker` is not `false`: `echo $(git rev-parse HEAD) > /tmp/.claude-prepush-$(git rev-parse --abbrev-ref HEAD | tr '/' '-')` — allows bash-guard gate (c) to permit the push. When it is `false` the gate is off and no marker is needed.
 6. Stage and commit if uncommitted changes exist.
 6.3. **CI Gate evaluation (per-push, v0.26.0)** — resolve the task's CI Gate (`getTask` → `ciGate`; the Monday column is authoritative). Hotfix-base PRs NEVER honor a skip — treat as `Full` and tell the user if the column says otherwise.
    - **Gate is `Skip (human)`**: honor it. Note in the PR body ("CI Gate: Skip (human) — wait + e2e gates skipped by board authorization").

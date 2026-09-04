@@ -202,6 +202,28 @@ clean_marker
 run_test "empty list + no marker → BLOCK by gate (c)" 2 "git push origin main" "marker"
 
 # ============================================================
+# gate (c) opt-out: git.prePushMarker (pipeline Wave 1)
+# ============================================================
+echo "## gate (c) opt-out — git.prePushMarker"
+
+# ── gate (c) opt-out: git.prePushMarker (pipeline Wave 1) ──────────────────
+rm -f /tmp/.claude-prepush-main   # no marker for this branch
+
+cat > "$TEST_DIR/.claude/project-config.json" <<CFG
+{ "version": "1", "git": { "prePushMarker": false, "protectedBranches": [] } }
+CFG
+OUT=$(printf '{"tool_name":"Bash","tool_input":{"command":"git push -u origin main"}}' | "$HOOK" 2>&1); CODE=$?
+if [ "$CODE" -eq 0 ]; then PASS=$((PASS+1)); echo "PASS: prePushMarker=false allows push without marker"
+else FAIL=$((FAIL+1)); echo "FAIL: prePushMarker=false should allow push (exit $CODE): $OUT"; fi
+
+cat > "$TEST_DIR/.claude/project-config.json" <<CFG
+{ "version": "1", "git": { "protectedBranches": [] } }
+CFG
+OUT=$(printf '{"tool_name":"Bash","tool_input":{"command":"git push -u origin main"}}' | "$HOOK" 2>&1); CODE=$?
+if [ "$CODE" -eq 2 ] && echo "$OUT" | grep -q "no validation marker"; then PASS=$((PASS+1)); echo "PASS: default still requires the marker"
+else FAIL=$((FAIL+1)); echo "FAIL: default should block without marker (exit $CODE): $OUT"; fi
+
+# ============================================================
 # Cleanup
 # ============================================================
 cd /
