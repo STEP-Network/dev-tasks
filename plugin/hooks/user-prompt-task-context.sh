@@ -255,25 +255,55 @@ def read_cache(cache_path: str, pr_num: str, cache_ttl: int):
     return cache.get("data")
 
 
-def fetch_pr_state(pr_num: str, project_root: str):
+def _run_gh(args, project_root: str, env=None):
     try:
-        result = subprocess.run(
-            [
-                "gh",
-                "pr",
-                "view",
-                pr_num,
-                "--json",
-                "state,reviewDecision,statusCheckRollup,mergeable",
-            ],
+        return subprocess.run(
+            args,
             capture_output=True,
             text=True,
             timeout=5,
             cwd=project_root,
+            env=env,
         )
     except Exception:
         return None
-    if result.returncode != 0:
+
+
+def fetch_pr_state(pr_num: str, project_root: str):
+    """Read PR state including statusCheckRollup.
+
+    `statusCheckRollup` is refused for a FINE-GRAINED personal access token
+    ("Resource not accessible by personal access token"), and `gh` EXITS 0 on
+    that refusal with empty stdout — so a returncode check alone reads the
+    failure as success-with-no-data (#3200367976). Retry once with the ambient
+    token cleared so `gh` falls back to its stored classic credential.
+
+    The retry, rather than an unconditional unset, is deliberate: inside GitHub
+    Actions the injected token is the only credential and there is no keyring,
+    so clearing it unconditionally would break the very environment that works.
+    subprocess takes no shell prefix, hence env= rather than "GH_TOKEN= gh ...".
+    """
+    args = [
+        "gh",
+        "pr",
+        "view",
+        pr_num,
+        "--json",
+        "state,reviewDecision,statusCheckRollup,mergeable",
+    ]
+
+    result = _run_gh(args, project_root)
+
+    # Empty stdout is a FAILURE here even on a zero exit — that is the bug shape.
+    if result is None or result.returncode != 0 or not (result.stdout or "").strip():
+        stderr = (result.stderr if result else "") or ""
+        if result is None or "not accessible" in stderr or not (result.stdout or "").strip():
+            env = dict(os.environ)
+            env.pop("GH_TOKEN", None)
+            env.pop("GITHUB_TOKEN", None)
+            result = _run_gh(args, project_root, env=env)
+
+    if result is None or result.returncode != 0:
         return None
     try:
         return json.loads(result.stdout)
