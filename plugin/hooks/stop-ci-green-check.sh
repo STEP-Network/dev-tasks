@@ -47,6 +47,7 @@ exec >&2
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/lib/resolve-agent-cwd.sh"
+source "$SCRIPT_DIR/lib/gh-checks.sh"
 
 # Read the Stop-hook payload (may be empty for older Claude Code versions —
 # resolve_agent_cwd handles that gracefully). Prefer agent's actual cwd over
@@ -151,7 +152,21 @@ fi
 
 # Query CI state. `gh pr checks` returns one row per check name with its
 # bucket: pass | fail | pending | skipping | cancelled.
-STATUS=$(cd "$PROJECT_ROOT" && gh pr checks "$PR" --json name,bucket 2>/dev/null)
+# Read the check status through the shared helper, NOT a bare `gh` call.
+# `gh pr checks` resolves via GraphQL statusCheckRollup, which a fine-grained
+# PAT is refused by — and `gh` exits 0 on that refusal with empty stdout, so
+# the old `2>/dev/null` form made an auth failure indistinguishable from
+# "this PR has no checks yet". This gate then fell through to its >60s
+# fail-open branch and let every session out without ever reading CI
+# (#3200367976). The helper retries with the ambient token cleared and
+# returns non-zero on a genuine failure.
+GH_CHECKS_ERR=$(mktemp)
+if STATUS=$(cd "$PROJECT_ROOT" && gh_pr_checks "$PR" --json name,bucket 2>"$GH_CHECKS_ERR"); then
+  GH_CHECKS_READABLE=1
+else
+  GH_CHECKS_READABLE=0
+  STATUS=""
+fi
 if [ -z "$STATUS" ] || [ "$STATUS" = "[]" ]; then
   # Race-window detection: if the marker is fresh (<60s old) AND gh returned
   # empty, GitHub probably hasn't registered the workflow runs yet. Block —
@@ -172,9 +187,25 @@ if [ -z "$STATUS" ] || [ "$STATUS" = "[]" ]; then
       exit 2
     fi
   fi
-  # Older than 60s with empty status → likely a real query failure, not a race.
-  # Don't trap the user; warn and let through.
-  echo "WARNING: could not query CI for PR #$PR ($BRANCH). Verify manually before declaring done." >&2
+  # Older than 60s with empty status. Two DIFFERENT causes, and conflating
+  # them is what hid #3200367976 for as long as it lasted:
+  #
+  #   a) the query FAILED (auth, network) — we know nothing about CI
+  #   b) the query SUCCEEDED and the PR genuinely has no checks
+  #
+  # Both used to print the same vague warning and exit 0. Say which it is, and
+  # print the underlying error, so a permanent auth misconfiguration cannot go
+  # on reading like a transient network blip.
+  if [ "$GH_CHECKS_READABLE" = "0" ]; then
+    echo "WARNING: could NOT READ CI for PR #$PR ($BRANCH) — the query itself failed." >&2
+    if [ -s "$GH_CHECKS_ERR" ]; then
+      echo "  gh said: $(head -c 400 "$GH_CHECKS_ERR")" >&2
+    fi
+    echo "  This is NOT \"CI is green\". Verify manually before declaring done." >&2
+  else
+    echo "WARNING: PR #$PR ($BRANCH) reports no checks at all. Verify manually before declaring done." >&2
+  fi
+  rm -f "$GH_CHECKS_ERR"
   exit 0
 fi
 

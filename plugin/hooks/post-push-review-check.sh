@@ -5,6 +5,7 @@
 # projects that don't follow this workflow.
 source "$(dirname "${BASH_SOURCE[0]}")/lib/config-reader.sh"
 source "$(dirname "${BASH_SOURCE[0]}")/lib/resolve-agent-cwd.sh"
+source "$(dirname "${BASH_SOURCE[0]}")/lib/gh-checks.sh"
 hook_enabled "post-push-review-check" || exit 0
 # Hook: PostToolUse (Bash)
 # After a successful git push, poll CI status until complete, then check reviews.
@@ -68,7 +69,13 @@ ATTEMPT=0
 while [ $ATTEMPT -lt $MAX_ATTEMPTS ]; do
   ATTEMPT=$((ATTEMPT + 1))
 
-  CHECKS=$(cd "$PROJECT_ROOT" && gh pr checks "$PR_NUM" 2>/dev/null)
+  # Read via the shared helper: a bare `gh pr checks` returns EMPTY while
+  # exiting 0 under a fine-grained PAT (#3200367976). That was doubly bad
+  # here — empty CHECKS makes PENDING 0, so this poll loop broke on attempt
+  # 1 and reported "0 passed, 0 failed" without ever polling anything.
+  # stderr is suppressed inside the loop only, or a persistent auth failure
+  # would print up to 20 times; the post-loop read below surfaces it once.
+  CHECKS=$(cd "$PROJECT_ROOT" && gh_pr_checks "$PR_NUM" 2>/dev/null) || CHECKS=""
   FAILED=$(echo "$CHECKS" | grep -ci "fail")
   PENDING=$(echo "$CHECKS" | grep -ci "pending\|queued\|in_progress")
   PASSED=$(echo "$CHECKS" | grep -ci "pass\|success")
@@ -88,7 +95,12 @@ done
 echo ""
 
 # Final status
-CHECKS=$(cd "$PROJECT_ROOT" && gh pr checks "$PR_NUM" 2>/dev/null)
+# Final read. stderr is NOT suppressed: if the checks are unreadable the
+# operator must see why, rather than reading an empty result as "no failures".
+if ! CHECKS=$(cd "$PROJECT_ROOT" && gh_pr_checks "$PR_NUM"); then
+  echo "  ⚠️  Could not read CI checks for PR #$PR_NUM — this is NOT a green result." >&2
+  CHECKS=""
+fi
 FAIL_LINES=$(echo "$CHECKS" | grep -i "fail")
 
 if [ -n "$FAIL_LINES" ]; then
