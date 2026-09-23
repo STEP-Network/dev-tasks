@@ -231,3 +231,58 @@ describe("visualDiff capture contract — docs lockstep (v0.37.0)", () => {
     expect(doctor).toContain("storageState")
   })
 })
+
+describe("the tracker block", () => {
+  const validate = makeValidator()
+
+  it("is optional — an existing config with no tracker block still validates", () => {
+    const config = validConfig()
+    expect(validate(config)).toBe(true)
+  })
+
+  it("accepts provider linear", () => {
+    const config = { ...validConfig(), tracker: { provider: "linear" } }
+    expect(validate(config)).toBe(true)
+  })
+
+  it("accepts provider monday", () => {
+    const config = { ...validConfig(), tracker: { provider: "monday" } }
+    expect(validate(config)).toBe(true)
+  })
+
+  it("REFUSES an unknown provider", () => {
+    const config = { ...validConfig(), tracker: { provider: "jira" } }
+    expect(validate(config)).toBe(false)
+  })
+
+  it("REFUSES an unknown key inside the block", () => {
+    const config = { ...validConfig(), tracker: { provider: "linear", boardId: "123" } }
+    expect(validate(config)).toBe(false)
+  })
+
+  it("accepts the linear sub-block with a team key", () => {
+    const config = { ...validConfig(), tracker: { provider: "linear", linear: { teamKey: "STEP" } } }
+    expect(validate(config)).toBe(true)
+  })
+})
+
+describe("retired hooks stay accepted in the enum", () => {
+  const validate = makeValidator()
+
+  it("a config still listing the four retired hooks validates", () => {
+    // Removing an enum member would invalidate PolAds's committed config the
+    // moment the plugin updates, before anyone could edit it.
+    const config = {
+      ...validConfig(),
+      hooks: {
+        enabled: ["stop-task-check", "post-self-review", "subtask-reminder", "subtask-progress-gate"],
+      },
+    }
+    expect(validate(config)).toBe(true)
+  })
+
+  it("the hooks description says they are ignored at runtime", () => {
+    expect(schema.properties.hooks.description).toMatch(/RETIRED in 1\.0/)
+    expect(schema.properties.hooks.description).toMatch(/IGNORED at runtime/)
+  })
+})

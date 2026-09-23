@@ -14,6 +14,7 @@
     "productId": "REQUIRED — Monday Products-board item ID for this product",
     "v1MilestoneEpicIds": []
   },
+  "tracker": { "provider": "monday" },
   "environments": {
     "uat": { "url": "https://test.example.com" }
   },
@@ -43,20 +44,16 @@
       "worktree-required",
       "worktree-path-boundary",
       "branch-task-match",
-      "stop-task-check",
       "protect-sensitive-files",
       "pre-commit-secrets-scan",
-      "subtask-reminder",
       "auto-file-followup-nudge",
       "post-merge-postmortem",
       "post-push-track",
       "post-push-review-check",
-      "post-self-review",
       "pre-compact-task-snapshot",
       "user-prompt-task-context",
       "subprocess-failure",
       "refinement-gate",
-      "subtask-progress-gate",
       "demo-url-required",
       "stop-waiting-for-uat-stage",
       "stop-monday-reconciled-check",
