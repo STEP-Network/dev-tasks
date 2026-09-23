@@ -6,6 +6,12 @@
 source "$(dirname "${BASH_SOURCE[0]}")/lib/config-reader.sh"
 hook_enabled "worktree-path-boundary" || exit 0
 
+# Spec section 4: the worktree gates are agent-only. A human works in the main
+# checkout by design (/dev checks the branch out there), so blocking edits
+# outside a worktree would refuse the normal human flow.
+source "$(dirname "${BASH_SOURCE[0]}")/lib/profile.sh"
+profile_is agent || exit 0
+
 # Redirect stdout to stderr so block messages (exit 2) reach Claude Code
 # correctly. Per Claude Code hooks spec, block reasons must be on stderr.
 exec >&2
