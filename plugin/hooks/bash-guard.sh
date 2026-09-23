@@ -66,6 +66,14 @@ for pattern in "${DESTRUCTIVE_PATTERNS[@]}"; do
   fi
 done
 
+# Gates (d) and (e) are agent-only (spec section 4). A human's parity miss is
+# caught by the CI `i18n` job within a minute of the push; an agent has no
+# equivalent feedback inside its own session, so the commit-time gate stays.
+# Resolving the profile BEFORE reading the i18n config also means a human
+# laptop pays no jq calls for a feature that cannot fire.
+source "$(dirname "${BASH_SOURCE[0]}")/lib/profile.sh"
+if profile_is agent; then
+
 # Resolve i18n config once for sections (d) and (e). Both are dormant unless
 # project-config.i18n.enabled = true.
 I18N_ENABLED=$(read_project_config '.i18n.enabled')
@@ -227,6 +235,8 @@ print(f'Missing ({len(missing)}): {\", \".join(missing)}')
     fi
   fi
 fi
+fi
+# end of gates (d) and (e)
 
 # (f) Protected-branch push block: hard-refuse `git push` whose target ref
 # matches any branch in project-config.git.protectedBranches[] (default list:
