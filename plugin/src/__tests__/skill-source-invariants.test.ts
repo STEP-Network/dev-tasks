@@ -132,6 +132,13 @@ describe("/ship", () => {
     expect(source).toMatch(/STEP-/)
   })
 
+  it("labels by Linear's bare label name, not a group-qualified path", () => {
+    // The real STEP workspace's labels are bare (`chore`, `polads`, ...).
+    // The adapter matches by exact name and silently skips unknown ones, so
+    // a group-qualified path like `type/chore` never applies a label.
+    expect(source).not.toMatch(/--label\s+"?type\//)
+  })
+
   it("arms auto-merge with the exact flags, and never --admin", () => {
     expect(source).toMatch(/gh pr merge .*--auto --squash --delete-branch/)
     expect(source).not.toMatch(/gh pr merge[^\n`]*--admin/)

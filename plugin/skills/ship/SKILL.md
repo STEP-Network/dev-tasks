@@ -76,7 +76,7 @@ guaranteeing the reference is better than blocking on its absence.
 npx tsx "${CLAUDE_PLUGIN_ROOT}/scripts/trackerctl.ts" create \
   --title "<the PR's subject line>" \
   --description "$(git log --format='- %s' "origin/$DEFAULT_BASE..HEAD")" \
-  --label "type/chore" \
+  --label "chore" \
   --state "In Progress"
 ```
 

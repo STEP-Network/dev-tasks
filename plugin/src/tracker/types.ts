@@ -31,7 +31,9 @@ export interface TrackerIssue {
 export interface CreateIssueInput {
   title: string
   description?: string
-  /** Label names, e.g. `["product/polads", "type/chore"]`. Unknown names are skipped. */
+  /** Label names, matched exactly, e.g. `["polads", "chore"]`. Linear's grouped
+   *  labels (`product/`, `type/`, ...) are addressed by their bare child name,
+   *  not the group-qualified path. Unknown names are skipped. */
   labels?: string[]
   /** Target state name. Defaults to the provider's own default when omitted. */
   state?: string

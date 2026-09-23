@@ -4,7 +4,9 @@
  * Workspace assumptions, all created by `pnpm linear:bootstrap` in the PolAds
  * repo (scripts/linear/model.ts): one team with key STEP, twelve states in
  * board order with `Ready` and `In Progress` among them, and the label groups
- * product/ type/ flag/ lock/ source/ bug-status/.
+ * product/ type/ flag/ lock/ source/ bug-status/. Labels are addressed by
+ * their bare child name, not the group-qualified path — e.g. `chore`, not
+ * `type/chore`.
  */
 
 import { linearRequest } from "./linear-client.ts"
