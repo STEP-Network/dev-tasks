@@ -11,7 +11,7 @@
 #   bash .claude/scripts/worktree-audit.sh --auto       # non-interactive GC: remove DONE +
 #                                                       # ABANDONED, unlock stale git locks
 #
-# Classification rules (mirrors .claude/rules/worktree-discipline.md):
+# Classification rules (mirrors rules/worktree-discipline.md):
 #
 #   DONE       branch merged (direct OR via PR squash-merge) AND working tree clean
 #   IN-FLIGHT  working tree dirty, OR branch unmerged but has an .claude/active-task.json

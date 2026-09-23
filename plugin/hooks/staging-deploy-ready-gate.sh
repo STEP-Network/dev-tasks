@@ -10,7 +10,7 @@
 # Rationale: "Waiting for UAT" tells a human the change is live on staging and
 # ready to test. Flipping it the instant a PR merges (or before the post-merge
 # redeploy finishes) is a lie — the reviewer hits the pre-deploy version. This
-# gate enforces the order documented in workflow-pipeline.md:
+# gate enforces the order documented in rules/workflow-pipeline.md:
 #   Merge → wait for staging deploy READY → flip Waiting for UAT.
 #
 # The legitimate writer is /ship-pr: after polling Vercel
@@ -104,7 +104,7 @@ echo "\"Waiting for UAT\" means a human can test the change on staging. Flipping
 echo "before the post-merge deploy finishes points reviewers at the pre-deploy"
 echo "version (PR #347 / retro #2926719311)."
 echo ""
-echo "Correct order (/ship-pr Phase 6.6 → 6.7, workflow-pipeline.md):"
+echo "Correct order (/ship-pr Phase 6.6 → 6.7, ${CLAUDE_PLUGIN_ROOT:-<plugin>}/rules/workflow-pipeline.md):"
 echo "  1. Merge the PR."
 echo "  2. Poll the deploy until READY:"
 echo "       mergedSHA=\$(gh pr view {N} --json mergeCommit --jq .mergeCommit.oid)"

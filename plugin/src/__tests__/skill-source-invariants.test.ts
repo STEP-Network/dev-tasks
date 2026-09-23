@@ -8,7 +8,7 @@
  * section 11 keeps banned outright.
  */
 
-import { readFileSync } from "node:fs"
+import { existsSync, readdirSync, readFileSync } from "node:fs"
 import { resolve, dirname } from "node:path"
 import { fileURLToPath } from "node:url"
 import { describe, it, expect } from "vitest"
@@ -18,6 +18,10 @@ const PLUGIN_ROOT = resolve(__dirname, "..", "..")
 
 function skill(name: string): string {
   return readFileSync(resolve(PLUGIN_ROOT, "skills", name, "SKILL.md"), "utf-8")
+}
+
+function rule(file: string): string {
+  return readFileSync(resolve(PLUGIN_ROOT, "rules", file), "utf-8")
 }
 
 describe("babysit-prs no longer bans auto-merge", () => {
@@ -154,5 +158,115 @@ describe("/ship", () => {
   it("stops after opening the PR — no CI polling loop", () => {
     expect(source).toMatch(/stops?\b/i)
     expect(source).not.toMatch(/gh pr checks --watch/)
+  })
+})
+
+describe("plugin rules are read on demand", () => {
+  // rule-autoload is opt-in since 1.0.1 (STEP-3088), so a plugin rule reaches
+  // the agent only when a skill names it. The name has to resolve in a
+  // consumer project, and a skill that runs under the Linear provider must not
+  // send the agent to a rule that only describes the Monday pipeline.
+  const MARKER = "**Monday provider only.**"
+  const ruleFiles = readdirSync(resolve(PLUGIN_ROOT, "rules")).filter((f) => f.endsWith(".md"))
+  const mondayOnly = ruleFiles.filter((f) =>
+    rule(f).split("\n").slice(0, 12).some((line) => line.includes(MARKER)),
+  )
+
+  // Skills that run on the Monday MCP tools or inside the legacy
+  // /pickup-task → /ship-pr pipeline. Every other skill can run in a Linear
+  // project, so every other skill is checked.
+  const MONDAY_SKILLS = new Set([
+    "audit-versions",
+    "create-task",
+    "file-retro",
+    "investigate-request",
+    "log-progress",
+    "pickup-task",
+    "plan-task",
+    "refine-task",
+    "release-version",
+    "self-review",
+    "ship-pr",
+    "triage-feedback",
+    "write-uat-spec",
+  ])
+  const skillNames = readdirSync(resolve(PLUGIN_ROOT, "skills"), { withFileTypes: true })
+    .filter((d) => d.isDirectory())
+    .map((d) => d.name)
+
+  it("marks exactly the Monday-era rules", () => {
+    // The full list, so dropping one banner can't quietly take that rule out
+    // of the Linear-skill check below.
+    expect([...mondayOnly].sort()).toEqual([
+      "agent-autonomy.md",
+      "agent-orchestration.md",
+      "autonomous-by-default.md",
+      "e2e-masterplan.md",
+      "meta-workflow.md",
+      "release-flow.md",
+      "task-lifecycle.md",
+      "versioning.md",
+      "versions-lifecycle.md",
+      "workflow-pipeline.md",
+      "worktree-discipline.md",
+    ])
+  })
+
+  it("exempts only skills that exist", () => {
+    // A renamed skill would otherwise drop out of the check without a sound.
+    for (const name of MONDAY_SKILLS) {
+      expect(existsSync(resolve(PLUGIN_ROOT, "skills", name, "SKILL.md")), name).toBe(true)
+    }
+  })
+
+  // `.claude/rules/<rule>.md` is the consumer's folder, where plugin rules do
+  // not live, and `plugin/rules/` only exists inside this repo. A bare
+  // `<rule>.md` gives the agent nothing to Read. `${CLAUDE_PLUGIN_ROOT}/rules/`
+  // (substituted in skill content) or, in a hook, the same prefix printed
+  // with a fallback, resolves everywhere.
+  const names = ruleFiles.map((f) => f.replace(/\.md$/, "")).join("|")
+  const unresolvable = new RegExp(`(?:\\.claude|plugin)/rules/(?:${names})\\.md`)
+  const bare = new RegExp(`(?<![\\w/.-])(?:${names})\\.md`)
+
+  it("names plugin rules by a path that resolves in a consumer project", () => {
+    for (const name of skillNames) {
+      expect(skill(name), name).not.toMatch(unresolvable)
+      expect(skill(name), name).not.toMatch(bare)
+    }
+  })
+
+  it("points hook and script messages at rule paths that resolve", () => {
+    // With autoload off, a block message is often the only way the agent
+    // hears about a rule.
+    const files: string[] = []
+    for (const [dir, exts] of [
+      ["hooks", [".sh", ".py"]],
+      ["hooks/lib", [".sh"]],
+      ["scripts", [".sh"]],
+    ] as const) {
+      for (const f of readdirSync(resolve(PLUGIN_ROOT, dir))) {
+        if (exts.some((ext) => f.endsWith(ext))) files.push(`${dir}/${f}`)
+      }
+    }
+    expect(files.length).toBeGreaterThan(30)
+    for (const file of files) {
+      const source = readFileSync(resolve(PLUGIN_ROOT, file), "utf-8")
+      expect(source, file).not.toMatch(unresolvable)
+      expect(source, file).not.toMatch(bare)
+    }
+  })
+
+  it("keeps skills that can run under Linear away from Monday-only rules", () => {
+    const offenders: string[] = []
+    for (const name of skillNames.filter((s) => !MONDAY_SKILLS.has(s))) {
+      for (const line of skill(name).split("\n")) {
+        for (const file of mondayOnly) {
+          if (line.includes(file) && !line.includes("Monday provider only")) {
+            offenders.push(`${name}: ${file}`)
+          }
+        }
+      }
+    }
+    expect(offenders).toEqual([])
   })
 })

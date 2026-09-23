@@ -1,9 +1,14 @@
 # Workflow Pipeline — End-to-End Lifecycle
 
+> **Monday provider only.** The legacy pipeline that takes a Monday task from
+> backlog to released, and the hooks that gate it.
+> Under `tracker.provider: linear` this rule does not apply.
+
 > **Canonical walkthrough.** This is the source of truth for how a Monday task
 > moves from backlog to released. Other rules go deep on specific phases — this
-> one walks the entire arc and points at them. Loaded on demand via
-> `rules-routing.json` for any skill, hook, or rule edit.
+> one walks the entire arc and points at them. Read on demand when a skill
+> names it. A project that lists `rule-autoload` in `hooks.enabled[]` also
+> gets it through `rules-routing.json` on any skill, hook, or rule edit.
 
 If you're learning the workflow, read this first; the per-phase rules expand
 each step. If you're hitting a hook block and aren't sure why, find the phase
@@ -149,7 +154,8 @@ Per phase, deeper detail lives in:
 
 ## When this rule is loaded
 
-Per `plugin/rules-routing.json`:
+When a skill names it, and, in a project that lists `rule-autoload` in
+`hooks.enabled[]`, per `rules-routing.json`:
 
 - Editing any plugin skill (`plugin/skills/**/*.md` — matches files in skill
   subdirectories)

@@ -150,5 +150,5 @@ echo "  2. (Agent-side) Set 'reviewAddressed': 'handoff-to-orchestrator' in"
 echo "     .claude/active-task.json. The orchestrator's /babysit-prs Phase 4"
 echo "     owns the post-merge reconciliation in that case."
 echo ""
-echo "Reference: .claude/rules/agent-coordination.md Orchestrator post-merge checklist."
+echo "Reference: ${CLAUDE_PLUGIN_ROOT:-<plugin>}/rules/agent-orchestration.md 'Orchestrator post-merge checklist'."
 exit 2

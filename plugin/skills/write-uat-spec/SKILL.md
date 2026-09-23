@@ -268,7 +268,7 @@ When in doubt: visual-diff for "did this commit break something visible" during 
 - `plugin/skills/ship-pr/SKILL.md` — Phase 2 push gate + Phase 4.6 autonomous-UAT hard gate + Phase 4.5 UAT doc agent-verified vs human-only split
 - `plugin/skills/visual-diff/SKILL.md` — sibling skill for ad-hoc Before/After (see "Coordination" above)
 - `plugin/skills/investigate-request/SKILL.md` — BLOCKING question + AskUserQuestion pattern (the auth-refusal flow is the same shape)
-- `plugin/rules/autonomous-by-default.md` — "Missing context the agent can't derive" carve-out (auth-setup-missing is the canonical example)
+- `${CLAUDE_PLUGIN_ROOT}/rules/autonomous-by-default.md` — "Missing context the agent can't derive" carve-out (auth-setup-missing is the canonical example)
 - `plugin/skills/e2e-tester/` — subagent this skill delegates to
 - `plugin/templates/starter-project-config.json` — example `e2e` block for consumer adoption
 
