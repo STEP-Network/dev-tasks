@@ -5,9 +5,9 @@
 #
 # Replays a session the way Claude Code would: every hook hooks.json registers
 # for SessionStart, then UserPromptSubmit, then PreToolUse and PostToolUse for
-# an Edit of lib/example.ts. It keeps only what reaches the model:
+# an Edit of lib/example.ts, then Stop. It keeps only what reaches the model:
 #   SessionStart, UserPromptSubmit  stdout, as plain text or JSON additionalContext
-#   PreToolUse, PostToolUse         hookSpecificOutput.additionalContext, a deny
+#   PreToolUse, PostToolUse, Stop   hookSpecificOutput.additionalContext, a deny
 #                                   reason, or a block reason from JSON stdout
 #   any event                       stderr of a hook that exits 2
 # Everything else (other stdout, stderr on exit 0) goes to Claude Code's debug
@@ -15,10 +15,14 @@
 # lockfiles, secrets and Bash commands, never a lib/*.ts edit.
 #
 # Two projects, each run from the main checkout and from a worktree:
-#   linear  tracker.provider linear, PolAds' hooks.enabled[] (2026-09-23), no
-#           active task. Must add 0 bytes.
+#   linear  PolAds' config as of 2026-09-23 (tracker.provider linear, its
+#           hooks.enabled[], ci.greenBeforeStop false), no active task. Must add
+#           0 bytes.
 #   monday  the starter template's config. Must add no rule text. Case D from
 #           active-task-recon is expected in the worktree session.
+# The branch names are unusual on purpose: stop-ci-green-check reads push
+# markers from the shared /tmp by branch name, and a stray one for `main` must
+# not change the result.
 #
 # No network: MONDAY_API_KEY is unset and gh/curl are stubs that fail.
 # Run with: bash plugin/hooks/__tests__/fresh-session-context.test.sh
@@ -52,10 +56,10 @@ new_project() {
   printf '%s\n' "$2" > "$repo/.claude/project-config.json"
   printf 'export const a = 1\n' > "$repo/lib/example.ts"
   printf '.claude/worktrees/\n' > "$repo/.gitignore"
-  git -C "$repo" init -q -b main
+  git -C "$repo" init -q -b fresh-session-base
   git -C "$repo" add -A
   git -C "$repo" -c user.email=t@example.com -c user.name=t commit -q -m init
-  git -C "$repo" worktree add -q -b feat/example "$repo/.claude/worktrees/feat-example"
+  git -C "$repo" worktree add -q -b fresh-session/example "$repo/.claude/worktrees/feat-example"
   printf 'export const b = 2\n' >> "$repo/.claude/worktrees/feat-example/lib/example.ts"
   git -C "$repo/.claude/worktrees/feat-example" -c user.email=t@example.com -c user.name=t \
     commit -q -am wip
@@ -97,13 +101,14 @@ run_session() {
   local file="$cwd/lib/example.ts"
   : > "$seen"
   local ev tool payload cmd rc bytes
-  for step in SessionStart UserPromptSubmit PreToolUse:Edit PostToolUse:Edit; do
+  for step in SessionStart UserPromptSubmit PreToolUse:Edit PostToolUse:Edit Stop; do
     ev="${step%%:*}"; tool=""
     [ "$ev" != "$step" ] && tool="${step#*:}"
     payload=$(jq -nc --arg sid "$sid" --arg cwd "$cwd" --arg ev "$ev" --arg fp "$file" '
       {session_id: $sid, cwd: $cwd, hook_event_name: $ev}
       + (if $ev == "SessionStart" then {source: "startup"}
          elif $ev == "UserPromptSubmit" then {prompt: "Rename the constant in lib/example.ts"}
+         elif $ev == "Stop" then {stop_hook_active: false}
          else {tool_name: "Edit",
                tool_input: {file_path: $fp, old_string: "a", new_string: "b"}}
               + (if $ev == "PostToolUse" then {tool_response: {filePath: $fp, success: true}}
@@ -117,7 +122,7 @@ run_session() {
       rc=$?
       visible "$ev" "$WORK/out" "$WORK/err" "$rc" > "$WORK/vis"
       bytes=$(wc -c < "$WORK/vis" | tr -d ' ')
-      printf '    %-17s %-28s %6s bytes\n' "$ev" "$(basename "${cmd%% *}")" "$bytes"
+      printf '    %-17s %-32s %6s bytes\n' "$ev" "$(basename "${cmd%% *}")" "$bytes"
       cat "$WORK/vis" >> "$seen"
     done < <(commands_for "$ev" "$tool")
   done
@@ -138,7 +143,7 @@ no_rule_text() {
 }
 
 LINEAR=$(new_project linear \
-  "{\"tracker\":{\"provider\":\"linear\"},\"hooks\":{\"enabled\":$POLADS_ENABLED}}")
+  "{\"tracker\":{\"provider\":\"linear\"},\"ci\":{\"greenBeforeStop\":false},\"hooks\":{\"enabled\":$POLADS_ENABLED}}")
 MONDAY=$(new_project monday "$(cat "$ROOT/templates/starter-project-config.json")")
 
 for spec in "linear-main:$LINEAR:$LINEAR" \
@@ -146,7 +151,7 @@ for spec in "linear-main:$LINEAR:$LINEAR" \
             "monday-main:$MONDAY:$MONDAY" \
             "monday-worktree:$MONDAY/.claude/worktrees/feat-example:$MONDAY/.claude/worktrees/feat-example"; do
   IFS=: read -r label cwd project <<<"$spec"
-  echo "==> $label: SessionStart + one prompt + one Edit of lib/example.ts"
+  echo "==> $label: SessionStart + one prompt + one Edit of lib/example.ts + Stop"
   run_session "$label" "$cwd" "$project"
   no_rule_text "$label"
   total=$(wc -c < "$WORK/$label.seen" | tr -d ' ')

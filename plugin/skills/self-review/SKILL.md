@@ -10,7 +10,7 @@ You MUST invoke `/self-review` automatically after finishing implementation. Man
 
 ## Ship-readiness principle
 
-Mark FAIL only when concrete production/user/maintainer harm. Style preferences, speculative defensive code, premature optimization, missing docstrings on self-documenting code, pattern nits → PASS. Auth bypass, wrong logic, dropped writes, PII leaks, missing i18n keys in configured locales, missing required tests, stale user-facing docs after behavior change → FAIL. Full triage in `ship-readiness.md`.
+Mark FAIL only when concrete production/user/maintainer harm. Style preferences, speculative defensive code, premature optimization, missing docstrings on self-documenting code, pattern nits → PASS. Auth bypass, wrong logic, dropped writes, PII leaks, missing i18n keys in configured locales, missing required tests, stale user-facing docs after behavior change → FAIL. Full triage in `${CLAUDE_PLUGIN_ROOT}/rules/ship-readiness.md`.
 
 ## Workflow (iterative)
 
@@ -74,7 +74,7 @@ Each hit is a candidate — project's themed wrapper required unless documented 
 
 ## Check #11 — Corridor (rules)
 
-Triage per `ship-readiness.md`:
+Triage per `${CLAUDE_PLUGIN_ROOT}/rules/ship-readiness.md`:
 - BLOCKER (critical/high; security/correctness) → FAIL, fix
 - IMPROVEMENT (medium; small fix, real win) → FAIL only if worth fixing
 - POLISH (low; speculative/stylistic) → close via `updateFindingState` with `risk_accepted` or `false_positive`, PASS with note

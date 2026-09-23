@@ -30,7 +30,7 @@ Tasks decay. A task filed weeks ago may cite functions that have been renamed, a
 3. **Read source files**: Glob/Grep to find related code; ground each subtask in a real code path.
 4. **Decompose into 3–7 subtasks** (often: schema → backend → ui → test → docs):
    - Each: `name` + `description` + `type` + `estimatedHours`
-   - Types: Backend / Test / Documentation / UX-UI / Database / To Do (see `task-lifecycle.md`)
+   - Types: Backend / Test / Documentation / UX-UI / Database / To Do (see `${CLAUDE_PLUGIN_ROOT}/rules/task-lifecycle.md`)
    - NEVER include a human-test subtask. Human verification = parent's `Waiting for UAT` + auto-generated UAT doc on column `doc_mm3adfdg` (written by `/ship-pr` Phase 4.5).
 5. **Apply subtasks**: `manageSubtasks` with `create` per new, `delete`/`update` for obsolete (rescoping is fine).
 6. **Optional dependency**: set `dependencyIds` via `updateTask` (column `dependency_mm0pwbxn`).

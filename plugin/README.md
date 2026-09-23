@@ -8,7 +8,7 @@ For non-STEP projects, this plugin will fail at first contact (hard-coded board 
 
 - **MCP server** — 47 stdio tools wrapping Monday's GraphQL API (backlog, tasks, sprints, epics, bugs, versions, products, feedback, retros, public roadmap, structured changelog, UAT docs, before/after visual-diff docs, task attachments (download + read files/screenshots), version timeline).
 - **Skills (16)** — workflow: `pickup-task`, `create-task`, `refine-task`, `log-progress`, `self-review`, `ship-pr`, `release-version`, `audit-versions`, `doctor`, `run-full-e2e` (in-session full Playwright suite vs staging — see below); posture: `holistic-thinking`, `production-quality-ownership`, `design-consistency`, `triage-feedback`, `goal` (persistent completion condition — see below); orchestration: `babysit-prs`. Invoked as `/dev-tasks:<skill>`.
-- **Rules (17)** — read on demand: a skill that needs one names `${CLAUDE_PLUGIN_ROOT}/rules/<file>`. Eleven open with **Monday provider only** and describe the legacy Monday pipeline. The `rule-autoload.sh` PreToolUse hook injects rules by the file globs in `rules-routing.json` only in a project that lists `rule-autoload` in `hooks.enabled[]` (off by default since 1.0.1).
+- **Rules (17)** — read on demand: a skill that needs one names `${CLAUDE_PLUGIN_ROOT}/rules/<file>`. Eleven open with **Monday provider only** and describe the legacy Monday pipeline. The `rule-autoload.sh` PreToolUse hook injects rules by the file globs in `rules-routing.json` only in a project that lists `rule-autoload` in `hooks.enabled[]` (off by default since 1.0.1). A project's own `rules.extraRules` files need no such entry: listing them is the opt-in.
 - **Agents (4)** — `codebase-researcher`, `self-reviewer`, `doc-updater`, `e2e-tester`. Spawned via subagent.
 - **Hooks (34)** — STEP-wide policy hooks (always-on, non-overridable) + opt-in workflow hooks gated by `project-config.hooks.enabled[]` (`rule-autoload` among them since 1.0.1) + the always-on worktree janitor. Includes `commit-id-gate` (every commit must reference a Monday Tasks-board `#id`) and `stop-goal-persistence` (refuses premature autonomous stops while a `/goal` is unmet — see below).
 - **Per-project config** — `.claude/project-config.json` validated against `schemas/project-config.schema.json`.
@@ -116,7 +116,7 @@ Pin `main` to a release tag (e.g. `.../v0.22.1/...`) if you want validation froz
     "requiredChecks": ["build", "test", "lint"]
   },
   "rules": {
-    "extraRules": []                     // .claude/rules/ files for rule-autoload to surface (needs "rule-autoload" in hooks.enabled)
+    "extraRules": []                     // .claude/rules/ files surfaced once per session; listing them is the opt-in
   },
   "hooks": {
     "enabled": [                         // opt-in non-policy hooks

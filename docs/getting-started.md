@@ -68,7 +68,7 @@ The tool name in the trace will be `mcp__plugin_dev-tasks_dev-tasks__listSprints
 
 ## Step 5 — Create project-config.json (optional — needed for hooks + i18n)
 
-Without `.claude/project-config.json`, no opt-in hook runs, `rule-autoload` included (opt-in since 1.0.1). All blocking hooks (task-state-guard, worktree-required, bash-guard, etc.) stay dormant. That's safe for projects that don't follow this workflow.
+Without `.claude/project-config.json`, no opt-in hook runs, `rule-autoload` included (opt-in since 1.0.1): task-state-guard, worktree-required and the other blocking hooks stay dormant. Only the always-on hooks run, among them the policy hooks `bash-guard` and `stop-ci-green-check`. That's safe for projects that don't follow this workflow.
 
 To **opt into** the blocking hooks, create `.claude/project-config.json` from the template:
 

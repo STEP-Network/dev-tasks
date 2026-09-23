@@ -194,13 +194,22 @@ describe("plugin rules are read on demand", () => {
     .filter((d) => d.isDirectory())
     .map((d) => d.name)
 
-  it("marks the Monday-era rules and leaves the provider-neutral ones alone", () => {
-    expect(mondayOnly).toEqual(
-      expect.arrayContaining(["task-lifecycle.md", "versions-lifecycle.md", "workflow-pipeline.md"]),
-    )
-    for (const neutral of ["critical-thinking.md", "monitor-predicate-pattern.md", "ship-readiness.md"]) {
-      expect(mondayOnly).not.toContain(neutral)
-    }
+  it("marks exactly the Monday-era rules", () => {
+    // The full list, so dropping one banner can't quietly take that rule out
+    // of the Linear-skill check below.
+    expect([...mondayOnly].sort()).toEqual([
+      "agent-autonomy.md",
+      "agent-orchestration.md",
+      "autonomous-by-default.md",
+      "e2e-masterplan.md",
+      "meta-workflow.md",
+      "release-flow.md",
+      "task-lifecycle.md",
+      "versioning.md",
+      "versions-lifecycle.md",
+      "workflow-pipeline.md",
+      "worktree-discipline.md",
+    ])
   })
 
   it("exempts only skills that exist", () => {
@@ -210,13 +219,40 @@ describe("plugin rules are read on demand", () => {
     }
   })
 
+  // `.claude/rules/<rule>.md` is the consumer's folder, where plugin rules do
+  // not live, and `plugin/rules/` only exists inside this repo. A bare
+  // `<rule>.md` gives the agent nothing to Read. `${CLAUDE_PLUGIN_ROOT}/rules/`
+  // (substituted in skill content) or, in a hook, the same prefix printed
+  // with a fallback, resolves everywhere.
+  const names = ruleFiles.map((f) => f.replace(/\.md$/, "")).join("|")
+  const unresolvable = new RegExp(`(?:\\.claude|plugin)/rules/(?:${names})\\.md`)
+  const bare = new RegExp(`(?<![\\w/.-])(?:${names})\\.md`)
+
   it("names plugin rules by a path that resolves in a consumer project", () => {
-    // `.claude/rules/<rule>.md` is the consumer's folder, where plugin rules
-    // do not live, and `plugin/rules/` only exists inside this repo.
-    const names = ruleFiles.map((f) => f.replace(/\.md$/, "")).join("|")
-    const unresolvable = new RegExp(`(?:\\.claude|plugin)/rules/(?:${names})\\.md`)
     for (const name of skillNames) {
       expect(skill(name), name).not.toMatch(unresolvable)
+      expect(skill(name), name).not.toMatch(bare)
+    }
+  })
+
+  it("points hook and script messages at rule paths that resolve", () => {
+    // With autoload off, a block message is often the only way the agent
+    // hears about a rule.
+    const files: string[] = []
+    for (const [dir, exts] of [
+      ["hooks", [".sh", ".py"]],
+      ["hooks/lib", [".sh"]],
+      ["scripts", [".sh"]],
+    ] as const) {
+      for (const f of readdirSync(resolve(PLUGIN_ROOT, dir))) {
+        if (exts.some((ext) => f.endsWith(ext))) files.push(`${dir}/${f}`)
+      }
+    }
+    expect(files.length).toBeGreaterThan(30)
+    for (const file of files) {
+      const source = readFileSync(resolve(PLUGIN_ROOT, file), "utf-8")
+      expect(source, file).not.toMatch(unresolvable)
+      expect(source, file).not.toMatch(bare)
     }
   })
 

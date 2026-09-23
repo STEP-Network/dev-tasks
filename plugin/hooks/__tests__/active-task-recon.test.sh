@@ -31,6 +31,9 @@ fail() { echo "  FAIL: $1" >&2; FAIL=$((FAIL + 1)); }
 # Fake-worktree-shaped temp dir for path-detection check
 WORK="$(mktemp -d -t active-task-recon-XXXX)"
 trap 'rm -rf "$WORK"' EXIT
+# The hook reads the provider from the git toplevel. Stop git's search at
+# $WORK so a TMPDIR inside some checkout can't lend these dirs its config.
+export GIT_CEILING_DIRECTORIES="$WORK"
 FAKE_WORKTREE="$WORK/.claude/worktrees/feat-test-recon"
 mkdir -p "$FAKE_WORKTREE/.claude"
 
@@ -121,6 +124,33 @@ else
 fi
 rm -f "$CONFIG"
 
+# A session can start in a subdirectory. The provider then comes from the
+# config at the git toplevel, where trackerctl reads it, not from $PWD.
+SUB_WT="$WORK/.claude/worktrees/feat-subdir"
+mkdir -p "$SUB_WT/.claude" "$SUB_WT/lib"
+printf 'x\n' > "$SUB_WT/lib/file.ts"
+echo '{"tracker":{"provider":"linear"}}' > "$SUB_WT/.claude/project-config.json"
+git -C "$SUB_WT" init -q
+git -C "$SUB_WT" add -A
+git -C "$SUB_WT" -c user.email=t@example.com -c user.name=t commit -q -m init
+
+echo "==> Test 9: linear worktree, session started in a subdirectory — silent"
+out=$(run_hook "$SUB_WT/lib")
+if [ -z "$out" ]; then
+  pass "subdirectory of a linear worktree: no output"
+else
+  fail "expected silence from a subdirectory under linear, got: $out"
+fi
+
+echo "==> Test 10: monday worktree, session started in a subdirectory — Case D"
+echo '{"tracker":{"provider":"monday"}}' > "$SUB_WT/.claude/project-config.json"
+out=$(run_hook "$SUB_WT/lib")
+if echo "$out" | grep -q "Case D:"; then
+  pass "subdirectory of a monday worktree: Case D reported"
+else
+  fail "expected Case D from a subdirectory under monday, got: $out"
+fi
+
 # Optional Monday-touching tests — skip cleanly if env missing
 if [ -z "${MONDAY_API_KEY:-}" ]; then
   echo "==> SKIP: Monday-touching tests (MONDAY_API_KEY not set)"
@@ -128,7 +158,7 @@ else
   command -v curl >/dev/null 2>&1 || { echo "==> SKIP: curl missing"; echo "Results: $PASS passed, $FAIL failed"; [ "$FAIL" -eq 0 ]; exit $?; }
   command -v jq   >/dev/null 2>&1 || { echo "==> SKIP: jq missing"; echo "Results: $PASS passed, $FAIL failed"; [ "$FAIL" -eq 0 ]; exit $?; }
 
-  echo "==> Test 9: healthy In Progress task — no drift output"
+  echo "==> Test 11: healthy In Progress task — no drift output"
   # Create throwaway task at Needs Refinement, claim it (sets In Progress + agent)
   TASK_ID=$(curl -sS -X POST https://api.monday.com/v2 \
     -H "Authorization: $MONDAY_API_KEY" \
@@ -136,7 +166,7 @@ else
     -d '{"query":"mutation { create_item(board_id: 5091706356, item_name: \"recon-test — DELETE ME\", column_values: \"{\\\"task_status\\\": {\\\"index\\\": 0}, \\\"dropdown_mm0mrcex\\\": {\\\"ids\\\": [\\\"1\\\"]}}\") { id } }"}' \
     | jq -r '.data.create_item.id')
   if [ -z "$TASK_ID" ] || [ "$TASK_ID" = "null" ]; then
-    fail "couldn't create throwaway task for Test 9"
+    fail "couldn't create throwaway task for Test 11"
   else
     echo "{\"taskId\":\"$TASK_ID\",\"branch\":\"feat/test-recon\"}" > "$FAKE_WORKTREE/.claude/active-task.json"
     sleep 1
@@ -149,7 +179,7 @@ else
       fail "expected silent, got: $out"
     fi
 
-    echo "==> Test 10: Case A — task Done on Monday"
+    echo "==> Test 12: Case A — task Done on Monday"
     # Move to Done
     curl -sS -X POST https://api.monday.com/v2 \
       -H "Authorization: $MONDAY_API_KEY" \

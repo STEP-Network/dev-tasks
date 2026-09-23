@@ -5,8 +5,10 @@
 # and per-case project dirs (.claude/project-config.json + .claude/rules/).
 # The hook emits additionalContext JSON on stdout when it injects, nothing otherwise.
 #
-# The hook is opt-in since 1.0.1, so new_project lists it in hooks.enabled[]
-# unless a case says otherwise. Tests 8-10 cover the default: nothing injected.
+# The plugin's rules are opt-in since 1.0.1, so new_project lists rule-autoload
+# in hooks.enabled[] unless a case says otherwise. Tests 8-10 cover the
+# default (no plugin rule text). Test 11 covers rules.extraRules, which still
+# surfaces without the entry.
 
 set -u
 shopt -s nullglob
@@ -125,9 +127,8 @@ else
 fi
 
 # -------------------------------------------------------------------
-echo "==> Test 8: not in hooks.enabled[] → a matching edit injects nothing (the default)"
-pd=$(new_project p8 '["proj.md"]' '[]')
-printf 'CONSUMER-EXTRA-RULE\n' > "$pd/.claude/rules/proj.md"
+echo "==> Test 8: not in hooks.enabled[], no extraRules → a matching edit injects nothing (the default)"
+pd=$(new_project p8 '[]' '[]')
 out=$(run_hook "$pd" "$pd/schema.sql" "s8" "$WORK/t8")
 if [ -z "$out" ]; then
   pass "opt-in hook stays silent when the project has not listed it"
@@ -168,6 +169,20 @@ if printf '%s' "$out" | jq -r '.hookSpecificOutput.additionalContext' 2>/dev/nul
   pass "control: with rule-autoload enabled the same edit injects '$LIFECYCLE_H1'"
 else
   fail "control failed: enabled hook did not inject task-lifecycle.md (got ${#out} bytes)"
+fi
+
+# -------------------------------------------------------------------
+# rules.extraRules is the project naming its own files, which is an opt-in in
+# itself, so it must not die with the hooks.enabled[] gate. The plugin's rule
+# still stays out.
+echo "==> Test 11: not in hooks.enabled[], extraRules listed → extras only"
+pd=$(new_project p11 '["proj.md"]' '[]')
+printf 'CONSUMER-EXTRA-RULE\n' > "$pd/.claude/rules/proj.md"
+out=$(run_hook "$pd" "$pd/schema.sql" "s11" "$WORK/t11")
+if printf '%s' "$out" | grep -q "CONSUMER-EXTRA-RULE" && ! printf '%s' "$out" | grep -q "PLUGIN-RULE-DB-CONTENT"; then
+  pass "extraRules surfaced, plugin rule held back"
+else
+  fail "expected the extra rule and no plugin rule (got: $out)"
 fi
 
 # -------------------------------------------------------------------

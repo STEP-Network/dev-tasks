@@ -88,6 +88,13 @@ ALSO keyed on `.claude/active-task.json` existing, which the 1.0 `/dev` flow
 never creates, so on a mini it stays inert too until a future phase-2 worker
 writes a task file. One config serves both profiles regardless.
 
+**Plugin rules (1.0.1).** `rule-autoload` no longer runs by default: skills
+read `${CLAUDE_PLUGIN_ROOT}/rules/<file>` when they need a rule. A Monday
+project that wants the 1.0.0 behaviour back (lifecycle rules injected on the
+first matching edit of a session) adds `"rule-autoload"` to `hooks.enabled[]`.
+Under `linear`, leave it out: 11 of the 17 rules describe the Monday pipeline.
+A project's own `rules.extraRules` files surface without that entry.
+
 ## 4. The Linear key (only when `provider` is `linear`)
 
 ```bash

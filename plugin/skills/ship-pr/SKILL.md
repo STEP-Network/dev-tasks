@@ -44,7 +44,7 @@ Read `git.prePushMarker` from `.claude/project-config.json` (default `true`).
    - **Panel**: spawn 2–3 FRESH review subagents in parallel via `dev-tasks:self-reviewer` (it has Read/Glob/Grep/Bash). "Fresh/independent" means **no author context** — the reviewer must NOT inherit this session's implementation conversation/rationale — NOT "diff only". Each reviewer gets the diff (`git diff $defaultBase...HEAD`), the task AC, the project rules, AND **full repo read access** — it MUST read the changed files in full and grep for sibling call-sites (other routes/components/schemas that share the changed pattern). The 2026-06-12 parity benchmark (task #2988065489 UAT doc) proved diff-only review misses the bot's class of finding: "the same validation gap exists in another unpatched route" and full-file control-flow/runtime-API-behavior bugs. Repo access is the lever that closes that gap — the GitHub bot has it; the panel must too.
    - **Lenses**: **correctness** (logic, edge cases, regressions, runtime-API-contract behavior), **security** (injection, authz, secrets, gate-bypass), and — when the diff touches test files or test-worthy surface — **tests/coverage**. Each lens MUST include a **sibling-call-site sweep**: grep the repo for other code paths that need the same change (the diff under review may patch only 1 of N sites). Effort scales with task priority: Critical/High → 3 lenses; Medium/Low → 2 (correctness + security).
    - **Quality bar (Nate, 2026-06-12) — HARD GATE**: the panel must be at least GitHub-Claude-code-review quality. A project may set `review.cloudBot: "final-push"` ONLY after the panel passes the parity benchmark — panel covers ALL bot BLOCKERs on ≥5 historical bot-reviewed PRs (record the run in the adopting project's docs; the dev-tasks benchmark lives in task #2988065489's UAT doc). **As of 2026-06-12 the dev-tasks benchmark has NOT passed (2/5) — so `cloudBot` stays `"always"` by default and this restructure ships gated-off until a repo-access + sibling-sweep panel re-runs the benchmark green.**
-   - **Triage** all panel findings with the ship-readiness.md rubric (BLOCKER / IMPROVEMENT / POLISH). Fix BLOCKERs + cheap IMPROVEMENTs → re-run the panel on the updated diff (fresh subagents again). Loop until zero BLOCKERs. These local rounds don't count toward Phase 6's 5-round cap (they're cheap); cap local rounds at 5 all the same — persistent new-BLOCKER churn at round 5 → `stuck:regression-loop` per ship-readiness.md.
+   - **Triage** all panel findings with the `${CLAUDE_PLUGIN_ROOT}/rules/ship-readiness.md` rubric (BLOCKER / IMPROVEMENT / POLISH). Fix BLOCKERs + cheap IMPROVEMENTs → re-run the panel on the updated diff (fresh subagents again). Loop until zero BLOCKERs. These local rounds don't count toward Phase 6's 5-round cap (they're cheap); cap local rounds at 5 all the same — persistent new-BLOCKER churn at round 5 → `stuck:regression-loop` per `${CLAUDE_PLUGIN_ROOT}/rules/ship-readiness.md`.
    - **Record** into active-task.json `reviewAddressed.sources.localReview`: `{ blockers: <fixed count>, improvements: <n>, polish: <n>, replies: [], lenses: ["correctness", ...], rounds: <n> }` (emit the `reviewAddressed` marker first if writing the full structured object now; otherwise record panel results in memory and write once at Phase 6 step 8 as usual). POLISH findings from the local panel are declined in the PR body's review section (no PR comments exist pre-push) — list them under "Local review: declined as POLISH" so the human sees them.
    - **Skip** when `review.sources` lacks `localReview` (default for existing projects — behavior unchanged).
 6.8. **VisualDiff BEFORE pass (v0.33.0; deterministic gate + audited skip v0.34.0)** — captures the changed UI on staging *before* this change ships, so the human gets a before/after pair in a Monday doc. Runs HERE (pre-push) because staging still shows the pre-change state until the PR merges + deploys.
@@ -147,13 +147,13 @@ Branch on execution context per `${CLAUDE_PLUGIN_ROOT}/rules/agent-autonomy.md`.
 - `"final-push"`: the local panel (Phase 2 step 6.7) carried the iteration rounds — do NOT wait for a bot review per round. Wait for exactly ONE bot review on the current (final) push, triage it; if it surfaces a real BLOCKER, the fix push becomes the new final push (wait once again — round cap applies as usual). Requires the parity benchmark to have passed for this project (schema description has the contract).
 - `"off"`: skip step 3 entirely (no bot installed). Steps 1–2 + 4–9 unchanged — CI green, Corridor, and the local panel still gate.
 
-1. Poll CI via a `Monitor` that watches `gh pr checks {prNumber}` and emits terminal transitions. Restart the Monitor on each new push — stale events from previous commit confuse triage. See [`monitor-predicate-pattern.md`](../../rules/monitor-predicate-pattern.md) for transition-only emission + immediate-action-on-success patterns.
+1. Poll CI via a `Monitor` that watches `gh pr checks {prNumber}` and emits terminal transitions. Restart the Monitor on each new push — stale events from previous commit confuse triage. See `${CLAUDE_PLUGIN_ROOT}/rules/monitor-predicate-pattern.md` for transition-only emission + immediate-action-on-success patterns.
 2. Poll Corridor findings via `mcp__plugin_corridor_corridor__getFindings({ cwd, branch, state: "open", excludeAIFalsePositives: true })`. Retry up to 3× with 60s delay if empty.
 3. Fetch GitHub bot review comments per the cloudBot mode above: `gh pr view {prNumber} --json comments` → filter for `author.login == "claude"` and body contains `"## Code Review"`.
-4. Triage ALL findings (GitHub bot review + Corridor + /self-review + local panel results from Phase 2 step 6.7) per `ship-readiness.md` (BLOCKER / IMPROVEMENT / POLISH).
+4. Triage ALL findings (GitHub bot review + Corridor + /self-review + local panel results from Phase 2 step 6.7) per `${CLAUDE_PLUGIN_ROOT}/rules/ship-readiness.md` (BLOCKER / IMPROVEMENT / POLISH).
 5. For each POLISH finding: post a PR-reply declining it (category + reason). Capture the GitHub comment ID returned.
 6. For Corridor declines: call `mcp__plugin_corridor_corridor__updateFindingState({ findingId, state: "closed", closedReasonCategory, closedReason })`.
-7. Loop: fix BLOCKERs + cheap IMPROVEMENTs → re-push → restart Monitors → re-poll Corridor → re-triage. **Hard cap at 5 rounds — see "Round cap" below.** Early escalation if 3 consecutive rounds each introduce a NEW BLOCKER (regression-loop signal) → `TASK_STUCK` with `reviewAddressed: "stuck:regression-loop"` per `ship-readiness.md`.
+7. Loop: fix BLOCKERs + cheap IMPROVEMENTs → re-push → restart Monitors → re-poll Corridor → re-triage. **Hard cap at 5 rounds — see "Round cap" below.** Early escalation if 3 consecutive rounds each introduce a NEW BLOCKER (regression-loop signal) → `TASK_STUCK` with `reviewAddressed: "stuck:regression-loop"` per `${CLAUDE_PLUGIN_ROOT}/rules/ship-readiness.md`.
 8. **Emit the reviewAddressed marker** (`bash ${CLAUDE_PLUGIN_ROOT}/scripts/emit-state-marker.sh reviewAddressed`), then write structured `reviewAddressed` to active-task.json (see schema below). The marker unlocks `protect-active-task-state`.
 9. Merge via `gh pr merge --admin --squash` (NEVER `--delete-branch` — collides with worktrees). The `pre-merge-review-gate` hook validates step 8 before allowing this.
 
@@ -163,7 +163,7 @@ Track the current round with `/tmp/.claude-ship-pr-round-<branch>` — a single-
 
 The cap is intentional. Without it, the agent chases bot-mislabeled "Critical" findings indefinitely (the GitHub Claude bot is the usual offender). With it, every round-5 BLOCKER gets one strict pass: ship-blocking or not?
 
-**At-cap re-triage protocol** (canonical criteria in [`ship-readiness.md`](../../rules/ship-readiness.md) → "At-cap re-triage"):
+**At-cap re-triage protocol** (canonical criteria in `${CLAUDE_PLUGIN_ROOT}/rules/ship-readiness.md` → "At-cap re-triage"):
 
 1. List remaining BLOCKERs across all sources (`claudeBot`, `corridor`, `selfReview`).
 2. For each, apply the strict "actual critical" filter: would this break production for real users (security / data loss / wrong user-visible output / auth bypass / regression introduced this PR)? Bot-mislabeled "Critical" style nits, speculative edge cases, and pattern-consistency complaints do NOT pass.
@@ -230,7 +230,7 @@ Field semantics:
 
 **Hotfix exception (both paths)**: PRs targeting `$hotfixBase` require human merge. Stop at "CI green + reviews addressed" with a final update.
 
-**Stuck is the only valid early exit** (per `agent-autonomy.md`). CI failures / review BLOCKERs / known flakes are NOT Stuck — diagnose and fix.
+**Stuck is the only valid early exit** (per `${CLAUDE_PLUGIN_ROOT}/rules/agent-autonomy.md`). CI failures / review BLOCKERs / known flakes are NOT Stuck — diagnose and fix.
 
 **CI flake exception**: `Test`/`Playwright E2E: fail` alone can be a pre-existing flake — verify against staging HEAD before treating as BLOCKER.
 
@@ -299,7 +299,7 @@ See `CLAUDE.md` → Shipping conventions for the PR #347 case study that motivat
 
 ### Phase 8: Version Linkage Check (informational)
 
-25. Read `taskId` from state file. Call `getTask` and inspect `targetVersion`. If set, log; if unset, `auto-version.ts` writes it server-side on the `Waiting for UAT` transition. Per `versions-lifecycle.md`, versions are historical — no action needed here.
+25. Read `taskId` from state file. Call `getTask` and inspect `targetVersion`. If set, log; if unset, `auto-version.ts` writes it server-side on the `Waiting for UAT` transition. Per `${CLAUDE_PLUGIN_ROOT}/rules/versions-lifecycle.md`, versions are historical — no action needed here.
 
 25b. Update structured Release Summary on the linked version (after version is confirmed). Read current via `getVersion(versionId)`. Map task type to 3-cat: Development → `feature`; Bugfix → `fix`; Maintenance / Refine / Documentation / PM-work → `improvement`. Use `Public Task Name` (column `text_mm349ah6`) if set, else internal name. Parse existing JSON via `parseStructuredChangelog` (auto-migrates legacy 4-cat). Add task to bucket. Update `progress`. Wrap in `STRUCTURED_CHANGELOG_V1` markers. Write via `updateVersion(versionId, releaseSummary)`.
 
@@ -340,14 +340,14 @@ Hotfix flow: parent still at `In Progress`. Phase 10 sets `Done` directly.
 
 ### Phase 11: Claim next planned task
 
-Per `agent-autonomy.md`, after merge + cleanup the agent does NOT stop unless: no planned next task, OR Stuck condition + no follow-up queued, OR operator said "end after this one". Otherwise invoke `/dev-tasks:pickup-task <next-task-id>`.
+Per `${CLAUDE_PLUGIN_ROOT}/rules/agent-autonomy.md`, after merge + cleanup the agent does NOT stop unless: no planned next task, OR Stuck condition + no follow-up queued, OR operator said "end after this one". Otherwise invoke `/dev-tasks:pickup-task <next-task-id>`.
 
 ## Failure Handling
 
 - Build/lint/test fails → show error, do NOT push, do NOT set marker.
 - CI fails → fix and re-push.
 - Regression loop (3 consecutive rounds introducing new BLOCKERs) → `TASK_STUCK`, `reviewAddressed: "stuck:regression-loop"`, alert user. Fires BEFORE the 5-round cap.
-- Round cap reached with actual-critical BLOCKER remaining (Phase 6 only) → `TASK_STUCK`, `reviewAddressed: "stuck:max-rounds"`, post unresolved-findings summary to Monday, halt. See Phase 6 "Round cap" + `ship-readiness.md` "At-cap re-triage".
+- Round cap reached with actual-critical BLOCKER remaining (Phase 6 only) → `TASK_STUCK`, `reviewAddressed: "stuck:max-rounds"`, post unresolved-findings summary to Monday, halt. See Phase 6 "Round cap" + `${CLAUDE_PLUGIN_ROOT}/rules/ship-readiness.md` "At-cap re-triage".
 - 3 consecutive failures any stage → `/log-progress TASK_STUCK`.
 - Vercel deployment not found after 3 retries → warn but post PR URL to Monday.
 

@@ -6,7 +6,7 @@
 #   read_project_config <jq-path>   → prints the value of the given jq path
 #                                     from $CLAUDE_PROJECT_DIR/.claude/project-config.json
 #   project_config_exists           → returns 0 if config exists, 1 otherwise
-#   tracker_provider [project-dir]  → prints linear|monday
+#   tracker_provider [dir]          → prints linear|monday (fallbacks warn on stderr)
 #
 # All output goes to stdout; errors are silent (returns empty string on miss).
 # Callers should handle empty output appropriately.
@@ -49,22 +49,55 @@ hook_enabled() {
   [ -n "$result" ]
 }
 
-# tracker_provider [project-dir]
-# Prints `linear` or `monday` with the precedence readTrackerProvider in
-# src/tracker/index.ts uses: DEV_TASKS_TRACKER wins, then tracker.provider,
-# and anything missing or unrecognised is `monday`. Reads the config in the
-# given directory, else $CLAUDE_PROJECT_DIR, else $PWD.
+# tracker_provider [dir]
+# Prints `linear` or `monday`: the answer readTrackerProvider in
+# src/tracker/index.ts gives for the same directory, so a hook and trackerctl
+# never disagree. DEV_TASKS_TRACKER wins when it is `linear` or `monday`.
+# Otherwise it reads .claude/project-config.json at the git toplevel of the
+# directory (a worktree's own root, since the config is committed), or in the
+# directory itself outside git. The directory defaults to $PWD. No tracker
+# block means `monday`. A missing or unparseable file, or a value that is not
+# `linear` or `monday`, also means `monday`, with a `dev-tasks:` line on
+# stderr worded like the TypeScript one.
 # Use it to keep a Monday-only hook quiet in a Linear project:
 #   [ "$(tracker_provider "$PWD")" = "monday" ] || exit 0
 tracker_provider() {
-  local provider="${DEV_TASKS_TRACKER:-}"
-  if [ "$provider" != "linear" ] && [ "$provider" != "monday" ]; then
-    provider=$(jq -r '.tracker.provider // empty' \
-      "${1:-${CLAUDE_PROJECT_DIR:-$PWD}}/.claude/project-config.json" 2>/dev/null)
-  fi
-  if [ "$provider" = "linear" ]; then
-    printf 'linear'
-  else
+  local dir="${1:-$PWD}" root path provider
+  case "${DEV_TASKS_TRACKER:-}" in
+    linear|monday) printf '%s' "$DEV_TASKS_TRACKER"; return 0 ;;
+    "") ;;
+    *) printf 'dev-tasks: ignoring DEV_TASKS_TRACKER="%s": it must be "linear" or "monday".\n' \
+         "$DEV_TASKS_TRACKER" >&2 ;;
+  esac
+
+  root=$(git -C "$dir" rev-parse --show-toplevel 2>/dev/null) || root=""
+  path="${root:-$dir}/.claude/project-config.json"
+  if [ ! -f "$path" ] || [ ! -r "$path" ]; then
+    printf 'dev-tasks: could not read %s; using the monday tracker. Set tracker.provider there, or DEV_TASKS_TRACKER.\n' \
+      "$path" >&2
     printf 'monday'
+    return 0
   fi
+  if ! command -v jq >/dev/null 2>&1; then
+    printf 'dev-tasks: jq not found, cannot read %s; using the monday tracker.\n' "$path" >&2
+    printf 'monday'
+    return 0
+  fi
+
+  # tojson keeps a string's quotes, so "linear" and a non-string are told
+  # apart, and the warning prints the value the way JSON.stringify does.
+  if ! provider=$(jq -s -r 'if length != 1 then error("not one JSON value") else .[0] end
+      | .tracker? | select(type == "object") | select(has("provider"))
+      | .provider | tojson' "$path" 2>/dev/null); then
+    printf 'dev-tasks: %s is not valid JSON; using the monday tracker.\n' "$path" >&2
+    printf 'monday'
+    return 0
+  fi
+  case "$provider" in
+    '"linear"') printf 'linear' ;;
+    '"monday"'|"") printf 'monday' ;;
+    *) printf 'dev-tasks: tracker.provider %s in %s is not "linear" or "monday"; using the monday tracker.\n' \
+         "$provider" "$path" >&2
+       printf 'monday' ;;
+  esac
 }
