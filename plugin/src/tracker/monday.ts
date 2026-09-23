@@ -13,8 +13,9 @@
  *    has no per-item link primitive that takes a title, and overloading
  *    prLink vs demoUrl by sniffing the title would be a guess.
  *  - `priority` is always 0 and `listReady` therefore falls back to oldest
- *    first. Mapping Monday's priority index onto Linear's 0-4 scale would be
- *    a second mapping table for a surface being retired.
+ *    first, and only across the first `limit` items it fetched rather than
+ *    the whole queue. Mapping Monday's priority index onto Linear's 0-4 scale
+ *    and paging items_page would be work for a surface being retired.
  *
  * It does NOT go through the 45 MCP tools: those return formatted strings for
  * a human to read, and parsing an item id back out of one is the brittleness

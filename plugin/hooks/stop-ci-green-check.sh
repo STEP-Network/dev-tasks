@@ -305,7 +305,7 @@ if [ -n "$FAILS" ]; then
   fi
   echo "BLOCKED: CI failures on PR #$PR ($BRANCH): $FAILS" >&2
   echo "" >&2
-  echo "Either fix the failures, or — if they're known flakes per .claude/rules/ship-readiness.md" >&2
+  echo "Either fix the failures, or — if they're known flakes per ${CLAUDE_PLUGIN_ROOT:-<plugin>}/rules/ship-readiness.md" >&2
   echo "(e.g. Test fail = DB-unavailable in CI, claude-review fail = Anthropic infra 'directory" >&2
   echo "mismatch' error) — acknowledge them by writing the reason to:" >&2
   echo "  $ACK_FILE" >&2

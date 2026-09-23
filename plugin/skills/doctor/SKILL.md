@@ -95,7 +95,7 @@ How to check:
 
 ### 11. Corridor companion plugin
 
-STEP-wide required companion per `ai-review-stack.md`. Without it: `analyzePlan` unavailable; Stop hook can't gate on findings; `/self-review` Check #11 + `/ship-pr` Step 18b degrade to "Corridor unavailable".
+STEP-wide required companion per `${CLAUDE_PLUGIN_ROOT}/rules/ai-review-stack.md`. Without it: `analyzePlan` unavailable; Stop hook can't gate on findings; `/self-review` Check #11 + `/ship-pr` Step 18b degrade to "Corridor unavailable".
 
 1. Inspect `~/.claude/settings.json` `enabledPlugins` for `corridor@*`.
 2. Verify tools loaded: check for `mcp__plugin_corridor_corridor__*` (e.g. `mcp__plugin_corridor_corridor__listProjects`).

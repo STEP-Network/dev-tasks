@@ -1,5 +1,8 @@
 # Task Lifecycle
 
+> **Monday provider only.** Monday statuses, subtasks and board columns.
+> Under `tracker.provider: linear` this rule does not apply.
+
 > **dev-tasks 1.0:** in a `/dev` → `/preview` → `/ship` session (the two-flow
 > model), the status transitions, subtask gates, and lifecycle phases below do
 > not apply: `/dev` makes no tracker writes at all, and `/ship` opens the PR,

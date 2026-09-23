@@ -64,7 +64,7 @@ Derive "What shipped" from the commit log (`git log {base}..HEAD --oneline`) —
 
 ## TASK_STUCK — escalation
 
-Post a `createUpdate` describing the blocker, what was tried, and what a human needs to decide. Set `reviewAddressed` appropriately (`stuck:*`) per `ship-readiness.md`. This is an exception to "no narrative" because a stuck task needs a human signal that git history alone won't surface.
+Post a `createUpdate` describing the blocker, what was tried, and what a human needs to decide. Set `reviewAddressed` appropriately (`stuck:*`) per `${CLAUDE_PLUGIN_ROOT}/rules/ship-readiness.md`. This is an exception to "no narrative" because a stuck task needs a human signal that git history alone won't surface.
 
 ## Post-Conditions
 

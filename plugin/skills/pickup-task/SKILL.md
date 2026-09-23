@@ -59,7 +59,7 @@ A task ready-to-start today may have been silently superseded by a recently-merg
     - Any not `Done` → warn naming blockers; user can accept (then `claimTask` will refuse with same info — wait for blocker or clear via `updateTask(itemId, dependencyIds: [])` only if misfiled), or pick different task (then `ExitWorktree({ action: "remove" })` and loop to step 1).
 
 5. **Version context** (informational only — versions are historical):
-    - Tasks join the open version at the Waiting-for-UAT transition (server-side via `auto-version.ts`). Per `versions-lifecycle.md`, versions are historical containers, not planning artifacts. Epics plan futures.
+    - Tasks join the open version at the Waiting-for-UAT transition (server-side via `auto-version.ts`). Per `${CLAUDE_PLUGIN_ROOT}/rules/versions-lifecycle.md`, versions are historical containers, not planning artifacts. Epics plan futures.
     - Optional: `listVersions(status: "In Development", productId: $productId)` to surface what's currently open. Do NOT link the epic to a version here.
 
 6. **Sprint auto-assignment** (must run before claim — `claimTask` refuses tasks outside active sprint):

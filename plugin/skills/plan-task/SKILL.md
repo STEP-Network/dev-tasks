@@ -99,6 +99,6 @@ Agent now has current-codebase-grounded plan. Proceed with subtask 1.
 
 - `.claude/skills/pickup-task/SKILL.md` — runs BEFORE this skill
 - `.claude/skills/refine-task/SKILL.md` — where original plan came from
-- `.claude/rules/critical-thinking.md` — posture this skill instantiates
+- `${CLAUDE_PLUGIN_ROOT}/rules/critical-thinking.md` — posture this skill instantiates
 - `.claude/skills/holistic-thinking/SKILL.md` — depth lens
 - `EnterPlanMode` / `ExitPlanMode` — built-in plan mode (user-approval gated)

@@ -34,7 +34,7 @@ Build-time / not-rendered → SKIP with documented reason in self-review Check #
 ### Step 2 — Capture Before
 
 Take screenshot of unmodified page. Tool priority (v0.37.0 — file-producing first; Step 5 Reads PNGs from disk, and `/ship-pr` Phase 6.8 can only upload files):
-1. **Playwright CLI** — `npx playwright screenshot --viewport-size=1440,900 --full-page --wait-for-timeout=3000 [--load-storage=<e2e persona storageState>] "<url>" before-desktop.png`. Writes a real file, works headless, and is the ONLY path that authenticates via `e2e.personas[].storageState`. Custom script via Bash for multi-state pages (canonical pattern in `.claude/rules/testing.md`).
+1. **Playwright CLI** — `npx playwright screenshot --viewport-size=1440,900 --full-page --wait-for-timeout=3000 [--load-storage=<e2e persona storageState>] "<url>" before-desktop.png`. Writes a real file, works headless, and is the ONLY path that authenticates via `e2e.personas[].storageState`. Custom script via Bash for multi-state pages (canonical pattern in `${CLAUDE_PLUGIN_ROOT}/rules/testing.md`).
 2. `chrome-devtools-mcp` `take_screenshot` with its file-saving parameter — verify the file exists on disk afterward.
 3. `mcp__claude-in-chrome__*` — navigate + screenshot into MODEL CONTEXT. Acceptable for the Step 5 comparison itself (the images render to you directly), but produces NO file: nothing to re-Read later and nothing `/ship-pr` Phase 6.8 can upload to the Monday Visual Changes doc. If this diff will ship through Phase 6.8, prefer option 1 so the same PNGs feed the upload.
 4. Vercel preview URL of recent `$defaultBase` commit (latest merged PR's preview) as the Before source when local isn't buildable.
@@ -117,7 +117,7 @@ When in doubt: visual-diff for "did this commit break something visible" during 
 
 ## Reference
 
-- `.claude/rules/testing.md` Visual Validation — fuller rationale + Playwright snippets
+- `${CLAUDE_PLUGIN_ROOT}/rules/testing.md` Visual Validation — fuller rationale + Playwright snippets
 - `.claude/skills/self-review/SKILL.md` Check #2 — the gate enforcing this skill ran
 - `npx playwright screenshot` — file-producing capture (default; required for authed via `--load-storage`); `mcp__claude-in-chrome__*` renders to model context only (comparison, not files)
 - `.claude/skills/e2e-tester/` — Playwright subagent for delegation

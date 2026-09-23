@@ -10,7 +10,7 @@ Read `.claude/project-config.json`. Extract `git.defaultBase` (PRs polled here) 
 
 Subagents can't poll CI — they're one-shot. After a subagent runs `/ship-pr` and hands off, someone must handle the merge. That's this skill, run by the main session.
 
-Three use cases per `.claude/rules/agent-autonomy.md`:
+Three use cases:
 1. Subagent-produced PRs (most common): Task() subagent → `/ship-pr` → SendMessage handoff → main session runs `/babysit-prs`.
 2. Multi-agent fan-out: N parallel subagents, each producing a PR. One polling loop.
 3. Recovery from prior session: previous run ended before push reached merge state.
@@ -20,7 +20,7 @@ Single-agent main-session work uses `/ship-pr` Phase 6.6 autonomous merge — no
 ## When NOT to invoke
 
 - Single-agent main-session work (use Phase 6.6 instead)
-- Hotfix PRs targeting `$hotfixBase` (human merge per `release-flow.md`)
+- Hotfix PRs targeting `$hotfixBase` (a human merges those)
 - About to end the session (leave open PRs for next orchestrator)
 
 ## Workflow
@@ -90,6 +90,8 @@ After fixup pushes, re-arm Phase 6 Monitor for round N+1. Loop terminates when r
 
 ### Phase 3: Monday reconciliation
 
+Monday provider only (`tracker.provider` unset or `monday`). Under `linear`, skip to Phase 4: Linear's GitHub integration moves the issue to Agent UAT on merge (spec section 7.3), and there are no subtasks or hours to reconcile.
+
 For each freshly-merged PR (if MCP up):
 
 1. `getTask({ itemId: taskId, format: "json" })` — read state.
@@ -127,7 +129,7 @@ Resolves the consumer project root from `$CLAUDE_PROJECT_DIR` (Claude Code sets 
 
 Batch mode for retroactive cleanup of multiple DONE worktrees: `bash ${CLAUDE_PLUGIN_ROOT}/scripts/worktree-audit.sh --remove -y`.
 
-The full post-merge contract — what the orchestrator owes the Monday board for each merged PR (createUpdate, manageSubtasks, worktree-remove, SendMessage, demoUrl verify) — lives in [`agent-orchestration.md`](../../rules/agent-orchestration.md) "Orchestrator post-merge checklist". This Phase 4 is the mechanical wrapper; the rule is the spec.
+Monday provider only: the full post-merge contract — what the orchestrator owes the Monday board for each merged PR (createUpdate, manageSubtasks, worktree-remove, SendMessage, demoUrl verify) — lives in `${CLAUDE_PLUGIN_ROOT}/rules/agent-orchestration.md` "Orchestrator post-merge checklist". This Phase 4 is the mechanical wrapper; the rule is the spec.
 
 ### Phase 5: Agent shutdown
 
@@ -143,14 +145,14 @@ Use a `Monitor` that evaluates current state on first iteration (so an already-p
 
 A wait condition that ignores current state and only watches future events is broken — always evaluate current state on first iteration. Don't wait for `mergeStateStatus=CLEAN` — it can be permanently UNSTABLE from secondary workflow noise.
 
-See [`plugin/rules/monitor-predicate-pattern.md`](../../rules/monitor-predicate-pattern.md) for the two patterns that govern Monitor emission cadence (transition-only) + post-success action timing (act in the same response — don't narrate between Monitor returning and the merge call).
+See `${CLAUDE_PLUGIN_ROOT}/rules/monitor-predicate-pattern.md` for the two patterns that govern Monitor emission cadence (transition-only) + post-success action timing (act in the same response — don't narrate between Monitor returning and the merge call).
 
 ## Anti-patterns
 
 - Prefer `gh pr merge {pr} --auto --squash`. GitHub merges when every required check goes green, so the orchestrator never sits in a polling loop. This REVERSES the note that used to sit here: `--auto` was called flaky because UNSTABLE check noise held merges open, and the fix for that is to require only checks that settle, not to merge past them. Never `--admin` — it merges past a red required check, which spec section 11 bans and for which no ruleset bypass exists (`bypass_actors` is empty on purpose). Never `--delete-branch` either: when checks are already green (the `CLEAN` case), `--auto` merges immediately, and `gh`'s local-branch deletion collides with worktrees (see step 4 of Phase 2 above).
 - DO NOT merge PRs targeting `main` — hotfix PRs require human merge.
 - DO NOT delete the worktree before merging — git refuses (branch checked out).
-- DO NOT skip Monday reconciliation if MCP up — post-merge state is the audit trail.
+- DO NOT skip Monday reconciliation if MCP up (Monday provider) — post-merge state is the audit trail.
 - DO NOT batch reconciliation across MCP outage windows — catch up immediately on recovery.
 
 ## Failure modes
@@ -178,6 +180,8 @@ Next sweep: 5min, or when agent notifies
 
 ## Dispatching subagents
 
+Monday provider only: the template dispatches a refined Monday task through `/pickup-task` → `/ship-pr`. Under `linear`, brief the subagent directly instead.
+
 When the orchestrator spawns a fix-class subagent (the most common `/babysit-prs` precursor), use the canonical dispatch template:
 
 ```bash
@@ -189,6 +193,6 @@ Fill the placeholders (`<task-ID>`, `<task-name>`, `<branch>`, etc.) — keep th
 ## Cross-references
 
 - `/ship-pr` Phase 6.6 — main-session autonomous merge
-- `.claude/rules/release-flow.md` — branching + merge policy
-- `.claude/rules/task-lifecycle.md` — status transitions
+- `${CLAUDE_PLUGIN_ROOT}/rules/release-flow.md` — branching + merge policy (Monday provider only)
+- `${CLAUDE_PLUGIN_ROOT}/rules/task-lifecycle.md` — status transitions (Monday provider only)
 - `.claude/scripts/worktree-audit.sh` — batch worktree cleanup

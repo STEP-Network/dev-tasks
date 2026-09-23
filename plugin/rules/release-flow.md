@@ -1,5 +1,10 @@
 # Release Flow
 
+> **Monday provider only.** The release ceremony below is `/release-version`
+> against the Monday Versions board, gated on linked Monday tasks. Under
+> `tracker.provider: linear` this rule does not apply: follow the project's
+> own release process.
+
 Three release modes under the **staging-as-base branching flow** (effective 2026-05-05, GH issue #109).
 
 ## TL;DR

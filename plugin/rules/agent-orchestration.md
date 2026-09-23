@@ -1,9 +1,16 @@
 # Agent Orchestration Workflow
 
+> **Monday provider only.** The post-merge checklist reconciles the Monday
+> board, and the protected state fields live in `.claude/active-task.json`,
+> which the 1.0 flow never writes.
+> Under `tracker.provider: linear` this rule does not apply.
+
 > **Reference rule** — codifies how the main session (orchestrator) and
 > spawned subagents share work, signal handoffs, and reconcile state on Monday
-> after PRs merge. Loaded on demand via `rules-routing.json` when editing
-> orchestrator code paths, hooks, or `/babysit-prs`.
+> after PRs merge. Read on demand when a skill names it. A project that lists
+> `rule-autoload` in `hooks.enabled[]` also gets it through
+> `rules-routing.json` when editing orchestrator code paths, hooks, or
+> `/babysit-prs`.
 
 **Companion**: [`agent-coordination.md`](agent-coordination.md) covers the
 *Subagents vs Agent Teams* decision (when to use which coordination shape).
@@ -269,6 +276,9 @@ protection to specific branches.
    agent-set `allowMainCheckout` even with a marker present).
 
 ## When this rule is loaded
+
+When a skill names it, and, in a project that lists `rule-autoload` in
+`hooks.enabled[]`, per `rules-routing.json` when:
 
 - Editing an `Agent(prompt=...)` dispatch from the orchestrator
 - Editing any `.claude/hooks/*.sh` workflow-enforcement hook

@@ -22,7 +22,7 @@ exec >&2
 # Rationale: claimed work runs in isolation per-task. Worktrees give each task
 # its own checkout + .claude/active-task.json + push marker, so two parallel
 # Claude sessions don't clobber each other's state. See
-# .claude/rules/worktree-discipline.md.
+# rules/worktree-discipline.md.
 #
 # Detection: a session is "in a worktree" when `git rev-parse --git-common-dir`
 # differs from `git rev-parse --git-dir`. This catches BOTH `.claude/worktrees/`
@@ -92,5 +92,5 @@ echo "  3. (Emergency only) Add \"allowMainCheckout\": true to"
 echo "     .claude/active-task.json. The flag is explicit + visible so future"
 echo "     reviewers can audit the exception. Document why in the task body."
 echo ""
-echo "See .claude/rules/worktree-discipline.md for the full discipline."
+echo "See ${CLAUDE_PLUGIN_ROOT:-<plugin>}/rules/worktree-discipline.md for the full discipline."
 exit 2

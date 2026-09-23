@@ -64,6 +64,90 @@ describe("extractAcceptanceCriteria", () => {
     expect(extractAcceptanceCriteria("")).toBe("")
     expect(extractAcceptanceCriteria(undefined as unknown as string)).toBe("")
   })
+
+  describe("fenced code blocks", () => {
+    // A `#` line inside a fence is a shell comment or a Markdown sample, not a
+    // heading. Read as one, it cut the criteria off at the first code block.
+    it("does not end the block at a # line inside a backtick fence", () => {
+      const withCode = [
+        "## Acceptance criteria",
+        "",
+        "- [ ] The script runs:",
+        "",
+        "  ```bash",
+        "  # install first",
+        "  npm ci",
+        "  ```",
+        "",
+        "- [ ] The other thing works",
+        "",
+        "## Notes",
+        "",
+        "Not part of the criteria.",
+      ].join("\n")
+      const block = extractAcceptanceCriteria(withCode)
+      expect(block).toMatch(/# install first/)
+      expect(block).toMatch(/The other thing works/)
+      expect(block).not.toMatch(/Notes/)
+    })
+
+    it("treats a tilde fence the same way", () => {
+      const withCode = "## Acceptance criteria\n\n~~~md\n## A sample heading\n~~~\n\n- [ ] after\n\n## Notes\n\nno"
+      expect(extractAcceptanceCriteria(withCode)).toBe("~~~md\n## A sample heading\n~~~\n\n- [ ] after")
+    })
+
+    it("does not take a heading inside a fence for the criteria heading", () => {
+      const template = [
+        "Paste this template:",
+        "",
+        "```md",
+        "## Acceptance criteria",
+        "- [ ] placeholder",
+        "```",
+        "",
+        "## Acceptance criteria",
+        "",
+        "- [ ] the real one",
+      ].join("\n")
+      expect(extractAcceptanceCriteria(template)).toBe("- [ ] the real one")
+    })
+
+    it("tracks fences in a description with CRLF line endings", () => {
+      // `.` stops at a \r, so the fence pattern never matched a CRLF line.
+      const crlf = [
+        "## Acceptance criteria",
+        "",
+        "- [ ] one",
+        "```bash",
+        "# comment",
+        "```",
+        "- [ ] two",
+        "",
+        "## Notes",
+        "not criteria",
+      ].join("\r\n")
+      expect(extractAcceptanceCriteria(crlf)).toBe("- [ ] one\n```bash\n# comment\n```\n- [ ] two")
+    })
+
+    it("closes a fence only on a run of the same character at least as long", () => {
+      const nested = [
+        "## Acceptance criteria",
+        "",
+        "````md",
+        "```",
+        "## Still inside the outer fence",
+        "```",
+        "````",
+        "",
+        "- [ ] after",
+        "",
+        "## Notes",
+      ].join("\n")
+      const block = extractAcceptanceCriteria(nested)
+      expect(block).toMatch(/Still inside the outer fence/)
+      expect(block).toMatch(/- \[ \] after$/)
+    })
+  })
 })
 
 describe("slugify", () => {

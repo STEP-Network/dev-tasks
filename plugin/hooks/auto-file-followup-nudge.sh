@@ -42,7 +42,7 @@ if echo "$ACTUAL_CMD" | grep -qE '^git revert ' ; then
 fi
 
 # Trigger 4: writing a TODO comment via Edit/Write is not visible here (different
-# matcher) — covered by .claude/rules/meta-workflow.md instead.
+# matcher) — covered by rules/meta-workflow.md instead.
 
 if [ -n "$NUDGE" ]; then
   # PostToolUse hook output to stderr is visible to the agent as system context

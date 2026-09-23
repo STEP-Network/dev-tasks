@@ -8,7 +8,7 @@ A 10-minute walkthrough to install the plugin in a fresh project and verify it w
 
 - **37 MCP tools** for Monday.com: backlog, tasks, sprints, epics, bugs, versions, products, feedback, retros, changelogs, UAT docs
 - **7 lifecycle skills** invoked as `/dev-tasks:<name>`: `pickup-task`, `create-task`, `refine-task`, `log-progress`, `self-review`, `ship-pr`, `release-version`
-- **8 universal rules** auto-injected into context on Edit/Write when contextually relevant (task-lifecycle, ship-readiness, release-flow, etc.)
+- **Lifecycle rules** (task-lifecycle, ship-readiness, release-flow, etc.) that skills read on demand. The `rule-autoload` hook that injected them on Edit/Write is opt-in since 1.0.1
 - **6 opt-in blocking hooks** that enforce the task-first workflow: no edits without a claimed task, no commits without self-review, no pushes without validation, no session-exit while pipeline is incomplete
 
 ## Prerequisites
@@ -68,7 +68,7 @@ The tool name in the trace will be `mcp__plugin_dev-tasks_dev-tasks__listSprints
 
 ## Step 5 — Create project-config.json (optional — needed for hooks + i18n)
 
-Without `.claude/project-config.json`, only `rule-autoload` (the always-on hook) runs. All blocking hooks (task-state-guard, worktree-required, bash-guard, etc.) stay dormant. That's safe for projects that don't follow this workflow.
+Without `.claude/project-config.json`, no opt-in hook runs, `rule-autoload` included (opt-in since 1.0.1): task-state-guard, worktree-required and the other blocking hooks stay dormant. Only the always-on hooks run, among them the policy hooks `bash-guard` and `stop-ci-green-check`. That's safe for projects that don't follow this workflow.
 
 To **opt into** the blocking hooks, create `.claude/project-config.json` from the template:
 
@@ -105,7 +105,7 @@ Then edit:
 
 Run `/reload-plugins` after writing. From the next Edit/Write onward, the listed hooks will fire.
 
-To opt **out** of a specific hook, remove its name from `hooks.enabled[]`. To disable all hooks while keeping rule-autoload, set `hooks.enabled: []`.
+To opt **out** of a specific hook, remove its name from `hooks.enabled[]`. To disable all opt-in hooks, set `hooks.enabled: []`.
 
 ## Step 6 — Try the lifecycle skills
 
@@ -149,13 +149,13 @@ After implementation, follow with:
 
 **Tools missing from session** — `/reload-plugins` doesn't fully restart MCP servers; if you modify plugin source code, fully restart Claude Code to pick up changes. Skills, rules, and hooks **are** reloaded by `/reload-plugins`.
 
-**Hook blocks every edit, even harmless ones** — check `.claude/project-config.json` doesn't include the blocking hook you want disabled. To turn off all blocking hooks while keeping rule-autoload: `{"hooks": {"enabled": []}}`.
+**Hook blocks every edit, even harmless ones** — check `.claude/project-config.json` doesn't include the blocking hook you want disabled. To turn off all blocking hooks: `{"hooks": {"enabled": []}}`.
 
 **`mcp__plugin_dev-tasks_dev-tasks__listSprints` returns "MONDAY_API_KEY environment variable is not set"** — the var isn't reaching the MCP child process. Make sure it's exported in the shell that launches Claude Code, then fully restart Claude Code (`/reload-plugins` doesn't re-spawn MCP processes — see also the related cache caveat above).
 
 **`bash-guard` fires on a commit and complains about missing locale keys** — i18n parity check is active. Either add the missing keys, set `i18n.parityHookMode: "warn"` to convert blocks to warnings, or set `i18n.enabled: false` to skip the check entirely.
 
-**Rule injection is huge (>10KB) on every edit** — rules auto-inject once per session per rule file (marker in `$TMPDIR/dev-tasks/`). If you see persistent re-injection, the session ID may be changing — check Claude Code's session handling or clear `$TMPDIR/dev-tasks/` between sessions.
+**Rule injection is huge (>10KB) on every edit** — the project lists `rule-autoload` in `hooks.enabled[]`; drop it and let skills read rules on demand (the default since 1.0.1). While it is enabled, rules inject once per session per rule file (marker in `$TMPDIR/dev-tasks/`). If you see persistent re-injection, the session ID may be changing — check Claude Code's session handling or clear `$TMPDIR/dev-tasks/` between sessions.
 
 ## Uninstall
 

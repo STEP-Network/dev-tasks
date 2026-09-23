@@ -255,7 +255,7 @@ for line in sys.stdin:
   echo "Why this gate exists: every workflow-enforcement hook reads decision state"
   echo "from .claude/active-task.json. Manual edits to the fields above let an agent"
   echo "bypass self-review, push to staging without a PR, skip CI checks, etc."
-  echo "See plugin/rules/agent-orchestration.md 'Protected state fields' for the full list."
+  echo "See ${CLAUDE_PLUGIN_ROOT:-<plugin>}/rules/agent-orchestration.md 'Protected state fields' for the full list."
   exit 2
 fi
 
