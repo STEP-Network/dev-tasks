@@ -41,3 +41,31 @@ describe("babysit-prs no longer bans auto-merge", () => {
     expect(source).toMatch(/gh pr merge/)
   })
 })
+
+describe("/dev", () => {
+  const source = skill("dev")
+
+  it("declares itself user-invocable with the name dev", () => {
+    expect(source).toMatch(/^---\n[\s\S]*?\bname:\s*dev\b[\s\S]*?\buser_invocable:\s*true\b[\s\S]*?\n---/m)
+  })
+
+  it("writes NOTHING to the tracker", () => {
+    // Spec section 5: "No tracker writes, no subtasks, no hours."
+    expect(source).not.toMatch(/trackerctl(\.ts["']?)?\s+(create|claim|comment|attach)/)
+  })
+
+  it("reads the issue through trackerctl rather than an MCP tool", () => {
+    expect(source).toMatch(/trackerctl\.ts["']?\s+branch/)
+    expect(source).not.toMatch(/mcp__plugin_dev-tasks/)
+  })
+
+  it("works in the MAIN checkout unless --worktree is passed", () => {
+    expect(source).toMatch(/--worktree/)
+    expect(source).toMatch(/main checkout/i)
+  })
+
+  it("ends with /preview when devSurface is preview", () => {
+    expect(source).toMatch(/devSurface/)
+    expect(source).toMatch(/\/preview/)
+  })
+})
