@@ -259,11 +259,6 @@ describe("the tracker block", () => {
     const config = { ...validConfig(), tracker: { provider: "linear", boardId: "123" } }
     expect(validate(config)).toBe(false)
   })
-
-  it("accepts the linear sub-block with a team key", () => {
-    const config = { ...validConfig(), tracker: { provider: "linear", linear: { teamKey: "STEP" } } }
-    expect(validate(config)).toBe(true)
-  })
 })
 
 describe("retired hooks stay accepted in the enum", () => {

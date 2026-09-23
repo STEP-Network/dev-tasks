@@ -171,19 +171,7 @@
           "type": "string",
           "enum": ["linear", "monday"],
           "default": "monday",
-          "description": "`linear` routes through plugin/src/tracker/linear.ts; `monday` through the deliberately minimal plugin/src/tracker/monday.ts, which is kept for the cutover weekend only and is deleted a release after BUG_TRACKER=linear goes live."
-        },
-        "linear": {
-          "type": "object",
-          "additionalProperties": false,
-          "description": "Linear-specific settings. Only needed when a workspace diverges from the STEP defaults.",
-          "properties": {
-            "teamKey": {
-              "type": "string",
-              "default": "STEP",
-              "description": "The Linear team key that prefixes every issue identifier. STEP for PolAds. The design spec writes POL; that is superseded by lib/ci/pr-task-trace.ts, which is what the Task trace required check actually runs."
-            }
-          }
+          "description": "`linear` routes through plugin/src/tracker/linear.ts; `monday` through the deliberately minimal plugin/src/tracker/monday.ts, which is kept for the cutover weekend only and is deleted a release after `tracker.provider` has been `linear` in production."
         }
       }
     },

@@ -3,8 +3,8 @@
  *
  * CUTOVER-WEEKEND ONLY (spec section 10). It exists so the three skills work
  * the day they ship, before the Linear workspace exists, and so the cutover
- * is one config key. Delete this file once BUG_TRACKER=linear has been live
- * for a release.
+ * is one config key. Delete this file once `tracker.provider` has been
+ * `linear` in production for a release.
  *
  * It is DELIBERATELY minimal and lossy:
  *  - no subtasks, no sprint, no epic, no hours. An issue opened by /ship is a

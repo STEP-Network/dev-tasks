@@ -8,7 +8,8 @@
     "autoMergePolicy": {
       "main": "never"
     },
-    "protectedBranches": ["main", "staging", "master", "production", "prod"]
+    "protectedBranches": ["main", "staging", "master", "production", "prod"],
+    "prePushMarker": false
   },
   "monday": {
     "productId": "REQUIRED — Monday Products-board item ID for this product",
@@ -29,7 +30,8 @@
       "maxChangedLines": 50,
       "pathAllowlist": [],
       "pathDenylist": ["migrations/**", "**/migrations/**", "db/**", "**/db/**", "auth/**", "**/auth/**", "api/**", "**/api/**", "*.sql"]
-    }
+    },
+    "greenBeforeStop": false
   },
   "rules": {
     "extraRules": []
@@ -40,7 +42,6 @@
   },
   "hooks": {
     "enabled": [
-      "task-state-guard",
       "worktree-required",
       "worktree-path-boundary",
       "branch-task-match",
