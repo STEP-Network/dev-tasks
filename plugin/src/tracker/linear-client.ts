@@ -66,11 +66,21 @@ const TRANSIENT_RE =
 
 const MUTATION_RE = /^\s*mutation\b/i
 
+/**
+ * Unset/empty means "no cap" (open). Anything else must be a base-10
+ * non-negative integer or this throws — a typo or a negative value must
+ * fail CLOSED, not silently disable the cap on a live run. Never echoes the
+ * raw value in the thrown message.
+ */
 function maxWrites(): number {
   const raw = process.env.TRACKERCTL_MAX_WRITES
-  if (!raw || !raw.trim()) return Number.POSITIVE_INFINITY
-  const n = Number.parseInt(raw, 10)
-  return Number.isFinite(n) && n >= 0 ? n : Number.POSITIVE_INFINITY
+  if (raw === undefined) return Number.POSITIVE_INFINITY
+  const trimmed = raw.trim()
+  if (!trimmed) return Number.POSITIVE_INFINITY
+  if (!/^\d+$/.test(trimmed)) {
+    throw new Error("TRACKERCTL_MAX_WRITES must be a non-negative integer.")
+  }
+  return Number.parseInt(trimmed, 10)
 }
 
 export async function linearRequest<T>(
@@ -91,6 +101,8 @@ export async function linearRequest<T>(
 
   const key = loadLinearKey()
 
+  let lastStatus: number | undefined
+
   for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
     const wait = lastCall + MIN_INTERVAL_MS - Date.now()
     if (wait > 0) await sleep(wait)
@@ -103,7 +115,12 @@ export async function linearRequest<T>(
     })
 
     if (res.status === 429 || res.status >= 500) {
-      await sleep(Math.min(MAX_BACKOFF_MS, 2_000 * 2 ** attempt))
+      lastStatus = res.status
+      // Don't burn the backoff sleep on the final attempt — fall through to
+      // the give-up error immediately.
+      if (attempt < MAX_ATTEMPTS - 1) {
+        await sleep(Math.min(MAX_BACKOFF_MS, 2_000 * 2 ** attempt))
+      }
       continue
     }
 
@@ -119,5 +136,8 @@ export async function linearRequest<T>(
     return json.data as T
   }
 
-  throw new Error(`Linear: gave up after ${MAX_ATTEMPTS} attempts`)
+  throw new Error(
+    `Linear: gave up after ${MAX_ATTEMPTS} attempts` +
+      (lastStatus !== undefined ? ` (last status ${lastStatus})` : ""),
+  )
 }

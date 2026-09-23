@@ -155,6 +155,56 @@ describe("linearRequest", () => {
     await expect(read).resolves.toBeDefined()
   })
 
+  it("fails closed on a non-numeric TRACKERCTL_MAX_WRITES", async () => {
+    process.env.TRACKERCTL_MAX_WRITES = "abc"
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ data: { ok: true } }))
+    vi.stubGlobal("fetch", fetchMock)
+
+    await expect(
+      linearRequest("mutation { issueCreate { success } }"),
+    ).rejects.toThrowError(/TRACKERCTL_MAX_WRITES/)
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it("fails closed on a negative TRACKERCTL_MAX_WRITES", async () => {
+    process.env.TRACKERCTL_MAX_WRITES = "-1"
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ data: { ok: true } }))
+    vi.stubGlobal("fetch", fetchMock)
+
+    await expect(
+      linearRequest("mutation { issueCreate { success } }"),
+    ).rejects.toThrowError(/TRACKERCTL_MAX_WRITES/)
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it("still allows reads under a malformed TRACKERCTL_MAX_WRITES", async () => {
+    process.env.TRACKERCTL_MAX_WRITES = "abc"
+    const fetchMock = vi.fn().mockImplementation(async () => jsonResponse({ data: { ok: true } }))
+    vi.stubGlobal("fetch", fetchMock)
+
+    const read = linearRequest("query { issue { id } }")
+    await vi.runAllTimersAsync()
+    await expect(read).resolves.toBeDefined()
+  })
+
+  it("gives up after MAX_ATTEMPTS on a persistent 503 without sleeping on the last attempt, reporting the last status", async () => {
+    // mockImplementation so every fetch() call gets its own Response — six
+    // real calls are driven through this mock.
+    const fetchMock = vi.fn().mockImplementation(async () => jsonResponse({}, 503))
+    vi.stubGlobal("fetch", fetchMock)
+
+    // .catch attached synchronously (before the fake-timer advance below) so
+    // there's no gap where the rejection is momentarily unhandled.
+    const settled = linearRequest("{ a }").catch((e: unknown) => e as Error)
+    await vi.runAllTimersAsync()
+    const err = await settled
+
+    expect(err).toBeInstanceOf(Error)
+    expect(err.message).toMatch(/gave up after 6 attempts/)
+    expect(err.message).toMatch(/503/)
+    expect(fetchMock).toHaveBeenCalledTimes(6)
+  })
+
   it("never puts the key in a thrown message", async () => {
     const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ errors: [{ message: "Bad" }] }))
     vi.stubGlobal("fetch", fetchMock)
