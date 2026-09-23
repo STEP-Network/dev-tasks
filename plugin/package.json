@@ -10,6 +10,7 @@
     "test:watch": "vitest",
     "start": "node dist/server.js",
     "generate:schema": "tsx scripts/generate-reviews-schema.ts",
+    "trackerctl": "tsx scripts/trackerctl.ts",
     "prepare": "npm run build"
   },
   "dependencies": {
