@@ -162,6 +162,19 @@
         }
       }
     },
+    "tracker": {
+      "type": "object",
+      "description": "Which issue tracker this project's /dev, /preview and /ship skills read and write. Defaults to `monday` when the block is absent, because phase 0 of the two-flow migration ships BEFORE the Linear workspace exists — a Linear default would break every consumer on release day. Flip to `linear` on cutover weekend; unsetting it is the rollback. DEV_TASKS_TRACKER overrides it per process, for rehearsals.",
+      "additionalProperties": false,
+      "properties": {
+        "provider": {
+          "type": "string",
+          "enum": ["linear", "monday"],
+          "default": "monday",
+          "description": "`linear` routes through plugin/src/tracker/linear.ts; `monday` through the deliberately minimal plugin/src/tracker/monday.ts, which is kept for the cutover weekend only and is deleted a release after `tracker.provider` has been `linear` in production."
+        }
+      }
+    },
     "environments": {
       "description": "Where this product is deployed. Used by skills to surface UAT URLs in Monday updates and self-review prompts.",
       "type": "object",
@@ -410,7 +423,7 @@
       }
     },
     "hooks": {
-      "description": "Per-project hook activation for non-policy hooks. Policy hooks (bash-guard, stop-ci-green-check) are STEP-wide and always-on regardless of this list. Listing them here is harmless (kept in the enum for backward compatibility with existing project-configs).",
+      "description": "Per-project hook activation for non-policy hooks. Policy hooks (bash-guard, stop-ci-green-check) are STEP-wide and always-on regardless of this list. Listing them here is harmless (kept in the enum for backward compatibility with existing project-configs). The same applies to the hooks RETIRED in 1.0 — stop-task-check, post-self-review, subtask-reminder, subtask-progress-gate — whose enum members are accepted and IGNORED at runtime so an existing project-config stays valid across the upgrade. Removing an enum member would invalidate a consumer's committed config the moment the plugin updates, before anyone could edit it.",
       "type": "object",
       "additionalProperties": false,
       "properties": {

@@ -8,12 +8,14 @@
     "autoMergePolicy": {
       "main": "never"
     },
-    "protectedBranches": ["main", "staging", "master", "production", "prod"]
+    "protectedBranches": ["main", "staging", "master", "production", "prod"],
+    "prePushMarker": false
   },
   "monday": {
     "productId": "REQUIRED — Monday Products-board item ID for this product",
     "v1MilestoneEpicIds": []
   },
+  "tracker": { "provider": "monday" },
   "environments": {
     "uat": { "url": "https://test.example.com" }
   },
@@ -28,7 +30,8 @@
       "maxChangedLines": 50,
       "pathAllowlist": [],
       "pathDenylist": ["migrations/**", "**/migrations/**", "db/**", "**/db/**", "auth/**", "**/auth/**", "api/**", "**/api/**", "*.sql"]
-    }
+    },
+    "greenBeforeStop": false
   },
   "rules": {
     "extraRules": []
@@ -39,24 +42,19 @@
   },
   "hooks": {
     "enabled": [
-      "task-state-guard",
       "worktree-required",
       "worktree-path-boundary",
       "branch-task-match",
-      "stop-task-check",
       "protect-sensitive-files",
       "pre-commit-secrets-scan",
-      "subtask-reminder",
       "auto-file-followup-nudge",
       "post-merge-postmortem",
       "post-push-track",
       "post-push-review-check",
-      "post-self-review",
       "pre-compact-task-snapshot",
       "user-prompt-task-context",
       "subprocess-failure",
       "refinement-gate",
-      "subtask-progress-gate",
       "demo-url-required",
       "stop-waiting-for-uat-stage",
       "stop-monday-reconciled-check",

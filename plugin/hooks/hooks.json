@@ -27,10 +27,6 @@
           {
             "type": "command",
             "command": "${CLAUDE_PLUGIN_ROOT}/hooks/branch-task-match.sh"
-          },
-          {
-            "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/subtask-reminder.sh"
           }
         ]
       },
@@ -95,11 +91,6 @@
           },
           {
             "type": "command",
-            "if": "Bash(git push *)",
-            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/subtask-progress-gate.sh"
-          },
-          {
-            "type": "command",
             "if": "Bash(git commit *)",
             "command": "${CLAUDE_PLUGIN_ROOT}/hooks/commit-id-gate.sh"
           }
@@ -149,24 +140,11 @@
             "command": "${CLAUDE_PLUGIN_ROOT}/hooks/ui-change-test-reminder.sh"
           }
         ]
-      },
-      {
-        "matcher": "Task",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/post-self-review.sh"
-          }
-        ]
       }
     ],
     "Stop": [
       {
         "hooks": [
-          {
-            "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/stop-task-check.sh"
-          },
           {
             "type": "command",
             "command": "${CLAUDE_PLUGIN_ROOT}/hooks/stop-ci-green-check.sh"

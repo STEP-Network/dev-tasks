@@ -1,5 +1,13 @@
 # Autonomous by Default
 
+> **dev-tasks 1.0:** in a `/dev` → `/preview` → `/ship` session (the two-flow
+> model), the `/refine-task` → `/pickup-task` → `/plan-task` → `/self-review`
+> → `/ship-pr` chain below does not apply: `/dev` makes no tracker writes and
+> works in the main checkout on a human profile, and `/ship` opens the PR and
+> stops — there is no self-review loop or autonomous merge to chain into.
+> This rule describes the legacy `/pickup-task` pipeline, which stays
+> available until its retirement release.
+
 When working a claimed task, run the full lifecycle without pausing for permission between phases. Stop only on the carve-outs below.
 
 ## The stance

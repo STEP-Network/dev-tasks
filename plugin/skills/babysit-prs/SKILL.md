@@ -67,7 +67,7 @@ For each PR that passed Phase 1b (all configured reviewers posted):
 1. Verify review state via `gh pr view {N} --json comments` — latest `claude` author comment. Positive verdicts: "ship-ready", "ship as-is", "no BLOCKERs", "all checks pass", "Self-Review PASSED", "verdict: green", or 🟢. If BLOCKERs surfaced → Phase 2b.
 2. Read PR body for Monday task ID: `gh pr view {N} --json body | grep "Monday\.com Task"`.
 3. Ensure `reviewAddressed` is populated in the PR's worktree active-task.json (structured format preferred — see `/ship-pr` SKILL.md Phase 6 schema). If the producing agent used `"handoff-to-orchestrator"`, the orchestrator must now perform its own triage pass and write the structured `reviewAddressed` before merging. The `pre-merge-review-gate` hook enforces this.
-4. Merge: `gh pr merge {N} --admin --squash`. NEVER `--delete-branch` — `gh` tries to delete the local tracking branch by switching cwd's checkout to `$defaultBase`, which fails with `fatal: '$defaultBase' is already used by worktree` and can corrupt the active task's branch state in a worktree session.
+4. Merge: `gh pr merge {N} --auto --squash`. NEVER `--delete-branch` — `gh` tries to delete the local tracking branch by switching cwd's checkout to `$defaultBase`, which fails with `fatal: '$defaultBase' is already used by worktree` and can corrupt the active task's branch state in a worktree session.
 5. Local cleanup: `git fetch --prune origin`. Drops the stale ref. Safe from any worktree.
 6. Capture merge SHA: `gh pr view {N} --json mergeCommit --jq .mergeCommit.oid`.
 
@@ -147,7 +147,7 @@ See [`plugin/rules/monitor-predicate-pattern.md`](../../rules/monitor-predicate-
 
 ## Anti-patterns
 
-- DO NOT use `gh pr merge --auto` — flaky against this repo's CI (UNSTABLE noise blocks auto-merge). Use `--admin --squash`.
+- Prefer `gh pr merge {pr} --auto --squash`. GitHub merges when every required check goes green, so the orchestrator never sits in a polling loop. This REVERSES the note that used to sit here: `--auto` was called flaky because UNSTABLE check noise held merges open, and the fix for that is to require only checks that settle, not to merge past them. Never `--admin` — it merges past a red required check, which spec section 11 bans and for which no ruleset bypass exists (`bypass_actors` is empty on purpose). Never `--delete-branch` either: when checks are already green (the `CLEAN` case), `--auto` merges immediately, and `gh`'s local-branch deletion collides with worktrees (see step 4 of Phase 2 above).
 - DO NOT merge PRs targeting `main` — hotfix PRs require human merge.
 - DO NOT delete the worktree before merging — git refuses (branch checked out).
 - DO NOT skip Monday reconciliation if MCP up — post-merge state is the audit trail.
@@ -157,11 +157,11 @@ See [`plugin/rules/monitor-predicate-pattern.md`](../../rules/monitor-predicate-
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| `gh pr merge` "branch is checked out" | Worktree still has the branch | Force-remove worktree, then merge with admin |
+| `gh pr merge` "branch is checked out" | Worktree still has the branch | Force-remove worktree, then re-run `gh pr merge {N} --auto --squash` |
 | "PR already merged" | Status update lag from prior tick | Verify via `gh pr view --json state`; skip to reconciliation if MERGED |
 | `updateTask` 404 on subtask IDs | Subtasks on different board | Use `manageSubtasks({ parentItemId, operations })` |
 | Monday MCP "Server not found" | OAuth session switched | Defer; capture queue inline; retry on MCP recovery |
-| CLEAN but `--admin` fails | Branch protection requires a check the agent didn't see | Check `gh pr checks {N}` for blocker; add via PR body edit |
+| CLEAN but auto-merge doesn't fire | Branch protection requires a check the agent didn't see, or `--auto` wasn't accepted (repo setting or existing merge conflict) | Check `gh pr checks {N}` for blocker; add via PR body edit; re-run `gh pr merge {N} --auto --squash` once resolved |
 
 ## Output
 
