@@ -353,7 +353,8 @@ if echo "$ACTUAL_CMD" | grep -q "git push"; then
         echo "  pnpm build && pnpm lint && pnpm test"
         echo "  echo \$(git rev-parse HEAD) > $MARKER"
         echo ""
-        echo "Or run /ship-pr to handle this automatically."
+        echo "Or run /ship, which typechecks before it pushes. Opt out entirely"
+        echo "with git.prePushMarker: false in .claude/project-config.json."
         exit 2
       fi
     fi
