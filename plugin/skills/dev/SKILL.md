@@ -15,7 +15,12 @@ carries one.
 
 ## Phase 0: where you are
 
-Read `.claude/project-config.json` for `git.defaultBase` (default `staging`).
+Read `.claude/project-config.json` for `git.defaultBase` (default `staging`):
+
+```bash
+DEFAULT_BASE=$(jq -r '.git.defaultBase // "staging"' .claude/project-config.json 2>/dev/null)
+```
+
 Read the machine profile:
 
 ```bash
@@ -52,12 +57,18 @@ branch; if it IS the base branch, ask what the work is rather than guessing.
 
 ```bash
 git fetch origin
-git checkout -B "$BRANCH" "origin/$DEFAULT_BASE"
+if git show-ref --verify --quiet "refs/heads/$BRANCH"; then
+  git checkout "$BRANCH"
+elif git show-ref --verify --quiet "refs/remotes/origin/$BRANCH"; then
+  git checkout -b "$BRANCH" --track "origin/$BRANCH"
+else
+  git checkout -b "$BRANCH" "origin/$DEFAULT_BASE"
+fi
 ```
 
-`-B` so re-running `/dev` on an existing branch resumes it instead of failing.
-If the branch already exists locally with commits on it, `git checkout "$BRANCH"`
-instead and say so — never reset someone's work onto the base.
+A branch that already exists — locally or remote-only — is resumed as-is.
+Only a genuinely new name is cut from `origin/$DEFAULT_BASE`. Never reset
+someone's work onto the base.
 
 ## Phase 3: load the issue as context
 

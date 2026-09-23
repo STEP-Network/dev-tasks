@@ -50,7 +50,7 @@ The Linear key was read from `~/.config/linear/.env` and never printed.
 | Auto-merge lands three PRs unattended | three `/ship` PRs merged by GitHub with no human pressing merge; record the PR numbers | Open |
 | `Claude review` runs clean on five PRs | PolAds-repo workflow, tracked separately. It is added to ruleset 21998691 by a HUMAN only after five clean runs | Open |
 | The profile matrix behaves on a human laptop | `worktree-required` inert, i18n gates inert, gate (f) still blocks a push to staging | Verified in the hook test suites (`worktree-profile-gate`, `bash-guard-i18n-profile`, `bash-guard-gate-b-retired`) and live for gate (f) above |
-| The profile matrix behaves on an agent profile | with `DEV_TASKS_PROFILE=agent`: `worktree-required` blocks, i18n gates block, gate (f) still blocks | Verified in the same suites; gate (f) live above |
+| The profile matrix behaves on an agent profile | with `DEV_TASKS_PROFILE=agent`: `worktree-required` blocks, i18n gates block, gate (f) still blocks | Partially verified — see note |
 | No retired hook is registered | `bash hooks/__tests__/retired-hooks.test.sh` green on the installed 1.0.0 cache, not just in the source tree | Source tree verified; installed cache open until the post-merge reinstall |
 | The Linear adapter round-trips live | steps 2-6 above | Verified 2026-09-23 |
 | One full week on one machine before a second adopts it | date started, date cleared | Open |
@@ -63,3 +63,11 @@ The Linear key was read from `~/.config/linear/.env` and never printed.
   were exercised against live data.
 - `claim` did not resolve a Linear user, because the claimant is not a member.
   The assignee branch of `claimIssue` is therefore unexercised against the live API.
+- **Note on the agent-profile row above:** `worktree-required` blocking under
+  `DEV_TASKS_PROFILE=agent` was verified against the `worktree-profile-gate`
+  fixture, which plants a `.claude/active-task.json` deliberately — the hook
+  is ALSO keyed on that file existing, and it exits 0 without it regardless of
+  profile. The 1.0 `/dev` flow never creates `active-task.json`, so on a real
+  agent mini `worktree-required` stays inert until a future phase-2 worker
+  writes one. The hook's logic is verified; its live effect in the 1.0 `/dev`
+  flow is not, hence "partially."

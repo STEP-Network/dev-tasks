@@ -8,7 +8,7 @@
  *
  *   trackerctl read STEP-123
  *   trackerctl branch STEP-123
- *   trackerctl create --title "Fix the thing" --description "$BODY" --label type/chore
+ *   trackerctl create --title "Fix the thing" --description "$BODY" --label chore
  *   trackerctl comment STEP-123 --body "opened PR #42"
  *   trackerctl attach STEP-123 --url https://github.com/... --title "PR #42"
  *   trackerctl ready --limit 10

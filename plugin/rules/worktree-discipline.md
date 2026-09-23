@@ -1,5 +1,13 @@
 # Worktree Discipline
 
+> **dev-tasks 1.0:** in a `/dev` → `/preview` → `/ship` session (the two-flow
+> model), the "never in the main checkout" bar below does not apply by
+> default: worktrees are agent-profile only now (`worktree-required` /
+> `worktree-path-boundary` are profile-gated, inert on a human laptop), and
+> `/dev --worktree` opts in explicitly. This rule describes the legacy
+> `/pickup-task` pipeline's worktree-per-task discipline, which stays
+> available until its retirement release.
+
 When and how Claude Code sessions must run inside a git worktree. Enforced by `.claude/hooks/worktree-required.sh`.
 
 ## The bar

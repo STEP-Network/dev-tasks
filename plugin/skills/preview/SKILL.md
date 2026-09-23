@@ -14,14 +14,22 @@ preview deployment and prints the URL. No PR, no tracker write, no checks.
 ## Phase 1: commit and push
 
 ```bash
+BRANCH=$(git branch --show-current)
+if [ -z "$BRANCH" ]; then
+  echo "Detached HEAD — no branch to push. Check one out, or run /dev to create one." >&2
+  exit 1
+fi
 git add -A
-git commit -m "wip: $(git branch --show-current)"   # skip when the tree is clean
+git commit -m "wip: $BRANCH"   # skip when the tree is clean
 git push -u origin HEAD
 ```
 
-`HEAD`, never a branch name: the person may be on a detached checkout, and a
-push to `staging` is refused by `bash-guard` gate (f) anyway. Gate (f) is NOT
-profile-gated — it holds on every machine.
+`HEAD`, never a hard-coded branch name: the push always targets whatever
+branch is actually checked out. That still requires an actual branch —
+`git push -u origin HEAD` fails on a detached checkout (there is nothing for
+`HEAD` to name) — so Phase 1 stops and asks for a branch (or a run of `/dev`)
+instead of attempting it. A push to `staging` is refused by `bash-guard`
+gate (f) anyway. Gate (f) is NOT profile-gated — it holds on every machine.
 
 If the commit is empty and the branch is already pushed, skip straight to
 Phase 2 and print the URL for the existing deployment.

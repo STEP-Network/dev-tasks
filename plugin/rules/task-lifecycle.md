@@ -1,5 +1,13 @@
 # Task Lifecycle
 
+> **dev-tasks 1.0:** in a `/dev` → `/preview` → `/ship` session (the two-flow
+> model), the status transitions, subtask gates, and lifecycle phases below do
+> not apply: `/dev` makes no tracker writes at all, and `/ship` opens the PR,
+> writes the provider's Task trace line, and stops — there is no claim, no
+> subtask, no `Waiting for UAT` flip. This rule describes the legacy
+> `/pickup-task` → `/ship-pr` pipeline, which stays available until its
+> retirement release.
+
 Monday.com task lifecycle: statuses, subtask types, dependencies, gates.
 
 ## Status flow

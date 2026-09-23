@@ -59,24 +59,43 @@ Add the tracker block:
 Flip `provider` to `linear` on cutover weekend. Unsetting it is the rollback,
 and it needs no code change.
 
-Then trim `hooks.enabled[]`. Spec section 4 turns three of them off on BOTH
-profiles, so remove them outright:
+**Prerequisites for `/dev`, `/preview`, and `/ship` to run unblocked:**
+
+- `git.prePushMarker: false` — otherwise `bash-guard` gate (c) blocks every
+  `/preview`/`/ship` push behind a local build/lint/test marker that neither
+  skill writes.
+- `ci.greenBeforeStop: false` — otherwise `stop-ci-green-check` holds the
+  session open waiting for a PR that `/ship` deliberately leaves for CI to
+  finish.
+- Do NOT add `task-state-guard` or `commit-id-gate` to `hooks.enabled[]` —
+  `task-state-guard` refuses the first edit when there is no
+  `.claude/active-task.json` (which `/dev` never creates), and
+  `commit-id-gate` refuses the pre-issue commit `/preview` makes before
+  `/ship` has opened anything for a commit to reference.
+
+Then trim `hooks.enabled[]`. Spec section 4 retires two of these outright and
+turns the other two off on BOTH profiles — four in total, so remove them all:
 
 - `subtask-reminder` — retired in 1.0 (the script is gone)
 - `post-self-review` — retired in 1.0 (the script is gone)
 - `pipeline-reminder` — off for both profiles
 - `stop-visual-diff-check` — off for both profiles (CI captures the screenshots)
 
-`worktree-required` and `worktree-path-boundary` STAY in the list. They are
-now profile-gated, so they are inert on a laptop and live on a mini, and one
-config serves both.
+`worktree-required` and `worktree-path-boundary` STAY in the list. Both are
+now profile-gated (inert on a laptop). `worktree-path-boundary` is then live
+on a mini as soon as the session is inside a worktree; `worktree-required` is
+ALSO keyed on `.claude/active-task.json` existing, which the 1.0 `/dev` flow
+never creates, so on a mini it stays inert too until a future phase-2 worker
+writes a task file. One config serves both profiles regardless.
 
 ## 4. The Linear key (only when `provider` is `linear`)
 
 ```bash
 mkdir -p ~/.config/linear
-printf 'LINEAR_API_KEY=%s\n' "$KEY" > ~/.config/linear/.env
+read -rs KEY
+(umask 077; printf 'LINEAR_API_KEY=%s\n' "$KEY" > ~/.config/linear/.env)
 chmod 600 ~/.config/linear/.env
+unset KEY
 ```
 
 Never in the repo, never in a shell history line that persists, never as a CLI
