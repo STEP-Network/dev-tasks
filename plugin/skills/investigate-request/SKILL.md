@@ -186,8 +186,8 @@ See [`EXAMPLES.md`](./EXAMPLES.md) for two full input → output walkthroughs (p
 
 ## Cross-references
 
-- `plugin/rules/autonomous-by-default.md` — the "Missing context the agent can't derive" carve-out points here as the concrete pattern.
+- `${CLAUDE_PLUGIN_ROOT}/rules/autonomous-by-default.md` — the "Missing context the agent can't derive" carve-out points here as the concrete pattern.
 - `plugin/skills/create-task/SKILL.md` Phase 0 — dedup-mode invocation contract.
 - `plugin/skills/refine-task/SKILL.md` Phase 0 — relevance-mode invocation contract.
 - `plugin/skills/pickup-task/SKILL.md` Phase 0 — relevance-mode invocation contract.
-- `plugin/rules/critical-thinking.md` — pushing back on a wrong proposal (different from asking for missing context).
+- `${CLAUDE_PLUGIN_ROOT}/rules/critical-thinking.md` — pushing back on a wrong proposal (different from asking for missing context).

@@ -1,5 +1,9 @@
 # Meta-Workflow Tooling
 
+> **Monday provider only.** It files to Monday boards through the Monday MCP
+> tools (`createBug`, `createRetro`, `createTask`).
+> Under `tracker.provider: linear` this rule does not apply.
+
 When the agent files improvements to its own workflow tooling (hooks, skills, rules, MCP tools). Loaded on demand when hitting a tooling friction point.
 
 ## TL;DR

@@ -126,7 +126,7 @@ NEW gate between UAT doc generation and the `Waiting for UAT` transition. Runs t
 
 ### Phase 6: CI + Review Polling (main session) or Handoff (subagent)
 
-Branch on execution context per `.claude/rules/agent-autonomy.md`. Quick check: is `Monitor` in your tool surface?
+Branch on execution context per `${CLAUDE_PLUGIN_ROOT}/rules/agent-autonomy.md`. Quick check: is `Monitor` in your tool surface?
 
 **CI Gate Skip path (either context, v0.26.0)**: when the task's CI Gate is `Skip (human)` / `Skip (agent)` (and the PR base is NOT `$hotfixBase`), do NOT sit in the CI polling loop. Instead: (1) run ONE review-triage pass over whatever findings already exist (Corridor + bot review if present — don't wait for them); (2) arm server-side merge with `gh pr merge {prNumber} --auto --squash` IF `git.autoMergePolicy` allows agent merges for the base branch — otherwise leave the PR for `/babysit-prs`/human; (3) emit the reviewAddressed marker and set `reviewAddressed: "handoff-to-orchestrator"`; (4) continue to Phase 6.6. GitHub's branch protection still requires green checks before the auto-merge fires — skip removes the agent's WAIT, never the green-merge requirement. `stop-ci-green-check` allows the session to end with checks pending under this gate; a check that already FAILED still blocks the stop (fix it or ack the flake).
 

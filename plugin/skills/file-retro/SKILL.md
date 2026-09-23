@@ -25,7 +25,7 @@ Ask: *"If I left this alone, would the system produce wrong output for a real us
 - **No, but harder work / produces noise** → Retro. Continue.
 - **No, and it's a missing capability** → Task under workflow-tooling epic. STOP.
 
-Same heuristic as `.claude/rules/meta-workflow.md`.
+Same heuristic as `${CLAUDE_PLUGIN_ROOT}/rules/meta-workflow.md`.
 
 ## Workflow
 
@@ -102,6 +102,6 @@ Hook surfaces non-blocking nudge on CI-ack writes, `gh run rerun --failed` (flak
 
 ## Reference
 
-- `.claude/rules/meta-workflow.md` — full Bug-vs-Retro-vs-Task triage + "Dedupe before create"
+- `${CLAUDE_PLUGIN_ROOT}/rules/meta-workflow.md` — full Bug-vs-Retro-vs-Task triage + "Dedupe before create"
 - `mcp__plugin_dev-tasks_dev-tasks__createRetro` / `updateRetro` / `listRetros`
 - `auto-file-followup-nudge.sh` — hook surfacing retro-file nudges

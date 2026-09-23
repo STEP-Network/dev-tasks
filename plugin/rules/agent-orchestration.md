@@ -1,5 +1,10 @@
 # Agent Orchestration Workflow
 
+> **Monday provider only.** The post-merge checklist reconciles the Monday
+> board, and the protected state fields live in `.claude/active-task.json`,
+> which the 1.0 flow never writes.
+> Under `tracker.provider: linear` this rule does not apply.
+
 > **Reference rule** — codifies how the main session (orchestrator) and
 > spawned subagents share work, signal handoffs, and reconcile state on Monday
 > after PRs merge. Loaded on demand via `rules-routing.json` when editing

@@ -1,5 +1,9 @@
 # E2E Masterplan — toward selective-UAT autonomy
 
+> **Monday provider only.** The plan is built on Monday task statuses
+> (`Waiting for UAT`, a new `Verified`) and the legacy `/ship-pr` phases.
+> Under `tracker.provider: linear` this rule does not apply.
+
 ## TL;DR
 
 STEP's long-term aim: **agent autonomy with selective human review.** AI handles ~80% of changes that are mechanically verifiable end-to-end; humans review the ~20% where subjective judgment matters (UX feel, regulatory interpretation, stakeholder-visible design). UAT becomes selective, not universal.

@@ -1,5 +1,9 @@
 # Workflow Pipeline — End-to-End Lifecycle
 
+> **Monday provider only.** The legacy pipeline that takes a Monday task from
+> backlog to released, and the hooks that gate it.
+> Under `tracker.provider: linear` this rule does not apply.
+
 > **Canonical walkthrough.** This is the source of truth for how a Monday task
 > moves from backlog to released. Other rules go deep on specific phases — this
 > one walks the entire arc and points at them. Loaded on demand via

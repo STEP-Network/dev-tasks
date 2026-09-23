@@ -1,5 +1,9 @@
 # Worktree Discipline
 
+> **Monday provider only.** The worktree-per-claimed-Monday-task discipline,
+> keyed on `.claude/active-task.json`, which the 1.0 flow never writes.
+> Under `tracker.provider: linear` this rule does not apply.
+
 > **dev-tasks 1.0:** in a `/dev` → `/preview` → `/ship` session (the two-flow
 > model), the "never in the main checkout" bar below does not apply by
 > default: worktrees are agent-profile only now (`worktree-required` /

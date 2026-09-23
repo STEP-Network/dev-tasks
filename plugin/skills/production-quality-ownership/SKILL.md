@@ -89,5 +89,5 @@ Regulated industries: relevant regulation/audit context in overlay file.
 
 - `.claude/skills/self-review/SKILL.md` — code-level 10-point checklist
 - `.claude/skills/design-consistency/SKILL.md` — deep version of Q6
-- `.claude/rules/ship-readiness.md` — BLOCKER / IMPROVEMENT / POLISH triage
+- `${CLAUDE_PLUGIN_ROOT}/rules/ship-readiness.md` — BLOCKER / IMPROVEMENT / POLISH triage
 - Consumer's `.claude/rules/` for project-specific testing/ui-design/i18n
