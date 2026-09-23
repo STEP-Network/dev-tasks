@@ -10,6 +10,11 @@
 
 set -u
 
+# A shell-exported DEV_TASKS_PROFILE overrides the profile FILE this test
+# writes per case (see hooks/lib/profile.sh) — unset it so the fixture is the
+# only thing deciding the profile.
+unset DEV_TASKS_PROFILE
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PASS=0
 FAIL=0

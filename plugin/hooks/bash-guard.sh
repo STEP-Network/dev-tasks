@@ -298,7 +298,7 @@ print(target)
       echo ""
       echo "All changes to protected branches must land via a Pull Request:"
       echo "  1. Push to a feature branch: git push origin feat/<slug>"
-      echo "  2. Open a PR via /ship-pr (build + lint + test + schema + PR creation)"
+      echo "  2. Open a PR with /ship (typecheck + traceable PR + auto-merge)"
       echo "  3. Bot review + CI complete, then merge via the PR"
       echo ""
       echo "Server-side complement: configure GitHub branch protection on '$TARGET_REF'"
@@ -326,10 +326,14 @@ if echo "$ACTUAL_CMD" | grep -q "git push"; then
 
     if [ ! -f "$MARKER" ]; then
       echo "BLOCKED: Pre-push gate failed — no validation marker found."
-      echo "You must run /ship-pr (which runs build + lint + test + schema check) before pushing."
+      echo "You must run /ship (which runs typecheck before pushing) before pushing."
       echo ""
       echo "Alternatively, run: pnpm build && pnpm lint && pnpm test"
       echo "Then create the marker: echo \$(git rev-parse HEAD) > $MARKER"
+      echo ""
+      echo "Opt out entirely (CI as the validation authority instead): set"
+      echo "  git.prePushMarker: false"
+      echo "in .claude/project-config.json."
       exit 2
     fi
 

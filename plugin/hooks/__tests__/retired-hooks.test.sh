@@ -42,17 +42,17 @@ for name in $RETIRED; do
   fi
 done
 
-echo "--- every remaining registration points at a file that exists ---"
+echo "--- every remaining registration points at a file that exists and is executable ---"
 missing=0
 for cmd in $(jq -r '.hooks | to_entries[] | .value[] | .hooks[] | .command' "$HOOKS_JSON"); do
   rel="${cmd#\$\{CLAUDE_PLUGIN_ROOT\}/}"
-  if [ ! -f "$PLUGIN_ROOT/$rel" ]; then
-    echo "FAIL: registration points at a missing file: $rel"
+  if [ ! -f "$PLUGIN_ROOT/$rel" ] || [ ! -x "$PLUGIN_ROOT/$rel" ]; then
+    echo "FAIL: registration points at a file that is missing or not executable: $rel"
     missing=$((missing + 1))
   fi
 done
 if [ "$missing" -eq 0 ]; then
-  echo "PASS: every registration resolves to a real file"
+  echo "PASS: every registration resolves to a real, executable file"
   PASS=$((PASS + 1))
 else
   FAIL=$((FAIL + missing))
