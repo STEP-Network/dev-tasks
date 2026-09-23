@@ -12,14 +12,16 @@
 import { describe, it, expect, beforeEach, vi } from "vitest"
 
 const requestMock = vi.fn()
-vi.mock("../linear-client.ts", () => ({
+vi.mock("../linear-client.ts", async (importOriginal) => ({
+  // The real module, so LinearCreateConflictError is the class linear.ts checks for.
+  ...(await importOriginal<typeof import("../linear-client.ts")>()),
   linearRequest: (...args: unknown[]) => requestMock(...args),
-  LINEAR_ENDPOINT: "https://api.linear.app/graphql",
-  loadLinearKey: () => "test-key",
-  resetLinearClientForTests: () => {},
 }))
 
 const { createLinearTracker } = await import("../linear.ts")
+const { LinearCreateConflictError } = await import("../linear-client.ts")
+
+const UUID_V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
 
 const TEAM = {
   teams: {
@@ -34,7 +36,10 @@ const TEAM = {
             { id: "state-progress", name: "In Progress", type: "started", position: 4 },
           ],
         },
-        labels: { nodes: [{ id: "label-chore", name: "chore" }] },
+        labels: {
+          nodes: [{ id: "label-chore", name: "chore" }],
+          pageInfo: { hasNextPage: false, endCursor: "labels-1" },
+        },
       },
     ],
   },
@@ -125,6 +130,115 @@ describe("createIssue", () => {
     // traceability issue opened by /ship.
     expect(requestMock.mock.calls[1][1].input.stateId).toBeUndefined()
   })
+
+  it("finds a label that sits past the first page of team labels", async () => {
+    // The migration's epic/<slug> labels alone can push `chore` off a first
+    // page; reading one page skipped it without a word.
+    const firstPage = {
+      teams: {
+        nodes: [
+          {
+            ...TEAM.teams.nodes[0],
+            labels: {
+              nodes: [{ id: "label-epic", name: "some-epic" }],
+              pageInfo: { hasNextPage: true, endCursor: "labels-1" },
+            },
+          },
+        ],
+      },
+    }
+    requestMock
+      .mockResolvedValueOnce(firstPage)
+      .mockResolvedValueOnce({
+        team: {
+          labels: {
+            nodes: [{ id: "label-chore", name: "chore" }],
+            pageInfo: { hasNextPage: false, endCursor: "labels-2" },
+          },
+        },
+      })
+      .mockResolvedValueOnce({ issueCreate: { issue: ISSUE_FIELDS } })
+
+    await createLinearTracker().createIssue({ title: "x", labels: ["chore"] })
+
+    // One team, not the default 50: Linear multiplies the nested labels(first:
+    // 250) by the outer connection's page size, and 50 x 250 labels is past
+    // its 10,000-point cap for a single query.
+    expect(requestMock.mock.calls[0][0]).toMatch(/teams\(first: 1,/)
+    expect(requestMock.mock.calls[1][1]).toMatchObject({ id: "team-uuid", after: "labels-1" })
+    expect(requestMock.mock.calls[2][1].input.labelIds).toEqual(["label-chore"])
+  })
+})
+
+describe("creates carry an id of the adapter's own", () => {
+  it("createIssue sends a UUID v4 as the issue id", async () => {
+    requestMock
+      .mockResolvedValueOnce(TEAM)
+      .mockResolvedValueOnce({ issueCreate: { issue: ISSUE_FIELDS } })
+
+    await createLinearTracker().createIssue({ title: "x" })
+
+    expect(requestMock.mock.calls[1][1].input.id).toMatch(UUID_V4)
+  })
+
+  it("comment sends a UUID v4 as the comment id, a fresh one per comment", async () => {
+    requestMock
+      .mockResolvedValueOnce({ issues: { nodes: [ISSUE_FIELDS] } })
+      .mockResolvedValueOnce({ commentCreate: { success: true } })
+      .mockResolvedValueOnce({ issues: { nodes: [ISSUE_FIELDS] } })
+      .mockResolvedValueOnce({ commentCreate: { success: true } })
+
+    const tracker = createLinearTracker()
+    await tracker.comment("STEP-123", "one")
+    await tracker.comment("STEP-123", "two")
+
+    const [query, variables] = requestMock.mock.calls[1]
+    expect(query).toMatch(/commentCreate/)
+    expect(variables.input).toMatchObject({ issueId: "issue-uuid", body: "one" })
+    expect(variables.input.id).toMatch(UUID_V4)
+    expect(requestMock.mock.calls[3][1].input.id).not.toBe(variables.input.id)
+  })
+})
+
+describe("a retry refused as 'already exists' is settled by reading the id back", () => {
+  it("createIssue returns the issue its earlier attempt created", async () => {
+    requestMock
+      .mockResolvedValueOnce(TEAM)
+      .mockRejectedValueOnce(new LinearCreateConflictError("Linear: Entity Issue with id x already exists"))
+      .mockResolvedValueOnce({ issue: { ...ISSUE_FIELDS, identifier: "STEP-501" } })
+
+    const issue = await createLinearTracker().createIssue({ title: "Ship the thing" })
+
+    const sentId = requestMock.mock.calls[1][1].input.id
+    const [readQuery, readVariables] = requestMock.mock.calls[2]
+    expect(readQuery).toMatch(/issue\(id:/)
+    expect(readVariables).toEqual({ id: sentId })
+    expect(issue.id).toBe("STEP-501")
+  })
+
+  it("comment succeeds once the comment reads back", async () => {
+    requestMock
+      .mockResolvedValueOnce({ issues: { nodes: [ISSUE_FIELDS] } })
+      .mockRejectedValueOnce(new LinearCreateConflictError("Linear: Entity Comment with id x already exists"))
+      .mockResolvedValueOnce({ comment: { id: "comment-uuid" } })
+
+    await expect(createLinearTracker().comment("STEP-123", "hi")).resolves.toBeUndefined()
+
+    const sentId = requestMock.mock.calls[1][1].input.id
+    expect(requestMock.mock.calls[2][0]).toMatch(/comment\(id:/)
+    expect(requestMock.mock.calls[2][1]).toEqual({ id: sentId })
+  })
+
+  it("rethrows the conflict when nothing reads back", async () => {
+    // Linear also reports PHANTOM insert conflicts, for ids nothing holds.
+    // Calling that a success would drop the comment without a word.
+    requestMock
+      .mockResolvedValueOnce({ issues: { nodes: [ISSUE_FIELDS] } })
+      .mockRejectedValueOnce(new LinearCreateConflictError("Linear: conflict on insert"))
+      .mockRejectedValueOnce(new Error("Linear: Entity not found: Comment"))
+
+    await expect(createLinearTracker().comment("STEP-123", "hi")).rejects.toThrowError(/conflict on insert/)
+  })
 })
 
 describe("claimIssue", () => {
@@ -178,6 +292,7 @@ describe("listReady", () => {
           { ...ISSUE_FIELDS, identifier: "STEP-2", priority: 1, updatedAt: "2026-09-01T00:00:00.000Z" },
           { ...ISSUE_FIELDS, identifier: "STEP-3", priority: 3, updatedAt: "2026-02-01T00:00:00.000Z" },
         ],
+        pageInfo: { hasNextPage: false, endCursor: "ready-1" },
       },
     })
 
@@ -185,8 +300,49 @@ describe("listReady", () => {
 
     const [query, variables] = requestMock.mock.calls[0]
     expect(query).toMatch(/issues\(/)
-    expect(variables).toMatchObject({ teamKey: "STEP", stateName: "Ready", first: 10 })
+    expect(variables).toMatchObject({ teamKey: "STEP", stateName: "Ready" })
     expect(issues.map((i) => i.id)).toEqual(["STEP-2", "STEP-3", "STEP-1"])
+  })
+
+  it("pages through the whole queue before sorting, so an Urgent issue on page 2 still comes first", async () => {
+    // Linear pages in createdAt order, so a NEW Urgent issue lands on the
+    // last page. Sorting only the first page handed the front door the
+    // oldest Low issues instead.
+    requestMock
+      .mockResolvedValueOnce({
+        issues: {
+          nodes: [
+            { ...ISSUE_FIELDS, identifier: "STEP-1", priority: 4, updatedAt: "2026-01-01T00:00:00.000Z" },
+            { ...ISSUE_FIELDS, identifier: "STEP-2", priority: 3, updatedAt: "2026-02-01T00:00:00.000Z" },
+          ],
+          pageInfo: { hasNextPage: true, endCursor: "ready-1" },
+        },
+      })
+      .mockResolvedValueOnce({
+        issues: {
+          nodes: [{ ...ISSUE_FIELDS, identifier: "STEP-9", priority: 1, updatedAt: "2026-09-20T00:00:00.000Z" }],
+          pageInfo: { hasNextPage: false, endCursor: "ready-2" },
+        },
+      })
+
+    const issues = await createLinearTracker().listReady(2)
+
+    expect(issues.map((i) => i.id)).toEqual(["STEP-9", "STEP-2"])
+    expect(requestMock.mock.calls[0][1]).toMatchObject({ after: null })
+    expect(requestMock.mock.calls[1][1]).toMatchObject({ after: "ready-1" })
+    // The page size is not the limit, and it stays small: Linear refuses a
+    // query over 10,000 complexity points, and one issue with its nested
+    // labels costs about 58, so a page of 250 would be refused outright.
+    expect(requestMock.mock.calls[0][1].first).toBeLessThanOrEqual(100)
+  })
+
+  it("throws rather than looping when Linear hands back a cursor that does not advance", async () => {
+    const stuck = {
+      issues: { nodes: [ISSUE_FIELDS], pageInfo: { hasNextPage: true, endCursor: "same" } },
+    }
+    requestMock.mockResolvedValueOnce(stuck).mockResolvedValueOnce(stuck)
+
+    await expect(createLinearTracker().listReady(5)).rejects.toThrowError(/cursor/)
   })
 })
 

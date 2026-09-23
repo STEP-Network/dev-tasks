@@ -12,12 +12,15 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest"
+import { randomUUID } from "node:crypto"
 import {
   linearRequest,
   loadLinearKey,
   resetLinearClientForTests,
+  LinearCreateConflictError,
   LINEAR_ENDPOINT,
 } from "../linear-client.ts"
+import { createLinearTracker } from "../linear.ts"
 
 const ORIGINAL_KEY = process.env.LINEAR_API_KEY
 const ORIGINAL_HOME = process.env.HOME
@@ -212,5 +215,118 @@ describe("linearRequest", () => {
     expect(err).toBeInstanceOf(Error)
     expect(err.message).toMatch(/Bad/)
     expect(err.message).not.toContain("lin_api_test_key")
+  })
+})
+
+describe("mutation retries", () => {
+  // A 5xx does not say whether the write landed. The adapter sends its own
+  // UUID on every create, so a retry names the SAME entity; Linear then
+  // refuses the second insert instead of making a duplicate.
+  const CREATE = "mutation($input: IssueCreateInput!) { issueCreate(input: $input) { issue { id } } }"
+  const ID = "3f2b8c1e-6d4a-4f0b-9c2e-7a1d5e8b4c6f"
+  const VARIABLES = { input: { id: ID, teamId: "team-uuid", title: "x" } }
+
+  it("resends the identical body, client id included, after a 5xx", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse({}, 502))
+      .mockResolvedValueOnce(jsonResponse({ data: { issueCreate: { issue: { id: ID } } } }))
+    vi.stubGlobal("fetch", fetchMock)
+
+    const promise = linearRequest(CREATE, VARIABLES)
+    await vi.runAllTimersAsync()
+    await promise
+
+    const [first, second] = fetchMock.mock.calls.map(([, init]) => init.body as string)
+    expect(second).toBe(first)
+    expect(JSON.parse(second).variables.input.id).toBe(ID)
+  })
+
+  it("raises LinearCreateConflictError when a RETRY is refused as already existing", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse({}, 503))
+      .mockResolvedValueOnce(
+        jsonResponse({ errors: [{ message: `Entity Issue with id ${ID} already exists` }] }),
+      )
+    vi.stubGlobal("fetch", fetchMock)
+
+    const settled = linearRequest(CREATE, VARIABLES).catch((e: unknown) => e as Error)
+    await vi.runAllTimersAsync()
+    const err = await settled
+
+    // Its own class, so the adapter can read the id back and decide whether
+    // the first attempt landed. It is still an Error with Linear's message.
+    expect(err).toBeInstanceOf(LinearCreateConflictError)
+    expect(err.message).toMatch(/already exists/)
+  })
+
+  it("treats 'already exists' on the FIRST attempt as a plain refusal", async () => {
+    // No earlier attempt of ours could have landed, so there is nothing to
+    // settle: the id really is taken.
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(jsonResponse({ errors: [{ message: `Entity Issue with id ${ID} already exists` }] }))
+    vi.stubGlobal("fetch", fetchMock)
+
+    const err = await linearRequest(CREATE, VARIABLES).catch((e: unknown) => e as Error)
+
+    expect(err).toBeInstanceOf(Error)
+    expect(err).not.toBeInstanceOf(LinearCreateConflictError)
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+
+  it("leaves exactly one issue when a 5xx hid a create that landed (adapter and transport together)", async () => {
+    // A fake Linear that stores the FIRST create and then answers 502, the
+    // way a gateway timeout in front of a finished write does. Like the real
+    // one, it mints an id when the input carries none.
+    const stored = new Map<string, Record<string, unknown>>()
+    let creates = 0
+    const fetchMock = vi.fn().mockImplementation(async (_url: string, init: { body: string }) => {
+      const { query, variables } = JSON.parse(init.body)
+      if (/teams\(/.test(query)) {
+        const team = {
+          id: "team-uuid",
+          key: "STEP",
+          name: "STEP",
+          states: { nodes: [] },
+          labels: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
+        }
+        return jsonResponse({ data: { teams: { nodes: [team] } } })
+      }
+      if (/issueCreate/.test(query)) {
+        creates += 1
+        const id: string = variables.input.id ?? randomUUID()
+        if (stored.has(id)) {
+          return jsonResponse({ errors: [{ message: `Entity Issue with id ${id} already exists` }] })
+        }
+        const issue = {
+          id,
+          identifier: `STEP-${900 + stored.size}`,
+          title: variables.input.title,
+          description: null,
+          url: "https://linear.app/step/issue/STEP-900",
+          priority: 0,
+          updatedAt: "2026-09-23T00:00:00.000Z",
+          state: { name: "Ready" },
+          labels: { nodes: [] },
+        }
+        stored.set(id, issue)
+        return creates === 1 ? jsonResponse({}, 502) : jsonResponse({ data: { issueCreate: { issue } } })
+      }
+      if (/issue\(id:/.test(query)) {
+        return jsonResponse({ data: { issue: stored.get(variables.id) ?? null } })
+      }
+      throw new Error(`unexpected query: ${query}`)
+    })
+    vi.stubGlobal("fetch", fetchMock)
+
+    const promise = createLinearTracker().createIssue({ title: "Ship the thing" })
+    await vi.runAllTimersAsync()
+    const issue = await promise
+
+    expect(creates).toBe(2)
+    expect(stored.size).toBe(1)
+    expect(issue.id).toBe("STEP-900")
   })
 })

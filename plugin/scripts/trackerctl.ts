@@ -14,8 +14,10 @@
  *   trackerctl ready --limit 10
  *   trackerctl claim STEP-123 --as bob
  *
- * The provider comes from .claude/project-config.json `tracker.provider`
- * (default monday), overridable with DEV_TASKS_TRACKER.
+ * The provider comes from `tracker.provider` in the .claude/project-config.json
+ * at the git toplevel (default monday), overridable with DEV_TASKS_TRACKER. A
+ * missing or unparseable file or an unknown value still means monday, with a
+ * warning on stderr.
  */
 
 import { resolveTracker } from "../src/tracker/index.ts"

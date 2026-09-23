@@ -7,7 +7,8 @@
  * cutover weekend.
  */
 
-import { describe, it, expect, beforeEach, afterEach } from "vitest"
+import { describe, it, expect, beforeEach, afterEach, vi, type MockInstance } from "vitest"
+import { execFileSync } from "node:child_process"
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -15,55 +16,92 @@ import { readTrackerProvider, resolveTracker } from "../index.ts"
 import { stripDescriptionDocHeader } from "../monday.ts"
 
 let root: string
+let stderr: MockInstance
+const ORIGINAL_TRACKER = process.env.DEV_TASKS_TRACKER
 
 function writeConfig(body: unknown): void {
   mkdirSync(join(root, ".claude"), { recursive: true })
   writeFileSync(join(root, ".claude", "project-config.json"), JSON.stringify(body))
 }
 
+function warnings(): string {
+  return stderr.mock.calls.map((c) => String(c[0])).join("")
+}
+
 beforeEach(() => {
   root = mkdtempSync(join(tmpdir(), "tracker-cfg-"))
+  delete process.env.DEV_TASKS_TRACKER
+  stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true)
 })
 
 afterEach(() => {
+  stderr.mockRestore()
+  if (ORIGINAL_TRACKER === undefined) delete process.env.DEV_TASKS_TRACKER
+  else process.env.DEV_TASKS_TRACKER = ORIGINAL_TRACKER
   rmSync(root, { recursive: true, force: true })
 })
 
 describe("readTrackerProvider", () => {
-  it("defaults to monday when there is no config at all", () => {
+  it("defaults to monday when there is no config at all, and says so on stderr", () => {
     expect(readTrackerProvider(root)).toBe("monday")
+    // Silence here meant a skill run from the wrong directory wrote to
+    // Monday while the project had moved to Linear.
+    expect(warnings()).toMatch(/project-config\.json/)
+    expect(warnings()).toMatch(/monday/)
   })
 
-  it("defaults to monday when the config has no tracker block", () => {
+  it("defaults to monday QUIETLY when the config has no tracker block", () => {
+    // The documented pre-cutover default, not a fallback: every Monday
+    // project would otherwise warn on every call.
     writeConfig({ version: "1", monday: { productId: "1" } })
     expect(readTrackerProvider(root)).toBe("monday")
+    expect(stderr).not.toHaveBeenCalled()
   })
 
   it("reads linear when the config says so", () => {
     writeConfig({ version: "1", tracker: { provider: "linear" } })
     expect(readTrackerProvider(root)).toBe("linear")
+    expect(stderr).not.toHaveBeenCalled()
   })
 
-  it("falls back to monday on an unrecognised value rather than throwing", () => {
-    // A typo must not take the three skills down; Monday still works.
+  it("falls back to monday on an unrecognised value rather than throwing, and warns", () => {
+    // A typo must not take the three skills down; Monday still works. But a
+    // typo must not pass unnoticed either.
     writeConfig({ version: "1", tracker: { provider: "jira" } })
     expect(readTrackerProvider(root)).toBe("monday")
+    expect(warnings()).toMatch(/jira/)
   })
 
-  it("survives an unparseable config", () => {
+  it("survives an unparseable config, and warns", () => {
     mkdirSync(join(root, ".claude"), { recursive: true })
     writeFileSync(join(root, ".claude", "project-config.json"), "{ not json")
     expect(readTrackerProvider(root)).toBe("monday")
+    expect(warnings()).toMatch(/project-config\.json/)
   })
 
   it("is overridden by DEV_TASKS_TRACKER, for the rehearsal", () => {
     writeConfig({ version: "1", tracker: { provider: "monday" } })
     process.env.DEV_TASKS_TRACKER = "linear"
-    try {
-      expect(readTrackerProvider(root)).toBe("linear")
-    } finally {
-      delete process.env.DEV_TASKS_TRACKER
-    }
+    expect(readTrackerProvider(root)).toBe("linear")
+  })
+
+  it("ignores an unrecognised DEV_TASKS_TRACKER, and warns", () => {
+    writeConfig({ version: "1", tracker: { provider: "linear" } })
+    process.env.DEV_TASKS_TRACKER = "Linear"
+    expect(readTrackerProvider(root)).toBe("linear")
+    expect(warnings()).toMatch(/DEV_TASKS_TRACKER/)
+  })
+
+  it("reads the config at the git toplevel when run from a subdirectory", () => {
+    // stdio ignored: execFileSync otherwise forwards the child's stderr
+    // through process.stderr.write, which is the spy under test.
+    execFileSync("git", ["init", "-q"], { cwd: root, stdio: "ignore" })
+    writeConfig({ version: "1", tracker: { provider: "linear" } })
+    const nested = join(root, "packages", "app")
+    mkdirSync(nested, { recursive: true })
+
+    expect(readTrackerProvider(nested)).toBe("linear")
+    expect(stderr).not.toHaveBeenCalled()
   })
 })
 
