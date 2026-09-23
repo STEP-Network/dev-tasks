@@ -14,10 +14,10 @@ This repo is a Claude Code plugin marketplace + plugin source. The plugin (`dev-
 │   ├── .mcp.json                     # registers the stdio MCP server
 │   ├── package.json + tsconfig.json  # plugin deps (@modelcontextprotocol/sdk + zod) + TS build
 │   ├── src/                          # MCP TypeScript source (44 tools)
-│   ├── dist/                         # tsc output (gitignored)
-│   ├── rules/                        # 8 universal lifecycle rules
+│   ├── dist/                         # tsc output (committed: marketplace installs run no build)
+│   ├── rules/                        # 17 rules, read on demand (11 Monday provider only)
 │   ├── rules-routing.json
-│   ├── skills/                       # 8 core lifecycle skills
+│   ├── skills/                       # 24 skills: /dev, /preview, /ship, plus the Monday pipeline's and the posture skills
 │   ├── hooks/                        # lifecycle hooks (rule-autoload, task-state guard, worktree enforcement, drift recon, etc.); see plugin/.claude-plugin/plugin.json for the registered list
 │   ├── schemas/                      # project-config.schema.json
 │   └── templates/                    # starter-project-config.json

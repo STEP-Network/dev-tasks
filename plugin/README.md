@@ -8,7 +8,7 @@ For non-STEP projects, this plugin will fail at first contact (hard-coded board 
 
 - **MCP server** — 47 stdio tools wrapping Monday's GraphQL API (backlog, tasks, sprints, epics, bugs, versions, products, feedback, retros, public roadmap, structured changelog, UAT docs, before/after visual-diff docs, task attachments (download + read files/screenshots), version timeline).
 - **The 1.0 flow** — `dev` (branch, dev server, the issue as context), `preview` (push and print the Vercel preview URL), `ship` (typecheck, push, open a traceable PR, arm auto-merge, stop). `/dev` → work → `/ship` replaces the pickup → self-review → ship-pr ceremony; CI owns everything after the PR opens. See [The 1.0 flow](#the-10-flow) below.
-- **Skills (16)** — workflow: `pickup-task`, `create-task`, `refine-task`, `log-progress`, `self-review`, `ship-pr`, `release-version`, `audit-versions`, `doctor`, `run-full-e2e` (in-session full Playwright suite vs staging — see below); posture: `holistic-thinking`, `production-quality-ownership`, `design-consistency`, `triage-feedback`, `goal` (persistent completion condition — see below); orchestration: `babysit-prs`. Invoked as `/dev-tasks:<skill>`.
+- **Skills (24)** — the 1.0 flow: `dev`, `preview`, `ship` (above); workflow: `pickup-task`, `create-task`, `refine-task`, `plan-task`, `investigate-request`, `log-progress`, `self-review`, `ship-pr`, `write-uat-spec`, `visual-diff`, `release-version`, `audit-versions`, `file-retro`, `doctor`, `run-full-e2e` (in-session full Playwright suite vs staging — see below); posture: `holistic-thinking`, `production-quality-ownership`, `design-consistency`, `triage-feedback`, `goal` (persistent completion condition — see below); orchestration: `babysit-prs`. Invoked as `/dev-tasks:<skill>`.
 - **Rules (17)** — read on demand: a skill that needs one names `${CLAUDE_PLUGIN_ROOT}/rules/<file>`. Eleven open with **Monday provider only** and describe the legacy Monday pipeline. The `rule-autoload.sh` PreToolUse hook injects rules by the file globs in `rules-routing.json` only in a project that lists `rule-autoload` in `hooks.enabled[]` (off by default since 1.0.1). A project's own `rules.extraRules` files need no such entry: listing them is the opt-in.
 - **Agents (4)** — `codebase-researcher`, `self-reviewer`, `doc-updater`, `e2e-tester`. Spawned via subagent.
 - **Hooks (34)** — STEP-wide policy hooks (always-on, non-overridable) + opt-in workflow hooks gated by `project-config.hooks.enabled[]` (`rule-autoload` among them since 1.0.1) + the always-on worktree janitor. Includes `commit-id-gate` (every commit must reference a Monday Tasks-board `#id`) and `stop-goal-persistence` (refuses premature autonomous stops while a `/goal` is unmet — see below).
@@ -431,7 +431,7 @@ plugin/
 │   └── register-tools.ts        # shared between stdio + HTTP transports
 ├── rules/                       # 17 rules, read on demand (11 Monday provider only)
 ├── rules-routing.json           # file-glob → rule-file mapping
-├── skills/                      # 15 skills (workflow + posture + doctor + goal)
+├── skills/                      # 24 skills (the 1.0 flow + workflow + posture + orchestration)
 ├── hooks/                       # 35 hooks (policy + opt-in/auto, incl. workflow-enforcement gates + commit-id-gate + auto-merge-policy-gate + stop-goal-persistence)
 ├── agents/                      # 4 subagent definitions
 ├── schemas/                     # project-config.schema.json
