@@ -93,3 +93,51 @@ describe("/preview", () => {
     expect(source).not.toMatch(/playwright test/)
   })
 })
+
+describe("/ship", () => {
+  const source = skill("ship")
+
+  it("declares itself user-invocable with the name ship", () => {
+    expect(source).toMatch(/^---\n[\s\S]*?\bname:\s*ship\b[\s\S]*?\buser_invocable:\s*true\b[\s\S]*?\n---/m)
+  })
+
+  it("runs tsc --noEmit as the ONE local check, with an opt-out", () => {
+    expect(source).toMatch(/tsc --noEmit/)
+    expect(source).toMatch(/--skip-typecheck/)
+  })
+
+  it("runs no other local check", () => {
+    expect(source).not.toMatch(/pnpm (build|lint|test)\b/)
+    expect(source).not.toMatch(/playwright test/)
+    expect(source).not.toMatch(/validate-schema/)
+  })
+
+  it("creates an issue when none is linked", () => {
+    expect(source).toMatch(/trackerctl\.ts["']?\s+create/)
+  })
+
+  it("puts the identifier in BOTH the PR title and the PR body", () => {
+    // LINEAR_REF_RE reads the BODY (lib/ci/pr-task-trace.ts); Linear's own
+    // autolink reads the TITLE. Only one of the two is the CI check.
+    expect(source).toMatch(/PR title/i)
+    expect(source).toMatch(/PR body/i)
+    expect(source).toMatch(/STEP-/)
+  })
+
+  it("arms auto-merge with the exact flags, and never --admin", () => {
+    expect(source).toMatch(/gh pr merge .*--auto --squash --delete-branch/)
+    expect(source).not.toMatch(/gh pr merge[^\n`]*--admin/)
+    expect(source).not.toMatch(/[Uu]se `--admin/)
+  })
+
+  it("targets the configured base and never pushes to it", () => {
+    expect(source).toMatch(/git\.defaultBase/)
+    expect(source).toMatch(/git push -u origin HEAD/)
+    expect(source).not.toMatch(/git push\s+origin\s+(staging|main)\b/)
+  })
+
+  it("stops after opening the PR — no CI polling loop", () => {
+    expect(source).toMatch(/stops?\b/i)
+    expect(source).not.toMatch(/gh pr checks --watch/)
+  })
+})
