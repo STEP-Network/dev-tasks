@@ -5,15 +5,18 @@
 #   - Case D (missing active-task.json in worktree-shaped dir) — local-only
 #   - the Monday-provider gate: silent under tracker.provider / DEV_TASKS_TRACKER
 #     = linear, Case D still reported under monday — local-only
-#   - Healthy in-progress task (no drift output expected) — uses real Monday API
-#   - Case A (task Done on Monday) — uses real Monday API + throwaway task
+#   - Healthy in-progress task (no drift output expected) and Case A (task Done
+#     on Monday) — offline, against a stubbed curl (Tests 11-12)
+#   - the same two against the real Monday API (Tests 13-14) — opt-in only
 #
 # Skipped (manual verification only):
 #   - Case B (ownership changed) — would require deliberately mutating Agent ID
 #     on a task; risk of side effects outweighs automation value.
 #
-# Requires MONDAY_API_KEY env. Tests touching Monday create + delete a
-# throwaway item on board 5091706356.
+# Tests 13-14 create and delete a throwaway item on the live Tasks board
+# (5091706356). A MONDAY_API_KEY in the environment is not enough to run them,
+# because agent shells export one: they also need DEV_TASKS_LIVE_MONDAY_TESTS=1.
+# Everything else makes no network call.
 
 set -u
 shopt -s nullglob
@@ -36,25 +39,38 @@ trap 'rm -rf "$WORK"' EXIT
 export GIT_CEILING_DIRECTORIES="$WORK"
 FAKE_WORKTREE="$WORK/.claude/worktrees/feat-test-recon"
 mkdir -p "$FAKE_WORKTREE/.claude"
+CONFIG="$FAKE_WORKTREE/.claude/project-config.json"
+MONDAY_CONFIG='{"tracker":{"provider":"monday"}}'
 
 # Helper: run hook from a given cwd and capture stdout. DEV_TASKS_TRACKER is
-# cleared so a value exported in the caller's shell can't flip the provider.
+# cleared so a value exported in the caller's shell can't flip the provider,
+# and MONDAY_API_KEY so no local case can reach Monday.
 run_hook() {
-  ( cd "$1" && env -u DEV_TASKS_TRACKER bash "$HOOK" 2>&1 )
+  ( cd "$1" && env -u DEV_TASKS_TRACKER -u MONDAY_API_KEY bash "$HOOK" 2>&1 )
 }
 
 # Helper: same, with DEV_TASKS_TRACKER set to $2
 run_hook_tracker() {
-  ( cd "$1" && DEV_TASKS_TRACKER="$2" bash "$HOOK" 2>&1 )
+  ( cd "$1" && env -u MONDAY_API_KEY DEV_TASKS_TRACKER="$2" bash "$HOOK" 2>&1 )
 }
 
-echo "==> Test 1: Case D — missing active-task.json in worktree-shaped dir"
+# Helper: run hook with the caller's MONDAY_API_KEY. Live tests only.
+run_hook_live() {
+  ( cd "$1" && env -u DEV_TASKS_TRACKER bash "$HOOK" 2>&1 )
+}
+
+echo "==> Test 1: Case D — missing active-task.json, worktree with no project-config (Monday is the default)"
 out=$(run_hook "$FAKE_WORKTREE")
 if echo "$out" | grep -q "Case D:" && echo "$out" | grep -q "feat-test-recon"; then
   pass "Case D detected + names the worktree"
 else
   fail "Case D not detected. Output: $out"
 fi
+
+# From here on the fixture carries a committed Monday config, as a real Monday
+# consumer's worktree does. Without one, tracker_provider's "could not read"
+# warning (stderr, which run_hook folds in) would land in every output below.
+echo "$MONDAY_CONFIG" > "$CONFIG"
 
 echo "==> Test 2: outside worktree path — hook is silent"
 out=$(run_hook "$WORK")
@@ -86,7 +102,6 @@ fi
 # writes active-task.json, so under Linear Case D would fire in every worktree
 # session and point the agent at /pickup-task.
 rm -f "$FAKE_WORKTREE/.claude/active-task.json"
-CONFIG="$FAKE_WORKTREE/.claude/project-config.json"
 
 echo "==> Test 5: tracker.provider linear — silent where Case D would fire"
 echo '{"tracker":{"provider":"linear"}}' > "$CONFIG"
@@ -98,7 +113,7 @@ else
 fi
 
 echo "==> Test 6: tracker.provider monday — Case D still reported"
-echo '{"tracker":{"provider":"monday"}}' > "$CONFIG"
+echo "$MONDAY_CONFIG" > "$CONFIG"
 out=$(run_hook "$FAKE_WORKTREE")
 if echo "$out" | grep -q "Case D:"; then
   pass "monday project: Case D reported"
@@ -122,7 +137,7 @@ if echo "$out" | grep -q "Case D:"; then
 else
   fail "expected Case D with DEV_TASKS_TRACKER=monday, got: $out"
 fi
-rm -f "$CONFIG"
+echo "$MONDAY_CONFIG" > "$CONFIG"
 
 # A session can start in a subdirectory. The provider then comes from the
 # config at the git toplevel, where trackerctl reads it, not from $PWD.
@@ -151,14 +166,68 @@ else
   fail "expected Case D from a subdirectory under monday, got: $out"
 fi
 
-# Optional Monday-touching tests — skip cleanly if env missing
-if [ -z "${MONDAY_API_KEY:-}" ]; then
-  echo "==> SKIP: Monday-touching tests (MONDAY_API_KEY not set)"
+# The Monday round-trip, offline. curl is a stub that logs each call and
+# answers with $CURL_FIXTURE, and the key is a placeholder, so the hook's
+# query path runs and nothing can reach Monday.
+STUB_DIR="$WORK/stub"
+CURL_LOG="$WORK/curl.log"
+mkdir -p "$STUB_DIR"
+cat > "$STUB_DIR/curl" <<'STUB'
+#!/bin/bash
+# Stands in for api.monday.com: logs the call, answers with $CURL_FIXTURE.
+printf '%s\n' "$*" >> "$CURL_LOG"
+printf '%s' "$CURL_FIXTURE"
+STUB
+chmod +x "$STUB_DIR/curl"
+
+# run_hook_stubbed <cwd> <monday-response-json>
+run_hook_stubbed() {
+  ( cd "$1" && env -u DEV_TASKS_TRACKER PATH="$STUB_DIR:$PATH" \
+      MONDAY_API_KEY="fake-not-a-key" CURL_FIXTURE="$2" CURL_LOG="$CURL_LOG" \
+      bash "$HOOK" 2>&1 )
+}
+
+# monday_item <status> <agent> → the items query response the hook parses
+monday_item() {
+  jq -nc --arg s "$1" --arg a "$2" \
+    '{data:{items:[{column_values:[{id:"task_status",text:$s},{id:"dropdown_mm0mrcex",text:$a}]}]}}'
+}
+
+echo '{"taskId":"1234567890","branch":"feat/test-recon"}' > "$FAKE_WORKTREE/.claude/active-task.json"
+
+echo "==> Test 11: healthy In Progress task — no drift output (stubbed Monday)"
+: > "$CURL_LOG"
+out=$(run_hook_stubbed "$FAKE_WORKTREE" "$(monday_item "In Progress" "Claude Code in CLI")")
+if [ ! -s "$CURL_LOG" ]; then
+  fail "the hook never queried Monday, so its silence proves nothing (output: $out)"
+elif [ -z "$out" ]; then
+  pass "healthy task: queried Monday, printed nothing"
+else
+  fail "expected no output for a healthy task, got: $out"
+fi
+
+echo "==> Test 12: Case A — task Done on Monday (stubbed Monday)"
+: > "$CURL_LOG"
+out=$(run_hook_stubbed "$FAKE_WORKTREE" "$(monday_item "Done" "Claude Code in CLI")")
+if echo "$out" | grep -q "Case A:.*1234567890.*Done"; then
+  pass "Case A detected"
+else
+  fail "expected Case A detection, got: $out"
+fi
+rm -f "$FAKE_WORKTREE/.claude/active-task.json"
+
+# The same two against the live API. They create and delete a real item on the
+# Tasks board, so a key in the environment is not enough (agent shells export
+# one): they also need DEV_TASKS_LIVE_MONDAY_TESTS=1.
+if [ "${DEV_TASKS_LIVE_MONDAY_TESTS:-}" != "1" ]; then
+  echo "==> SKIP: live Monday tests 13-14 (they write to the Tasks board; opt in with DEV_TASKS_LIVE_MONDAY_TESTS=1 and MONDAY_API_KEY)"
+elif [ -z "${MONDAY_API_KEY:-}" ]; then
+  echo "==> SKIP: live Monday tests 13-14 (DEV_TASKS_LIVE_MONDAY_TESTS=1 but MONDAY_API_KEY is not set)"
 else
   command -v curl >/dev/null 2>&1 || { echo "==> SKIP: curl missing"; echo "Results: $PASS passed, $FAIL failed"; [ "$FAIL" -eq 0 ]; exit $?; }
   command -v jq   >/dev/null 2>&1 || { echo "==> SKIP: jq missing"; echo "Results: $PASS passed, $FAIL failed"; [ "$FAIL" -eq 0 ]; exit $?; }
 
-  echo "==> Test 11: healthy In Progress task — no drift output"
+  echo "==> Test 13: healthy In Progress task — no drift output (live Monday)"
   # Create throwaway task at Needs Refinement, claim it (sets In Progress + agent)
   TASK_ID=$(curl -sS -X POST https://api.monday.com/v2 \
     -H "Authorization: $MONDAY_API_KEY" \
@@ -166,11 +235,11 @@ else
     -d '{"query":"mutation { create_item(board_id: 5091706356, item_name: \"recon-test — DELETE ME\", column_values: \"{\\\"task_status\\\": {\\\"index\\\": 0}, \\\"dropdown_mm0mrcex\\\": {\\\"ids\\\": [\\\"1\\\"]}}\") { id } }"}' \
     | jq -r '.data.create_item.id')
   if [ -z "$TASK_ID" ] || [ "$TASK_ID" = "null" ]; then
-    fail "couldn't create throwaway task for Test 11"
+    fail "couldn't create throwaway task for Test 13"
   else
     echo "{\"taskId\":\"$TASK_ID\",\"branch\":\"feat/test-recon\"}" > "$FAKE_WORKTREE/.claude/active-task.json"
     sleep 1
-    out=$(run_hook "$FAKE_WORKTREE")
+    out=$(run_hook_live "$FAKE_WORKTREE")
     # AGENT_ID enum: "Claude Code CLI" = 19; Monday text rendering = "Claude Code in CLI"
     # Healthy = no drift output.
     if [ -z "$out" ]; then
@@ -179,7 +248,7 @@ else
       fail "expected silent, got: $out"
     fi
 
-    echo "==> Test 12: Case A — task Done on Monday"
+    echo "==> Test 14: Case A — task Done on Monday (live Monday)"
     # Move to Done
     curl -sS -X POST https://api.monday.com/v2 \
       -H "Authorization: $MONDAY_API_KEY" \
@@ -187,7 +256,7 @@ else
       -d "{\"query\":\"mutation SetDone(\$board: ID!, \$item: ID!, \$val: JSON!) { change_column_value(board_id: \$board, item_id: \$item, column_id: \\\"task_status\\\", value: \$val) { id } }\", \"variables\": {\"board\": \"5091706356\", \"item\": \"$TASK_ID\", \"val\": \"{\\\"index\\\":1}\"}}" \
       >/dev/null
     sleep 1
-    out=$(run_hook "$FAKE_WORKTREE")
+    out=$(run_hook_live "$FAKE_WORKTREE")
     if echo "$out" | grep -q "Case A:.*$TASK_ID.*Done"; then
       pass "Case A detected"
     else
