@@ -19,6 +19,11 @@ Read `.claude/project-config.json`:
 - `git.autoMergePolicy` — auto-merge is armed only when the base's policy is
   `auto-after-checks-and-review`. `never` or `manual-only` means open the PR
   and leave it for a human, and say so.
+- `tracker.provider` (default `monday`; `DEV_TASKS_TRACKER` env var
+  overrides) — which kind of id Phase 3/4 are working with. Equivalently:
+  look at the shape of the `id` trackerctl hands back in Phase 3 — `STEP-<n>`
+  is Linear, a bare number is Monday. Phase 4's PR title and body differ by
+  provider, so know which one you're on before you get there.
 
 ```bash
 PROFILE=$(bash "${CLAUDE_PLUGIN_ROOT}/hooks/lib/profile.sh" get profile)
@@ -69,15 +74,16 @@ guaranteeing the reference is better than blocking on its absence.
 
 ```bash
 npx tsx "${CLAUDE_PLUGIN_ROOT}/scripts/trackerctl.ts" create \
-  --title "<the PR title>" \
+  --title "<the PR's subject line>" \
   --description "$(git log --format='- %s' "origin/$DEFAULT_BASE..HEAD")" \
   --label "type/chore" \
   --state "In Progress"
 ```
 
-Take `id` out of the JSON. Use the PR title as the issue title so the two read
-the same; use the commit subjects as the description so the issue says what
-landed.
+Take `id` out of the JSON. Use the PR's subject line as the issue title so the
+two read the same (the PR's title itself doesn't exist yet — it's built in
+Phase 4 from this same subject plus the id created here); use the commit
+subjects as the description so the issue says what landed.
 
 > A PR whose changed paths are ALL under `.claude/`, `.github/` or `docs/` is
 > exempt from `Task trace` and needs no issue. Check with
@@ -86,21 +92,43 @@ landed.
 
 ## Phase 4: open the PR
 
-The identifier goes in BOTH places, and they are read by different things:
+The identifier goes in BOTH places, and they are read by different things —
+and the exact shape of each depends on `tracker.provider` from Phase 0:
 
-- **the PR TITLE** — `STEP-123: <subject>`. Linear's GitHub integration links
-  on this, and it is what a human sees in the PR list.
-- **the PR BODY** — `LINEAR_REF_RE` in `lib/ci/pr-task-trace.ts` reads the
-  BODY, not the title. A title-only reference fails the required check.
-
-Capitals, always: the regex is case-sensitive.
+- **the PR TITLE** — what a human sees in the PR list, and what the
+  tracker's own GitHub integration links on.
+  - `linear`: `STEP-123: <subject>`
+  - `monday`: `<subject> (#<id>)`
+- **the PR BODY**'s first line is the trace line that `lib/ci/pr-task-trace.ts`
+  reads — the required `Task trace` check does NOT read the title, so a
+  title-only reference fails it regardless of provider.
+  - `linear`: `LINEAR_REF_RE` matches `STEP-123` — capitals, always; the
+    regex is case-sensitive.
+  - `monday`: `TASK_LINE_RE` matches `Monday.com Task: #<id>` exactly —
+    that literal shape, not a bare id and not `#<id>` alone.
 
 ```bash
+# linear
 gh pr create \
   --base "$DEFAULT_BASE" \
   --title "STEP-123: <subject>" \
   --body "$(cat <<'BODY'
 STEP-123
+
+## What changed
+<two or three lines>
+
+## How it was checked
+tsc --noEmit locally; everything else is CI.
+BODY
+)"
+
+# monday
+gh pr create \
+  --base "$DEFAULT_BASE" \
+  --title "<subject> (#<id>)" \
+  --body "$(cat <<'BODY'
+Monday.com Task: #<id>
 
 ## What changed
 <two or three lines>

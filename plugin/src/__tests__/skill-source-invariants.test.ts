@@ -124,6 +124,14 @@ describe("/ship", () => {
     expect(source).toMatch(/STEP-/)
   })
 
+  it("writes the Monday provider's Task trace line, not a bare id", () => {
+    // TASK_LINE_RE in lib/ci/pr-task-trace.ts matches this exact shape on
+    // origin/staging while tracker.provider defaults to monday; a bare id
+    // in the body matches neither TASK_LINE_RE nor LINEAR_REF_RE.
+    expect(source).toMatch(/Monday\.com Task: #/)
+    expect(source).toMatch(/STEP-/)
+  })
+
   it("arms auto-merge with the exact flags, and never --admin", () => {
     expect(source).toMatch(/gh pr merge .*--auto --squash --delete-branch/)
     expect(source).not.toMatch(/gh pr merge[^\n`]*--admin/)
