@@ -56,7 +56,7 @@ Then in the Claude Code session:
 /reload-plugins
 ```
 
-To activate the blocking hooks (task-state-guard, worktree-required, worktree-path-boundary, bash-guard, stop-task-check, stop-ci-green-check), copy `plugin/templates/starter-project-config.json` to `<consumer-project>/.claude/project-config.json` and trim it to what you want enabled. Without that file, only `rule-autoload` runs; all blocking hooks are dormant.
+To activate the blocking hooks (task-state-guard, worktree-required, worktree-path-boundary, bash-guard, stop-task-check, stop-ci-green-check), copy `plugin/templates/starter-project-config.json` to `<consumer-project>/.claude/project-config.json` and trim it to what you want enabled. Without that file, every opt-in hook is dormant: all the blocking hooks, and `rule-autoload` (opt-in since 1.0.1; plugin rules are read on demand).
 
 **Worktree lifecycle.** Per-task worktrees accumulate under `.claude/worktrees/`. The `worktree-janitor.sh` SessionStart hook auto-prunes DONE + ABANDONED worktrees and clears stale git locks (`.git/worktrees/<n>/locked` > 24h) on every session start. Silent when nothing to clean. Manual modes: `bash plugin/scripts/worktree-audit.sh` (report) / `--remove` (interactive) / `--auto` (what the hook runs). Full details in `plugin/README.md` under "Worktree lifecycle".
 
@@ -470,7 +470,7 @@ Deferred (not detected by the current hook):
 - **C — Task reassigned epic/sprint** — low signal; intentional refinement looks identical to drift
 - **E — Stale claimToken** — would require an extra `getUpdates` API call per session start; cost > benefit
 
-The hook silent-no-ops when: cwd is not under `.claude/worktrees/`, `MONDAY_API_KEY` is unset, `curl`/`jq` missing, or the Monday API returns no response. One non-silent edge case: if `active-task.json` is present but `taskId` is empty/malformed, the hook emits a one-line warning ("active-task.json present but taskId empty/malformed; skipping drift check.") before exiting 0 — surfacing the broken state file is more useful than silently skipping it. Output format: `[active-task-recon] Case X: <one-line summary>` followed by indented suggestion lines. Smoke-tested by `plugin/hooks/__tests__/active-task-recon.test.sh` (6 cases — local-only + Monday round-trip).
+The hook silent-no-ops when: cwd is not under `.claude/worktrees/`, the tracker provider is `linear` (`tracker.provider` or `DEV_TASKS_TRACKER`; every case is Monday state, since 1.0.1), `MONDAY_API_KEY` is unset, `curl`/`jq` missing, or the Monday API returns no response. One non-silent edge case: if `active-task.json` is present but `taskId` is empty/malformed, the hook emits a one-line warning ("active-task.json present but taskId empty/malformed; skipping drift check.") before exiting 0 — surfacing the broken state file is more useful than silently skipping it. Output format: `[active-task-recon] Case X: <one-line summary>` followed by indented suggestion lines. Smoke-tested by `plugin/hooks/__tests__/active-task-recon.test.sh` (6 cases — local-only + Monday round-trip).
 
 ## Environment variables
 

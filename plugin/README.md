@@ -8,9 +8,9 @@ For non-STEP projects, this plugin will fail at first contact (hard-coded board 
 
 - **MCP server** — 47 stdio tools wrapping Monday's GraphQL API (backlog, tasks, sprints, epics, bugs, versions, products, feedback, retros, public roadmap, structured changelog, UAT docs, before/after visual-diff docs, task attachments (download + read files/screenshots), version timeline).
 - **Skills (16)** — workflow: `pickup-task`, `create-task`, `refine-task`, `log-progress`, `self-review`, `ship-pr`, `release-version`, `audit-versions`, `doctor`, `run-full-e2e` (in-session full Playwright suite vs staging — see below); posture: `holistic-thinking`, `production-quality-ownership`, `design-consistency`, `triage-feedback`, `goal` (persistent completion condition — see below); orchestration: `babysit-prs`. Invoked as `/dev-tasks:<skill>`.
-- **Rules (9)** — auto-injected on Edit/Write via the `rule-autoload.sh` PreToolUse hook based on file globs in `rules-routing.json`.
+- **Rules (17)** — read on demand: a skill that needs one names `${CLAUDE_PLUGIN_ROOT}/rules/<file>`. Eleven open with **Monday provider only** and describe the legacy Monday pipeline. The `rule-autoload.sh` PreToolUse hook injects rules by the file globs in `rules-routing.json` only in a project that lists `rule-autoload` in `hooks.enabled[]` (off by default since 1.0.1).
 - **Agents (4)** — `codebase-researcher`, `self-reviewer`, `doc-updater`, `e2e-tester`. Spawned via subagent.
-- **Hooks (34)** — STEP-wide policy hooks (always-on, non-overridable) + opt-in workflow hooks gated by `project-config.hooks.enabled[]` + always-on rule-autoload/janitor. Includes `commit-id-gate` (every commit must reference a Monday Tasks-board `#id`) and `stop-goal-persistence` (refuses premature autonomous stops while a `/goal` is unmet — see below).
+- **Hooks (34)** — STEP-wide policy hooks (always-on, non-overridable) + opt-in workflow hooks gated by `project-config.hooks.enabled[]` (`rule-autoload` among them since 1.0.1) + the always-on worktree janitor. Includes `commit-id-gate` (every commit must reference a Monday Tasks-board `#id`) and `stop-goal-persistence` (refuses premature autonomous stops while a `/goal` is unmet — see below).
 - **Per-project config** — `.claude/project-config.json` validated against `schemas/project-config.schema.json`.
 
 ## Requirements
@@ -116,7 +116,7 @@ Pin `main` to a release tag (e.g. `.../v0.22.1/...`) if you want validation froz
     "requiredChecks": ["build", "test", "lint"]
   },
   "rules": {
-    "extraRules": []                     // additional file paths for rule-autoload to surface
+    "extraRules": []                     // .claude/rules/ files for rule-autoload to surface (needs "rule-autoload" in hooks.enabled)
   },
   "hooks": {
     "enabled": [                         // opt-in non-policy hooks
@@ -408,7 +408,7 @@ plugin/
 │   │   ├── changelog-refresh.ts # live view of linked tasks
 │   │   └── __tests__/           # vitest (63 tests)
 │   └── register-tools.ts        # shared between stdio + HTTP transports
-├── rules/                       # 9 universal lifecycle rules
+├── rules/                       # 17 rules, read on demand (11 Monday provider only)
 ├── rules-routing.json           # file-glob → rule-file mapping
 ├── skills/                      # 15 skills (workflow + posture + doctor + goal)
 ├── hooks/                       # 35 hooks (policy + opt-in/auto, incl. workflow-enforcement gates + commit-id-gate + auto-merge-policy-gate + stop-goal-persistence)
