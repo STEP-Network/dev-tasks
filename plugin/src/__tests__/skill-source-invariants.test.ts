@@ -69,3 +69,27 @@ describe("/dev", () => {
     expect(source).toMatch(/\/preview/)
   })
 })
+
+describe("/preview", () => {
+  const source = skill("preview")
+
+  it("declares itself user-invocable with the name preview", () => {
+    expect(source).toMatch(/^---\n[\s\S]*?\bname:\s*preview\b[\s\S]*?\buser_invocable:\s*true\b[\s\S]*?\n---/m)
+  })
+
+  it("pushes the FEATURE branch and never the base", () => {
+    expect(source).toMatch(/git push -u origin HEAD/)
+    expect(source).not.toMatch(/git push\s+origin\s+(staging|main)\b/)
+  })
+
+  it("prints the protection bypass query", () => {
+    // A preview URL without it 302s an unauthenticated reader to a login page.
+    expect(source).toMatch(/VERCEL_AUTOMATION_BYPASS_SECRET/)
+    expect(source).toMatch(/x-vercel-set-bypass-cookie/)
+  })
+
+  it("runs no local build, lint, test or Playwright", () => {
+    expect(source).not.toMatch(/pnpm (build|lint|test)\b/)
+    expect(source).not.toMatch(/playwright test/)
+  })
+})
