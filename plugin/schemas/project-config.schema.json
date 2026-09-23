@@ -198,7 +198,7 @@
       "additionalProperties": false,
       "properties": {
         "extraRules": {
-          "description": "Additional project-specific rule files (basenames in .claude/rules/) surfaced by the rule-autoload hook once per session, alongside the plugin's universal rules (which auto-load per rules-routing.json by file-glob). Basename-only — entries containing '/' or '..' are rejected.",
+          "description": "Additional project-specific rule files (basenames in .claude/rules/) surfaced by the rule-autoload hook once per session, alongside the plugin's universal rules (which load per rules-routing.json by file-glob). Only read when hooks.enabled[] lists `rule-autoload`, which is off by default since 1.0.1. Basename-only — entries containing '/' or '..' are rejected.",
           "type": "array",
           "items": { "type": "string" }
         }
@@ -473,7 +473,8 @@
               "stop-goal-persistence",
               "auto-merge-policy-gate",
               "staging-deploy-ready-gate",
-              "stop-visual-diff-check"
+              "stop-visual-diff-check",
+              "rule-autoload"
             ]
           },
           "uniqueItems": true

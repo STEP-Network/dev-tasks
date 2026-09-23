@@ -4,6 +4,9 @@
 # No network. Builds a throwaway CLAUDE_PLUGIN_ROOT (rules-routing.json + rules/)
 # and per-case project dirs (.claude/project-config.json + .claude/rules/).
 # The hook emits additionalContext JSON on stdout when it injects, nothing otherwise.
+#
+# The hook is opt-in since 1.0.1, so new_project lists it in hooks.enabled[]
+# unless a case says otherwise. Tests 8-10 cover the default: nothing injected.
 
 set -u
 shopt -s nullglob
@@ -25,26 +28,24 @@ mkdir -p "$PLUGIN_ROOT/rules"
 printf '{"rules":[{"file":"db.md","match":["*.sql"]}]}\n' > "$PLUGIN_ROOT/rules-routing.json"
 printf 'PLUGIN-RULE-DB-CONTENT\n' > "$PLUGIN_ROOT/rules/db.md"
 
-# new_project <name> [extraRules-json] → echoes the project dir; seeds .claude/
+# new_project <name> [extraRules-json] [hooks-enabled-json]
+# → echoes the project dir; seeds .claude/. hooks.enabled defaults to ["rule-autoload"].
 new_project() {
-  local name="$1" extra="${2:-}"
+  local name="$1" extra="${2:-[]}" enabled="${3:-[\"rule-autoload\"]}"
   local pd="$WORK/$name"
   mkdir -p "$pd/.claude/rules"
-  if [ -n "$extra" ]; then
-    printf '{"rules":{"extraRules":%s}}\n' "$extra" > "$pd/.claude/project-config.json"
-  else
-    printf '{}\n' > "$pd/.claude/project-config.json"
-  fi
+  printf '{"rules":{"extraRules":%s},"hooks":{"enabled":%s}}\n' "$extra" "$enabled" \
+    > "$pd/.claude/project-config.json"
   printf '%s' "$pd"
 }
 
-# run_hook <project_dir> <file_path> <session_id> <tmpdir>
+# run_hook <project_dir> <file_path> <session_id> <tmpdir> [plugin_root]
 run_hook() {
-  local pd="$1" fp="$2" sid="$3" td="$4"
+  local pd="$1" fp="$2" sid="$3" td="$4" root="${5:-$PLUGIN_ROOT}"
   local input
   input=$(jq -nc --arg fp "$fp" --arg sid "$sid" --arg cwd "$pd" \
     '{tool_input:{file_path:$fp}, session_id:$sid, cwd:$cwd}')
-  CLAUDE_PLUGIN_ROOT="$PLUGIN_ROOT" TMPDIR="$td" bash "$HOOK" <<<"$input" 2>/dev/null
+  CLAUDE_PLUGIN_ROOT="$root" CLAUDE_PROJECT_DIR="$pd" TMPDIR="$td" bash "$HOOK" <<<"$input" 2>/dev/null
 }
 
 # -------------------------------------------------------------------
@@ -121,6 +122,52 @@ if [ -z "$out" ]; then
   pass "no config + no match is a clean no-op"
 else
   fail "expected empty output (got: $out)"
+fi
+
+# -------------------------------------------------------------------
+echo "==> Test 8: not in hooks.enabled[] → a matching edit injects nothing (the default)"
+pd=$(new_project p8 '["proj.md"]' '[]')
+printf 'CONSUMER-EXTRA-RULE\n' > "$pd/.claude/rules/proj.md"
+out=$(run_hook "$pd" "$pd/schema.sql" "s8" "$WORK/t8")
+if [ -z "$out" ]; then
+  pass "opt-in hook stays silent when the project has not listed it"
+else
+  fail "expected empty output (got: $out)"
+fi
+
+# -------------------------------------------------------------------
+echo "==> Test 9: no project-config at all → a matching edit injects nothing"
+pd="$WORK/p9"; mkdir -p "$pd"
+out=$(run_hook "$pd" "$pd/schema.sql" "s9" "$WORK/t9")
+if [ -z "$out" ]; then
+  pass "no config means no injection, even on a glob match"
+else
+  fail "expected empty output (got: $out)"
+fi
+
+# -------------------------------------------------------------------
+# Test 10 runs against the REAL rules-routing.json and rules/, so it asserts on
+# the text the plugin ships rather than on a fixture. A fresh session's first
+# edit of a .ts file used to pull in task-lifecycle.md, autonomous-by-default.md
+# and worktree-discipline.md.
+echo "==> Test 10: fresh session + one .ts edit, real plugin rules → no rule text"
+REAL_ROOT="$(cd "$TEST_DIR/../.." && pwd)"
+LIFECYCLE_H1="$(head -1 "$REAL_ROOT/rules/task-lifecycle.md")"
+pd=$(new_project p10 '[]' '[]')
+out=$(run_hook "$pd" "$pd/lib/example.ts" "s10" "$WORK/t10" "$REAL_ROOT")
+if [ -z "$out" ]; then
+  pass "default config: first edit of a .ts file injects no plugin rule text"
+else
+  fail "expected no output, got ${#out} bytes: $(printf '%s' "$out" | head -c 200)"
+fi
+# Control, so the assertion above cannot pass vacuously: opting in to the same
+# edit does inject the rule the routing names.
+pd=$(new_project p10b '[]')
+out=$(run_hook "$pd" "$pd/lib/example.ts" "s10b" "$WORK/t10b" "$REAL_ROOT")
+if printf '%s' "$out" | jq -r '.hookSpecificOutput.additionalContext' 2>/dev/null | grep -qxF "$LIFECYCLE_H1"; then
+  pass "control: with rule-autoload enabled the same edit injects '$LIFECYCLE_H1'"
+else
+  fail "control failed: enabled hook did not inject task-lifecycle.md (got ${#out} bytes)"
 fi
 
 # -------------------------------------------------------------------

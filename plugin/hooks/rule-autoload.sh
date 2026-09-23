@@ -16,8 +16,18 @@
 #
 # Fail-open: any error / missing config / empty match → exits 0 silently and
 # does NOT block the Edit/Write.
+#
+# Opt-in since 1.0.1: inert unless .claude/project-config.json lists
+# "rule-autoload" in hooks.enabled[]. Before that it ran in every project and
+# put ~23 KB of rules into the first edit of any .ts file, most of it the
+# Monday-era lifecycle. Plugin rules are read on demand now: a skill that needs
+# one names ${CLAUDE_PLUGIN_ROOT}/rules/<file>.
 
 set -uo pipefail
+
+source "$(dirname "${BASH_SOURCE[0]}")/lib/config-reader.sh"
+hook_enabled "rule-autoload" || exit 0
+
 # extglob enables extended patterns; globstar (** crosses dirs) only exists in bash 4+,
 # but bash 3.2's [[ ]] pattern matching treats * as "any chars including slashes" anyway,
 # so ** in our routing globs works either way. Silence the warning on 3.2.

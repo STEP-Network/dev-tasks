@@ -6,6 +6,7 @@
 #   read_project_config <jq-path>   → prints the value of the given jq path
 #                                     from $CLAUDE_PROJECT_DIR/.claude/project-config.json
 #   project_config_exists           → returns 0 if config exists, 1 otherwise
+#   tracker_provider [project-dir]  → prints linear|monday
 #
 # All output goes to stdout; errors are silent (returns empty string on miss).
 # Callers should handle empty output appropriately.
@@ -46,4 +47,24 @@ hook_enabled() {
   local result
   result=$(jq -r --arg name "$hook_name" '(.hooks.enabled // []) | index($name) // empty' "$path" 2>/dev/null)
   [ -n "$result" ]
+}
+
+# tracker_provider [project-dir]
+# Prints `linear` or `monday` with the precedence readTrackerProvider in
+# src/tracker/index.ts uses: DEV_TASKS_TRACKER wins, then tracker.provider,
+# and anything missing or unrecognised is `monday`. Reads the config in the
+# given directory, else $CLAUDE_PROJECT_DIR, else $PWD.
+# Use it to keep a Monday-only hook quiet in a Linear project:
+#   [ "$(tracker_provider "$PWD")" = "monday" ] || exit 0
+tracker_provider() {
+  local provider="${DEV_TASKS_TRACKER:-}"
+  if [ "$provider" != "linear" ] && [ "$provider" != "monday" ]; then
+    provider=$(jq -r '.tracker.provider // empty' \
+      "${1:-${CLAUDE_PROJECT_DIR:-$PWD}}/.claude/project-config.json" 2>/dev/null)
+  fi
+  if [ "$provider" = "linear" ]; then
+    printf 'linear'
+  else
+    printf 'monday'
+  fi
 }
