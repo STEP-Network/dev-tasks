@@ -2,8 +2,11 @@
  * Shared Zod schema for review-memory rows.
  *
  * Used by:
- *   - hooks/append-review-memory.ts (runtime validation before append)
+ *   - scripts/generate-reviews-schema.ts (writes the JSON Schema mirror)
  *   - src/__tests__/zod-json-schema-sync.test.ts (byte-equality sync test)
+ *
+ * Its runtime writer, hooks/append-review-memory.ts, went with post-self-review
+ * (retired in 1.0), its only caller.
  *
  * The JSON Schema mirror lives at plugin/schemas/reviews.schema.json and is
  * generated from this Zod schema via `zod-to-json-schema`. Consumers that

@@ -7,6 +7,7 @@ For non-STEP projects, this plugin will fail at first contact (hard-coded board 
 ## What ships
 
 - **MCP server** — 47 stdio tools wrapping Monday's GraphQL API (backlog, tasks, sprints, epics, bugs, versions, products, feedback, retros, public roadmap, structured changelog, UAT docs, before/after visual-diff docs, task attachments (download + read files/screenshots), version timeline).
+- **The 1.0 flow** — `dev` (branch, dev server, the issue as context), `preview` (push and print the Vercel preview URL), `ship` (typecheck, push, open a traceable PR, arm auto-merge, stop). `/dev` → work → `/ship` replaces the pickup → self-review → ship-pr ceremony; CI owns everything after the PR opens. See [The 1.0 flow](#the-10-flow) below.
 - **Skills (16)** — workflow: `pickup-task`, `create-task`, `refine-task`, `log-progress`, `self-review`, `ship-pr`, `release-version`, `audit-versions`, `doctor`, `run-full-e2e` (in-session full Playwright suite vs staging — see below); posture: `holistic-thinking`, `production-quality-ownership`, `design-consistency`, `triage-feedback`, `goal` (persistent completion condition — see below); orchestration: `babysit-prs`. Invoked as `/dev-tasks:<skill>`.
 - **Rules (9)** — auto-injected on Edit/Write via the `rule-autoload.sh` PreToolUse hook based on file globs in `rules-routing.json`.
 - **Agents (4)** — `codebase-researcher`, `self-reviewer`, `doc-updater`, `e2e-tester`. Spawned via subagent.
@@ -41,6 +42,19 @@ cp $CLAUDE_PLUGIN_ROOT/templates/starter-project-config.json .claude/project-con
 Required fields to populate: `git.defaultBase`, `monday.productId`, `monday.v1MilestoneEpicIds`, `environments.uat.url`.
 
 Run `/dev-tasks:doctor` after first install to verify the setup.
+
+## The 1.0 flow
+
+A machine profile decides which hooks run, three skills replace the ten-phase ship ceremony, and a tracker adapter reads and writes Linear (team STEP) or Monday behind one config key. Install and upgrade steps, and a before/after table, are in [`docs/dev-tasks-1-0-install.md`](../docs/dev-tasks-1-0-install.md).
+
+- **`/dev [<issue id> | <free text>]`** — a branch named after the issue (`STEP-123-fix-the-thing`), the dev server, and the issue's description and acceptance criteria as context. Writes nothing to the tracker.
+- **`/preview`** — commits, pushes the branch and prints its Vercel preview URL with the protection bypass. No PR, no tracker write.
+- **`/ship`** — `tsc --noEmit`, push, make sure the branch has an issue (it creates one when the branch carries no id, so the PR passes `Task trace`), open the PR, arm auto-merge where the base's `git.autoMergePolicy` allows it, then stop. CI owns everything after that.
+- **Machine profile** — `~/.claude/dev-tasks-profile.json` says `human` (a laptop: worktree and i18n gates off, `devSurface: localhost`) or `agent` (a mini: gates on, `devSurface: preview`). An absent file means `human`. `DEV_TASKS_PROFILE` overrides it for one process.
+- **Tracker** — `tracker.provider` in `.claude/project-config.json` is `monday` (the default) or `linear`, and `DEV_TASKS_TRACKER` overrides it for one process. The skills reach the tracker only through `scripts/trackerctl.ts`, which reads the Linear key from `LINEAR_API_KEY` or `~/.config/linear/.env` (mode 600).
+- **Retired** — the `stop-task-check`, `post-self-review`, `subtask-reminder` and `subtask-progress-gate` hooks and `bash-guard` gate (b). `pipeline-reminder` and `stop-visual-diff-check` are off on both profiles. `/dev-tasks:doctor` warns when any of them is still in `hooks.enabled[]`.
+
+The Monday lifecycle skills (`pickup-task`, `refine-task`, `self-review`, `ship-pr` and the rest) still ship for consumers that have not moved over. The sections below that mention them describe that legacy pipeline.
 
 ## STEP-wide policy (non-overridable)
 
@@ -105,6 +119,7 @@ Pin `main` to a release tag (e.g. `.../v0.22.1/...`) if you want validation froz
   "environments": {
     "uat": { "url": "https://test.example.com" }
   },
+  "tracker": { "provider": "monday" },   // or "linear" (see "The 1.0 flow")
   "i18n": {                              // optional, per-product
     "enabled": false,
     "locales": [],
@@ -121,11 +136,10 @@ Pin `main` to a release tag (e.g. `.../v0.22.1/...`) if you want validation froz
   "hooks": {
     "enabled": [                         // opt-in non-policy hooks
       "task-state-guard", "worktree-required", "worktree-path-boundary",
-      "branch-task-match", "stop-task-check", "protect-sensitive-files",
-      "pre-commit-secrets-scan", "subtask-reminder", "auto-file-followup-nudge",
-      "post-merge-postmortem", "post-push-track", "post-push-review-check",
-      "post-self-review", "pre-compact-task-snapshot", "user-prompt-task-context",
-      "subprocess-failure", "ui-change-test-reminder", "stop-visual-diff-check"
+      "branch-task-match", "protect-sensitive-files", "pre-commit-secrets-scan",
+      "auto-file-followup-nudge", "post-merge-postmortem", "post-push-track",
+      "post-push-review-check", "pre-compact-task-snapshot",
+      "user-prompt-task-context", "subprocess-failure", "ui-change-test-reminder"
     ]
   }
 }
@@ -133,8 +147,11 @@ Pin `main` to a release tag (e.g. `.../v0.22.1/...`) if you want validation froz
 
 ### Visual-diff enforcement (v0.35.0)
 
-If your project ships UI, enable **both** of these so a UI change can't reach
-"Waiting for UAT" with an empty Monday "Visual Changes" doc:
+**1.0 turns `stop-visual-diff-check` off on both profiles**: CI captures the
+screenshots now, so leave it out of `hooks.enabled[]` (`/dev-tasks:doctor`
+warns when it is listed). The rest of this section describes the legacy Monday
+pipeline, where a project that ships UI enabled both of these so a UI change
+couldn't reach "Waiting for UAT" with an empty Monday "Visual Changes" doc:
 
 - **`ui-change-test-reminder`** — PostToolUse nudge on UI edits. Now also points
   at the Monday Visual Changes doc + `/ship-pr` Phase 6.8. (Many consumers omit
@@ -173,9 +190,9 @@ contract and unblocks authed surfaces (where most real product UI lives):
   captures can authenticate by navigating there first. Same-origin with
   `environments.uat.url` is enforced (SSRF guard); the secret lives in an env var —
   only its NAME is in config, and the substituted URL is never logged.
-- **`/doctor` check 12** audits the wiring: enforcement hook enabled, personas
-  declared, storageState files present on disk, persona references resolve,
-  loginUrl origin + secret sanity.
+- **`/doctor` check 12** audits the wiring: personas declared, storageState
+  files present on disk, persona references resolve, loginUrl origin + secret
+  sanity.
 
 ## Full-suite E2E in-session (on by default) — `e2e.fullSuite` + `/dev-tasks:run-full-e2e`
 

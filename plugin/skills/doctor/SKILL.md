@@ -1,6 +1,6 @@
 ---
 name: doctor
-description: Audit a consumer's dev-tasks setup. Verifies project-config is valid, MONDAY_API_KEY resolves, People-board lookup works for the current whoami, required Monday boards are reachable, and policy hooks are in place. Run after first install or when something feels off.
+description: Audit a consumer's dev-tasks setup. Verifies project-config is valid, MONDAY_API_KEY resolves, People-board lookup works for the current whoami, required Monday boards are reachable, policy hooks are in place, and the 1.0 pieces (machine profile, tracker.provider, the Linear key file, no retired hooks listed) are sound. Run after first install or when something feels off.
 user_invocable: true
 ---
 
@@ -104,15 +104,58 @@ WARN: listed but MCP not loaded → restart Claude Code.
 
 ### 12. Visual-diff wiring (v0.37.0)
 
-The visualDiff feature is ON by default, but its ENFORCEMENT hook is opt-in and its authed-capture inputs are consumer-declared — a consumer can silently run for weeks with UI tasks shipping no Visual Changes docs (the exact 2026-06-23→07-09 PolAds gap). Audit the wiring whenever `visualDiff.enabled` is not `false` AND `environments.uat.url` is an `https://` URL:
+The visualDiff feature is ON by default and its authed-capture inputs are consumer-declared, so a consumer can silently capture nothing for the routes that matter. Audit the wiring whenever `visualDiff.enabled` is not `false` AND `environments.uat.url` is an `https://` URL. Do NOT recommend the `stop-visual-diff-check` enforcement hook: 1.0 turns it off on both profiles because CI captures the screenshots (Check 16 warns when it is still listed).
 
-1. **Enforcement hook**: `hooks.enabled[]` missing `stop-visual-diff-check` → WARN with the exact fix: add `"stop-visual-diff-check"` to `hooks.enabled[]` in `.claude/project-config.json` (without it, UI-diff sessions can exit with neither captured routes nor a recorded skip).
-2. **Personas for authed capture**: `e2e.personas[]` empty or absent → WARN: "every authed route will be skipped with 'auth required, no persona' — declare personas (id + storageState produced by your auth.setup.ts) and set `visualDiff.authPersona`".
-3. **storageState files exist**: for each persona with a non-null `storageState`, check the path exists on disk (repo-root-relative). Missing → WARN naming the file and the consumer's regeneration command (their `auth.setup.ts` / e2e setup project — e.g. `pnpm playwright test --project=setup` or the project's e2e gate script).
-4. **Persona references resolve**: `visualDiff.authPersona` and every `routeMap[].persona` must equal some `e2e.personas[].id` (JSON Schema can't cross-validate this). Dangling reference → FAIL with the offending id.
-5. **loginUrl sanity** (only when set): its origin must equal the `environments.uat.url` origin (SSRF contract), and if it contains `{secret}`, `visualDiff.loginSecretEnv` must be set AND that env var must resolve non-empty locally. Violation → FAIL (origin mismatch) / WARN (secret env unset).
+1. **Personas for authed capture**: `e2e.personas[]` empty or absent → WARN: "every authed route will be skipped with 'auth required, no persona' — declare personas (id + storageState produced by your auth.setup.ts) and set `visualDiff.authPersona`".
+2. **storageState files exist**: for each persona with a non-null `storageState`, check the path exists on disk (repo-root-relative). Missing → WARN naming the file and the consumer's regeneration command (their `auth.setup.ts` / e2e setup project — e.g. `pnpm playwright test --project=setup` or the project's e2e gate script).
+3. **Persona references resolve**: `visualDiff.authPersona` and every `routeMap[].persona` must equal some `e2e.personas[].id` (JSON Schema can't cross-validate this). Dangling reference → FAIL with the offending id.
+4. **loginUrl sanity** (only when set): its origin must equal the `environments.uat.url` origin (SSRF contract), and if it contains `{secret}`, `visualDiff.loginSecretEnv` must be set AND that env var must resolve non-empty locally. Violation → FAIL (origin mismatch) / WARN (secret env unset).
 
-All five are config/disk reads — no network calls.
+All four are config/disk reads — no network calls.
+
+### 13. Machine profile (1.0)
+
+`~/.claude/dev-tasks-profile.json` decides which hooks run on this machine (spec section 4). Read it through the plugin's own reader, so the answer is the one the hooks act on:
+
+```bash
+bash "${CLAUDE_PLUGIN_ROOT}/hooks/lib/profile.sh" get profile
+bash "${CLAUDE_PLUGIN_ROOT}/hooks/lib/profile.sh" get devSurface
+bash "${CLAUDE_PLUGIN_ROOT}/hooks/lib/profile.sh" get mini
+```
+
+Report `profile`, `devSurface` and `mini`, then:
+
+- File absent → PASS, resolves `human` (a laptop). Say so: on an agent mini that is wrong, and the mini's worktree and i18n gates are off until it has `{ "profile": "agent", "devSurface": "preview", "mini": "<name>" }`.
+- File present, valid JSON, `profile` is `human` or `agent` → PASS.
+- File present but not valid JSON (`jq -e . ~/.claude/dev-tasks-profile.json` fails), or `profile` is anything else → WARN: it resolves `agent` on purpose, so a configured machine never silently disarms its gates. On a laptop, fix the file.
+- `DEV_TASKS_PROFILE` is set → note it: it overrides `profile` (and nothing else) for this shell.
+
+### 14. `tracker.provider` (1.0)
+
+Which tracker `/dev`, `/preview` and `/ship` read and write, from `.claude/project-config.json` at the repo root. `DEV_TASKS_TRACKER` overrides it for one process.
+
+- Absent → PASS: `monday`, the documented pre-cutover default.
+- `linear` or `monday` → PASS, report it.
+- Anything else → FAIL: the adapter falls back to `monday`, so a typo sends a Linear project's writes to Monday. Fix the value.
+- `DEV_TASKS_TRACKER` is set: to `linear` or `monday` → WARN that it overrides the config in this shell. To anything else → WARN that it is ignored.
+
+### 15. Linear API key (1.0, only when the provider is `linear`)
+
+Skip as PASS ("not needed") when Check 14 resolved `monday`. Otherwise:
+
+- `LINEAR_API_KEY` set in the environment → PASS (it wins over the file). Test with `[ -n "$LINEAR_API_KEY" ]`; never print it.
+- Else `~/.config/linear/.env` missing → FAIL: create it per step 4 of `docs/dev-tasks-1-0-install.md`.
+- No non-empty key line → FAIL. Count, never print: `grep -c '^LINEAR_API_KEY=.' ~/.config/linear/.env`.
+- Whenever the file exists, its mode must be `600` → otherwise FAIL with the fix `chmod 600 ~/.config/linear/.env`. The key writes to the whole Linear workspace, and any other local account can read a `644` file. Read the mode with `stat -f %Lp ~/.config/linear/.env` (macOS) or `stat -c %a ~/.config/linear/.env` (Linux).
+
+Never `cat` the file or echo the key, in this check or any other.
+
+### 16. No retired or turned-off hooks in `hooks.enabled[]` (1.0)
+
+`hooks.enabled[]` should list none of these. Each one listed → WARN with the fix: remove it.
+
+- `stop-task-check`, `post-self-review`, `subtask-reminder`, `subtask-progress-gate`: retired in 1.0. The schema still accepts the names so old configs stay valid, and the runtime ignores them. Dead config.
+- `pipeline-reminder`, `stop-visual-diff-check`: turned off on both profiles in 1.0, yet both still RUN when listed. `pipeline-reminder` nags about `selfReviewPassed`, which the 1.0 flow never sets, and `stop-visual-diff-check` holds a Stop for screenshots that CI now captures.
 
 ## Output
 
