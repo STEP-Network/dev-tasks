@@ -410,7 +410,7 @@
       }
     },
     "hooks": {
-      "description": "Per-project hook activation for non-policy hooks. Policy hooks (bash-guard, stop-ci-green-check) are STEP-wide and always-on regardless of this list. Listing them here is harmless (kept in the enum for backward compatibility with existing project-configs).",
+      "description": "Per-project hook activation for non-policy hooks. Policy hooks (bash-guard, stop-ci-green-check) are STEP-wide and always-on regardless of this list. Listing them here is harmless (kept in the enum for backward compatibility with existing project-configs). The same applies to the hooks RETIRED in 1.0 — stop-task-check, post-self-review, subtask-reminder, subtask-progress-gate — whose enum members are accepted and IGNORED at runtime so an existing project-config stays valid across the upgrade. Removing an enum member would invalidate a consumer's committed config the moment the plugin updates, before anyone could edit it.",
       "type": "object",
       "additionalProperties": false,
       "properties": {
