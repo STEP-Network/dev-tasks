@@ -1,13 +1,12 @@
 #!/bin/bash
 
-# STEP-wide policy: gates (a) destructive commands (incl. --force), (b)
-# self-review before commit, (c) pre-push validation marker, and (f) protected-
-# branch push block are always-on regardless of project-config.hooks.enabled[].
-# The previous opt-in gate was lifted as part of the multi-project alignment
-# (Phase 3). Gates (d)(e) — i18n parity — remain conditional on
-# project-config.i18n.enabled = true. Gate (f) is configurable via
-# project-config.git.protectedBranches[] (empty array disables; default list:
-# main staging master production prod).
+# STEP-wide policy: gates (a) destructive commands (incl. --force), (c)
+# pre-push validation marker, and (f) protected-branch push block are always-on
+# regardless of project-config.hooks.enabled[]. Gate (b), which refused a
+# commit until self-review had passed, was RETIRED in 1.0: review moved to the
+# CI `Claude review` required check (spec sections 4 and 10). The letters of
+# the surviving gates are deliberately NOT renumbered — the hook tests, the
+# plugin README and PolAds's .claude/hooks/README.md all name them by letter.
 source "$(dirname "${BASH_SOURCE[0]}")/lib/config-reader.sh"
 source "$(dirname "${BASH_SOURCE[0]}")/lib/resolve-agent-cwd.sh"
 
@@ -16,9 +15,8 @@ source "$(dirname "${BASH_SOURCE[0]}")/lib/resolve-agent-cwd.sh"
 exec >&2
 
 # Hook: PreToolUse (Bash)
-# Six gates:
+# Five gates:
 #   (a) Block destructive commands
-#   (b) Block git commit without self-review (Fix 1)
 #   (c) SHA-scoped pre-push gate (Fix 5)
 #   (d) i18n locale parity — block commit if staged default-locale file has NEW keys
 #       missing from other configured locale files. Active only when
@@ -67,36 +65,6 @@ for pattern in "${DESTRUCTIVE_PATTERNS[@]}"; do
     exit 2
   fi
 done
-
-STATE_FILE="$PROJECT_ROOT/.claude/active-task.json"
-
-# (b) Pre-commit gate: block git commit if self-review has not passed
-if echo "$ACTUAL_CMD" | grep -q "git commit"; then
-  if [ -f "$STATE_FILE" ]; then
-    SELF_REVIEW_PASSED=$(STATE_FILE_PATH="$STATE_FILE" python3 -c "
-import json, os, sys
-try:
-    with open(os.environ['STATE_FILE_PATH']) as f:
-        state = json.load(f)
-    print('true' if state.get('selfReviewPassed') else 'false')
-except Exception:
-    print('false')
-" 2>/dev/null)
-
-    if [ "$SELF_REVIEW_PASSED" != "true" ]; then
-      echo "BLOCKED: Cannot commit — self-review has NOT passed."
-      echo ""
-      echo "The post-implementation pipeline requires self-review before committing:"
-      echo "  1. Run /self-review (iterative until all 10 checks pass)"
-      echo "  2. Self-review sets selfReviewPassed: true in .claude/active-task.json"
-      echo "  3. Then you can commit and proceed to /ship-pr"
-      echo ""
-      echo "This gate prevents shipping unreviewed code."
-      exit 2
-    fi
-  fi
-  # No state file = no active task enforcement on commit (task-state-guard handles edits)
-fi
 
 # Resolve i18n config once for sections (d) and (e). Both are dormant unless
 # project-config.i18n.enabled = true.

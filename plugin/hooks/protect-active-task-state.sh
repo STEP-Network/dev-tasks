@@ -5,7 +5,7 @@
 #
 # Background: every workflow-enforcement hook reads decision state from
 # .claude/active-task.json:
-#   selfReviewPassed     ← bash-guard commit gate, ship-pr Phase 1
+#   (selfReviewPassed was removed in 1.0 — bash-guard gate (b) and post-self-review, its only reader and its only emitter, are both retired.)
 #   reviewAddressed      ← stop-task-check, pre-merge-review-gate
 #   parentStatus         ← stop-waiting-for-uat-stage
 #   mondayReconciledShas ← stop-monday-reconciled-check
@@ -20,7 +20,7 @@
 # it requires a marker /tmp/.claude-state-marker-<field>-<HEAD_SHA> emitted
 # by the legitimate write path:
 #
-#   selfReviewPassed     ← post-self-review.sh on validator PASS
+#   (selfReviewPassed was removed in 1.0 — bash-guard gate (b) and post-self-review, its only reader and its only emitter, are both retired.)
 #   reviewAddressed      ← /ship-pr Phase 6.2 (handoff) or Phase 6 (structured)
 #   parentStatus         ← /ship-pr Phase 6.7 (after WfUAT transition succeeds)
 #   mondayReconciledShas ← /ship-pr Phase 10 + /babysit-prs Phase 3 (after gh pr merge)
@@ -138,16 +138,6 @@ def marker_exists(field):
     return os.path.exists(marker_path(field))
 
 blocks = []
-
-cur_self = bool(current.get('selfReviewPassed'))
-prop_self = bool(proposed.get('selfReviewPassed'))
-if not cur_self and prop_self and not marker_exists('selfReviewPassed'):
-    blocks.append((
-        'selfReviewPassed',
-        f"Setting selfReviewPassed=true requires marker {marker_path('selfReviewPassed')}.\n"
-        "Run /self-review to completion — post-self-review.sh emits the marker when\n"
-        "the self-reviewer subagent's output contains 'Self-Review PASSED'."
-    ))
 
 cur_ra = current.get('reviewAddressed') or ''
 prop_ra = proposed.get('reviewAddressed') or ''
