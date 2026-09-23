@@ -22,7 +22,7 @@
  */
 
 import { executeMondayQuery } from "../monday-client.ts"
-import { BOARDS, TASK_COLUMNS } from "../constants.ts"
+import { BOARDS, TASK_COLUMNS, TASK_STATUS } from "../constants.ts"
 import { getTaskDescriptionDoc } from "../tools/taskDescriptionDoc.ts"
 import {
   byPriorityThenAge,
@@ -120,7 +120,7 @@ export function createMondayTracker(): Tracker {
           board: String(BOARDS.TASKS),
           item: ref,
           column: TASK_COLUMNS.status,
-          value: JSON.stringify({ label: "In Progress" }),
+          value: JSON.stringify({ index: TASK_STATUS["In Progress"] }),
         },
       )
       await executeMondayQuery(
@@ -177,7 +177,7 @@ export function createMondayTracker(): Tracker {
            boards(ids: [$board]) {
              items_page(
                limit: $limit,
-               query_params: { rules: [{ column_id: $column, compare_value: ["Ready to Start"], operator: any_of }] }
+               query_params: { rules: [{ column_id: $column, compare_value: [${TASK_STATUS["Ready to Start"]}], operator: any_of }] }
              ) {
                items { id name url updated_at column_values { id text } }
              }
