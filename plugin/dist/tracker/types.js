@@ -56,7 +56,8 @@ export function extractAcceptanceCriteria(markdown) {
     let fence = null;
     let level = 0;
     const body = [];
-    for (const line of markdown.split("\n")) {
+    // \r?\n: FENCE_RE's `.` stops at a \r, so a CRLF line never matched it.
+    for (const line of markdown.split(/\r?\n/)) {
         const wasInFence = fence !== null;
         fence = stepFence(fence, line);
         // The opening and closing fence lines count as code too.

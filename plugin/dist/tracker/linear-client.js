@@ -56,24 +56,6 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const TRANSIENT_RE = /internal server error|ratelimited|rate limit|timed? ?out|temporarily unavailable/i;
 const MUTATION_RE = /^\s*mutation\b/i;
 /**
- * How Linear refuses a create whose `id` is already taken. The adapter sends
- * its own UUID on every create precisely so that a retry after a lost answer
- * gets this refusal instead of making a duplicate.
- */
-const CONFLICT_RE = /already exists|conflict on insert/i;
-/**
- * A mutation's RETRY was refused because its id already exists. Usually the
- * earlier attempt landed and only its answer was lost, but Linear also
- * reports phantom insert conflicts for ids nothing holds, so this is not
- * proof: the caller settles it by reading the id back.
- */
-export class LinearCreateConflictError extends Error {
-    constructor(message) {
-        super(message);
-        this.name = "LinearCreateConflictError";
-    }
-}
-/**
  * Unset/empty means "no cap" (open). Anything else must be a base-10
  * non-negative integer or this throws — a typo or a negative value must
  * fail CLOSED, not silently disable the cap on a live run. Never echoes the
@@ -128,10 +110,6 @@ export async function linearRequest(query, variables = {}) {
             if (TRANSIENT_RE.test(message) && attempt < MAX_ATTEMPTS - 1) {
                 await sleep(Math.min(MAX_BACKOFF_MS, 2_000 * 2 ** attempt));
                 continue;
-            }
-            // Only on a retry: on the first attempt nothing of ours can have landed.
-            if (isMutation && attempt > 0 && CONFLICT_RE.test(message)) {
-                throw new LinearCreateConflictError(`Linear: ${message}`);
             }
             throw new Error(`Linear: ${message}`);
         }

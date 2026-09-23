@@ -123,7 +123,8 @@ export function extractAcceptanceCriteria(markdown: string): string {
   let fence: Fence | null = null
   let level = 0
   const body: string[] = []
-  for (const line of markdown.split("\n")) {
+  // \r?\n: FENCE_RE's `.` stops at a \r, so a CRLF line never matched it.
+  for (const line of markdown.split(/\r?\n/)) {
     const wasInFence = fence !== null
     fence = stepFence(fence, line)
     // The opening and closing fence lines count as code too.
@@ -195,12 +196,15 @@ export function branchNameFor(issueId: string, title: string): string {
 /** 0 ("No priority") sorts LAST; every real priority sorts ahead of it. */
 const priorityRank = (p: number): number => (p === 0 ? 5 : p)
 
+/** The two fields the queue order reads, so a lean ranking node sorts too. */
+type Rankable = { priority: number; updatedAt: string }
+
 /**
  * Queue order for the front door: most urgent first, and within one priority
  * the OLDEST first, so a low-priority issue cannot starve behind a stream of
  * newer ones at the same level.
  */
-export function byPriorityThenAge(a: TrackerIssue, b: TrackerIssue): number {
+export function byPriorityThenAge(a: Rankable, b: Rankable): number {
   const d = priorityRank(a.priority) - priorityRank(b.priority)
   if (d !== 0) return d
   return a.updatedAt.localeCompare(b.updatedAt)

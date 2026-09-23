@@ -10,7 +10,7 @@
  */
 
 import { randomUUID } from "node:crypto"
-import { LinearCreateConflictError, linearRequest } from "./linear-client.ts"
+import { linearRequest } from "./linear-client.ts"
 import {
   byPriorityThenAge,
   extractAcceptanceCriteria,
@@ -74,14 +74,26 @@ const IDENTIFIER_RE = /^([A-Za-z]+)-(\d+)$/
 /*
  * Page sizes are bounded by complexity, not by count. Linear refuses any
  * single query over 10,000 points: 0.1 per field, 1 per object, and each
- * connection multiplies its children by its `first` (50 when omitted).
- * A label is ~1.2 points, so 250 labels is ~300. An ISSUE_FIELDS issue is
- * ~58, most of it the nested labels connection at its default 50, so 100
- * issues is ~5,800 and 250 would be ~14,500 and refused outright.
+ * connection multiplies its children by its `first` (50 when omitted). An
+ * API key's user also gets only 3M points an hour, which a front door
+ * polling every minute spends quickly.
+ * - A label is ~1.2 points, so 250 labels is ~300.
+ * - A ranking node (id, priority, updatedAt) is ~1.3, so 250 is ~330.
+ * - An ISSUE_FIELDS issue is ~58, most of it the nested labels connection
+ *   at its default 50, so 100 full issues is ~5,800 and 250 would be
+ *   ~14,500 and refused outright.
  */
 const LABEL_PAGE_SIZE = 250
-const READY_PAGE_SIZE = 100
+const READY_PAGE_SIZE = 250
+const FULL_ISSUE_CHUNK = 100
 const PAGE_INFO = `pageInfo { hasNextPage endCursor }`
+
+/** What ranking the Ready queue needs, and nothing else. */
+interface RankNode {
+  id: string
+  priority: number
+  updatedAt: string
+}
 
 /**
  * Every node of a connection: `page` is the first page, `next` fetches the
@@ -107,13 +119,14 @@ async function allNodes<N>(
 }
 
 /**
- * Settles a create whose retry Linear refused as already existing. The id is
- * ours, so if it reads back, the earlier attempt landed and that entity IS the
- * result. If it does not, the conflict was Linear's own phantom and the
- * original error stands: calling it a success would lose the write silently.
+ * Settles a create that threw, whatever the error said: a 5xx that outlasted
+ * the retries, a refused retry in any wording, a dropped connection. The id
+ * is a fresh UUID minted by this very call, so if it reads back, this call's
+ * write landed and that entity IS the result. If it does not, the create
+ * really failed and its own error stands. (Linear also reports phantom
+ * insert conflicts for ids nothing holds, so no wording alone is proof.)
  */
-async function settleConflict<T>(error: unknown, readBack: () => Promise<T | null>): Promise<T> {
-  if (!(error instanceof LinearCreateConflictError)) throw error
+async function readBackAfterFailure<T>(error: unknown, readBack: () => Promise<T | null>): Promise<T> {
   const landed = await readBack().catch(() => null)
   if (landed) return landed
   throw error
@@ -248,7 +261,7 @@ export function createLinearTracker(): Tracker {
         { input: { id, issueId, body } },
       )
     } catch (error) {
-      await settleConflict(error, async () => {
+      await readBackAfterFailure(error, async () => {
         const data = await linearRequest<{ comment: { id: string } | null }>(
           `query($id: String!) { comment(id: $id) { id } }`,
           { id },
@@ -304,6 +317,7 @@ export function createLinearTracker(): Tracker {
       if (stateId) payload.stateId = stateId
       if (labelIds) payload.labelIds = labelIds
 
+      let created: RawIssue
       try {
         const data = await linearRequest<{ issueCreate: { issue: RawIssue } }>(
           `mutation($input: IssueCreateInput!) {
@@ -311,10 +325,19 @@ export function createLinearTracker(): Tracker {
            }`,
           { input: payload },
         )
-        return toIssue(data.issueCreate.issue)
+        created = data.issueCreate.issue
       } catch (error) {
-        return toIssue(await settleConflict(error, () => fetchRaw(id)))
+        return toIssue(await readBackAfterFailure(error, () => fetchRaw(id)))
       }
+      if (created.id !== id) {
+        // Retries are idempotent only while Linear honours the client id, and
+        // this is the one place that would show it stopped.
+        process.stderr.write(
+          `dev-tasks: Linear gave ${created.identifier} its own id, not the client id sent; ` +
+            `a retried create can duplicate.\n`,
+        )
+      }
+      return toIssue(created)
     },
 
     async comment(ref, body) {
@@ -333,27 +356,56 @@ export function createLinearTracker(): Tracker {
     },
 
     async listReady(limit = 25) {
-      // The WHOLE queue, then the sort, then the limit. Linear pages in
-      // createdAt order, so sorting one page misses a new Urgent issue that
-      // sits on a later one.
+      // Rank the WHOLE queue, then fetch full issues for the winners only.
+      // Linear pages in its own order, not by priority, so sorting one page
+      // misses an Urgent issue on a later one. Ranking needs three fields,
+      // and paging full issues instead cost ~5,800 points a page.
+      const where = { teamKey: LINEAR_TEAM_KEY, stateName: "Ready" }
       const page = async (after: string | null) => {
-        const data = await linearRequest<{ issues: Connection<RawIssue> }>(
+        const data = await linearRequest<{ issues: Connection<RankNode> }>(
           `query($teamKey: String!, $stateName: String!, $first: Int!, $after: String) {
              issues(
                first: $first,
                after: $after,
                filter: { team: { key: { eq: $teamKey } }, state: { name: { eq: $stateName } } }
              ) {
-               nodes { ${ISSUE_FIELDS} }
+               nodes { id priority updatedAt }
                ${PAGE_INFO}
              }
            }`,
-          { teamKey: LINEAR_TEAM_KEY, stateName: "Ready", first: READY_PAGE_SIZE, after },
+          { ...where, first: READY_PAGE_SIZE, after },
         )
         return data.issues
       }
-      const nodes = await allNodes(await page(null), page)
-      return nodes.map(toIssue).sort(byPriorityThenAge).slice(0, limit)
+      const ranked = (await allNodes(await page(null), page)).sort(byPriorityThenAge).slice(0, limit)
+
+      const full = new Map<string, RawIssue>()
+      for (let i = 0; i < ranked.length; i += FULL_ISSUE_CHUNK) {
+        const ids = ranked.slice(i, i + FULL_ISSUE_CHUNK).map((node) => node.id)
+        // Filtered on Ready again: an issue claimed since the ranking drops out
+        // rather than coming back as if it were still free.
+        const data = await linearRequest<{ issues: { nodes: RawIssue[] } }>(
+          `query($teamKey: String!, $stateName: String!, $ids: [ID!]!, $first: Int!) {
+             issues(
+               first: $first,
+               filter: {
+                 id: { in: $ids },
+                 team: { key: { eq: $teamKey } },
+                 state: { name: { eq: $stateName } }
+               }
+             ) {
+               nodes { ${ISSUE_FIELDS} }
+             }
+           }`,
+          { ...where, ids, first: ids.length },
+        )
+        for (const raw of data.issues.nodes) full.set(raw.id, raw)
+      }
+      // Linear answers in its own order; the ranking is ours.
+      return ranked.flatMap((node) => {
+        const raw = full.get(node.id)
+        return raw ? [toIssue(raw)] : []
+      })
     },
   }
 }

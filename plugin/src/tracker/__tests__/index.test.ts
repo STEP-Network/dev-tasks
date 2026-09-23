@@ -11,13 +11,14 @@ import { describe, it, expect, beforeEach, afterEach, vi, type MockInstance } fr
 import { execFileSync } from "node:child_process"
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
-import { join } from "node:path"
+import { dirname, join } from "node:path"
 import { readTrackerProvider, resolveTracker } from "../index.ts"
 import { stripDescriptionDocHeader } from "../monday.ts"
 
 let root: string
 let stderr: MockInstance
 const ORIGINAL_TRACKER = process.env.DEV_TASKS_TRACKER
+const ORIGINAL_CEILING = process.env.GIT_CEILING_DIRECTORIES
 
 function writeConfig(body: unknown): void {
   mkdirSync(join(root, ".claude"), { recursive: true })
@@ -30,6 +31,9 @@ function warnings(): string {
 
 beforeEach(() => {
   root = mkdtempSync(join(tmpdir(), "tracker-cfg-"))
+  // git stops its search at root, so a TMPDIR inside some repo cannot lend
+  // these tests that repo's config. The resolver's git child inherits it.
+  process.env.GIT_CEILING_DIRECTORIES = dirname(root)
   delete process.env.DEV_TASKS_TRACKER
   stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true)
 })
@@ -38,6 +42,8 @@ afterEach(() => {
   stderr.mockRestore()
   if (ORIGINAL_TRACKER === undefined) delete process.env.DEV_TASKS_TRACKER
   else process.env.DEV_TASKS_TRACKER = ORIGINAL_TRACKER
+  if (ORIGINAL_CEILING === undefined) delete process.env.GIT_CEILING_DIRECTORIES
+  else process.env.GIT_CEILING_DIRECTORIES = ORIGINAL_CEILING
   rmSync(root, { recursive: true, force: true })
 })
 

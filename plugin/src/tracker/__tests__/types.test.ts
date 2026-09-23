@@ -112,6 +112,23 @@ describe("extractAcceptanceCriteria", () => {
       expect(extractAcceptanceCriteria(template)).toBe("- [ ] the real one")
     })
 
+    it("tracks fences in a description with CRLF line endings", () => {
+      // `.` stops at a \r, so the fence pattern never matched a CRLF line.
+      const crlf = [
+        "## Acceptance criteria",
+        "",
+        "- [ ] one",
+        "```bash",
+        "# comment",
+        "```",
+        "- [ ] two",
+        "",
+        "## Notes",
+        "not criteria",
+      ].join("\r\n")
+      expect(extractAcceptanceCriteria(crlf)).toBe("- [ ] one\n```bash\n# comment\n```\n- [ ] two")
+    })
+
     it("closes a fence only on a run of the same character at least as long", () => {
       const nested = [
         "## Acceptance criteria",

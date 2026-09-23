@@ -9,17 +9,17 @@
  * is the normal case for a mini.
  */
 
-import { describe, it, expect, beforeEach, vi } from "vitest"
+import { describe, it, expect, beforeEach, afterEach, vi, type MockInstance } from "vitest"
 
 const requestMock = vi.fn()
-vi.mock("../linear-client.ts", async (importOriginal) => ({
-  // The real module, so LinearCreateConflictError is the class linear.ts checks for.
-  ...(await importOriginal<typeof import("../linear-client.ts")>()),
+vi.mock("../linear-client.ts", () => ({
   linearRequest: (...args: unknown[]) => requestMock(...args),
+  LINEAR_ENDPOINT: "https://api.linear.app/graphql",
+  loadLinearKey: () => "test-key",
+  resetLinearClientForTests: () => {},
 }))
 
 const { createLinearTracker } = await import("../linear.ts")
-const { LinearCreateConflictError } = await import("../linear-client.ts")
 
 const UUID_V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
 
@@ -57,8 +57,17 @@ const ISSUE_FIELDS = {
   labels: { nodes: [{ name: "product/polads" }] },
 }
 
+let stderr: MockInstance
+
 beforeEach(() => {
   requestMock.mockReset()
+  // The fixtures answer every create with ISSUE_FIELDS' fixed id, which the
+  // adapter reports on stderr as Linear ignoring its client id.
+  stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true)
+})
+
+afterEach(() => {
+  stderr.mockRestore()
 })
 
 describe("readIssue", () => {
@@ -198,13 +207,40 @@ describe("creates carry an id of the adapter's own", () => {
     expect(variables.input.id).toMatch(UUID_V4)
     expect(requestMock.mock.calls[3][1].input.id).not.toBe(variables.input.id)
   })
-})
 
-describe("a retry refused as 'already exists' is settled by reading the id back", () => {
-  it("createIssue returns the issue its earlier attempt created", async () => {
+  it("says so on stderr when Linear answers with an id other than the one sent", async () => {
+    // Retries are idempotent only while Linear honours the client id. If it
+    // ever stopped, this is the one place that would show it.
     requestMock
       .mockResolvedValueOnce(TEAM)
-      .mockRejectedValueOnce(new LinearCreateConflictError("Linear: Entity Issue with id x already exists"))
+      .mockResolvedValueOnce({ issueCreate: { issue: ISSUE_FIELDS } })
+
+    await createLinearTracker().createIssue({ title: "x" })
+
+    expect(stderr.mock.calls.map((c) => String(c[0])).join("")).toMatch(/client id/)
+  })
+
+  it("stays quiet when Linear keeps the client id", async () => {
+    requestMock
+      .mockResolvedValueOnce(TEAM)
+      .mockImplementationOnce(async (_query: string, variables: { input: { id: string } }) => ({
+        issueCreate: { issue: { ...ISSUE_FIELDS, id: variables.input.id } },
+      }))
+
+    await createLinearTracker().createIssue({ title: "x" })
+
+    expect(stderr).not.toHaveBeenCalled()
+  })
+})
+
+describe("a create that threw is settled by reading its own id back", () => {
+  // Whatever the error said: a 5xx that outlasted the retries, a refusal in
+  // unexpected words, a dropped connection. The id is a fresh UUID minted by
+  // this call, so finding it can only mean this call's write landed.
+  it("createIssue returns the issue when its id reads back", async () => {
+    requestMock
+      .mockResolvedValueOnce(TEAM)
+      .mockRejectedValueOnce(new Error("Linear: gave up after 6 attempts (last status 502)"))
       .mockResolvedValueOnce({ issue: { ...ISSUE_FIELDS, identifier: "STEP-501" } })
 
     const issue = await createLinearTracker().createIssue({ title: "Ship the thing" })
@@ -219,7 +255,7 @@ describe("a retry refused as 'already exists' is settled by reading the id back"
   it("comment succeeds once the comment reads back", async () => {
     requestMock
       .mockResolvedValueOnce({ issues: { nodes: [ISSUE_FIELDS] } })
-      .mockRejectedValueOnce(new LinearCreateConflictError("Linear: Entity Comment with id x already exists"))
+      .mockRejectedValueOnce(new TypeError("fetch failed"))
       .mockResolvedValueOnce({ comment: { id: "comment-uuid" } })
 
     await expect(createLinearTracker().comment("STEP-123", "hi")).resolves.toBeUndefined()
@@ -229,12 +265,12 @@ describe("a retry refused as 'already exists' is settled by reading the id back"
     expect(requestMock.mock.calls[2][1]).toEqual({ id: sentId })
   })
 
-  it("rethrows the conflict when nothing reads back", async () => {
+  it("rethrows the create's own error when nothing reads back", async () => {
     // Linear also reports PHANTOM insert conflicts, for ids nothing holds.
     // Calling that a success would drop the comment without a word.
     requestMock
       .mockResolvedValueOnce({ issues: { nodes: [ISSUE_FIELDS] } })
-      .mockRejectedValueOnce(new LinearCreateConflictError("Linear: conflict on insert"))
+      .mockRejectedValueOnce(new Error("Linear: conflict on insert"))
       .mockRejectedValueOnce(new Error("Linear: Entity not found: Comment"))
 
     await expect(createLinearTracker().comment("STEP-123", "hi")).rejects.toThrowError(/conflict on insert/)
@@ -284,17 +320,36 @@ describe("attachLink", () => {
 })
 
 describe("listReady", () => {
+  // Ranking reads three fields per issue; the full issue (description,
+  // labels) is fetched for the winners only. `lean` is a ranking node and
+  // `echoFull` plays the second query, answering in REVERSE of the order it
+  // was asked, since Linear's order is its own and the ranking is ours.
+  const lean = (n: number, priority: number, updatedAt: string) => ({ id: `uuid-${n}`, priority, updatedAt })
+  const page = (nodes: unknown[], endCursor: string, hasNextPage = false) => ({
+    issues: { nodes, pageInfo: { hasNextPage, endCursor } },
+  })
+  const echoFull = async (_query: string, variables: { ids: string[] }) => ({
+    issues: {
+      nodes: [...variables.ids]
+        .reverse()
+        .map((id) => ({ ...ISSUE_FIELDS, id, identifier: `STEP-${id.slice("uuid-".length)}` })),
+    },
+  })
+  const fullFetches = () => requestMock.mock.calls.filter(([query]) => /id: \{ in: \$ids \}/.test(String(query)))
+
   it("filters on the Ready state and sorts by priority then age", async () => {
-    requestMock.mockResolvedValueOnce({
-      issues: {
-        nodes: [
-          { ...ISSUE_FIELDS, identifier: "STEP-1", priority: 0, updatedAt: "2026-01-01T00:00:00.000Z" },
-          { ...ISSUE_FIELDS, identifier: "STEP-2", priority: 1, updatedAt: "2026-09-01T00:00:00.000Z" },
-          { ...ISSUE_FIELDS, identifier: "STEP-3", priority: 3, updatedAt: "2026-02-01T00:00:00.000Z" },
-        ],
-        pageInfo: { hasNextPage: false, endCursor: "ready-1" },
-      },
-    })
+    requestMock
+      .mockResolvedValueOnce(
+        page(
+          [
+            lean(1, 0, "2026-01-01T00:00:00.000Z"),
+            lean(2, 1, "2026-09-01T00:00:00.000Z"),
+            lean(3, 3, "2026-02-01T00:00:00.000Z"),
+          ],
+          "ready-1",
+        ),
+      )
+      .mockImplementationOnce(echoFull)
 
     const issues = await createLinearTracker().listReady(10)
 
@@ -305,35 +360,88 @@ describe("listReady", () => {
   })
 
   it("pages through the whole queue before sorting, so an Urgent issue on page 2 still comes first", async () => {
-    // Linear pages in createdAt order, so a NEW Urgent issue lands on the
-    // last page. Sorting only the first page handed the front door the
-    // oldest Low issues instead.
+    // Linear pages in its own order, not by priority. Sorting only the first
+    // page handed the front door whatever sat there, and an Urgent issue on
+    // a later page never came up.
     requestMock
-      .mockResolvedValueOnce({
-        issues: {
-          nodes: [
-            { ...ISSUE_FIELDS, identifier: "STEP-1", priority: 4, updatedAt: "2026-01-01T00:00:00.000Z" },
-            { ...ISSUE_FIELDS, identifier: "STEP-2", priority: 3, updatedAt: "2026-02-01T00:00:00.000Z" },
-          ],
-          pageInfo: { hasNextPage: true, endCursor: "ready-1" },
-        },
-      })
-      .mockResolvedValueOnce({
-        issues: {
-          nodes: [{ ...ISSUE_FIELDS, identifier: "STEP-9", priority: 1, updatedAt: "2026-09-20T00:00:00.000Z" }],
-          pageInfo: { hasNextPage: false, endCursor: "ready-2" },
-        },
-      })
+      .mockResolvedValueOnce(
+        page([lean(1, 4, "2026-01-01T00:00:00.000Z"), lean(2, 3, "2026-02-01T00:00:00.000Z")], "ready-1", true),
+      )
+      .mockResolvedValueOnce(page([lean(9, 1, "2026-09-20T00:00:00.000Z")], "ready-2"))
+      .mockImplementationOnce(echoFull)
 
     const issues = await createLinearTracker().listReady(2)
 
     expect(issues.map((i) => i.id)).toEqual(["STEP-9", "STEP-2"])
     expect(requestMock.mock.calls[0][1]).toMatchObject({ after: null })
     expect(requestMock.mock.calls[1][1]).toMatchObject({ after: "ready-1" })
-    // The page size is not the limit, and it stays small: Linear refuses a
-    // query over 10,000 complexity points, and one issue with its nested
-    // labels costs about 58, so a page of 250 would be refused outright.
-    expect(requestMock.mock.calls[0][1].first).toBeLessThanOrEqual(100)
+  })
+
+  it("keeps the cost to the ranking fields plus `limit` full issues (the cost shape)", async () => {
+    // Paging full issues cost ~5,800 points a page (each one's nested labels
+    // count as 50), so ~28,900 a call on a 440-issue queue, against a budget
+    // of 3M points an hour per user with the front door polling every minute.
+    // A ranking node is ~1.3 points: 250 a page is ~330. Three full issues
+    // are ~175. So the same call is now ~830 points in three requests.
+    const queue = Array.from({ length: 440 }, (_, i) => lean(i, 3, `2026-01-01T00:00:00.${String(i).padStart(3, "0")}Z`))
+    requestMock
+      .mockResolvedValueOnce(page(queue.slice(0, 250), "ready-1", true))
+      .mockResolvedValueOnce(page(queue.slice(250), "ready-2"))
+      .mockImplementationOnce(echoFull)
+
+    const issues = await createLinearTracker().listReady(3)
+
+    const ranking = requestMock.mock.calls.slice(0, 2)
+    for (const [query, variables] of ranking) {
+      expect(String(query)).toMatch(/nodes \{ id priority updatedAt \}/)
+      expect(String(query)).not.toMatch(/labels|description/)
+      expect(variables.first).toBeLessThanOrEqual(250)
+    }
+    expect(fullFetches()).toHaveLength(1)
+    const [fullQuery, fullVariables] = fullFetches()[0]
+    expect(String(fullQuery)).toMatch(/labels/)
+    expect(fullVariables.ids).toHaveLength(3)
+    expect(fullVariables.ids).toEqual(issues.map((i) => i.uuid))
+    expect(requestMock).toHaveBeenCalledTimes(3)
+  })
+
+  it("fetches a large limit's full issues in chunks that stay under the complexity cap", async () => {
+    // 100 full issues are ~5,800 points. One query for 150 would be ~8,700,
+    // and a limit of 200 would be refused outright.
+    const queue = Array.from({ length: 160 }, (_, i) => lean(i, 2, `2026-02-01T00:00:00.${String(i).padStart(3, "0")}Z`))
+    requestMock
+      .mockResolvedValueOnce(page(queue, "ready-1"))
+      .mockImplementationOnce(echoFull)
+      .mockImplementationOnce(echoFull)
+
+    const issues = await createLinearTracker().listReady(150)
+
+    expect(fullFetches().map(([, variables]) => variables.ids.length)).toEqual([100, 50])
+    expect(issues).toHaveLength(150)
+    expect(issues[0].uuid).toBe("uuid-0")
+    expect(issues[149].uuid).toBe("uuid-149")
+  })
+
+  it("asks for full issues still in Ready, and drops one that left it since the ranking", async () => {
+    requestMock
+      .mockResolvedValueOnce(
+        page([lean(1, 1, "2026-01-01T00:00:00.000Z"), lean(2, 2, "2026-01-01T00:00:00.000Z")], "ready-1"),
+      )
+      .mockResolvedValueOnce({ issues: { nodes: [{ ...ISSUE_FIELDS, id: "uuid-2", identifier: "STEP-2" }] } })
+
+    const issues = await createLinearTracker().listReady(2)
+
+    const [fullQuery, fullVariables] = fullFetches()[0]
+    expect(String(fullQuery)).toMatch(/state: \{ name: \{ eq: \$stateName \} \}/)
+    expect(fullVariables).toMatchObject({ stateName: "Ready" })
+    expect(issues.map((i) => i.id)).toEqual(["STEP-2"])
+  })
+
+  it("does not run the second query when nothing is Ready", async () => {
+    requestMock.mockResolvedValueOnce(page([], "ready-1"))
+
+    expect(await createLinearTracker().listReady(5)).toEqual([])
+    expect(requestMock).toHaveBeenCalledTimes(1)
   })
 
   it("throws rather than looping when Linear hands back a cursor that does not advance", async () => {
