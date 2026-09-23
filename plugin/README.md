@@ -52,6 +52,7 @@ A machine profile decides which hooks run, three skills replace the ten-phase sh
 - **`/ship`** — `tsc --noEmit`, push, make sure the branch has an issue (it creates one when the branch carries no id, so the PR passes `Task trace`), open the PR, arm auto-merge where the base's `git.autoMergePolicy` allows it, then stop. CI owns everything after that.
 - **Machine profile** — `~/.claude/dev-tasks-profile.json` says `human` (a laptop: worktree and i18n gates off, `devSurface: localhost`) or `agent` (a mini: gates on, `devSurface: preview`). An absent file means `human`. `DEV_TASKS_PROFILE` overrides it for one process.
 - **Tracker** — `tracker.provider` in `.claude/project-config.json` is `monday` (the default) or `linear`, and `DEV_TASKS_TRACKER` overrides it for one process. The skills reach the tracker only through `scripts/trackerctl.ts`, which reads the Linear key from `LINEAR_API_KEY` or `~/.config/linear/.env` (mode 600).
+- **Prerequisites** — `git.prePushMarker: false`, or `bash-guard` gate (c) refuses every `/preview` and `/ship` push behind a local build marker neither skill writes. `ci.greenBeforeStop: false`, or `stop-ci-green-check` holds the session open on the PR that `/ship` leaves to CI. Neither `task-state-guard` nor `commit-id-gate` in `hooks.enabled[]`: the first refuses every edit without the task file `/dev` never writes, the second the commit `/preview` makes before any issue exists. The starter template and the example below already have all four right, and `/dev-tasks:doctor` Check 17 warns on a Linear project that does not.
 - **Retired** — the `stop-task-check`, `post-self-review`, `subtask-reminder` and `subtask-progress-gate` hooks and `bash-guard` gate (b). `pipeline-reminder` and `stop-visual-diff-check` are off on both profiles. `/dev-tasks:doctor` warns when any of them is still in `hooks.enabled[]`.
 
 The Monday lifecycle skills (`pickup-task`, `refine-task`, `self-review`, `ship-pr` and the rest) still ship for consumers that have not moved over. The sections below that mention them describe that legacy pipeline.
@@ -110,7 +111,8 @@ Pin `main` to a release tag (e.g. `.../v0.22.1/...`) if you want validation froz
   "version": "1",
   "git": {
     "defaultBase": "staging",          // or "main" for trunk-based projects
-    "hotfixBase": "main"
+    "hotfixBase": "main",
+    "prePushMarker": false             // 1.0: CI validates. true = bash-guard gate (c) refuses every /preview and /ship push
   },
   "monday": {
     "productId": "2723505568",         // Monday Products-board item ID
@@ -128,18 +130,19 @@ Pin `main` to a release tag (e.g. `.../v0.22.1/...`) if you want validation froz
     "parityHookMode": "block"
   },
   "ci": {
-    "requiredChecks": ["build", "test", "lint"]
+    "requiredChecks": ["build", "test", "lint"],
+    "greenBeforeStop": false           // 1.0: /ship leaves the PR to CI. true = the session waits for green
   },
   "rules": {
     "extraRules": []                     // additional file paths for rule-autoload to surface
   },
   "hooks": {
-    "enabled": [                         // opt-in non-policy hooks
-      "task-state-guard", "worktree-required", "worktree-path-boundary",
-      "branch-task-match", "protect-sensitive-files", "pre-commit-secrets-scan",
-      "auto-file-followup-nudge", "post-merge-postmortem", "post-push-track",
-      "post-push-review-check", "pre-compact-task-snapshot",
-      "user-prompt-task-context", "subprocess-failure", "ui-change-test-reminder"
+    "enabled": [                         // opt-in non-policy hooks; see the 1.0 prerequisites
+      "worktree-required", "worktree-path-boundary", "branch-task-match",
+      "protect-sensitive-files", "pre-commit-secrets-scan", "auto-file-followup-nudge",
+      "post-merge-postmortem", "post-push-track", "post-push-review-check",
+      "pre-compact-task-snapshot", "user-prompt-task-context", "subprocess-failure",
+      "ui-change-test-reminder"
     ]
   }
 }
@@ -147,11 +150,12 @@ Pin `main` to a release tag (e.g. `.../v0.22.1/...`) if you want validation froz
 
 ### Visual-diff enforcement (v0.35.0)
 
-**1.0 turns `stop-visual-diff-check` off on both profiles**: CI captures the
-screenshots now, so leave it out of `hooks.enabled[]` (`/dev-tasks:doctor`
-warns when it is listed). The rest of this section describes the legacy Monday
-pipeline, where a project that ships UI enabled both of these so a UI change
-couldn't reach "Waiting for UAT" with an empty Monday "Visual Changes" doc:
+**1.0 turns `stop-visual-diff-check` off on both profiles**: screenshots
+belong to the consumer's CI (a PR screenshot workflow), not to a local Stop
+gate, so leave it out of `hooks.enabled[]` (`/dev-tasks:doctor` warns when it
+is listed). The rest of this section describes the legacy Monday pipeline,
+where a project that ships UI enabled both of these so a UI change couldn't
+reach "Waiting for UAT" with an empty Monday "Visual Changes" doc:
 
 - **`ui-change-test-reminder`** — PostToolUse nudge on UI edits. Now also points
   at the Monday Visual Changes doc + `/ship-pr` Phase 6.8. (Many consumers omit
