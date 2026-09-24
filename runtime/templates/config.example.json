@@ -8,7 +8,7 @@
     "otherAgentBots": []
   },
   "frontDoor": { "model": "sonnet", "tmuxSession": "frontdoor", "staleTickMinutes": 75 },
-  "worker": { "defaultModel": "sonnet", "complexModel": "opus", "maxTurns": 250, "maxBudgetUsd": 15, "wallClockMinutes": 90 },
+  "worker": { "defaultModel": "sonnet", "complexModel": "opus", "maxTurns": 250, "maxBudgetUsd": 15, "wallClockMinutes": 90, "autoMerge": false },
   "queue": { "mode": "allowlist", "allow": [], "refineWhenReadyBelow": 5, "lightModeWeeklyPct": 80, "fiveHourStopPct": 90, "timeZone": "Europe/Copenhagen" },
   "claims": { "heartbeatMinutes": 15, "ttlHours": 6 }
 }

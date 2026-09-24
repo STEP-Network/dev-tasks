@@ -2,7 +2,8 @@
  * What happens after a worker's session, per outcome (decision 2: rules in
  * code, not in the model):
  *   done         push, open or reuse the PR, arm auto-merge when the policy
- *                allows, link it, In Review, #polads-agents, remove the worktree
+ *                and the mini allow it, link it, In Review, #polads-agents,
+ *                remove the worktree
  *   needs_input  push what is committed, On hold + awaiting-answer, the
  *                question in the issue's Slack thread, #polads-agents
  *   blocked      push what is committed, On hold, a report comment, the reason
@@ -30,6 +31,15 @@ import type { Tracker, TrackerIssue } from "../tracker.ts"
 import { commitsAhead, isDirty, must, pushBranch, removeWorktree, type Exec } from "./git.ts"
 import { clause, type Outcome, type WorkerReport } from "./outcome.ts"
 
+/**
+ * Who merges the PR. auto: auto-merge is armed, as the project's policy
+ * allows. person: the policy leaves it to a person. mini-off: the policy
+ * allows it, but this mini's worker.autoMerge is false (a supervised phase).
+ */
+export type MergeMode = "auto" | "person" | "mini-off"
+
+export const MINI_OFF = "auto-merge off on this mini: a person merges"
+
 export interface FinalizeContext {
   exec: Exec
   tracker: Tracker
@@ -39,7 +49,7 @@ export interface FinalizeContext {
   branch: string
   /** null when the worktree was never prepared. */
   worktree: string | null
-  autoMerge: boolean
+  merge: MergeMode
   model: string
   minutes: number
   now: () => Date
@@ -60,7 +70,7 @@ export function prTitle(issueId: string, report: WorkerReport, fallback: string)
 export function prBody(
   issueId: string,
   report: WorkerReport,
-  meta: { mini: string; model: string; turns: number | null; costUsd: number | null; minutes: number; dirty: boolean },
+  meta: { mini: string; model: string; turns: number | null; costUsd: number | null; minutes: number; dirty: boolean; merge: MergeMode },
 ): string {
   const checks = report.verification?.length ? report.verification.map((v) => `- ${v}`).join("\n") : "- (the worker listed none)"
   const notes = [report.notes || "None.", meta.dirty ? "The worker left uncommitted changes, which are not in this PR." : ""].filter(Boolean).join("\n")
@@ -79,6 +89,7 @@ export function prBody(
     notes,
     "",
     `Worker: ${meta.mini}, model ${meta.model}, ${meta.turns ?? "?"} turns, estimated ${cost}, ${meta.minutes} min.`,
+    ...(meta.merge === "mini-off" ? [`${MINI_OFF[0].toUpperCase()}${MINI_OFF.slice(1)}.`] : []),
     "",
     "🤖 Generated with [Claude Code](https://claude.com/claude-code)",
   ].join("\n")
@@ -114,7 +125,7 @@ async function openOrReusePr(ctx: FinalizeContext, outcome: Outcome, dirty: bool
   const report = outcome.report!
   mkdirSync(ctx.paths.state, { recursive: true })
   const bodyFile = join(ctx.paths.state, `pr-body-${ctx.issue.id}.md`)
-  writeFileSync(bodyFile, prBody(ctx.issue.id, report, { mini: config.mini, model: ctx.model, turns: outcome.turns, costUsd: outcome.costUsd, minutes: ctx.minutes, dirty }))
+  writeFileSync(bodyFile, prBody(ctx.issue.id, report, { mini: config.mini, model: ctx.model, turns: outcome.turns, costUsd: outcome.costUsd, minutes: ctx.minutes, dirty, merge: ctx.merge }))
   const out = await must(
     ctx.exec,
     "gh",
@@ -170,8 +181,9 @@ async function settle(ctx: FinalizeContext, outcome: Outcome, progress: { pushed
     progress.prUrl = url
     recordPr(ctx.paths, { issue: issue.id, url, openedAt: ctx.now().toISOString() })
     appendLedger(ctx.paths, { type: "pr.opened", issue: issue.id, url }, ctx.now())
-    if (ctx.autoMerge) await must(ctx.exec, "gh", ["pr", "merge", url, "--auto", "--squash", "--delete-branch"], { cwd: config.repo.path })
-    post(`${issue.id} PR opened: ${url}${ctx.autoMerge ? " (auto-merge armed)" : " (a person merges this one)"}`)
+    if (ctx.merge === "auto") await must(ctx.exec, "gh", ["pr", "merge", url, "--auto", "--squash", "--delete-branch"], { cwd: config.repo.path })
+    const who = { auto: "auto-merge armed", person: "a person merges this one", "mini-off": MINI_OFF }[ctx.merge]
+    post(`${issue.id} PR opened: ${url} (${who})`)
     await ctx.tracker.attachLink(issue.id, url, `PR ${url.split("/").pop()}`)
     await ctx.tracker.updateIssue(issue.id, { state: "In Review" })
     if (!dirty) await removeWorktree(ctx.exec, config.repo.path, ctx.worktree!)
