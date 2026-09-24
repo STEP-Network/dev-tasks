@@ -13,12 +13,20 @@ import { randomUUID } from "node:crypto"
 import { linearRequest } from "./linear-client.ts"
 import {
   byPriorityThenAge,
+  CLAIM_PREFIX,
+  claimCommentBody,
   extractAcceptanceCriteria,
   LINEAR_TEAM_KEY,
+  newestClaim,
+  withHeartbeat,
+  type ClaimComment,
+  type ClaimRecord,
   type CreateIssueInput,
+  type IssuePatch,
   type IssuePriority,
   type Tracker,
   type TrackerIssue,
+  type TrackerUser,
 } from "./types.ts"
 
 const ISSUE_FIELDS = `
@@ -31,6 +39,7 @@ const ISSUE_FIELDS = `
   updatedAt
   state { name }
   labels { nodes { name } }
+  assignee { id }
 `
 
 interface RawIssue {
@@ -43,6 +52,7 @@ interface RawIssue {
   updatedAt: string
   state: { name: string } | null
   labels: { nodes: Array<{ name: string }> }
+  assignee: { id: string } | null
 }
 
 /** A Relay connection page, as Linear returns one. */
@@ -79,16 +89,21 @@ const IDENTIFIER_RE = /^([A-Za-z]+)-(\d+)$/
  * polling every minute spends quickly.
  * - A label is ~1.2 points, so 250 labels is ~300.
  * - A ranking node (id, priority, updatedAt) is ~1.3, so 250 is ~330.
- * - An ISSUE_FIELDS issue is ~58, most of it the nested labels connection
- *   at its default 50, so 100 full issues is ~5,800 and 250 would be
- *   ~14,500 and refused outright.
+ * - An ISSUE_FIELDS issue is ~59, most of it the nested labels connection
+ *   at its default 50 (the assignee adds ~1.1), so 100 full issues is
+ *   ~5,900 and 250 would be ~14,750 and refused outright.
+ * - A claim node is an ISSUE_FIELDS issue plus up to CLAIM_COMMENTS claim
+ *   comments at ~1.4 each, ~88, so 50 is ~4,400.
  */
 const LABEL_PAGE_SIZE = 250
 const READY_PAGE_SIZE = 250
 const FULL_ISSUE_CHUNK = 100
+const CLAIM_PAGE_SIZE = 50
+const CLAIM_COMMENTS = 20
 const PAGE_INFO = `pageInfo { hasNextPage endCursor }`
+const CLAIM_COMMENT_FIELDS = `comments(first: ${CLAIM_COMMENTS}, filter: { body: { startsWith: $prefix } }) { nodes { id body createdAt editedAt } }`
 
-/** What ranking the Ready queue needs, and nothing else. */
+/** What ranking a state's queue needs, and nothing else. */
 interface RankNode {
   id: string
   priority: number
@@ -121,8 +136,9 @@ async function allNodes<N>(
 /**
  * Settles a create that threw, whatever the error said: a 5xx that outlasted
  * the retries, a refused retry in any wording, a dropped connection. The id
- * is a fresh UUID minted by this very call, so if it reads back, this call's
- * write landed and that entity IS the result. If it does not, the create
+ * is a fresh UUID minted by this very call, or a caller's clientId that
+ * names the same entity on every attempt (createIssue), so if it reads back,
+ * a write for it landed and that entity IS the result. If it does not, the create
  * really failed and its own error stands. (Linear also reports phantom
  * insert conflicts for ids nothing holds, so no wording alone is proof.)
  */
@@ -145,6 +161,7 @@ function toIssue(raw: RawIssue): TrackerIssue {
     url: raw.url,
     priority: (raw.priority ?? 0) as IssuePriority,
     updatedAt: raw.updatedAt,
+    assigneeId: raw.assignee?.id ?? null,
   }
 }
 
@@ -208,6 +225,29 @@ export function createLinearTracker(): Tracker {
     return ids.length ? ids : undefined
   }
 
+  let viewerCache: TrackerUser | null = null
+
+  async function viewer(): Promise<TrackerUser> {
+    if (viewerCache) return viewerCache
+    const data = await linearRequest<{ viewer: TrackerUser }>(`query { viewer { id name email } }`)
+    viewerCache = data.viewer
+    return data.viewer
+  }
+
+  /**
+   * Label ids for an update. Unlike labelIdsFor (createIssue's lenient
+   * lookup), an unknown name throws: parking an issue without its
+   * `awaiting-answer` label would put it straight back in the queue.
+   */
+  async function strictLabelIds(names: string[]): Promise<string[]> {
+    const t = await team()
+    return names.map((name) => {
+      const hit = t.labels.find((l) => l.name === name)
+      if (!hit) throw new Error(`Linear: no label named ${name}`)
+      return hit.id
+    })
+  }
+
   async function fetchRaw(ref: string): Promise<RawIssue> {
     const trimmed = ref.trim()
 
@@ -240,16 +280,61 @@ export function createLinearTracker(): Tracker {
     return found
   }
 
-  async function userIdFor(claimant: string): Promise<string | undefined> {
-    const data = await linearRequest<{ users: { nodes: Array<{ id: string }> } }>(
-      `query($q: String!) {
-         users(first: 1, filter: { or: [{ email: { eq: $q } }, { displayName: { eq: $q } }] }) {
-           nodes { id }
-         }
-       }`,
-      { q: claimant },
-    )
-    return data.users.nodes[0]?.id
+  /**
+   * The first `limit` issues in a state, in byPriorityThenAge order. Ranks
+   * the WHOLE state, then fetches full issues for the winners only: Linear
+   * pages in its own order, not by priority, so sorting one page misses an
+   * Urgent issue on a later one. Ranking needs three fields, and paging full
+   * issues instead cost ~5,900 points a page.
+   */
+  async function listInState(stateName: string, limit: number): Promise<TrackerIssue[]> {
+    const where = { teamKey: LINEAR_TEAM_KEY, stateName }
+    const page = async (after: string | null) => {
+      const data = await linearRequest<{ issues: Connection<RankNode> }>(
+        `query($teamKey: String!, $stateName: String!, $first: Int!, $after: String) {
+           issues(
+             first: $first,
+             after: $after,
+             filter: { team: { key: { eq: $teamKey } }, state: { name: { eq: $stateName } } }
+           ) {
+             nodes { id priority updatedAt }
+             ${PAGE_INFO}
+           }
+         }`,
+        { ...where, first: READY_PAGE_SIZE, after },
+      )
+      return data.issues
+    }
+    const ranked = (await allNodes(await page(null), page)).sort(byPriorityThenAge).slice(0, limit)
+
+    const full = new Map<string, RawIssue>()
+    for (let i = 0; i < ranked.length; i += FULL_ISSUE_CHUNK) {
+      const ids = ranked.slice(i, i + FULL_ISSUE_CHUNK).map((node) => node.id)
+      // Filtered on the state again: an issue that left it since the ranking
+      // (a Ready issue claimed meanwhile) drops out rather than coming back
+      // as if it were still there.
+      const data = await linearRequest<{ issues: { nodes: RawIssue[] } }>(
+        `query($teamKey: String!, $stateName: String!, $ids: [ID!]!, $first: Int!) {
+           issues(
+             first: $first,
+             filter: {
+               id: { in: $ids },
+               team: { key: { eq: $teamKey } },
+               state: { name: { eq: $stateName } }
+             }
+           ) {
+             nodes { ${ISSUE_FIELDS} }
+           }
+         }`,
+        { ...where, ids, first: ids.length },
+      )
+      for (const raw of data.issues.nodes) full.set(raw.id, raw)
+    }
+    // Linear answers in its own order; the ranking is ours.
+    return ranked.flatMap((node) => {
+      const raw = full.get(node.id)
+      return raw ? [toIssue(raw)] : []
+    })
   }
 
   async function createComment(issueId: string, body: string): Promise<void> {
@@ -271,7 +356,7 @@ export function createLinearTracker(): Tracker {
     }
   }
 
-  return {
+  const tracker: Tracker = {
     kind: "linear",
 
     async readIssue(ref) {
@@ -280,38 +365,41 @@ export function createLinearTracker(): Tracker {
 
     async claimIssue(ref, claimant) {
       const raw = await fetchRaw(ref)
-      const stateId = await stateIdFor("In Progress")
-      // A mini is not a Linear member, so this is EXPECTED to miss most of
-      // the time. The claim is still recorded as a comment, which is what
-      // the 6-hour claim TTL reads.
-      const assigneeId = await userIdFor(claimant)
-
-      const input: Record<string, unknown> = {}
-      if (stateId) input.stateId = stateId
-      if (assigneeId) input.assigneeId = assigneeId
-
-      if (Object.keys(input).length > 0) {
-        await linearRequest(
-          `mutation($id: String!, $input: IssueUpdateInput!) {
-             issueUpdate(id: $id, input: $input) { success }
-           }`,
-          { id: raw.id, input },
-        )
+      // Every agent is its own Linear member account (2026-09-23, and every
+      // person too since 2026-09-24), so the claim IS the assignment to the
+      // key's own user. `claimant` names the mini in the comment, whose edit
+      // time is the heartbeat.
+      const me = await viewer()
+      if (raw.assignee && raw.assignee.id !== me.id) {
+        throw new Error(`Linear: ${raw.identifier} is assigned to someone else; not claiming it`)
       }
-
-      await createComment(raw.id, `claimed by ${claimant} at ${new Date().toISOString()}`)
-
+      const stateId = await stateIdFor("In Progress")
+      const input: Record<string, unknown> = { assigneeId: me.id }
+      if (stateId) input.stateId = stateId
+      // The comment first: if it fails, the issue is simply not claimed. The
+      // other way round, a failed comment would leave the issue assigned and
+      // In Progress with no claim for the sweeper to find, held for good.
+      await createComment(raw.id, claimCommentBody(claimant, new Date().toISOString()))
+      await linearRequest(
+        `mutation($id: String!, $input: IssueUpdateInput!) { issueUpdate(id: $id, input: $input) { success } }`,
+        { id: raw.id, input },
+      )
       return toIssue(await fetchRaw(ref))
     },
 
     async createIssue(input: CreateIssueInput) {
+      // The read-back below resolves whatever id was sent, and it also takes
+      // an identifier: a clientId of "STEP-5" would come back as STEP-5.
+      if (input.clientId !== undefined && !UUID_RE.test(input.clientId)) {
+        throw new Error(`Linear: clientId must be a UUID, got ${JSON.stringify(input.clientId)}`)
+      }
       const t = await team()
       const stateId = await stateIdFor(input.state)
       const labelIds = await labelIdsFor(input.labels)
 
-      // Our own id, so a retry after a lost answer names this issue rather
-      // than opening a second one.
-      const id = randomUUID()
+      // Our own id, or the caller's, so a retry after a lost answer names
+      // this issue rather than opening a second one.
+      const id = input.clientId ?? randomUUID()
       const payload: Record<string, unknown> = { id, teamId: t.id, title: input.title }
       if (input.description) payload.description = input.description
       if (stateId) payload.stateId = stateId
@@ -356,56 +444,101 @@ export function createLinearTracker(): Tracker {
     },
 
     async listReady(limit = 25) {
-      // Rank the WHOLE queue, then fetch full issues for the winners only.
-      // Linear pages in its own order, not by priority, so sorting one page
-      // misses an Urgent issue on a later one. Ranking needs three fields,
-      // and paging full issues instead cost ~5,800 points a page.
-      const where = { teamKey: LINEAR_TEAM_KEY, stateName: "Ready" }
+      return listInState("Ready", limit)
+    },
+
+    async listByState(state, limit = 50) {
+      // An unknown or miscased name matches nothing and would read as an
+      // empty queue. updateIssue refuses the same name, so this does too.
+      if (!(await stateIdFor(state))) throw new Error(`Linear: no state named ${state} on team ${LINEAR_TEAM_KEY}`)
+      return listInState(state, limit)
+    },
+
+    async whoami() {
+      return viewer()
+    },
+
+    async updateIssue(ref, patch: IssuePatch) {
+      // Resolve every name first, so a bad one throws before anything is written.
+      const input: Record<string, unknown> = {}
+      if (patch.description !== undefined) input.description = patch.description
+      if (patch.state !== undefined) {
+        const stateId = await stateIdFor(patch.state)
+        if (!stateId) throw new Error(`Linear: no state named ${patch.state} on team ${LINEAR_TEAM_KEY}`)
+        input.stateId = stateId
+      }
+      if (patch.addLabels?.length) input.addedLabelIds = await strictLabelIds(patch.addLabels)
+      if (patch.removeLabels?.length) input.removedLabelIds = await strictLabelIds(patch.removeLabels)
+      if (patch.assignee === "me") input.assigneeId = (await viewer()).id
+      if (patch.assignee === null) input.assigneeId = null
+
+      const raw = await fetchRaw(ref)
+      if (Object.keys(input).length === 0) return toIssue(raw)
+      const data = await linearRequest<{ issueUpdate: { issue: RawIssue } }>(
+        `mutation($id: String!, $input: IssueUpdateInput!) {
+           issueUpdate(id: $id, input: $input) { issue { ${ISSUE_FIELDS} } }
+         }`,
+        { id: raw.id, input },
+      )
+      return toIssue(data.issueUpdate.issue)
+    },
+
+    async touchClaim(ref, claimant) {
+      const raw = await fetchRaw(ref)
+      const data = await linearRequest<{ issue: { comments: { nodes: ClaimComment[] } } | null }>(
+        `query($id: String!, $prefix: String!) {
+           issue(id: $id) { ${CLAIM_COMMENT_FIELDS} }
+         }`,
+        { id: raw.id, prefix: CLAIM_PREFIX },
+      )
+      const comments = data.issue?.comments.nodes ?? []
+      const claim = newestClaim(comments, claimant)
+      if (!claim) return false
+      const body = comments.find((c) => c.id === claim.commentId)!.body
+      await linearRequest(
+        `mutation($id: String!, $input: CommentUpdateInput!) { commentUpdate(id: $id, input: $input) { success } }`,
+        { id: claim.commentId, input: { body: withHeartbeat(body, new Date().toISOString()) } },
+      )
+      return true
+    },
+
+    async releaseIssue(ref, reason) {
+      await tracker.updateIssue(ref, { state: "Ready", assignee: null })
+      await tracker.comment(ref, `released: ${reason}`)
+    },
+
+    async listClaims() {
+      // Only issues the key's owner holds: an agent's claim comment outlives
+      // the claim, and an issue a person has since taken must never reach
+      // the sweeper as a stale claim to release. Every page: the sweeper
+      // releases what this returns, and a claim on an unread page would hold
+      // its issue forever.
       const page = async (after: string | null) => {
-        const data = await linearRequest<{ issues: Connection<RankNode> }>(
-          `query($teamKey: String!, $stateName: String!, $first: Int!, $after: String) {
-             issues(
-               first: $first,
-               after: $after,
-               filter: { team: { key: { eq: $teamKey } }, state: { name: { eq: $stateName } } }
-             ) {
-               nodes { id priority updatedAt }
+        const data = await linearRequest<{ issues: Connection<RawIssue & { comments: { nodes: ClaimComment[] } }> }>(
+          `query($teamKey: String!, $prefix: String!, $first: Int!, $after: String) {
+             issues(first: $first, after: $after, filter: {
+               team: { key: { eq: $teamKey } },
+               state: { name: { eq: "In Progress" } },
+               assignee: { isMe: { eq: true } }
+             }) {
+               nodes {
+                 ${ISSUE_FIELDS}
+                 ${CLAIM_COMMENT_FIELDS}
+               }
                ${PAGE_INFO}
              }
            }`,
-          { ...where, first: READY_PAGE_SIZE, after },
+          { teamKey: LINEAR_TEAM_KEY, prefix: CLAIM_PREFIX, first: CLAIM_PAGE_SIZE, after },
         )
         return data.issues
       }
-      const ranked = (await allNodes(await page(null), page)).sort(byPriorityThenAge).slice(0, limit)
-
-      const full = new Map<string, RawIssue>()
-      for (let i = 0; i < ranked.length; i += FULL_ISSUE_CHUNK) {
-        const ids = ranked.slice(i, i + FULL_ISSUE_CHUNK).map((node) => node.id)
-        // Filtered on Ready again: an issue claimed since the ranking drops out
-        // rather than coming back as if it were still free.
-        const data = await linearRequest<{ issues: { nodes: RawIssue[] } }>(
-          `query($teamKey: String!, $stateName: String!, $ids: [ID!]!, $first: Int!) {
-             issues(
-               first: $first,
-               filter: {
-                 id: { in: $ids },
-                 team: { key: { eq: $teamKey } },
-                 state: { name: { eq: $stateName } }
-               }
-             ) {
-               nodes { ${ISSUE_FIELDS} }
-             }
-           }`,
-          { ...where, ids, first: ids.length },
-        )
-        for (const raw of data.issues.nodes) full.set(raw.id, raw)
+      const claims: ClaimRecord[] = []
+      for (const node of await allNodes(await page(null), page)) {
+        const claim = newestClaim(node.comments.nodes)
+        if (claim) claims.push({ issue: toIssue(node), ...claim })
       }
-      // Linear answers in its own order; the ranking is ours.
-      return ranked.flatMap((node) => {
-        const raw = full.get(node.id)
-        return raw ? [toIssue(raw)] : []
-      })
+      return claims
     },
   }
+  return tracker
 }

@@ -3,10 +3,10 @@
  *
  * The assertions that carry weight are about WHAT IS SENT, not what comes
  * back: an identifier resolved by team key + number rather than by guessing
- * that `issue(id:)` accepts "STEP-123"; a state set by looking the NAME up on
- * the team rather than hardcoding a workspace-specific UUID; and a claim that
- * still records a comment when the claimant resolves to no Linear user, which
- * is the normal case for a mini.
+ * that `issue(id:)` accepts "STEP-123"; and a state set by looking the NAME
+ * up on the team rather than hardcoding a workspace-specific UUID. The claim
+ * lifecycle, where a mini is now its own Linear member account, is in
+ * linear-agent.test.ts.
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi, type MockInstance } from "vitest"
@@ -274,30 +274,6 @@ describe("a create that threw is settled by reading its own id back", () => {
       .mockRejectedValueOnce(new Error("Linear: Entity not found: Comment"))
 
     await expect(createLinearTracker().comment("STEP-123", "hi")).rejects.toThrowError(/conflict on insert/)
-  })
-})
-
-describe("claimIssue", () => {
-  it("moves the issue to In Progress and comments, even with no matching user", async () => {
-    requestMock
-      .mockResolvedValueOnce({ issues: { nodes: [ISSUE_FIELDS] } }) // readIssue
-      .mockResolvedValueOnce(TEAM)                                   // team + states
-      .mockResolvedValueOnce({ users: { nodes: [] } })               // no such user
-      .mockResolvedValueOnce({ issueUpdate: { success: true } })
-      .mockResolvedValueOnce({ commentCreate: { success: true } })
-      .mockResolvedValueOnce({ issues: { nodes: [{ ...ISSUE_FIELDS, state: { name: "In Progress" } }] } })
-
-    const issue = await createLinearTracker().claimIssue("STEP-123", "bob")
-
-    const update = requestMock.mock.calls.find((c) => String(c[0]).includes("issueUpdate"))
-    expect(update?.[1].input).toMatchObject({ stateId: "state-progress" })
-    expect(update?.[1].input.assigneeId).toBeUndefined()
-
-    const comment = requestMock.mock.calls.find((c) => String(c[0]).includes("commentCreate"))
-    expect(comment?.[1].input.body).toMatch(/claimed/i)
-    expect(comment?.[1].input.body).toMatch(/bob/)
-
-    expect(issue.state).toBe("In Progress")
   })
 })
 

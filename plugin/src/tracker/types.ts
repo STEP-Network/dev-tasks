@@ -26,6 +26,8 @@ export interface TrackerIssue {
   priority: IssuePriority
   /** ISO 8601. Used only for ordering. */
   updatedAt: string
+  /** The Linear user holding the issue: on a mini, that agent's member account. null when unassigned. */
+  assigneeId: string | null
 }
 
 export interface CreateIssueInput {
@@ -37,6 +39,81 @@ export interface CreateIssueInput {
   labels?: string[]
   /** Target state name. Defaults to the provider's own default when omitted. */
   state?: string
+  /** A UUID the caller chose, sent as the new issue's id. A caller that can crash between
+   *  "created" and "recorded" (the Slack bridge filing intake) sends the same id again:
+   *  a create whose id is already taken reads that issue back and returns it, so the
+   *  retry opens no second issue. Anything but a UUID is refused before the write. */
+  clientId?: string
+}
+
+/** The Linear user an API key belongs to. Every person and every agent has their own
+ *  account (2026-09-24), so on a mini this is that agent's member account. */
+export interface TrackerUser {
+  id: string
+  name: string
+  email: string
+}
+
+/** A partial update applied in one write. Absent fields are left alone. */
+export interface IssuePatch {
+  description?: string
+  /** A state NAME. An unknown name throws: a park that silently did less would re-queue the issue. */
+  state?: string
+  /** Bare label names, as in CreateIssueInput.labels. Unknown names throw, for the same reason. */
+  addLabels?: string[]
+  removeLabels?: string[]
+  /** "me" assigns the key's owner. null unassigns. */
+  assignee?: "me" | null
+}
+
+/** Every claim comment starts with this. The heartbeat edits the same comment (spec 6.5). */
+export const CLAIM_PREFIX = "claimed by "
+
+export interface ClaimRecord {
+  issue: TrackerIssue
+  /** The mini named in the claim comment: the machine profile's `mini`, e.g. "eve". */
+  claimant: string
+  commentId: string
+  claimedAt: string
+  /** The claim comment's last edit (its heartbeat), or its creation when never edited. */
+  heartbeatAt: string
+}
+
+export interface ClaimComment {
+  id: string
+  body: string
+  createdAt: string
+  editedAt: string | null
+}
+
+// The time is exactly toISOString's shape: newestClaim ranks claims by
+// comparing these strings, which is only chronological for one fixed format.
+const CLAIM_RE = /^claimed by (\S+) at (\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z)(?:\s|$)/
+
+export function claimCommentBody(claimant: string, at: string): string {
+  return `${CLAIM_PREFIX}${claimant} at ${at}`
+}
+
+export function parseClaim(body: string): { claimant: string; claimedAt: string } | null {
+  const m = CLAIM_RE.exec(body)
+  return m ? { claimant: m[1], claimedAt: m[2] } : null
+}
+
+/** Keeps the claim line and replaces any earlier heartbeat line. */
+export function withHeartbeat(body: string, at: string): string {
+  return `${body.split("\n")[0]}\nheartbeat ${at}`
+}
+
+/** The newest claim among `comments`, optionally only `claimant`'s. */
+export function newestClaim(comments: ClaimComment[], claimant?: string): Omit<ClaimRecord, "issue"> | null {
+  let best: Omit<ClaimRecord, "issue"> | null = null
+  for (const c of comments) {
+    const parsed = parseClaim(c.body)
+    if (!parsed || (claimant !== undefined && parsed.claimant !== claimant)) continue
+    const record = { claimant: parsed.claimant, commentId: c.id, claimedAt: parsed.claimedAt, heartbeatAt: c.editedAt ?? c.createdAt }
+    if (!best || record.claimedAt > best.claimedAt) best = record
+  }
+  return best
 }
 
 export interface Tracker {
@@ -46,9 +123,11 @@ export interface Tracker {
   readIssue(ref: string): Promise<TrackerIssue>
 
   /**
-   * Moves the issue to In Progress and records who took it. `claimant` is a
-   * machine or person name (the `mini` field, or `whoami`); an implementation
-   * that cannot resolve it to a user still records the claim as a comment.
+   * Linear: leaves a `claimed by <claimant> at <time>` comment, then assigns
+   * the issue to the key's owner (on a mini, that agent's member account)
+   * and moves it to In Progress. The comment's edit time is the heartbeat.
+   * Refuses an issue someone else holds. Monday (cutover only): moves it to
+   * In Progress and leaves the same comment, assigning nobody.
    */
   claimIssue(ref: string, claimant: string): Promise<TrackerIssue>
 
@@ -63,6 +142,24 @@ export interface Tracker {
    * across the whole queue rather than one fetched page.
    */
   listReady(limit?: number): Promise<TrackerIssue[]>
+
+  /** The user the API key belongs to. */
+  whoami(): Promise<TrackerUser>
+
+  /** Applies `patch` in one write and returns the issue as it now is. */
+  updateIssue(ref: string, patch: IssuePatch): Promise<TrackerIssue>
+
+  /** Refreshes the heartbeat on `claimant`'s newest claim comment. false when there is none. */
+  touchClaim(ref: string, claimant: string): Promise<boolean>
+
+  /** Unassigns, puts the issue back in Ready, and comments why. */
+  releaseIssue(ref: string, reason: string): Promise<void>
+
+  /** In Progress issues assigned to the key's owner, with their newest claim: what the 6-hour sweeper reads. */
+  listClaims(): Promise<ClaimRecord[]>
+
+  /** Every issue in a state, sorted by byPriorityThenAge, cut to `limit`. An unknown state throws. */
+  listByState(state: string, limit?: number): Promise<TrackerIssue[]>
 }
 
 /**

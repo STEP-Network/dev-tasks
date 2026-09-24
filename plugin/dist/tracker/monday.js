@@ -80,6 +80,13 @@ async function toIssue(item) {
         url: item.url,
         priority: 0,
         updatedAt: item.updated_at,
+        assigneeId: null,
+    };
+}
+/** Methods only the agent runtime uses. The runtime requires Linear; this adapter is cutover-only. */
+function linearOnly(method) {
+    return async () => {
+        throw new Error(`${method} needs tracker.provider "linear". The Monday adapter is kept for the cutover weekend only.`);
     };
 }
 export function createMondayTracker() {
@@ -139,5 +146,11 @@ export function createMondayTracker() {
             const issues = await Promise.all(items.map(toIssue));
             return issues.sort(byPriorityThenAge);
         },
+        whoami: linearOnly("whoami"),
+        updateIssue: linearOnly("updateIssue"),
+        touchClaim: linearOnly("touchClaim"),
+        releaseIssue: linearOnly("releaseIssue"),
+        listClaims: linearOnly("listClaims"),
+        listByState: linearOnly("listByState"),
     };
 }
