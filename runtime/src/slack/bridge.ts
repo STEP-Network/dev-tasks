@@ -18,6 +18,7 @@ import { appendLedger, createLogger, redact, type Logger } from "../log.ts"
 import { enqueueSlack, type ChannelKey } from "../outbox.ts"
 import { releasePidLock, takePidLock } from "../pidlock.ts"
 import { assertLinearKeyFile, loadSlackSecrets } from "../secrets.ts"
+import { onQueue } from "../select.ts"
 import { issueForThread, saveThread } from "../threads.ts"
 import { createLinearTracker, type Tracker } from "../tracker.ts"
 import { classify, type Classified, type ClassifyContext, type SlackEnvelope } from "./classify.ts"
@@ -151,7 +152,9 @@ export async function fileIntake(deps: BridgeDeps, key: string): Promise<void> {
       writeJsonAtomic(path, { ...entry, issue: filed.id })
       saveThread(deps.paths, { issue: filed.id, channelId: entry.channel, ts: entry.ts, permalink, createdAt: deps.now().toISOString(), lastQuestionAt: null })
       // The reply first: it is a local write, and the link below a Linear call a crash can cut short.
-      reply(`filed ${filed.id} ${filed.url}. I will refine it and answer here.`)
+      // In allowlist mode a new issue is not on the list, so this mini will not refine it.
+      const next = onQueue(filed.id, deps.config.queue) ? "I will refine it and answer here." : "A person decides when I work on it."
+      reply(`filed ${filed.id} ${filed.url}. ${next}`)
       appendLedger(deps.paths, { type: "intake.filed", issue: filed.id }, deps.now())
       if (permalink) {
         await deps.tracker.attachLink(filed.id, permalink, "Slack intake thread").catch((error) => {

@@ -12,6 +12,7 @@ import type { AgentConfig, AgentPaths } from "./config.ts"
 import { listNew, readJson, writeJsonAtomic } from "./fsq.ts"
 import { coolingIssues, heldBackIssues, listJobs, updateJob } from "./jobs.ts"
 import { nextWakeupSeconds, selectNext, type QueuePolicy } from "./select.ts"
+import { onQueue } from "./select.ts"
 import type { Tracker, TrackerIssue } from "./tracker.ts"
 import { developBlockedByUsage, readUsage } from "./usage.ts"
 
@@ -20,6 +21,8 @@ export interface InboxEvent {
   type: "intake" | "mention"
   /** Set on intake: the Triage issue the bridge filed. */
   issue?: string
+  /** Set on intake: whether this mini refines it (open mode, or the id on queue.allow). The bridge's reply said which. */
+  refine?: boolean
   channel: string
   ts: string
   /** Where to answer: the mention's thread, or the intake message itself. */
@@ -38,6 +41,8 @@ export interface Digest {
   paused: boolean
   /** Why, while paused: what agentctl pause, agentd (early losses) or the runner (a graft) wrote. "" when none was given. */
   pauseReason: string | null
+  /** open: the whole queue. allowlist: only queue.allow, so a request filed now is left to a person. */
+  queueMode: AgentConfig["queue"]["mode"]
   events: InboxEvent[]
   finishedJobs: Array<{ issue: string; status: string; reason: string; prUrl: string | null }>
   worker: { issue: string; startedAt: string; minutes: number } | null
@@ -89,11 +94,11 @@ export function pauseReason(paths: AgentPaths): string | null {
 }
 
 /** What the front door acts on, and nothing of the bridge's own bookkeeping (linearId, retry marks): every wakeup reads it. */
-function toEvent(p: StoredEntry): InboxEvent {
+function toEvent(p: StoredEntry, queue: AgentConfig["queue"]): InboxEvent {
   return {
     key: p.key,
     type: p.type === "intake" ? "intake" : "mention",
-    ...(p.type === "intake" && p.issue ? { issue: p.issue } : {}),
+    ...(p.type === "intake" && p.issue ? { issue: p.issue, refine: onQueue(p.issue, queue) } : {}),
     channel: p.channel,
     ts: p.ts,
     threadTs: p.threadTs ?? p.ts,
@@ -115,7 +120,7 @@ export async function buildDigest(deps: DigestDeps): Promise<Digest> {
   const events = listNew<StoredEntry>(paths.inbox)
     .map((e) => e.payload)
     .filter((p) => p.type === "mention" || (p.type === "intake" && Boolean(p.issue)))
-    .map(toEvent)
+    .map((p) => toEvent(p, config.queue))
     .sort((a, b) => a.receivedAt.localeCompare(b.receivedAt))
     .slice(0, 10)
 
@@ -173,6 +178,7 @@ export async function buildDigest(deps: DigestDeps): Promise<Digest> {
     mini: config.mini,
     paused,
     pauseReason: pauseReason(paths),
+    queueMode: config.queue.mode,
     events,
     finishedJobs: finished.map((j) => ({
       issue: j.issue,

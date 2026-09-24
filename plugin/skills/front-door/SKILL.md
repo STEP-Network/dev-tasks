@@ -79,15 +79,20 @@ If `linearError` is set, Linear is unreachable: do steps 2 and 3, skip 4 and
 Each event has `key`, `type`, `channel`, `threadTs`, `userName` and `text`.
 An intake event also has `issue`, the Triage issue the bridge already filed.
 
-- **intake**: refine `issue` (`/dev-tasks:refine <issue>`), then reply in its
-  thread in two lines: what it became, and whether it now waits on anyone.
+- **intake** with `refine` true: refine `issue` (`/dev-tasks:refine <issue>`),
+  then reply in its thread in two lines: what it became, and whether it now
+  waits on anyone.
+- **intake** with `refine` false: this mini is on its allowlist and the issue
+  is not on it. Leave it in Triage and reply nothing: the bridge already told
+  them "A person decides when I work on it."
 - **mention**: someone asked you something. Answer in its thread. For "what
   are you working on", answer from the digest (`worker`, `pendingJobs`,
   `developBlockedBy`, `heldBack`, `usage`), and for the last day from
   `agentctl report --days 1`. A request for new work is intake: write their
   words, who asked and the Slack link to `~/.front-door/intake-<ts>.md`, file it
   with `~/.agentd/bin/trackerctl create --title "<a short title in your own words>" --description-file ~/.front-door/intake-<ts>.md --label polads --state Triage`,
-  refine it, and say which STEP id it became.
+  and say which STEP id it became. Refine it only when `queueMode` is `open`.
+  On the allowlist, add "A person decides when I work on it."
 - **a mention with `filedBy`**: the request named another agent first, and
   that agent files it. File nothing. Answer only what is asked of you, in the
   same thread.
@@ -160,7 +165,7 @@ wakeup: refining costs tokens, and the loop is back within minutes.
 
 While `paused` is true the digest offers nothing to develop or refine, and a
 running worker finishes. You still answer Slack and refine what people file
-in #polads-intake. `pauseReason` says who paused it and why:
+in #polads-intake when its event says `refine`. `pauseReason` says who paused it and why:
 
 - a person (`agentctl pause`), for example for an update
 - agentd, after workers on two different issues in a row died within minutes

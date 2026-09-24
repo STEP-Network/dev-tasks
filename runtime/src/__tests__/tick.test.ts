@@ -20,6 +20,20 @@ function setup(seed = [issue({ id: "STEP-1", labels: ["polads", "agent-ready"] }
 const base = { channel: "CIN", ts: "1800.1", user: "UNATE", userName: "Nate", text: "<@UBOT> x", receivedAt: "2026-09-24T09:59:00.000Z" }
 
 describe("buildDigest", () => {
+  it("tells the front door which intakes it refines: on the allowlist, only the listed ids", async () => {
+    const { paths, fake } = setup()
+    const allowlist = ConfigSchema.parse({ ...config, queue: { ...config.queue, mode: "allowlist", allow: ["STEP-9"] } })
+    putOnce(paths.inbox, "msg:CIN:1", { ...base, key: "msg:CIN:1", type: "intake", issue: "STEP-9", linearId: "x" })
+    putOnce(paths.inbox, "msg:CIN:2", { ...base, key: "msg:CIN:2", ts: "1800.2", type: "intake", issue: "STEP-10", linearId: "y" })
+    const digest = await buildDigest({ paths, config: allowlist, tracker: fake.tracker, now: () => NOW })
+    expect(digest.queueMode).toBe("allowlist")
+    expect(digest.events.map((e) => [e.issue, e.refine])).toEqual([
+      ["STEP-9", true],
+      ["STEP-10", false],
+    ])
+    expect((await buildDigest({ paths, config, tracker: fake.tracker, now: () => NOW })).queueMode).toBe("open")
+  })
+
   it("shows filed intakes and mentions, and hides answers and intakes not filed yet", async () => {
     const { paths, deps } = setup()
     putOnce(paths.inbox, "msg:CIN:1", { ...base, key: "msg:CIN:1", type: "intake", issue: "STEP-9", linearId: "x", receivedAt: "2026-09-24T09:58:00.000Z" })
@@ -32,7 +46,7 @@ describe("buildDigest", () => {
       ["mention", "msg:CAG:4", "1900.1"],
     ])
     // Only what the front door acts on: the bridge's own bookkeeping stays out of the model's context.
-    expect(digest.events[0]).toEqual({ key: "msg:CIN:1", type: "intake", issue: "STEP-9", channel: "CIN", ts: "1800.1", threadTs: "1800.1", user: "UNATE", userName: "Nate", text: "<@UBOT> x", receivedAt: "2026-09-24T09:58:00.000Z" })
+    expect(digest.events[0]).toEqual({ key: "msg:CIN:1", type: "intake", issue: "STEP-9", refine: true, channel: "CIN", ts: "1800.1", threadTs: "1800.1", user: "UNATE", userName: "Nate", text: "<@UBOT> x", receivedAt: "2026-09-24T09:58:00.000Z" })
   })
 
   it("carries filedBy on a mention another agent files, so the front door files nothing for it", async () => {

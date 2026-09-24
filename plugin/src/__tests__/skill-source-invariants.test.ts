@@ -183,6 +183,16 @@ describe("/front-door", () => {
     expect(source).not.toMatch(/--admin/)
   })
 
+  it("refines an intake only when the digest says this mini will, and otherwise promises nothing", () => {
+    // In allowlist mode an issue not on queue.allow is never refined, and the
+    // bridge's reply says a person decides (2026-09-24, Eve's first intake).
+    expect(source).toMatch(/\*\*intake\*\* with `refine` true: refine `issue`/)
+    expect(source).toMatch(/\*\*intake\*\* with `refine` false:[^\n]*\n[^\n]*\n?[^\n]*Leave it in Triage and reply nothing/)
+    expect(source).toMatch(/Refine it only when `queueMode` is `open`/)
+    expect(source).toMatch(/A person decides when I work on it\./)
+    expect(source).not.toMatch(/- \*\*intake\*\*: refine `issue`/)
+  })
+
   it("files nothing for a request another agent files", () => {
     // The bridge marks a mention with filedBy when another agent was named
     // first in an intake request: that agent files it (decision 3).
