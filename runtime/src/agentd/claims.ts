@@ -17,6 +17,7 @@ import { listJobs } from "../jobs.ts"
 import { appendLedger, type Logger } from "../log.ts"
 import { enqueueSlack } from "../outbox.ts"
 import type { ClaimRecord, Tracker } from "../tracker.ts"
+import type { Liveness } from "./jobrunner.ts"
 
 export function sweepDecision(input: {
   claims: ClaimRecord[]
@@ -44,13 +45,14 @@ export async function heartbeatAndSweep(deps: {
   paths: AgentPaths
   config: AgentConfig
   now: () => Date
-  /** Whether `pid` is still the worker for `jobId` (isWorkerAlive). */
-  isAlive: (pid: number, jobId: string) => boolean
+  /** Whether `pid` is still the worker for `jobId` (workerLiveness). */
+  liveness: (pid: number, jobId: string) => Liveness
   log: Logger
 }): Promise<{ refreshed: number; released: number }> {
+  // A worker ps cannot vouch for still holds its claim: releasing a live job's issue is the worse mistake.
   const running = new Set(
     listJobs(deps.paths, "running")
-      .filter((j) => j.pid !== undefined && deps.isAlive(j.pid, j.id))
+      .filter((j) => j.pid !== undefined && deps.liveness(j.pid, j.id) !== "gone")
       .map((j) => j.issue),
   )
   const decision = sweepDecision({ claims: await deps.tracker.listClaims(), runningIssues: running, now: deps.now(), ttlHours: deps.config.claims.ttlHours })

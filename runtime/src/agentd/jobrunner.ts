@@ -25,6 +25,9 @@ import { appendLedger, type Logger } from "../log.ts"
 import { enqueueSlack } from "../outbox.ts"
 import { commandOf } from "../pidlock.ts"
 
+/** A job's worker: still running ("ours"), not ("gone"), or ps could not say ("unknown"). */
+export type Liveness = "ours" | "gone" | "unknown"
+
 export interface JobRunnerDeps {
   paths: AgentPaths
   config: AgentConfig
@@ -32,8 +35,8 @@ export interface JobRunnerDeps {
   log: Logger
   /** When the machine last booted: any job started before it is dead. */
   bootAt: Date
-  /** Whether `pid` is still this job's worker (isWorkerAlive). */
-  isAlive(pid: number, jobId: string): boolean
+  /** Whether `pid` is still this job's worker (workerLiveness). */
+  liveness(pid: number, jobId: string): Liveness
   /** Signals a whole process group when given a negative pid. */
   kill(pid: number, signal: NodeJS.Signals): void
   /** Starts run.ts for the job. Returns the pid of the new process group's leader. */
@@ -94,11 +97,13 @@ function endBlocked(deps: JobRunnerDeps, job: JobRecord, reason: string, started
     updateJob(deps.paths, "done", previous.id, { miniFault: true })
     pauseForMiniFault(deps, [previous, job], now)
     more =
-      ` It is the second worker in a row, after ${previous.issue}'s, to stop within ${EARLY_DEATH_MINUTES} minutes of starting, which points at this mini rather than the issues: ` +
+      ` It is the second worker in a row, after ${previous.issue}'s, to die within ${EARLY_DEATH_MINUTES} minutes of starting or never start, which points at this mini rather than the issues: ` +
       `a broken install, a secrets file the runner refuses (~/.config/agentd/claude.env must be chmod 600), or a missing SDK. ` +
-      `The mini is paused. The logs are worker-${previous.id}.log and worker-${job.id}.log in ~/.agentd/logs. Run agentctl resume once it is fixed.`
+      `The mini is paused. Look for ${previous.id} and ${job.id} in ~/.agentd/logs/worker.log and agentd.log, and run agentctl resume once it is fixed.`
   } else if (lostEarly && heldBackIssues(deps.paths).has(job.issue)) {
-    more = ` Its last two workers stopped within ${EARLY_DEATH_MINUTES} minutes of starting, so ${job.issue} is held back from new jobs until a person runs it by hand (agentctl job submit --issue ${job.issue}). The logs are in ~/.agentd/logs/worker-${job.issue}-*.log.`
+    more =
+      ` Its last two workers died within ${EARLY_DEATH_MINUTES} minutes of starting or never started, so ${job.issue} is held back from new jobs until a person runs it by hand (agentctl job submit --issue ${job.issue}). ` +
+      `Look for ${job.issue} in ~/.agentd/logs/worker.log and agentd.log.`
     deps.log.error("issue held back after two early losses", { issue: job.issue })
   }
   enqueueSlack(deps.paths, { kind: "post", channel: "agents", text: `${job.issue}: ${reason}. ${notice}${more}` }, now)
@@ -144,8 +149,8 @@ export function superviseJobs(deps: JobRunnerDeps): void {
     // A pid survives a reboot in the job file, and macOS reuses pids: a job
     // from before the boot is dead whatever that pid is now.
     const beforeBoot = startedAt < deps.bootAt.getTime()
-    const dead = !job.pid || beforeBoot || !deps.isAlive(job.pid, job.id)
-    if (dead) {
+    const liveness: Liveness = !job.pid || beforeBoot ? "gone" : deps.liveness(job.pid, job.id)
+    if (liveness === "gone") {
       const reason = !job.killRequestedAt
         ? "the worker process died before reporting"
         : job.sessionStartedAt
@@ -162,13 +167,19 @@ export function superviseJobs(deps: JobRunnerDeps): void {
           `If it had claimed the issue, the claim is released after ${deps.config.claims.ttlHours} hours unless someone takes the issue first.`,
         lostEarly,
       )
-      if (said) deps.log.warn("worker gone without reporting", { issue: job.issue, pid: job.pid, reason })
+      if (said) deps.log.warn("worker gone without reporting", { issue: job.issue, jobId: job.id, pid: job.pid, reason })
       continue
     }
     busy = true
     if (now.getTime() <= deadline(job, startedAt, deps.config)) continue
     // The runner stops itself at its wall clock. One still running past the
     // deadline is stuck: its whole group goes, and the dead path above reports it.
+    // Only a group known to be the worker's is signalled: when ps cannot tell,
+    // the pid may belong to a stranger by now.
+    if (liveness === "unknown") {
+      deps.log.warn("worker past its deadline, but ps cannot tell whose pid it is: not signalled", { issue: job.issue, pid: job.pid })
+      continue
+    }
     if (!job.killRequestedAt) {
       deps.kill(-job.pid!, "SIGTERM")
       updateJob(deps.paths, "running", job.id, { killRequestedAt: now.toISOString() })
@@ -188,7 +199,7 @@ export function superviseJobs(deps: JobRunnerDeps): void {
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
     endBlocked(deps, next, `the worker could not be started: ${message}`, now.getTime(), "A person needs to look.", true)
-    deps.log.error("worker not started", { issue: next.issue, error: message })
+    deps.log.error("worker not started", { issue: next.issue, jobId: next.id, error: message })
     return
   }
   updateJob(deps.paths, "running", next.id, { pid })
@@ -197,17 +208,17 @@ export function superviseJobs(deps: JobRunnerDeps): void {
 }
 
 /**
- * Whether `pid` is still the worker for `jobId`: a live process whose command
- * line is run.ts with that job id (spawnWorkerProcess). Any other process
- * that now has the pid, after a crash of agentd or a reboot, is not ours, and
- * signalling its group would hit a stranger. When ps itself fails, nobody can
- * tell, and a live worker must not be written off: it counts as alive.
+ * Whether `pid` is still the worker for `jobId`: "ours" while a live process
+ * whose command line is run.ts with that job id has it (spawnWorkerProcess),
+ * "gone" when no process has it or another one does (after a crash of agentd
+ * or a reboot: signalling that group would hit a stranger), and "unknown"
+ * when ps itself fails. An unknown worker is neither written off nor signalled.
  */
-export function isWorkerAlive(pid: number, jobId: string, ps?: string): boolean {
+export function workerLiveness(pid: number, jobId: string, ps?: string): Liveness {
   const command = commandOf(pid, ps)
-  if (command === undefined) return true
+  if (command === undefined) return "unknown"
   const args = command?.trim().split(/\s+/) ?? []
-  return args.some((a) => a.endsWith("worker/run.ts")) && args.includes(jobId)
+  return args.some((a) => a.endsWith("worker/run.ts")) && args.includes(jobId) ? "ours" : "gone"
 }
 
 export function spawnWorkerProcess(paths: AgentPaths, runtimeDir: string): (jobId: string) => number {

@@ -203,18 +203,28 @@ export async function runJob(deps: RunDeps, jobId: string): Promise<JobResult> {
   }
   const nothing = { prUrl: null, branch: null, costUsd: null, turns: null, minutes: 0 }
 
-  // 1. read, skip or claim
-  const current = await tracker.readIssue(job.issue)
-  const me = await tracker.whoami()
-  if (current.state !== "Ready") return finish({ ...nothing, status: "skipped", reason: `the issue is ${current.state}, not Ready` })
-  if (current.assigneeId && current.assigneeId !== me.id) return finish({ ...nothing, status: "skipped", reason: "someone else holds the issue" })
-  const branch = branchNameFor(current.id, current.title)
-  const open = await exec("gh", ["pr", "list", "--repo", config.repo.slug, "--head", branch, "--state", "open", "--json", "url", "--jq", ".[0].url // empty"], { cwd: config.repo.path })
-  if (open.code === 0 && open.stdout.trim().startsWith("https://")) {
-    await tracker.updateIssue(current.id, { state: "In Review" })
-    return finish({ ...nothing, status: "skipped", reason: "a PR for this branch is already open", prUrl: open.stdout.trim(), branch })
+  // 1. read, skip or claim. Linear failing here ends the job the ordinary way,
+  // as skipped: a short outage is no fault of the issue or the mini, and a
+  // crash here would count as a worker lost early (agentd, heldBackIssues).
+  let issue: TrackerIssue
+  let branch: string
+  try {
+    const current = await tracker.readIssue(job.issue)
+    const me = await tracker.whoami()
+    if (current.state !== "Ready") return finish({ ...nothing, status: "skipped", reason: `the issue is ${current.state}, not Ready` })
+    if (current.assigneeId && current.assigneeId !== me.id) return finish({ ...nothing, status: "skipped", reason: "someone else holds the issue" })
+    branch = branchNameFor(current.id, current.title)
+    const open = await exec("gh", ["pr", "list", "--repo", config.repo.slug, "--head", branch, "--state", "open", "--json", "url", "--jq", ".[0].url // empty"], { cwd: config.repo.path })
+    if (open.code === 0 && open.stdout.trim().startsWith("https://")) {
+      await tracker.updateIssue(current.id, { state: "In Review" })
+      return finish({ ...nothing, status: "skipped", reason: "a PR for this branch is already open", prUrl: open.stdout.trim(), branch })
+    }
+    issue = await tracker.claimIssue(current.id, config.mini)
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    log.warn("Linear failed before the claim", { issue: job.issue, error: message })
+    return finish({ ...nothing, status: "skipped", reason: `Linear failed before the claim: ${message}` })
   }
-  const issue = await tracker.claimIssue(current.id, config.mini)
   appendLedger(paths, { type: "claimed", issue: issue.id }, deps.now())
   enqueueSlack(paths, { kind: "post", channel: "agents", text: `claimed ${issue.id} ${issue.title}` }, deps.now())
 

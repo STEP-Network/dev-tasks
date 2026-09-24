@@ -26,7 +26,7 @@ function setup(claims: ClaimRecord[]) {
   fake.tracker.listClaims = async () => claims
   const warnings: string[] = []
   const log: Logger = { info() {}, warn: (msg) => void warnings.push(msg), error() {} }
-  return { paths, fake, warnings, deps: { tracker: fake.tracker, paths, config, now: () => NOW, isAlive: () => true, log } }
+  return { paths, fake, warnings, deps: { tracker: fake.tracker, paths, config, now: () => NOW, liveness: () => "ours" as const, log } }
 }
 
 const runningJob = (paths: ReturnType<typeof agentPaths>, issueId: string) => {
@@ -67,14 +67,21 @@ describe("heartbeatAndSweep", () => {
     const asked: Array<[number, string]> = []
     const result = await heartbeatAndSweep({
       ...deps,
-      isAlive: (pid, jobId) => {
+      liveness: (pid, jobId) => {
         asked.push([pid, jobId])
-        return false
+        return "gone"
       },
     })
     expect(asked).toEqual([[4242, job.id]])
     expect(result).toEqual({ refreshed: 0, released: 1 })
     expect(fake.called("touchClaim")).toEqual([])
+  })
+
+  it("keeps the claim of a worker ps cannot vouch for: refreshed, never released", async () => {
+    const { paths, fake, deps } = setup([claim("STEP-1", "2026-09-24T01:00:00.000Z")])
+    runningJob(paths, "STEP-1")
+    expect(await heartbeatAndSweep({ ...deps, liveness: () => "unknown" })).toEqual({ refreshed: 1, released: 0 })
+    expect(fake.called("releaseIssue")).toEqual([])
   })
 
   it("counts a heartbeat only when the claim comment was there to refresh, and says when it was not", async () => {

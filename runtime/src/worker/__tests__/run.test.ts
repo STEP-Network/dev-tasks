@@ -96,6 +96,17 @@ describe("runJob", () => {
     }
   })
 
+  it("ends as skipped, not crashed, when Linear fails before the claim, so a short outage never holds an issue back", async () => {
+    for (const method of ["readIssue", "whoami", "claimIssue"]) {
+      const { deps, job, paths, q } = setup({ failOn: [method] })
+      expect(await runJob(deps, job.id)).toMatchObject({ status: "skipped", reason: `Linear failed before the claim: Linear: ${method} failed (fake)` })
+      expect(listJobs(paths, "running")).toEqual([])
+      expect(listJobs(paths, "done")[0]).toMatchObject({ result: { status: "skipped" } })
+      expect(listJobs(paths, "done")[0].lostEarly).toBeUndefined()
+      expect(q.seen).toEqual([])
+    }
+  })
+
   it("skips without claiming when the issue is no longer Ready", async () => {
     const { deps, job, fake } = setup({ issueOver: { state: "In Review" } })
     expect(await runJob(deps, job.id)).toMatchObject({ status: "skipped", reason: "the issue is In Review, not Ready" })

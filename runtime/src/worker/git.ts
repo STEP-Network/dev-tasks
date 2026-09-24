@@ -9,6 +9,7 @@
  */
 
 import { execFile } from "node:child_process"
+import { existsSync } from "node:fs"
 import { join } from "node:path"
 import { AGENT_CONFIG, workerEnv } from "./guard.ts"
 
@@ -111,7 +112,18 @@ async function startPoint(exec: Exec, o: WorktreeOptions): Promise<string> {
   return onOrigin ? `origin/${o.branch}` : `origin/${o.base}`
 }
 
+/**
+ * Files that rewrite history as git reads it, which no option turns off here
+ * and the worker's sandbox may write: a graft can make origin's tip a child
+ * of the worker's commit and empty the diff that the resume check reads.
+ */
+const HISTORY_REWRITES = [join("info", "grafts"), "shallow"]
+
 export async function prepareWorktree(exec: Exec, o: WorktreeOptions): Promise<{ path: string; resumed: boolean }> {
+  const found = HISTORY_REWRITES.find((file) => existsSync(join(o.repo, ".git", file)))
+  if (found) {
+    throw new WorktreeRefused(`the repository has .git/${found}, which can hide what a branch changes, so a person must look at it before a worker runs here`)
+  }
   const path = join(o.worktreesDir, o.branch)
   await mustGit(exec, ["-C", o.repo, "fetch", "origin", o.base, "--prune"])
   // A leftover from an earlier run of this issue. Its commits live on in the

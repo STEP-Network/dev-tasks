@@ -23,7 +23,7 @@ import { realExec, type Exec } from "../worker/git.ts"
 import { heartbeatAndSweep } from "./claims.ts"
 import { frontDoorAlive, lastTickAt, readFrontDoorState, superviseFrontDoor } from "./frontdoor.ts"
 import { cleanup, Every, healthStatus, inboxStuck, linearDownNotice, refreshCheckout, sentryCheckInUrl, watchPrs, type BridgeHeartbeat } from "./health.ts"
-import { isWorkerAlive, spawnWorkerProcess, superviseJobs } from "./jobrunner.ts"
+import { spawnWorkerProcess, superviseJobs, workerLiveness, type Liveness } from "./jobrunner.ts"
 
 const TICK_MS = 15_000
 
@@ -58,7 +58,7 @@ export interface DutyDeps {
   now: () => Date
   every: Every
   bootAt: Date
-  isAlive: (pid: number, jobId: string) => boolean
+  liveness: (pid: number, jobId: string) => Liveness
   kill: (pid: number, signal: NodeJS.Signals) => void
   spawnWorker: (jobId: string) => number
   sentryUrl: string | null
@@ -90,7 +90,7 @@ export async function runDuties(d: DutyDeps, memo: DutyMemo): Promise<void> {
     }
   }
   await step("front door", () => superviseFrontDoor({ paths, config, exec: d.exec, now, log, usage: () => readUsage(paths) }))
-  await step("jobs", () => superviseJobs({ paths, config, now, log, bootAt: d.bootAt, isAlive: d.isAlive, kill: d.kill, spawnWorker: d.spawnWorker }))
+  await step("jobs", () => superviseJobs({ paths, config, now, log, bootAt: d.bootAt, liveness: d.liveness, kill: d.kill, spawnWorker: d.spawnWorker }))
   // The main checkout and its worktrees change only between jobs: a job
   // fetches into the same repository, and its session loads the project's
   // settings and hooks from this checkout (projectConfigRoot).
@@ -99,7 +99,7 @@ export async function runDuties(d: DutyDeps, memo: DutyMemo): Promise<void> {
     await step("claims", async () => {
       let ok = false
       try {
-        const r = await heartbeatAndSweep({ tracker: d.tracker, paths, config, now, isAlive: d.isAlive, log })
+        const r = await heartbeatAndSweep({ tracker: d.tracker, paths, config, now, liveness: d.liveness, log })
         if (r.refreshed || r.released) log.info("claims", r)
         ok = true
       } finally {
@@ -191,7 +191,7 @@ async function main(): Promise<void> {
     now: () => new Date(),
     every: new Every(() => Date.now()),
     bootAt,
-    isAlive: isWorkerAlive,
+    liveness: workerLiveness,
     kill: killGroup,
     spawnWorker: spawnWorkerProcess(paths, runtimeDir),
     sentryUrl,

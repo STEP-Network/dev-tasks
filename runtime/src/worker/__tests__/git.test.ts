@@ -1,3 +1,6 @@
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
 import { describe, expect, it } from "vitest"
 import { fakeExec } from "../../__tests__/fakes.ts"
 import { assertPushable, commitsAhead, isDirty, prepareWorktree, pushBranch, realExec, removeWorktree, WorktreeRefused } from "../git.ts"
@@ -13,6 +16,19 @@ const NO_LOCAL = [/rev-parse --verify/, { code: 1 }] as const
 const LOCAL = [/rev-parse --verify/, { code: 0, stdout: "abc123\n" }] as const
 
 describe("prepareWorktree", () => {
+  it("refuses a repository with grafts or a shallow list, which can hide what a branch changes, before any git runs", async () => {
+    for (const file of [["info", "grafts"], ["shallow"]]) {
+      const repo = mkdtempSync(join(tmpdir(), "prepare-graft-"))
+      mkdirSync(join(repo, ".git", "info"), { recursive: true })
+      writeFileSync(join(repo, ".git", ...file), "")
+      const f = fakeExec([[...ABSENT], [...NO_LOCAL]])
+      const refused = prepareWorktree(f.exec, { ...OPTS, repo })
+      await expect(refused).rejects.toBeInstanceOf(WorktreeRefused)
+      await expect(refused).rejects.toThrow(`the repository has .git/${file.join("/")}, which can hide what a branch changes, so a person must look at it before a worker runs here`)
+      expect(f.lines()).toEqual([])
+    }
+  })
+
   it("cuts a new branch from origin/staging, installs there, then checks the branch out", async () => {
     const f = fakeExec([[...ABSENT], [...NO_LOCAL]])
     expect(await prepareWorktree(f.exec, OPTS)).toEqual({ path: WT, resumed: false })

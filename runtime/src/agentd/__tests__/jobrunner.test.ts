@@ -7,7 +7,7 @@ import { agentPaths, ConfigSchema } from "../../config.ts"
 import { listNew, writeJsonAtomic } from "../../fsq.ts"
 import { heldBackIssues, listJobs, moveJob, submitJob, updateJob } from "../../jobs.ts"
 import type { Logger } from "../../log.ts"
-import { isWorkerAlive, superviseJobs, type JobRunnerDeps } from "../jobrunner.ts"
+import { superviseJobs, workerLiveness, type JobRunnerDeps } from "../jobrunner.ts"
 
 const quiet: Logger = { info() {}, warn() {}, error() {} }
 const NOW = new Date("2026-09-24T12:00:00.000Z")
@@ -20,9 +20,9 @@ function setup(over: Partial<JobRunnerDeps> = {}) {
   const asked: Array<[number, string]> = []
   const deps: JobRunnerDeps = {
     paths, config, now: () => NOW, log: quiet, bootAt: new Date("2026-09-24T06:00:00.000Z"),
-    isAlive: (pid, jobId) => {
+    liveness: (pid, jobId) => {
       asked.push([pid, jobId])
-      return true
+      return "ours"
     },
     kill: (pid, signal) => { kills.push([pid, signal]) },
     spawnWorker: (id) => { spawned.push(id); return 5000 + spawned.length },
@@ -67,7 +67,7 @@ describe("superviseJobs", () => {
   })
 
   it("records a dead worker as blocked, says so, and frees the slot", () => {
-    const { paths, deps, spawned } = setup({ isAlive: () => false })
+    const { paths, deps, spawned } = setup({ liveness: () => "gone" })
     running(paths, "STEP-1", {})
     submitJob(paths, "STEP-2", null, NOW)
     superviseJobs(deps)
@@ -105,7 +105,7 @@ describe("superviseJobs", () => {
     superviseJobs(deps)
     expect(outbox(paths)).toEqual([])
     updateJob(paths, "running", job.id, { killRequestedAt: "2026-09-24T11:59:00.000Z" })
-    superviseJobs({ ...deps, isAlive: () => false })
+    superviseJobs({ ...deps, liveness: () => "gone" })
     expect(listJobs(paths, "done")[0].result).toMatchObject({ status: "blocked", reason: "the worker overran its wall clock of 90 minutes and was stopped" })
     expect(outbox(paths)).toHaveLength(1)
     expect(outbox(paths)[0]).toMatch(/^STEP-1: the worker overran its wall clock of 90 minutes and was stopped\./)
@@ -116,6 +116,9 @@ describe("superviseJobs", () => {
     const { paths, deps, kills } = setup()
     running(paths, "STEP-1", { startedAt: "2026-09-24T10:05:00.000Z", sessionStartedAt: "2026-09-24T10:30:00.000Z" })
     superviseJobs(deps)
+    expect(kills).toEqual([])
+    // 100 minutes into the session: past its own clock, and still inside the time to finish.
+    superviseJobs({ ...deps, now: () => new Date("2026-09-24T12:10:00.000Z") })
     expect(kills).toEqual([])
     // 90 minutes of session and 15 to finish have passed.
     superviseJobs({ ...deps, now: () => new Date("2026-09-24T12:15:01.000Z") })
@@ -128,10 +131,21 @@ describe("superviseJobs", () => {
     superviseJobs(deps)
     expect(kills).toEqual([[-4242, "SIGTERM"]])
     expect(listJobs(paths, "running")[0].killRequestedAt).toBe(NOW.toISOString())
-    superviseJobs({ ...deps, isAlive: () => false })
+    superviseJobs({ ...deps, liveness: () => "gone" })
     expect(listJobs(paths, "done").find((j) => j.id === job.id)?.result?.reason).toBe(
       "the worker was still preparing its worktree after 45 minutes and was stopped",
     )
+  })
+
+  it("never signals a worker ps cannot vouch for, and neither writes it off nor starts another", () => {
+    const { paths, deps, kills, spawned } = setup({ liveness: () => "unknown" })
+    running(paths, "STEP-1", { startedAt: "2026-09-24T09:00:00.000Z" })
+    submitJob(paths, "STEP-2", null, NOW)
+    superviseJobs(deps)
+    superviseJobs({ ...deps, now: () => new Date("2026-09-24T12:05:00.000Z") })
+    expect(kills).toEqual([])
+    expect(listJobs(paths, "running").map((j) => j.issue)).toEqual(["STEP-1"])
+    expect(spawned).toEqual([])
   })
 
   it("never overwrites the result a runner wrote just before it died", () => {
@@ -141,9 +155,9 @@ describe("superviseJobs", () => {
     const result = { status: "done" as const, reason: "done", prUrl: "https://github.com/x/pull/9", branch: "STEP-1-x", costUsd: 2, turns: 40, minutes: 30 }
     superviseJobs({
       ...deps,
-      isAlive: () => {
+      liveness: () => {
         writeJsonAtomic(join(paths.jobs, "done", `${job.id}.json`), { ...job, result })
-        return false
+        return "gone"
       },
     })
     expect(listJobs(paths, "done")[0].result).toEqual(result)
@@ -158,9 +172,9 @@ describe("superviseJobs", () => {
     superviseJobs({
       ...deps,
       // The runner moves its job to done and exits, between agentd's listing and its look at the pid.
-      isAlive: () => {
+      liveness: () => {
         moveJob(paths, job.id, "running", "done", { result })
-        return false
+        return "gone"
       },
     })
     expect(listJobs(paths, "done")[0].result).toEqual(result)
@@ -198,7 +212,7 @@ describe("two early losses in a row", () => {
   }
 
   it("on one issue hold that issue back, and say so once, in the second loss's own notice", () => {
-    const { paths, deps } = setup({ isAlive: () => false })
+    const { paths, deps } = setup({ liveness: () => "gone" })
     lose(paths, "STEP-1", "2026-09-24T11:50:00.000Z", "2026-09-24T11:55:00.000Z")
     superviseJobs(deps)
     expect(heldBackIssues(paths)).toEqual(new Set())
@@ -208,7 +222,7 @@ describe("two early losses in a row", () => {
     expect(heldBackIssues(paths)).toEqual(new Set(["STEP-1"]))
     expect(outbox(paths)).toHaveLength(2)
     expect(outbox(paths)[1]).toMatch(
-      /Its last two workers stopped within 10 minutes of starting, so STEP-1 is held back from new jobs until a person runs it by hand \(agentctl job submit --issue STEP-1\)\. The logs are in ~\/\.agentd\/logs\/worker-STEP-1-\*\.log\.$/,
+      /Its last two workers died within 10 minutes of starting or never started, so STEP-1 is held back from new jobs until a person runs it by hand \(agentctl job submit --issue STEP-1\)\. Look for STEP-1 in ~\/\.agentd\/logs\/worker\.log and agentd\.log\.$/,
     )
     // The mini is not paused: other issues go on.
     expect(existsSync(paths.pauseFile)).toBe(false)
@@ -219,7 +233,7 @@ describe("two early losses in a row", () => {
   })
 
   it("on two different issues pause the mini once, name the likely cause, and hold neither issue back", () => {
-    const { paths, deps } = setup({ isAlive: () => false })
+    const { paths, deps } = setup({ liveness: () => "gone" })
     const first = lose(paths, "STEP-1", "2026-09-24T11:50:00.000Z", "2026-09-24T11:55:00.000Z")
     superviseJobs(deps)
     const second = lose(paths, "STEP-2", "2026-09-24T11:56:00.000Z", "2026-09-24T11:57:00.000Z")
@@ -233,8 +247,8 @@ describe("two early losses in a row", () => {
     const posts = outbox(paths)
     expect(posts).toHaveLength(2)
     expect(posts[0]).not.toMatch(/paused|held back/)
-    expect(posts[1]).toMatch(/^STEP-2: the worker process died before reporting\. .* It is the second worker in a row, after STEP-1's, to stop within 10 minutes of starting, which points at this mini rather than the issues: /)
-    expect(posts[1].endsWith(`The mini is paused. The logs are worker-${first.id}.log and worker-${second.id}.log in ~/.agentd/logs. Run agentctl resume once it is fixed.`)).toBe(true)
+    expect(posts[1]).toMatch(/^STEP-2: the worker process died before reporting\. .* It is the second worker in a row, after STEP-1's, to die within 10 minutes of starting or never start, which points at this mini rather than the issues: /)
+    expect(posts[1].endsWith(`The mini is paused. Look for ${first.id} and ${second.id} in ~/.agentd/logs/worker.log and agentd.log, and run agentctl resume once it is fixed.`)).toBe(true)
     expect(posts[1]).not.toMatch(/held back/)
 
     // Both losses were the mini's. After a resume, one more loss neither pauses again nor holds an issue back.
@@ -247,7 +261,7 @@ describe("two early losses in a row", () => {
   })
 
   it("need the loss before to be early too: a job of another issue that ended otherwise is no fault", () => {
-    const { paths, deps } = setup({ isAlive: () => false })
+    const { paths, deps } = setup({ liveness: () => "gone" })
     const ok = submitJob(paths, "STEP-5", null, new Date("2026-09-24T11:00:00.000Z"))
     moveJob(paths, ok.id, "pending", "done", { endedAt: "2026-09-24T11:50:00.000Z", result: { status: "done", reason: "done", prUrl: null, branch: null, costUsd: null, turns: null, minutes: 45 } })
     lose(paths, "STEP-2", "2026-09-24T11:51:00.000Z", "2026-09-24T11:55:00.000Z")
@@ -284,21 +298,21 @@ describe("two early losses in a row", () => {
   })
 
   it("do not count a worker that ran a while, one lost to a reboot, or a job of the issue that ended otherwise in between", () => {
-    const late = setup({ isAlive: () => false })
+    const late = setup({ liveness: () => "gone" })
     lose(late.paths, "STEP-1", "2026-09-24T11:00:00.000Z", "2026-09-24T11:30:00.000Z")
     superviseJobs(late.deps)
     lose(late.paths, "STEP-1", "2026-09-24T11:50:00.000Z", "2026-09-24T11:55:00.000Z")
     superviseJobs({ ...late.deps, now: () => new Date("2026-09-24T12:01:00.000Z") })
     expect(heldBackIssues(late.paths)).toEqual(new Set())
 
-    const reboot = setup({ isAlive: () => false, bootAt: new Date("2026-09-24T11:58:00.000Z") })
+    const reboot = setup({ liveness: () => "gone", bootAt: new Date("2026-09-24T11:58:00.000Z") })
     lose(reboot.paths, "STEP-1", "2026-09-24T11:50:00.000Z", "2026-09-24T11:55:00.000Z")
     superviseJobs(reboot.deps)
     lose(reboot.paths, "STEP-1", "2026-09-24T11:58:30.000Z", "2026-09-24T11:59:00.000Z")
     superviseJobs({ ...reboot.deps, now: () => new Date("2026-09-24T12:01:00.000Z") })
     expect(heldBackIssues(reboot.paths)).toEqual(new Set())
 
-    const between = setup({ isAlive: () => false })
+    const between = setup({ liveness: () => "gone" })
     lose(between.paths, "STEP-1", "2026-09-24T11:50:00.000Z", "2026-09-24T11:55:00.000Z")
     superviseJobs(between.deps)
     const ok = submitJob(between.paths, "STEP-1", null, new Date("2026-09-24T11:56:00.000Z"))
@@ -310,9 +324,9 @@ describe("two early losses in a row", () => {
 })
 
 
-describe("isWorkerAlive", () => {
-  it("counts a worker as alive when ps itself fails, rather than write a live one off", () => {
-    expect(isWorkerAlive(process.pid, "STEP-7-20260924090000", "/nonexistent/ps")).toBe(true)
+describe("workerLiveness", () => {
+  it("is unknown when ps itself fails: neither written off nor signalled", () => {
+    expect(workerLiveness(process.pid, "STEP-7-20260924090000", "/nonexistent/ps")).toBe("unknown")
   })
 
   const children: ChildProcess[] = []
@@ -320,20 +334,20 @@ describe("isWorkerAlive", () => {
     for (const child of children.splice(0)) child.kill()
   })
 
-  it("is true only for a live process whose command line is run.ts for this job", () => {
+  it("is ours only for a live process whose command line is run.ts for this job", () => {
     // Its command line reads like a worker's: node ... src/worker/run.ts <job id>.
     const child = spawn(process.execPath, ["-e", "setTimeout(() => {}, 30000)", "/x/runtime/src/worker/run.ts", "STEP-7-20260924090000"], { stdio: "ignore" })
     children.push(child)
-    expect(isWorkerAlive(child.pid!, "STEP-7-20260924090000")).toBe(true)
+    expect(workerLiveness(child.pid!, "STEP-7-20260924090000")).toBe("ours")
     // Another job's id, and a prefix of this one, are not this job.
-    expect(isWorkerAlive(child.pid!, "STEP-8-20260924090000")).toBe(false)
-    expect(isWorkerAlive(child.pid!, "STEP-7-2026092409000")).toBe(false)
+    expect(workerLiveness(child.pid!, "STEP-8-20260924090000")).toBe("gone")
+    expect(workerLiveness(child.pid!, "STEP-7-2026092409000")).toBe("gone")
   })
 
-  it("is false for a pid that now belongs to some other process, or to none", () => {
+  it("is gone for a pid that now belongs to some other process, or to none", () => {
     // After a crash the old pid can belong to anything: here, this test runner.
-    expect(isWorkerAlive(process.pid, "STEP-7-20260924090000")).toBe(false)
+    expect(workerLiveness(process.pid, "STEP-7-20260924090000")).toBe("gone")
     const gone = spawnSync(process.execPath, ["-e", ""]).pid!
-    expect(isWorkerAlive(gone, "STEP-7-20260924090000")).toBe(false)
+    expect(workerLiveness(gone, "STEP-7-20260924090000")).toBe("gone")
   })
 })

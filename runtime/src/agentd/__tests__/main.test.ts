@@ -69,7 +69,7 @@ describe("runDuties", () => {
     const checkIns: string[] = []
     const d: DutyDeps = {
       paths, config, log, exec: f.exec, tracker: fakeTracker([]).tracker, now: () => new Date(t), every: new Every(() => t),
-      bootAt: new Date(NOW.getTime() - 86_400_000), isAlive: () => true, kill: () => {}, spawnWorker: () => 5001,
+      bootAt: new Date(NOW.getTime() - 86_400_000), liveness: () => "ours", kill: () => {}, spawnWorker: () => 5001,
       sentryUrl: null,
       checkIn: async (url) => {
         checkIns.push(url)
@@ -87,6 +87,14 @@ describe("runDuties", () => {
     submitJob(busy.paths, "STEP-1", null, NOW)
     await runDuties(busy.d, freshMemo())
     expect(busy.f.lines().some((l) => l.includes(" ls-remote ") || l.includes(" worktree prune"))).toBe(false)
+
+    // Paused, a pending job never starts: waiting is enough to hold the housekeeping back.
+    const waiting = duties()
+    mkdirSync(waiting.paths.root, { recursive: true })
+    writeFileSync(waiting.paths.pauseFile, "")
+    submitJob(waiting.paths, "STEP-1", null, NOW)
+    await runDuties(waiting.d, freshMemo())
+    expect(waiting.f.lines().some((l) => l.includes(" ls-remote ") || l.includes(" worktree prune"))).toBe(false)
 
     const idle = duties()
     await runDuties(idle.d, freshMemo())
