@@ -7,7 +7,7 @@ import { countIn, listNew } from "../../fsq.ts"
 import type { Logger } from "../../log.ts"
 import { enqueueSlack } from "../../outbox.ts"
 import { threadFor } from "../../threads.ts"
-import { drainOutbox, sendOutboxMessage, SlackTokenRefused, type SendContext, type SlackWeb } from "../send.ts"
+import { drainOutbox, sendOutboxMessage, SlackAccessRefused, type SendContext, type SlackWeb } from "../send.ts"
 
 const quiet: Logger = { info() {}, warn() {}, error() {} }
 
@@ -137,15 +137,35 @@ describe("drainOutbox", () => {
     expect(countIn(ctx.paths.outbox, "failed")).toBe(0)
   })
 
-  it("stops with every message kept, in order, when Slack refuses the token itself", async () => {
-    // A revoked token is not this message's fault: moving each to failed would empty the queue.
-    const revoked = Object.assign(new Error("An API error occurred: token_revoked"), { data: { error: "token_revoked" } })
-    const { ctx } = context({}, [revoked])
+  it.each(["token_revoked", "invalid_auth", "missing_scope"])("stops with every message kept, in order, when Slack refuses the app itself (%s)", async (code) => {
+    // Not this message's fault: moving each to failed would empty the queue while nobody notices.
+    const refused = Object.assign(new Error(`An API error occurred: ${code}`), { data: { error: code } })
+    const { ctx, posts } = context({}, [refused])
     enqueueSlack(ctx.paths, { kind: "post", channel: "agents", text: "one" }, new Date(1))
     enqueueSlack(ctx.paths, { kind: "post", channel: "agents", text: "two" }, new Date(2))
-    await expect(drainOutbox(ctx, quiet)).rejects.toThrow(SlackTokenRefused)
+    await expect(drainOutbox(ctx, quiet)).rejects.toThrow(SlackAccessRefused)
     await expect(drainOutbox(ctx, quiet)).resolves.toBe(2)
+    expect(posts.map((p) => p.text)).toEqual(["eve: one", "eve: two"])
     expect(countIn(ctx.paths.outbox, "failed")).toBe(0)
+  })
+
+  it("takes a message off the queue as soon as Slack has it, before the calls that follow", async () => {
+    // A crash while the permalink or the Linear link is pending must not post the question again.
+    const { ctx } = context()
+    ctx.web.permalink = () => new Promise(() => {})
+    enqueueSlack(ctx.paths, { kind: "issue", issue: "STEP-7", text: "Which date?", question: true })
+    void drainOutbox(ctx, quiet)
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    expect(countIn(ctx.paths.outbox, "new")).toBe(0)
+    expect(countIn(ctx.paths.outbox, "done")).toBe(1)
+  })
+
+  it("never posts a token-shaped string", async () => {
+    // Worker and git error text reach Slack through the outbox.
+    const { ctx, posts } = context()
+    enqueueSlack(ctx.paths, { kind: "post", channel: "agents", text: "push failed: https://x-access-token:xoxb-1-2-abc@github.com" })
+    await drainOutbox(ctx, quiet)
+    expect(posts[0].text).toBe("eve: push failed: https://x-access-token:[redacted]@github.com")
   })
 
   it("counts a reaction that is already there as sent", async () => {

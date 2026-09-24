@@ -79,9 +79,18 @@ export function loadClaudeOauthToken(home: string): string | null {
   return readSecretsFile(path).CLAUDE_CODE_OAUTH_TOKEN || null
 }
 
-/** The plugin reads the key itself; the runtime checks the file's mode at start. */
+/**
+ * The plugin reads the key itself (plugin/src/tracker/linear-client.ts); the
+ * runtime checks the file at start, its mode and its line the way that client
+ * reads it: the line that starts `LINEAR_API_KEY=`, and all of the rest of it,
+ * quotes included, as the key.
+ */
 export function assertLinearKeyFile(home: string): void {
-  if (process.env.LINEAR_API_KEY) return
+  if (process.env.LINEAR_API_KEY?.trim()) return
   const path = linearKeyPath(home)
-  if (!readSecretsFile(path).LINEAR_API_KEY) throw new Error(`secrets: LINEAR_API_KEY is missing from ${path}`)
+  readSecretsFile(path)
+  const line = readFileSync(path, "utf8").split("\n").find((l) => l.startsWith("LINEAR_API_KEY="))
+  const key = line?.slice("LINEAR_API_KEY=".length).trim()
+  if (!key) throw new Error(`secrets: LINEAR_API_KEY is missing from ${path}`)
+  if (/^["']/.test(key)) throw new Error(`secrets: LINEAR_API_KEY in ${path} is quoted, and the plugin's Linear client would send the quotes. Remove them.`)
 }

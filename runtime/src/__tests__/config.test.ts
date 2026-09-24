@@ -85,6 +85,6 @@ describe("the mini has one name (decision 2)", () => {
     const config = loadConfig(paths)
     expect(() => assertProfileMini(config, "eve", paths.config)).not.toThrow()
     expect(() => assertProfileMini(config, "bob", paths.config)).toThrow(/mini "eve".*mini "bob"/)
-    expect(() => assertProfileMini(config, null, paths.config)).toThrow(/mini "eve".*no mini/)
+    expect(() => assertProfileMini(config, null, paths.config)).toThrow(/mini "eve".*no mini.*no jq/)
   })
 })

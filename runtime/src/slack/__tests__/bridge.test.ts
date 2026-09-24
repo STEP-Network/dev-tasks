@@ -1,4 +1,5 @@
 import { spawnSync } from "node:child_process"
+import { EventEmitter } from "node:events"
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -9,9 +10,9 @@ import { listNew, putOnce } from "../../fsq.ts"
 import type { Logger } from "../../log.ts"
 import { threadFor } from "../../threads.ts"
 import { fakeTracker, issue } from "../../__tests__/fakes.ts"
-import { checkLocal, exitCodeFor, handleEnvelope, fileIntake, resolveChannels, retryPending, type BridgeDeps, type BridgeWeb } from "../bridge.ts"
+import { checkLocal, exitCodeFor, handleEnvelope, fileIntake, resolveChannels, retryPending, wireSocket, type BridgeDeps, type BridgeWeb, type SocketHooks } from "../bridge.ts"
 import type { SlackEnvelope } from "../classify.ts"
-import { SlackTokenRefused } from "../send.ts"
+import { SlackAccessRefused } from "../send.ts"
 
 const quiet: Logger = { info() {}, warn() {}, error() {} }
 
@@ -107,6 +108,15 @@ describe("intake", () => {
     deps.tracker = fakeTracker([]).tracker
     await retryPending(deps)
     expect(listNew<{ issue: string | null }>(paths.inbox)[0].payload.issue).toMatch(/^STEP-\d+$/)
+  })
+
+  it("tells the thread it filed the issue before it links the thread on Linear", async () => {
+    // The reply is a local write; the link is a Linear call a crash can interrupt.
+    const { deps, fake, paths } = setup()
+    fake.tracker.attachLink = () => new Promise(() => {})
+    void handleEnvelope(deps, mention("app_mention", "<@UBOT> The date is wrong on notices"))
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    expect(outboxTexts(paths)).toEqual(["filed STEP-901 https://linear.app/step/issue/STEP-901. I will refine it and answer here."])
   })
 
   it("does not file twice after a crash between Linear creating the issue and the bridge recording it", async () => {
@@ -245,12 +255,48 @@ describe("starting", () => {
     expect(status).toMatchObject({ connected: false, error: expect.stringMatching(/mini "eve".*mini "bob"/) })
   }, 30_000)
 
-  it("exits 1, for launchd to try again, only when Slack could not be reached", () => {
+  it("exits 1, for launchd to try again, only when Slack could not be reached or had trouble of its own", () => {
+    const refusal = (code: string) => Object.assign(new Error(`An API error occurred: ${code}`), { code: "slack_webapi_platform_error", data: { ok: false, error: code } })
     expect(exitCodeFor(Object.assign(new Error("fetch failed"), { code: "slack_webapi_request_error" }))).toBe(1)
     expect(exitCodeFor(Object.assign(new Error("HTTP 503"), { code: "slack_webapi_http_error" }))).toBe(1)
     expect(exitCodeFor(Object.assign(new Error("rate limited"), { code: "slack_webapi_rate_limited_error" }))).toBe(1)
-    expect(exitCodeFor(Object.assign(new Error("An API error occurred: invalid_auth"), { code: "slack_webapi_platform_error", data: { error: "invalid_auth" } }))).toBe(0)
+    for (const code of ["internal_error", "fatal_error", "service_unavailable", "request_timeout"]) expect(exitCodeFor(refusal(code))).toBe(1)
+    expect(exitCodeFor(refusal("invalid_auth"))).toBe(0)
     expect(exitCodeFor(new Error("slack-bridge: #polads-intake does not exist or is private"))).toBe(0)
-    expect(exitCodeFor(new SlackTokenRefused("slack-bridge: Slack refused the bot token (token_revoked)."))).toBe(0)
+    expect(exitCodeFor(new SlackAccessRefused("slack-bridge: Slack refused the app (token_revoked)."))).toBe(0)
+  })
+})
+
+describe("wireSocket", () => {
+  const hooks = (over: Partial<SocketHooks> = {}): SocketHooks => ({ async handle() {}, received() {}, connected() {}, ...over })
+
+  it("acknowledges each delivery first, and handles it even when the acknowledgement fails", async () => {
+    // A delivery Slack did not hear acknowledged comes again, and the inbox keeps one of the two.
+    const socket = new EventEmitter()
+    const order: string[] = []
+    wireSocket(socket, hooks({ handle: async (body) => void order.push(`handle ${body.event?.ts}`) }), quiet)
+    socket.emit("app_mention", { body: { event: { type: "app_mention", ts: "1" } }, ack: async () => void order.push("ack 1") })
+    socket.emit("message", { body: { event: { type: "message", ts: "2" } }, ack: async () => Promise.reject(new Error("socket closed")) })
+    socket.emit("reaction_added", { body: { event: { type: "reaction_added", ts: "3" } }, ack: async () => {} })
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(order.indexOf("ack 1")).toBeLessThan(order.indexOf("handle 1"))
+    expect(order.filter((step) => step.startsWith("handle")).sort()).toEqual(["handle 1", "handle 2", "handle 3"])
+  })
+
+  it("marks the connection down on reconnecting, which is how @slack/socket-mode 3 reports a drop", () => {
+    const socket = new EventEmitter()
+    const states: boolean[] = []
+    wireSocket(socket, hooks({ connected: (value) => void states.push(value) }), quiet)
+    for (const state of ["connected", "reconnecting", "connected", "disconnected"]) socket.emit(state)
+    expect(states).toEqual([true, false, true, false])
+  })
+
+  it("logs a delivery it could not handle instead of letting it end the process", async () => {
+    const socket = new EventEmitter()
+    const errors: string[] = []
+    wireSocket(socket, hooks({ handle: async () => Promise.reject(new Error("disk full")) }), { ...quiet, error: (msg) => void errors.push(msg) })
+    socket.emit("message", { body: {}, ack: async () => {} })
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(errors).toEqual(["event failed"])
   })
 })

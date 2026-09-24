@@ -174,7 +174,10 @@ export function readProfileMini(env: NodeJS.ProcessEnv = process.env): string | 
  */
 export function assertProfileMini(config: Pick<AgentConfig, "mini">, profileMini: string | null, configPath: string): void {
   if (profileMini === config.mini) return
-  const profile = profileMini === null ? "no mini" : `mini ${JSON.stringify(profileMini)}`
+  const profile =
+    profileMini === null
+      ? "no mini (none in the file, a file that does not parse, or no jq to read it with)"
+      : `mini ${JSON.stringify(profileMini)}`
   throw new Error(
     `agentd: ${configPath} names mini ${JSON.stringify(config.mini)}, but the machine profile ` +
       `(~/.claude/dev-tasks-profile.json, read by plugin/hooks/lib/profile.sh) has ${profile}. ` +

@@ -13,13 +13,13 @@ import { LogLevel, SocketModeClient } from "@slack/socket-mode"
 import { WebClient } from "@slack/web-api"
 import { agentPaths, assertProfileMini, loadConfig, readProfileMini, type AgentConfig, type AgentPaths } from "../config.ts"
 import { ack, countIn, entryPath, listNew, putOnce, readJson, safeKey, writeJsonAtomic } from "../fsq.ts"
-import { appendLedger, createLogger, type Logger } from "../log.ts"
+import { appendLedger, createLogger, redact, type Logger } from "../log.ts"
 import { enqueueSlack, type ChannelKey } from "../outbox.ts"
 import { assertLinearKeyFile, loadSlackSecrets } from "../secrets.ts"
 import { issueForThread, saveThread } from "../threads.ts"
 import { createLinearTracker, type Tracker } from "../tracker.ts"
 import { classify, type Classified, type ClassifyContext, type SlackEnvelope } from "./classify.ts"
-import { drainOutbox, SlackTokenRefused, type SendContext, type SlackWeb } from "./send.ts"
+import { drainOutbox, isSlackTrouble, SlackAccessRefused, type SendContext, type SlackWeb } from "./send.ts"
 import { answerTransition, appendAnswer, intakeIssue } from "./text.ts"
 
 export interface BridgeWeb extends SlackWeb {
@@ -116,13 +116,14 @@ export async function fileIntake(deps: BridgeDeps, key: string): Promise<void> {
         (await deps.tracker.createIssue({ ...input, clientId: entry.linearId }))
       writeJsonAtomic(path, { ...entry, issue: filed.id })
       saveThread(deps.paths, { issue: filed.id, channelId: entry.channel, ts: entry.ts, permalink, createdAt: deps.now().toISOString(), lastQuestionAt: null })
+      // The reply first: it is a local write, and the link below a Linear call a crash can cut short.
+      reply(`filed ${filed.id} ${filed.url}. I will refine it and answer here.`)
+      appendLedger(deps.paths, { type: "intake.filed", issue: filed.id }, deps.now())
       if (permalink) {
         await deps.tracker.attachLink(filed.id, permalink, "Slack intake thread").catch((error) => {
           deps.log.warn("intake thread not attached", { issue: filed.id, error: String(error) })
         })
       }
-      reply(`filed ${filed.id} ${filed.url}. I will refine it and answer here.`)
-      appendLedger(deps.paths, { type: "intake.filed", issue: filed.id }, deps.now())
     } catch (error) {
       deps.log.warn("intake not filed yet", { key, error: String(error) })
       if (!entry.toldUnfiled) {
@@ -209,27 +210,65 @@ const TRANSIENT_SLACK_CODES = new Set(["slack_webapi_request_error", "slack_weba
 
 /**
  * How the bridge exits when it cannot run. Slack out of reach (the network
- * not up yet after a power cut, say) passes: 1, and launchd starts it again.
- * Anything else, a bad config, another mini's name, a revoked token, a
- * missing channel, waits for a person: 0, and launchd leaves it stopped
- * (KeepAlive restarts only a failed exit, Task 17). agentctl status and the
- * Sentry check-in show why.
+ * not up yet after a power cut, say) or in trouble of its own passes: 1, and
+ * launchd starts it again. Anything else, a bad config, another mini's name,
+ * a revoked token, a missing channel, waits for a person: 0, and launchd
+ * leaves it stopped (KeepAlive restarts only a failed exit, Task 17).
+ * agentctl status and the Sentry check-in show why.
  */
 export function exitCodeFor(error: unknown): 0 | 1 {
   const code = (error as { code?: unknown } | null)?.code
-  return typeof code === "string" && TRANSIENT_SLACK_CODES.has(code) ? 1 : 0
+  return (typeof code === "string" && TRANSIENT_SLACK_CODES.has(code)) || isSlackTrouble(error) ? 1 : 0
+}
+
+export interface SocketHooks {
+  /** One delivery, after its acknowledgement. */
+  handle(body: SlackEnvelope): Promise<unknown>
+  /** Any delivery arrived: bridge.json's lastEventAt. */
+  received(): void
+  /** The connection came up (true) or dropped (false). */
+  connected(value: boolean): void
+}
+
+/**
+ * The Socket Mode wiring. Each delivery is acknowledged first, inside Slack's
+ * 3 seconds and before any Linear call, then handled, even when the
+ * acknowledgement failed: Slack then sends it again and the inbox keeps one.
+ * A dropped connection reconnects on its own and never reports
+ * "disconnected" (@slack/socket-mode 3), so "reconnecting" is the drop.
+ */
+export function wireSocket(socket: { on(event: string, listener: (...args: any[]) => void): unknown }, hooks: SocketHooks, log: Logger): void {
+  const onEvent = async ({ body, ack }: { body: SlackEnvelope; ack: () => Promise<void> }) => {
+    hooks.received()
+    try {
+      await ack()
+    } catch (error) {
+      log.warn("delivery not acknowledged, handled anyway", { error: String(error) })
+    }
+    try {
+      await hooks.handle(body)
+    } catch (error) {
+      log.error("event failed", { error: String(error) })
+    }
+  }
+  for (const type of ["app_mention", "message", "reaction_added"]) socket.on(type, onEvent)
+  for (const state of ["connected", "reconnecting", "disconnected"]) socket.on(state, () => hooks.connected(state === "connected"))
 }
 
 async function setup(paths: AgentPaths) {
   const { config, botToken, appToken } = checkLocal(paths, readProfileMini())
   const client = new WebClient(botToken)
+  // users.info and getPermalink have answers to fall back on (the user id, no
+  // link), so they fail fast rather than hold an intake or the drain through
+  // the Web API's half hour of retries.
+  const lookups = new WebClient(botToken, { retryConfig: { retries: 1 }, timeout: 10_000 })
   const auth = await client.auth.test()
   if (!auth.team_id || !auth.user_id) throw new Error("slack-bridge: auth.test returned no team or bot user")
   const channelIds = await resolveChannels(async (cursor) => {
     const page = await client.conversations.list({ types: "public_channel", exclude_archived: true, limit: 1000, cursor })
     return { channels: page.channels ?? [], next: page.response_metadata?.next_cursor || undefined }
   }, config.slack.channels)
-  return { config, appToken, client, teamId: auth.team_id, botUserId: auth.user_id, channelIds }
+  return { config, appToken, client, lookups, teamId: auth.team_id, botUserId: auth.user_id, channelIds }
 }
 
 async function main(): Promise<void> {
@@ -248,11 +287,13 @@ async function main(): Promise<void> {
       ...extra,
     })
   const halt = (error: unknown): never => {
-    const message = error instanceof Error ? error.message : String(error)
+    const message = redact(error instanceof Error ? error.message : String(error))
     writeStatus({ error: message })
     log.error("bridge stopped", { error: message })
     process.exit(exitCodeFor(error))
   }
+  // Setup can wait out a Slack outage: the last run's status must not stand meanwhile.
+  writeStatus()
 
   const s = await setup(paths).catch(halt)
 
@@ -264,7 +305,7 @@ async function main(): Promise<void> {
       return { ts: String(r.ts) }
     },
     async permalink(channel, ts) {
-      const r = await s.client.chat.getPermalink({ channel, message_ts: ts })
+      const r = await s.lookups.chat.getPermalink({ channel, message_ts: ts })
       return r.permalink ?? null
     },
     async react(channel, ts, name) {
@@ -273,7 +314,7 @@ async function main(): Promise<void> {
     async userName(userId) {
       const known = names.get(userId)
       if (known) return known
-      const r = await s.client.users.info({ user: userId })
+      const r = await s.lookups.users.info({ user: userId })
       const name = r.user?.profile?.display_name || r.user?.real_name || r.user?.name || userId
       names.set(userId, name)
       return name
@@ -308,28 +349,29 @@ async function main(): Promise<void> {
     attachThread: (id, permalink) => tracker.attachLink(id, permalink, "Slack thread"),
   }
 
-  const socket = new SocketModeClient({ appToken: s.appToken, logLevel: LogLevel.WARN })
-  const onEvent = async ({ body, ack: ackSlack }: { body: SlackEnvelope; ack: () => Promise<void> }) => {
-    lastEventAt = new Date().toISOString()
-    try {
-      await ackSlack() // inside Slack's 3 seconds, before any Linear call
-      await handleEnvelope(deps, body)
-    } catch (error) {
-      // An unacknowledged delivery comes again, and the inbox keeps it to one.
-      log.error("event failed", { error: String(error) })
-    }
-  }
-  socket.on("app_mention", onEvent)
-  socket.on("message", onEvent)
-  socket.on("reaction_added", onEvent)
-  // A dropped connection reconnects on its own and never reports
-  // "disconnected" (@slack/socket-mode 3), so "reconnecting" is the drop.
-  for (const state of ["connected", "reconnecting", "disconnected"] as const) {
-    socket.on(state, () => {
-      connected = state === "connected"
-      writeStatus()
-    })
-  }
+  const socket = new SocketModeClient({
+    appToken: s.appToken,
+    logLevel: LogLevel.WARN,
+    // socket-mode's own policy for reconnecting has no ceiling on the wait,
+    // which grows past an hour after a long outage: Slack drops what it cannot
+    // deliver meanwhile. When these run out (about 1.5 hours), start() or the
+    // reconnect throws and launchd starts the bridge again.
+    clientOptions: { retryConfig: { retries: 100, factor: 1.3, maxTimeout: 60_000 } },
+  })
+  wireSocket(
+    socket,
+    {
+      handle: (body) => handleEnvelope(deps, body),
+      received: () => {
+        lastEventAt = new Date().toISOString()
+      },
+      connected: (value) => {
+        connected = value
+        writeStatus()
+      },
+    },
+    log,
+  )
 
   // Before the connection, which waits out a Slack outage: the heartbeat and
   // the intake retry must not wait with it.
@@ -340,7 +382,7 @@ async function main(): Promise<void> {
     try {
       await drainOutbox(sendContext, log)
     } catch (error) {
-      if (error instanceof SlackTokenRefused) halt(error)
+      if (error instanceof SlackAccessRefused) halt(error)
       log.error("outbox drain failed", { error: String(error) })
     } finally {
       draining = false
@@ -350,7 +392,6 @@ async function main(): Promise<void> {
     retryPending(deps).catch((error) => log.error("retry failed", { error: String(error) }))
   }, 60_000)
   setInterval(() => writeStatus(), 30_000)
-  writeStatus()
 
   await socket.start().catch(halt)
   log.info("bridge connected", { team: s.teamId, channels: s.channelIds })

@@ -5,7 +5,7 @@ Every agent mini has its own Slack app (decision 3, 2026-09-24). Socket Mode han
 `app-manifest.json` is the template all of them share: the scopes, the events and Socket Mode. Only the name differs, and `src/slack/manifest.ts` fills it in. For Eve:
 
 ```bash
-cd ~/dev-tasks/runtime && npm ci
+cd ~/dev-tasks/runtime && npm ci   # Node 20.18.1 or later
 npx tsx src/slack/manifest.ts eve > ~/eve-manifest.json
 ```
 
@@ -19,4 +19,4 @@ Then, once per agent (step N2):
 4. Both tokens go in that mini's `~/.config/agentd/slack.env`, chmod 600 (step N3). Each mini holds only its own app's tokens.
 5. `/invite @eve` in `#polads-agents`, `#polads-questions`, `#polads-intake` and `#polads-releases`. The bridge refuses to start while the bot is missing from any of them.
 
-The four channels are shared by every agent. Each bridge acts only on messages that mention its own bot and on replies in the threads it opened.
+The four channels are shared by every agent. Each bridge acts only on messages that mention its own bot and on replies in the threads it opened. So mention one agent per request: a message in `#polads-intake` that names two bots is filed by both, as two issues, and both then take the replies in its thread.

@@ -84,6 +84,16 @@ describe("the optional and the checked files", () => {
     expect(() => assertLinearKeyFile(h)).not.toThrow()
   })
 
+  it("reads the Linear key line the way the plugin's client does, so a key it cannot send never passes", () => {
+    const h = home()
+    write(linearKeyPath(h), 'LINEAR_API_KEY="lin_api_test"\n', 0o600)
+    expect(() => assertLinearKeyFile(h)).toThrow(/is quoted/)
+    write(linearKeyPath(h), "export LINEAR_API_KEY=lin_api_test\n", 0o600)
+    expect(() => assertLinearKeyFile(h)).toThrow(/LINEAR_API_KEY is missing/)
+    write(linearKeyPath(h), "# the agent's own key\nLINEAR_API_KEY=lin_api_test\n", 0o600)
+    expect(() => assertLinearKeyFile(h)).not.toThrow()
+  })
+
   it("reads the worker's optional Claude token, and refuses it from a readable file", () => {
     const h = home()
     expect(loadClaudeOauthToken(h)).toBeNull()
