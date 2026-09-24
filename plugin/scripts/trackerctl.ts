@@ -29,7 +29,8 @@
  * `claim` and `heartbeat` act as this machine's mini: the `mini` field of
  * ~/.claude/dev-tasks-profile.json, as hooks/lib/profile.sh reads it. Only a
  * mini claims, so a machine without one (a laptop) is refused before the
- * tracker is touched. `--as`, if given, must name that same mini.
+ * tracker is touched, and so is `claims`. `--as`, if given, must name that
+ * same mini.
  */
 
 import { execFileSync } from "node:child_process"
@@ -99,16 +100,19 @@ function requireArg(value: string | undefined, name: string): string {
 }
 
 const UPDATE_FLAGS = ["state", "add-label", "remove-label", "description-file", "assign"]
+const REPEATABLE_FLAGS = ["add-label", "remove-label"]
 
 /**
  * `update`'s flags as a patch. Throws a usage error for a flag update does
- * not take, a flag with no value, a bad --assign, an empty description file
- * or an empty update: dropping one flag and writing the rest is how a park
- * built from an empty shell variable would silently do less.
+ * not take, a flag with no value, a single-valued flag given twice, a bad
+ * --assign, an empty description file or an empty update: dropping one flag
+ * and writing the rest is how a park built from an empty shell variable
+ * would silently do less.
  */
 export function buildPatch(flags: ParsedArgs["flags"], readText: (path: string) => string): IssuePatch {
   for (const [name, value] of Object.entries(flags)) {
     if (!UPDATE_FLAGS.includes(name)) throw new Error(`${USAGE}\nupdate does not take --${name}`)
+    if (Array.isArray(value) && !REPEATABLE_FLAGS.includes(name)) throw new Error(`${USAGE}\n--${name} is given more than once`)
     const values = Array.isArray(value) ? value : [value]
     if (values.some((v) => v === true || !v.trim())) throw new Error(`${USAGE}\n--${name} needs a value`)
   }
@@ -277,6 +281,10 @@ async function main(): Promise<void> {
       return
     }
     case "claims": {
+      // What this mini holds. On a person's key the same query would list
+      // their own issues that carry an old agent claim comment, and a
+      // `release` from that list would unassign them.
+      claimantFor(flags, readProfileMini())
       process.stdout.write(JSON.stringify(await tracker.listClaims()) + "\n")
       return
     }

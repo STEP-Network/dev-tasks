@@ -15,8 +15,9 @@ A Mac mini running agents uses:
 ```
 
 `mini` is that machine's name (`eve` on Eve's mini, `bob` on Bob's). Since
-1.1.0, `trackerctl claim` and `trackerctl heartbeat` act as that mini, and a
-machine without one (a laptop) is refused: only minis claim.
+1.1.0, `trackerctl claim` and `trackerctl heartbeat` act as that mini, and on
+a machine without one (a laptop) they and `trackerctl claims` are refused:
+only minis claim.
 
 An absent file means `human`. `DEV_TASKS_PROFILE=agent` overrides it for one
 process. A file that is present but corrupt resolves to `agent`, deliberately:
