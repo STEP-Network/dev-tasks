@@ -6,6 +6,7 @@
  * places; agentd treats done as the truth (Task 13).
  */
 
+import { createHash } from "node:crypto"
 import { existsSync, readdirSync, rmSync } from "node:fs"
 import { join } from "node:path"
 import type { AgentPaths } from "./config.ts"
@@ -86,17 +87,37 @@ export interface WatchedPr {
   notified?: string
 }
 
-const watchedPath = (paths: AgentPaths) => join(paths.state, "prs.json")
+/**
+ * One file per PR, in state/prs/, named by its URL's hash. The runner only
+ * adds files (recordPr) and agentd's watcher only changes or removes the ones
+ * it read, so neither process can drop the other's write, as two
+ * read-change-write cycles of one shared list could.
+ */
+const watchedDir = (paths: AgentPaths) => join(paths.state, "prs")
+const watchedFile = (paths: AgentPaths, url: string) => join(watchedDir(paths), `${createHash("sha256").update(url).digest("hex").slice(0, 32)}.json`)
 
 export function readWatchedPrs(paths: AgentPaths): WatchedPr[] {
-  return readJson<WatchedPr[]>(watchedPath(paths)) ?? []
+  const dir = watchedDir(paths)
+  if (!existsSync(dir)) return []
+  return readdirSync(dir)
+    .filter((f) => f.endsWith(".json"))
+    .map((f) => readJson<WatchedPr>(join(dir, f)))
+    .filter((p): p is WatchedPr => p !== null)
+    .sort((a, b) => a.openedAt.localeCompare(b.openedAt))
 }
 
-export function writeWatchedPrs(paths: AgentPaths, list: WatchedPr[]): void {
-  writeJsonAtomic(watchedPath(paths), list)
-}
-
+/** Starts watching a PR. A PR already watched keeps its record, `notified` included. */
 export function recordPr(paths: AgentPaths, pr: WatchedPr): void {
-  const list = readWatchedPrs(paths)
-  if (!list.some((p) => p.url === pr.url)) writeWatchedPrs(paths, [...list, pr])
+  const file = watchedFile(paths, pr.url)
+  if (!existsSync(file)) writeJsonAtomic(file, pr)
+}
+
+/** Rewrites a watched PR's record. One forgotten meanwhile stays forgotten. */
+export function updateWatchedPr(paths: AgentPaths, pr: WatchedPr): void {
+  const file = watchedFile(paths, pr.url)
+  if (existsSync(file)) writeJsonAtomic(file, pr)
+}
+
+export function forgetWatchedPr(paths: AgentPaths, url: string): void {
+  rmSync(watchedFile(paths, url), { force: true })
 }

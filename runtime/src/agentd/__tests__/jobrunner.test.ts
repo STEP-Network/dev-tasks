@@ -111,6 +111,22 @@ describe("superviseJobs", () => {
     expect(outbox(paths)[0]).toMatch(/^STEP-1: the worker overran its wall clock of 90 minutes and was stopped\./)
   })
 
+  it("says nothing of a worker that reported in the moment before it exited", () => {
+    const { paths, deps } = setup()
+    const job = running(paths, "STEP-1", {})
+    const result = { status: "done" as const, reason: "done", prUrl: "https://github.com/x/pull/9", branch: "STEP-1-x", costUsd: 2, turns: 40, minutes: 30 }
+    superviseJobs({
+      ...deps,
+      // The runner moves its job to done and exits, between agentd's listing and its look at the pid.
+      isAlive: () => {
+        moveJob(paths, job.id, "running", "done", { result })
+        return false
+      },
+    })
+    expect(listJobs(paths, "done")[0].result).toEqual(result)
+    expect(outbox(paths)).toEqual([])
+  })
+
   it("clears a job a crash left in both running and done", () => {
     const { paths, deps } = setup()
     const job = running(paths, "STEP-1", {})

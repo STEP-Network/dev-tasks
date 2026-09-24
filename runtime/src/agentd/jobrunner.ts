@@ -36,10 +36,14 @@ export interface JobRunnerDeps {
 
 const GRACE_MINUTES = 10
 
-/** Moves a job that will never report to done, as blocked, and tells #polads-agents. */
-function endBlocked(deps: JobRunnerDeps, job: JobRecord, reason: string, startedAt: number, notice: string): void {
+/**
+ * Moves a job that will never report to done, as blocked, and tells
+ * #polads-agents. Nothing is said when the job has left running meanwhile:
+ * its runner reported after all, in the moment before it exited.
+ */
+function endBlocked(deps: JobRunnerDeps, job: JobRecord, reason: string, startedAt: number, notice: string): boolean {
   const now = deps.now()
-  moveJob(deps.paths, job.id, "running", "done", {
+  const moved = moveJob(deps.paths, job.id, "running", "done", {
     endedAt: now.toISOString(),
     result: {
       status: "blocked",
@@ -51,8 +55,10 @@ function endBlocked(deps: JobRunnerDeps, job: JobRecord, reason: string, started
       minutes: Math.round((now.getTime() - startedAt) / 60_000),
     },
   })
+  if (!moved) return false
   appendLedger(deps.paths, { type: "worker.end", issue: job.issue, status: "blocked", reason }, now)
   enqueueSlack(deps.paths, { kind: "post", channel: "agents", text: `${job.issue}: ${reason}. ${notice}` }, now)
+  return true
 }
 
 export function superviseJobs(deps: JobRunnerDeps): void {
@@ -72,7 +78,7 @@ export function superviseJobs(deps: JobRunnerDeps): void {
       const reason = job.killRequestedAt
         ? `the worker overran its wall clock of ${deps.config.worker.wallClockMinutes} minutes and was stopped`
         : "the worker process died before reporting"
-      endBlocked(
+      const said = endBlocked(
         deps,
         job,
         reason,
@@ -80,7 +86,7 @@ export function superviseJobs(deps: JobRunnerDeps): void {
         `Anything it committed stays on this mini's local branch, where the next run of ${job.issue} here starts from it. ` +
           `Its claim is released after ${deps.config.claims.ttlHours} hours unless someone takes the issue first.`,
       )
-      deps.log.warn("worker gone without reporting", { issue: job.issue, pid: job.pid, reason })
+      if (said) deps.log.warn("worker gone without reporting", { issue: job.issue, pid: job.pid, reason })
       continue
     }
     busy = true
