@@ -37,7 +37,7 @@ export interface FakeLinear {
   close(): Promise<void>
 }
 
-/** Linear's GraphQL endpoint on loopback, for DEV_TASKS_LINEAR_ENDPOINT. It answers every query as Eve's viewer. */
+/** Linear's GraphQL endpoint on loopback, for DEV_TASKS_LINEAR_ENDPOINT: Eve as the viewer, and an empty queue. */
 export async function startFakeLinear(): Promise<FakeLinear> {
   const requests: FakeLinear["requests"] = []
   const server = createServer((req, res) => {
@@ -46,7 +46,10 @@ export async function startFakeLinear(): Promise<FakeLinear> {
     req.on("end", () => {
       requests.push({ authorization: req.headers.authorization, body })
       res.writeHead(200, { "content-type": "application/json" })
-      res.end(JSON.stringify({ data: { viewer: { id: "user-eve", name: "Eve", email: "eve@polads.eu" } } }))
+      const data = body.includes("viewer")
+        ? { viewer: { id: "user-eve", name: "Eve", email: "eve@polads.eu" } }
+        : { issues: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } } }
+      res.end(JSON.stringify({ data }))
     })
   })
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", () => resolve()))
