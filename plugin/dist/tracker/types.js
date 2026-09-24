@@ -5,6 +5,33 @@
  *
  * Source of truth for the shapes: the two-flow spec sections 5, 9.1 and 10.
  */
+/** Every claim comment starts with this. The heartbeat edits the same comment (spec 6.5). */
+export const CLAIM_PREFIX = "claimed by ";
+const CLAIM_RE = /^claimed by (\S+) at (\S+)/;
+export function claimCommentBody(claimant, at) {
+    return `${CLAIM_PREFIX}${claimant} at ${at}`;
+}
+export function parseClaim(body) {
+    const m = CLAIM_RE.exec(body);
+    return m ? { claimant: m[1], claimedAt: m[2] } : null;
+}
+/** Keeps the claim line and replaces any earlier heartbeat line. */
+export function withHeartbeat(body, at) {
+    return `${body.split("\n")[0]}\nheartbeat ${at}`;
+}
+/** The newest claim among `comments`, optionally only `claimant`'s. */
+export function newestClaim(comments, claimant) {
+    let best = null;
+    for (const c of comments) {
+        const parsed = parseClaim(c.body);
+        if (!parsed || (claimant !== undefined && parsed.claimant !== claimant))
+            continue;
+        const record = { claimant: parsed.claimant, commentId: c.id, claimedAt: parsed.claimedAt, heartbeatAt: c.editedAt ?? c.createdAt };
+        if (!best || record.claimedAt > best.claimedAt)
+            best = record;
+    }
+    return best;
+}
 /**
  * The real Linear team key. The spec writes `POL-123`; that is superseded by
  * `lib/ci/pr-task-trace.ts` in the PolAds repo, which is what the `Task trace`

@@ -8,8 +8,15 @@
  * multi-line prose containing spaces, quotes and newlines.
  */
 
-import { describe, it, expect } from "vitest"
-import { parseArgs } from "../../../scripts/trackerctl.ts"
+import { describe, it, expect, beforeEach, afterEach } from "vitest"
+import { spawnSync } from "node:child_process"
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { dirname, join, resolve } from "node:path"
+import { fileURLToPath } from "node:url"
+import { buildPatch, claimantFor, parseArgs, readProfileMini } from "../../../scripts/trackerctl.ts"
+
+const PLUGIN_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../../..")
 
 describe("parseArgs", () => {
   it("reads a subcommand and its positional", () => {
@@ -44,4 +51,107 @@ describe("parseArgs", () => {
   it("throws a usage error on no subcommand at all", () => {
     expect(() => parseArgs([])).toThrowError(/usage/i)
   })
+})
+
+describe("buildPatch", () => {
+  const read = (path: string) => `contents of ${path}`
+
+  it("maps every flag onto the patch", () => {
+    const { flags } = parseArgs([
+      "update", "STEP-1",
+      "--state", "On hold",
+      "--add-label", "awaiting-answer",
+      "--remove-label", "agent-ready",
+      "--remove-label", "chore",
+      "--description-file", "/tmp/brief.md",
+      "--assign", "me",
+    ])
+    expect(buildPatch(flags, read)).toEqual({
+      state: "On hold",
+      addLabels: ["awaiting-answer"],
+      removeLabels: ["agent-ready", "chore"],
+      description: "contents of /tmp/brief.md",
+      assignee: "me",
+    })
+  })
+
+  it("reads --assign none as unassign", () => {
+    expect(buildPatch(parseArgs(["update", "STEP-1", "--assign", "none"]).flags, read)).toEqual({ assignee: null })
+  })
+
+  it("refuses an unknown assignee and an empty update as usage errors", () => {
+    expect(() => buildPatch(parseArgs(["update", "STEP-1", "--assign", "alice"]).flags, read)).toThrow(/^usage:/)
+    expect(() => buildPatch(parseArgs(["update", "STEP-1"]).flags, read)).toThrow(/^usage:/)
+  })
+
+  it("refuses an empty description file rather than blank the issue", () => {
+    // /refine writes the brief to a file first. An empty file means that
+    // write failed, and sending it would wipe the issue's description.
+    const flags = parseArgs(["update", "STEP-1", "--description-file", "/tmp/brief.md"]).flags
+    expect(() => buildPatch(flags, () => " \n")).toThrow(/^usage:[\s\S]*empty/)
+  })
+})
+
+describe("the claimant is this machine's mini", () => {
+  let home: string
+
+  const writeProfile = (body: string) => writeFileSync(join(home, ".claude", "dev-tasks-profile.json"), body)
+
+  beforeEach(() => {
+    home = mkdtempSync(join(tmpdir(), "trackerctl-home-"))
+    mkdirSync(join(home, ".claude"))
+  })
+
+  afterEach(() => {
+    rmSync(home, { recursive: true, force: true })
+  })
+
+  it("reads the mini from the profile, and null wherever there is none", () => {
+    expect(readProfileMini(home)).toBeNull()
+    writeProfile('{ "profile": "human", "devSurface": "localhost", "mini": null }')
+    expect(readProfileMini(home)).toBeNull()
+    writeProfile('{ "profile": "agent", "devSurface": "preview", "mini": "" }')
+    expect(readProfileMini(home)).toBeNull()
+    writeProfile("{ this is not json")
+    expect(readProfileMini(home)).toBeNull()
+    writeProfile('{ "profile": "agent", "devSurface": "preview", "mini": "eve" }')
+    expect(readProfileMini(home)).toBe("eve")
+    writeProfile('{ "profile": "agent", "devSurface": "preview", "mini": "bob" }')
+    expect(readProfileMini(home)).toBe("bob")
+  })
+
+  it("claims as the profile's mini, whichever mini that is", () => {
+    expect(claimantFor({}, "eve")).toBe("eve")
+    expect(claimantFor({}, "bob")).toBe("bob")
+  })
+
+  it("refuses on a machine with no mini: only minis claim", () => {
+    // Not a usage error: the command was right, the machine is not a mini.
+    expect(() => claimantFor({}, null)).toThrow(/^only an agent mini claims/)
+  })
+
+  it("takes --as only when it names this machine's mini", () => {
+    expect(claimantFor(parseArgs(["claim", "STEP-1", "--as", "eve"]).flags, "eve")).toBe("eve")
+    expect(() => claimantFor(parseArgs(["claim", "STEP-1", "--as", "bob"]).flags, "eve")).toThrow(/^usage:[\s\S]*eve/)
+  })
+
+  it("refuses a mini name a claim comment could not carry", () => {
+    // parseClaim reads the claimant up to the first space, so "eve mini"
+    // would claim issues the heartbeat and the sweeper then never find.
+    expect(() => claimantFor({}, "eve mini")).toThrow(/eve mini/)
+    expect(() => claimantFor({}, "Eve")).toThrow(/Eve/)
+  })
+
+  it.each(["claim", "heartbeat"])("%s on the command line stops on a laptop before it reaches the tracker", (command) => {
+    // The whole CLI, as a skill runs it, with no profile and no Linear key
+    // in reach: a run that got past the refusal would fail on the key instead.
+    const run = spawnSync(join(PLUGIN_ROOT, "node_modules", ".bin", "tsx"), [join(PLUGIN_ROOT, "scripts", "trackerctl.ts"), command, "STEP-1"], {
+      cwd: home,
+      env: { PATH: process.env.PATH ?? "", HOME: home, DEV_TASKS_TRACKER: "linear", TRACKERCTL_MAX_WRITES: "0" },
+      encoding: "utf8",
+    })
+    expect(run.stderr).toMatch(/only an agent mini claims/)
+    expect(run.status).toBe(1)
+    expect(run.stdout).toBe("")
+  }, 30_000)
 })

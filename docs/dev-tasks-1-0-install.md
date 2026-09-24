@@ -11,8 +11,12 @@ JSON
 A Mac mini running agents uses:
 
 ```json
-{ "profile": "agent", "devSurface": "preview", "mini": "bob" }
+{ "profile": "agent", "devSurface": "preview", "mini": "eve" }
 ```
+
+`mini` is that machine's name (`eve` on Eve's mini, `bob` on Bob's). Since
+1.1.0, `trackerctl claim` and `trackerctl heartbeat` act as that mini, and a
+machine without one (a laptop) is refused: only minis claim.
 
 An absent file means `human`. `DEV_TASKS_PROFILE=agent` overrides it for one
 process. A file that is present but corrupt resolves to `agent`, deliberately:
@@ -21,7 +25,7 @@ a machine somebody configured must not silently disarm its own guards.
 Check it:
 
 ```bash
-bash ~/.claude/plugins/cache/dev-tasks-marketplace/dev-tasks/1.0.3/hooks/lib/profile.sh get profile
+bash ~/.claude/plugins/cache/dev-tasks-marketplace/dev-tasks/1.1.0/hooks/lib/profile.sh get profile
 ```
 
 ## 2. Refresh the plugin cache
@@ -46,7 +50,7 @@ Confirm the version:
 ```bash
 ls ~/.claude/plugins/cache/dev-tasks-marketplace/dev-tasks/
 ```
-Expected: `1.0.3`.
+Expected: `1.1.0`.
 
 ## 3. `.claude/project-config.json`
 
@@ -112,7 +116,7 @@ argument. `LINEAR_API_KEY` in the environment wins over the file.
 
 ```bash
 cd <consumer-project>
-npx tsx ~/.claude/plugins/cache/dev-tasks-marketplace/dev-tasks/1.0.3/scripts/trackerctl.ts ready --limit 3
+npx tsx ~/.claude/plugins/cache/dev-tasks-marketplace/dev-tasks/1.1.0/scripts/trackerctl.ts ready --limit 3
 ```
 
 Expected: one line of JSON, an array of up to three issues. An empty array is

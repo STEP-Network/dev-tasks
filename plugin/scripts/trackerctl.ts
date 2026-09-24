@@ -4,7 +4,8 @@
  *
  * Every subcommand prints exactly ONE line of JSON to stdout and nothing
  * else, so a skill can pipe it through `jq -r`. Diagnostics go to stderr.
- * Exit 0 on success, 1 on a tracker error, 64 on a usage error.
+ * Exit 0 on success, 1 on a tracker error or a refused claim, 64 on a
+ * usage error.
  *
  *   trackerctl read STEP-123
  *   trackerctl branch STEP-123
@@ -12,16 +13,30 @@
  *   trackerctl comment STEP-123 --body "opened PR #42"
  *   trackerctl attach STEP-123 --url https://github.com/... --title "PR #42"
  *   trackerctl ready --limit 10
- *   trackerctl claim STEP-123 --as bob
+ *   trackerctl claim STEP-123
+ *   trackerctl whoami
+ *   trackerctl update STEP-123 --state "On hold" --add-label awaiting-answer --description-file brief.md
+ *   trackerctl heartbeat STEP-123
+ *   trackerctl release STEP-123 --reason "claim expired"
+ *   trackerctl claims
+ *   trackerctl list --state Triage --limit 20
  *
  * The provider comes from `tracker.provider` in the .claude/project-config.json
  * at the git toplevel (default monday), overridable with DEV_TASKS_TRACKER. A
  * missing or unparseable file or an unknown value still means monday, with a
  * warning on stderr.
+ *
+ * `claim` and `heartbeat` act as this machine's mini: the `mini` field of
+ * ~/.claude/dev-tasks-profile.json. Only a mini claims, so a machine without
+ * one (a laptop) is refused before the tracker is touched. `--as`, if given,
+ * must name that same mini.
  */
 
+import { readFileSync } from "node:fs"
+import { homedir } from "node:os"
+import { join } from "node:path"
 import { resolveTracker } from "../src/tracker/index.ts"
-import { branchNameFor } from "../src/tracker/types.ts"
+import { branchNameFor, type IssuePatch } from "../src/tracker/types.ts"
 
 export interface ParsedArgs {
   command: string
@@ -29,7 +44,7 @@ export interface ParsedArgs {
   flags: Record<string, string | string[] | true>
 }
 
-const USAGE = `usage: trackerctl <read|branch|create|comment|attach|ready|claim> [args]`
+const USAGE = `usage: trackerctl <read|branch|create|comment|attach|ready|claim|whoami|update|heartbeat|release|claims|list> [args]`
 
 export function parseArgs(argv: string[]): ParsedArgs {
   if (argv.length === 0) throw new Error(USAGE)
@@ -81,6 +96,79 @@ function list(flags: ParsedArgs["flags"], name: string): string[] | undefined {
 function requireArg(value: string | undefined, name: string): string {
   if (!value) throw new Error(`${USAGE}\nmissing required --${name}`)
   return value
+}
+
+/** `update`'s flags as a patch. Throws a usage error for a bad --assign, an empty description file or an empty update. */
+export function buildPatch(flags: ParsedArgs["flags"], readText: (path: string) => string): IssuePatch {
+  const patch: IssuePatch = {}
+  const state = str(flags, "state")
+  if (state) patch.state = state
+  const add = list(flags, "add-label")
+  if (add) patch.addLabels = add
+  const remove = list(flags, "remove-label")
+  if (remove) patch.removeLabels = remove
+  const file = str(flags, "description-file")
+  if (file) {
+    // An empty brief means the write that made it failed. Sent as is, it
+    // would blank the issue's description.
+    const description = readText(file)
+    if (!description.trim()) throw new Error(`${USAGE}\n--description-file ${file} is empty`)
+    patch.description = description
+  }
+  const assign = str(flags, "assign")
+  if (assign !== undefined) {
+    if (assign === "me") patch.assignee = "me"
+    else if (assign === "none") patch.assignee = null
+    else throw new Error(`${USAGE}\n--assign takes me or none`)
+  }
+  if (Object.keys(patch).length === 0) {
+    throw new Error(`${USAGE}\nupdate needs one of --state --add-label --remove-label --description-file --assign`)
+  }
+  return patch
+}
+
+/**
+ * This machine's mini: the `mini` field of ~/.claude/dev-tasks-profile.json,
+ * the file hooks/lib/profile.sh reads. null when there is none: no file, a
+ * laptop's `"mini": null`, an empty name, or a file that does not parse.
+ */
+export function readProfileMini(home: string = homedir()): string | null {
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(readFileSync(join(home, ".claude", "dev-tasks-profile.json"), "utf8"))
+  } catch {
+    return null
+  }
+  const mini = (parsed as { mini?: unknown } | null)?.mini
+  return typeof mini === "string" && mini.trim() ? mini.trim() : null
+}
+
+// The runtime's config.json holds the same name to the same pattern. A claim
+// comment's claimant runs to the first space, so nothing wider round-trips.
+const MINI_RE = /^[a-z][a-z0-9-]*$/
+
+/**
+ * Who `claim` and `heartbeat` act as: this machine's mini, never a name from
+ * the command line. A laptop has no mini and is refused: only minis claim.
+ */
+export function claimantFor(flags: ParsedArgs["flags"], mini: string | null): string {
+  if (!mini) {
+    throw new Error(
+      `only an agent mini claims: ~/.claude/dev-tasks-profile.json on this machine has no "mini". ` +
+        `A mini's profile is { "profile": "agent", "devSurface": "preview", "mini": "<name>" }.`,
+    )
+  }
+  if (!MINI_RE.test(mini)) {
+    throw new Error(
+      `the profile's mini ${JSON.stringify(mini)} is not a name a claim comment can carry: ` +
+        `lowercase letters, digits and dashes, starting with a letter.`,
+    )
+  }
+  const as = str(flags, "as")
+  if (as !== undefined && as !== mini) {
+    throw new Error(`${USAGE}\n--as ${as} is not this machine's mini (${mini}); leave --as out`)
+  }
+  return mini
 }
 
 async function main(): Promise<void> {
@@ -140,11 +228,47 @@ async function main(): Promise<void> {
       return
     }
     case "claim": {
-      const issue = await tracker.claimIssue(
-        requireArg(positional[0], "ref (positional)"),
-        requireArg(str(flags, "as"), "as"),
-      )
+      const ref = requireArg(positional[0], "ref (positional)")
+      const issue = await tracker.claimIssue(ref, claimantFor(flags, readProfileMini()))
       process.stdout.write(JSON.stringify(issue) + "\n")
+      return
+    }
+    case "whoami": {
+      process.stdout.write(JSON.stringify(await tracker.whoami()) + "\n")
+      return
+    }
+    case "update": {
+      const patch = buildPatch(flags, (path) => readFileSync(path, "utf8"))
+      const issue = await tracker.updateIssue(requireArg(positional[0], "ref (positional)"), patch)
+      process.stdout.write(JSON.stringify(issue) + "\n")
+      return
+    }
+    case "heartbeat": {
+      const ref = requireArg(positional[0], "ref (positional)")
+      const touched = await tracker.touchClaim(ref, claimantFor(flags, readProfileMini()))
+      process.stdout.write(JSON.stringify({ touched }) + "\n")
+      return
+    }
+    case "release": {
+      await tracker.releaseIssue(
+        requireArg(positional[0], "ref (positional)"),
+        requireArg(str(flags, "reason"), "reason"),
+      )
+      process.stdout.write(JSON.stringify({ ok: true }) + "\n")
+      return
+    }
+    case "claims": {
+      process.stdout.write(JSON.stringify(await tracker.listClaims()) + "\n")
+      return
+    }
+    case "list": {
+      const raw = str(flags, "limit")
+      const limit = raw ? Number.parseInt(raw, 10) : 50
+      const issues = await tracker.listByState(
+        requireArg(str(flags, "state"), "state"),
+        Number.isFinite(limit) && limit > 0 ? limit : 50,
+      )
+      process.stdout.write(JSON.stringify(issues) + "\n")
       return
     }
     default:
