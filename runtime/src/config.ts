@@ -81,6 +81,12 @@ export const ConfigSchema = z.object({
       .prefault({}),
     /** Slack user ids whose messages count. Everyone else is ignored (spec 11). */
     allowedUsers: z.array(z.string().min(1)).min(1),
+    /**
+     * The bot user ids of the other agents' Slack apps (decision 3: one app
+     * per agent). A request that names several agents is filed by the first
+     * one it mentions, so each bridge must know the others' bots.
+     */
+    otherAgentBots: z.array(z.string().min(1)).default([]),
   }),
   frontDoor: z
     .object({
@@ -151,15 +157,19 @@ const PROFILE_SH = fileURLToPath(new URL("../../plugin/hooks/lib/profile.sh", im
 
 /**
  * This machine's mini as hooks/lib/profile.sh reports it (`get mini`), taken
- * as it is. null when it reports none: no profile, a laptop's `"mini": null`,
- * a file that does not parse, or no jq to read it with.
+ * as it is, the way trackerctl's readProfileMini takes it (plugin 1.1.1). null
+ * only for a clean exit with no answer: no profile, a laptop's `"mini": null`,
+ * a file that does not parse, or no jq to read it with (the reader's own
+ * fallbacks). Anything else (no bash, a moved or failing reader) throws: a
+ * broken reader must not pass for a machine without a mini.
  */
-export function readProfileMini(env: NodeJS.ProcessEnv = process.env): string | null {
+export function readProfileMini(env: NodeJS.ProcessEnv = process.env, script: string = PROFILE_SH): string | null {
   let out: string
   try {
-    out = execFileSync("bash", [PROFILE_SH, "get", "mini"], { encoding: "utf8", env, stdio: ["ignore", "pipe", "ignore"] })
-  } catch {
-    return null
+    out = execFileSync("bash", [script, "get", "mini"], { encoding: "utf8", env, stdio: ["ignore", "pipe", "pipe"] })
+  } catch (error) {
+    const stderr = String((error as { stderr?: unknown }).stderr ?? "").trim()
+    throw new Error(`agentd: ${script} could not report this machine's mini${stderr ? `: ${stderr}` : ""}`)
   }
   // jq -r ends its answer with one newline; nothing else is trimmed.
   const mini = out.replace(/\n$/, "")

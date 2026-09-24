@@ -9,7 +9,7 @@ import type { AgentPaths } from "../config.ts"
 import { ack, fail, listNew } from "../fsq.ts"
 import { appendLedger, redact, type Logger } from "../log.ts"
 import type { ChannelKey, OutboxMessage } from "../outbox.ts"
-import { saveThread, threadFor } from "../threads.ts"
+import { saveThread, threadFor, type ThreadRecord } from "../threads.ts"
 import { prefixed } from "./text.ts"
 
 /** The Web API calls a send makes. Tests pass a fake. */
@@ -29,6 +29,23 @@ export interface SendContext {
   /** Stores the thread link on the issue (spec 6.5). */
   attachThread(issue: string, permalink: string): Promise<void>
   now(): Date
+}
+
+/**
+ * The thread's link, stored on the thread and on the issue. Called after the
+ * message is out, so it never throws: a failure is a warning, and a thread
+ * still without a link gets another go with its next message.
+ */
+async function linkThread(ctx: SendContext, thread: ThreadRecord): Promise<{ warning?: string }> {
+  const permalink = await ctx.web.permalink(thread.channelId, thread.ts).catch(() => null)
+  if (!permalink) return { warning: `no permalink for the thread of ${thread.issue}` }
+  saveThread(ctx.paths, { ...thread, permalink })
+  try {
+    await ctx.attachThread(thread.issue, permalink)
+    return {}
+  } catch (error) {
+    return { warning: `could not attach the Slack thread to ${thread.issue}: ${error instanceof Error ? error.message : String(error)}` }
+  }
 }
 
 /**
@@ -61,8 +78,9 @@ export async function sendOutboxMessage(ctx: SendContext, msg: OutboxMessage, po
       if (existing) {
         await ctx.web.postMessage({ channel: existing.channelId, thread_ts: existing.ts, text: say(msg.text) })
         posted()
-        if (msg.question) saveThread(ctx.paths, { ...existing, lastQuestionAt: nowIso })
-        return {}
+        const thread = msg.question ? { ...existing, lastQuestionAt: nowIso } : existing
+        if (msg.question) saveThread(ctx.paths, thread)
+        return existing.permalink ? {} : linkThread(ctx, thread)
       }
       const about = await ctx.describeIssue(msg.issue).catch(() => null)
       const head = about ? `${msg.issue} ${about.title}\n${about.url}` : msg.issue
@@ -74,15 +92,7 @@ export async function sendOutboxMessage(ctx: SendContext, msg: OutboxMessage, po
       const thread = { issue: msg.issue, channelId: channel, ts, permalink: null, createdAt: nowIso, lastQuestionAt: msg.question ? nowIso : null }
       saveThread(ctx.paths, thread)
       posted()
-      const permalink = await ctx.web.permalink(channel, ts).catch(() => null)
-      if (!permalink) return { warning: `no permalink for the new thread of ${msg.issue}` }
-      saveThread(ctx.paths, { ...thread, permalink })
-      try {
-        await ctx.attachThread(msg.issue, permalink)
-        return {}
-      } catch (error) {
-        return { warning: `could not attach the Slack thread to ${msg.issue}: ${error instanceof Error ? error.message : String(error)}` }
-      }
+      return linkThread(ctx, thread)
     }
   }
 }
@@ -96,33 +106,55 @@ export function slackErrorCode(error: unknown): string | null {
 /** Refusals of the app itself, its token or its scopes, not of one message: nothing goes out until a person fixes it. */
 const ACCESS_REFUSALS = new Set([
   "invalid_auth", "not_authed", "account_inactive", "token_revoked", "token_expired", "team_access_not_granted",
-  "missing_scope", "no_permission", "not_allowed_token_type", "ekm_access_denied",
+  "missing_scope", "no_permission", "not_allowed_token_type", "access_denied", "ekm_access_denied",
 ])
+/** The bot cannot use a channel. In one of its own four, every later message there would fail too. */
+const CHANNEL_REFUSALS = new Set(["not_in_channel", "channel_not_found", "is_archived"])
 /** Slack's own trouble, reported as a refusal: worth another go, like the network. */
-const SLACK_TROUBLE = new Set(["internal_error", "fatal_error", "service_unavailable", "request_timeout", "ratelimited"])
+const SLACK_TROUBLE = new Set(["internal_error", "fatal_error", "service_unavailable", "request_timeout", "ratelimited", "rate_limited"])
 
 export function isSlackTrouble(error: unknown): boolean {
   const code = slackErrorCode(error)
   return code !== null && SLACK_TROUBLE.has(code)
 }
 
-/** What a failed send means for the queue. */
-export function sendFailure(error: unknown): "retry" | "drop" | "stop" {
+/**
+ * What a failed send means for the queue: retry (keep it, stop this drain),
+ * drop (move it to failed, carry on) or stop (keep everything and stop
+ * draining until a person has fixed the app). `ownChannel` names the bot's
+ * own channel the message went to, if it went to one of the four.
+ */
+export function sendFailure(error: unknown, ownChannel: ChannelKey | null = null): "retry" | "drop" | "stop" {
   const code = slackErrorCode(error)
   if (code === null || SLACK_TROUBLE.has(code)) return "retry"
-  // Any other refusal is about this message (a channel archived, a thread
-  // deleted, a text too long): kept waiting, it would hold up every one after it.
-  return ACCESS_REFUSALS.has(code) ? "stop" : "drop"
+  if (ACCESS_REFUSALS.has(code) || (ownChannel !== null && CHANNEL_REFUSALS.has(code))) return "stop"
+  // Any other refusal is about this message (a thread deleted, a text too
+  // long, a channel outside the four): kept waiting, it would hold up every one after it.
+  return "drop"
 }
 
-/** Slack refused the app itself: the bridge stops, and every message waits for a person to fix it. */
+/** Slack refused the app itself, or one of its four channels: the outbox waits, every message kept, for a person. */
 export class SlackAccessRefused extends Error {}
+
+/** Which of the bot's four channels a message goes to, if any. */
+function ownChannelOf(ctx: SendContext, msg: OutboxMessage): ChannelKey | null {
+  const byId = (id: string) => (Object.entries(ctx.channelIds) as Array<[ChannelKey, string]>).find(([, value]) => value === id)?.[0] ?? null
+  switch (msg.kind) {
+    case "post":
+      return msg.channel
+    case "reply":
+    case "react":
+      return byId(msg.channelId)
+    case "issue":
+      return byId(threadFor(ctx.paths, msg.issue)?.channelId ?? ctx.channelIds.questions)
+  }
+}
 
 /**
  * Posts what is waiting, oldest first. Stops at the first failure worth
  * retrying so the order holds, moves a message Slack refuses to failed, and
- * throws SlackAccessRefused, with every message still queued, when Slack
- * refuses the app itself.
+ * throws SlackAccessRefused, every message still queued, when Slack refuses
+ * the app itself or one of its four channels.
  */
 export async function drainOutbox(ctx: SendContext, log: Logger): Promise<number> {
   let sent = 0
@@ -133,18 +165,51 @@ export async function drainOutbox(ctx: SendContext, log: Logger): Promise<number
       if (payload.kind === "issue" && payload.question) appendLedger(ctx.paths, { type: "question.asked", issue: payload.issue }, ctx.now())
       sent++
     } catch (error) {
-      const failure = sendFailure(error)
+      const code = slackErrorCode(error)
+      const own = ownChannelOf(ctx, payload)
+      const failure = sendFailure(error, own)
       if (failure === "drop") {
         log.error("outbox message refused by Slack, moved to failed", { key, error: String(error) })
         fail(ctx.paths.outbox, key)
         continue
       }
       if (failure === "stop") {
-        throw new SlackAccessRefused(`slack-bridge: Slack refused the app (${slackErrorCode(error)}). Fix its token or scopes, then restart the bridge.`)
+        const what = code !== null && CHANNEL_REFUSALS.has(code) ? `a message to the ${own} channel (${ctx.channelIds[own!]})` : "the app"
+        throw new SlackAccessRefused(
+          `slack-bridge: Slack refused ${what}: ${code}. The outbox keeps every message: fix the app's token, scopes or channels, then restart the bridge.`,
+        )
       }
       log.warn("outbox waiting: Slack unreachable", { key, error: String(error) })
       break
     }
   }
   return sent
+}
+
+/**
+ * Drains the outbox every `everyMs` until Slack refuses the app. Then it
+ * stops for good, every message kept, and hands the reason to `refused` for
+ * bridge.json: the token is read at start, so nothing changes until a person
+ * fixes the app and restarts the bridge. Returns the stop.
+ */
+export function startOutbox(ctx: SendContext, log: Logger, refused: (reason: string) => void, everyMs = 2_000): () => void {
+  let draining = false
+  const timer = setInterval(async () => {
+    if (draining) return
+    draining = true
+    try {
+      await drainOutbox(ctx, log)
+    } catch (error) {
+      if (error instanceof SlackAccessRefused) {
+        clearInterval(timer)
+        log.error("outbox stopped", { error: error.message })
+        refused(error.message)
+      } else {
+        log.error("outbox drain failed", { error: String(error) })
+      }
+    } finally {
+      draining = false
+    }
+  }, everyMs)
+  return () => clearInterval(timer)
 }

@@ -7,7 +7,7 @@ import { countIn, listNew } from "../../fsq.ts"
 import type { Logger } from "../../log.ts"
 import { enqueueSlack } from "../../outbox.ts"
 import { threadFor } from "../../threads.ts"
-import { drainOutbox, sendOutboxMessage, SlackAccessRefused, type SendContext, type SlackWeb } from "../send.ts"
+import { drainOutbox, sendOutboxMessage, SlackAccessRefused, startOutbox, type SendContext, type SlackWeb } from "../send.ts"
 
 const quiet: Logger = { info() {}, warn() {}, error() {} }
 
@@ -55,6 +55,18 @@ describe("sendOutboxMessage", () => {
     expect(posts[0]).toEqual({ channel: "CQ", text: "eve: STEP-7 Fix the date\nhttps://linear.app/step/issue/STEP-7\n\nWhich date?" })
     expect(posts[1]).toEqual({ channel: "CQ", thread_ts: "9001.1", text: "eve: And the label?" })
     expect(threadFor(ctx.paths, "STEP-7")).toMatchObject({ channelId: "CQ", ts: "9001.1", lastQuestionAt: "2026-09-24T08:00:00.000Z" })
+    expect(attached).toEqual([["STEP-7", "https://step.slack.com/archives/CQ/p90011"]])
+  })
+
+  it("fetches and stores a thread's link on its next message when it had none", async () => {
+    const { ctx, attached } = context()
+    let calls = 0
+    const permalink = ctx.web.permalink
+    ctx.web.permalink = async (channel, ts) => (++calls === 1 ? null : permalink(channel, ts))
+    await sendOutboxMessage(ctx, { kind: "issue", issue: "STEP-7", text: "Which date?", question: true })
+    expect(threadFor(ctx.paths, "STEP-7")?.permalink).toBeNull()
+    await sendOutboxMessage(ctx, { kind: "issue", issue: "STEP-7", text: "And the label?", question: true })
+    expect(threadFor(ctx.paths, "STEP-7")?.permalink).toBe("https://step.slack.com/archives/CQ/p90011")
     expect(attached).toEqual([["STEP-7", "https://step.slack.com/archives/CQ/p90011"]])
   })
 
@@ -128,8 +140,8 @@ describe("drainOutbox", () => {
     expect(posts.map((p) => p.text)).toEqual(["eve: claimed STEP-7"])
   })
 
-  it("waits, as for the network, when Slack reports trouble of its own", async () => {
-    const trouble = Object.assign(new Error("An API error occurred: internal_error"), { data: { error: "internal_error" } })
+  it.each(["internal_error", "rate_limited"])("waits, as for the network, when Slack reports trouble of its own (%s)", async (code) => {
+    const trouble = Object.assign(new Error(`An API error occurred: ${code}`), { data: { error: code } })
     const { ctx } = context({}, [trouble])
     enqueueSlack(ctx.paths, { kind: "post", channel: "agents", text: "one" }, new Date(1))
     expect(await drainOutbox(ctx, quiet)).toBe(0)
@@ -137,7 +149,7 @@ describe("drainOutbox", () => {
     expect(countIn(ctx.paths.outbox, "failed")).toBe(0)
   })
 
-  it.each(["token_revoked", "invalid_auth", "missing_scope"])("stops with every message kept, in order, when Slack refuses the app itself (%s)", async (code) => {
+  it.each(["token_revoked", "invalid_auth", "missing_scope", "access_denied"])("stops with every message kept, in order, when Slack refuses the app itself (%s)", async (code) => {
     // Not this message's fault: moving each to failed would empty the queue while nobody notices.
     const refused = Object.assign(new Error(`An API error occurred: ${code}`), { data: { error: code } })
     const { ctx, posts } = context({}, [refused])
@@ -146,6 +158,16 @@ describe("drainOutbox", () => {
     await expect(drainOutbox(ctx, quiet)).rejects.toThrow(SlackAccessRefused)
     await expect(drainOutbox(ctx, quiet)).resolves.toBe(2)
     expect(posts.map((p) => p.text)).toEqual(["eve: one", "eve: two"])
+    expect(countIn(ctx.paths.outbox, "failed")).toBe(0)
+  })
+
+  it("stops, as for the app, when the bot is out of one of its own four channels", async () => {
+    // Every later message for that channel would fail too: a person must invite it back.
+    const outOf = Object.assign(new Error("An API error occurred: not_in_channel"), { data: { error: "not_in_channel" } })
+    const { ctx } = context({}, [outOf])
+    enqueueSlack(ctx.paths, { kind: "post", channel: "agents", text: "claimed STEP-7" }, new Date(1))
+    await expect(drainOutbox(ctx, quiet)).rejects.toThrow(/agents channel \(CAG\).*not_in_channel/)
+    expect(countIn(ctx.paths.outbox, "new")).toBe(1)
     expect(countIn(ctx.paths.outbox, "failed")).toBe(0)
   })
 
@@ -176,6 +198,33 @@ describe("drainOutbox", () => {
     enqueueSlack(ctx.paths, { kind: "react", channelId: "CQ", ts: "1700.5", name: "white_check_mark" })
     expect(await drainOutbox(ctx, quiet)).toBe(1)
     expect(countIn(ctx.paths.outbox, "failed")).toBe(0)
+  })
+
+  it("keeps draining through the network's trouble", async () => {
+    const { ctx, posts } = context({}, [Object.assign(new Error("fetch failed"), { code: "slack_webapi_request_error" })])
+    enqueueSlack(ctx.paths, { kind: "post", channel: "agents", text: "one" }, new Date(1))
+    const stop = startOutbox(ctx, quiet, () => {}, 5)
+    await new Promise((resolve) => setTimeout(resolve, 60))
+    stop()
+    expect(posts.map((p) => p.text)).toEqual(["eve: one"])
+  })
+
+  it("stops for good when Slack refuses the app, keeps every message, and says why once", async () => {
+    let tries = 0
+    const { ctx } = context()
+    ctx.web.postMessage = async () => {
+      tries++
+      throw Object.assign(new Error("An API error occurred: token_revoked"), { data: { error: "token_revoked" } })
+    }
+    enqueueSlack(ctx.paths, { kind: "post", channel: "agents", text: "one" }, new Date(1))
+    enqueueSlack(ctx.paths, { kind: "post", channel: "agents", text: "two" }, new Date(2))
+    const reasons: string[] = []
+    const stop = startOutbox(ctx, quiet, (reason) => void reasons.push(reason), 5)
+    await new Promise((resolve) => setTimeout(resolve, 60))
+    stop()
+    expect(tries).toBe(1)
+    expect(reasons).toEqual([expect.stringMatching(/token_revoked/)])
+    expect(countIn(ctx.paths.outbox, "new")).toBe(2)
   })
 
   it("records each posted question in the ledger", async () => {

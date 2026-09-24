@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { answerTransition, appendAnswer, intakeIssue, prefixed, truncateChars } from "../text.ts"
+import { answerTransition, appendAnswer, fromSlack, intakeIssue, mentionedUsers, prefixed, stripMention, truncateChars } from "../text.ts"
 
 describe("prefixed and truncateChars", () => {
   it("puts the mini's name first", () => {
@@ -18,8 +18,38 @@ describe("prefixed and truncateChars", () => {
   })
 })
 
+describe("Slack markup", () => {
+  const raw = "Fix &lt;title&gt; &amp; date on <https://test.polads.eu/da|the notice page>, ask <@UNATE> in <#C1|polads-intake> <!here>"
+
+  it("reads as Markdown in a description, with mentions named", () => {
+    expect(fromSlack(raw, { UNATE: "Nate" })).toBe("Fix <title> & date on [the notice page](https://test.polads.eu/da), ask @Nate in #polads-intake @here")
+  })
+
+  it("reads as plain text in a title", () => {
+    expect(fromSlack(raw, { UNATE: "Nate" }, "plain")).toBe("Fix <title> & date on the notice page, ask @Nate in #polads-intake @here")
+  })
+
+  it("keeps a bare link, a legacy named mention, and an id it has no name for", () => {
+    expect(fromSlack("<https://x.eu/a?b=1&amp;c=2> <@U1|eve> <@U9> <!subteam^S1|@devs>")).toBe("https://x.eu/a?b=1&c=2 @eve @U9 @devs")
+  })
+
+  it("lists the users a message mentions, in order, and strips this bot's mention in either form", () => {
+    expect(mentionedUsers("<@UOTHER> and <@UBOT|eve>, not <#C1|x>")).toEqual(["UOTHER", "UBOT"])
+    expect(stripMention("<@UBOT|eve> fix it, <@UBOT>", "UBOT")).toBe("fix it,")
+  })
+})
+
 describe("intakeIssue", () => {
   const meta = { userName: "Nate", permalink: "https://step.slack.com/archives/CIN/p1727", botUserId: "UBOT", product: "polads" }
+
+  it("files readable text: the title plain, the description Markdown, mentions named", () => {
+    expect(
+      intakeIssue("<@UBOT> The <https://test.polads.eu/da|notice page> shows &lt;none&gt;\nAs <@UKARL> saw", { ...meta, names: { UKARL: "Karl" } }),
+    ).toMatchObject({
+      title: "The notice page shows <none>",
+      description: "The [notice page](https://test.polads.eu/da) shows <none>\nAs @Karl saw\n\n---\nFiled from Slack by Nate: https://step.slack.com/archives/CIN/p1727",
+    })
+  })
 
   it("uses the first line as the title and keeps the whole request, with who and where", () => {
     expect(intakeIssue("<@UBOT>  The notice page shows the wrong date\nSeen on test.polads.eu/da/notices/123", meta)).toEqual({
@@ -48,6 +78,13 @@ describe("appendAnswer", () => {
     const twice = appendAnswer(once, { ...answer, ts: "1728.1", text: "And the Danish label", permalink: null })
     expect(twice.match(/## Answers from Slack/g)).toHaveLength(1)
     expect(twice.endsWith("<!-- slack:1728.1 -->\n**Nate**: And the Danish label")).toBe(true)
+  })
+
+  it("still knows an answer by its Slack link when Linear has dropped the marker", () => {
+    // Linear rebuilds a description from its own document model (plugin 1.1.1 met this with claim comments).
+    const once = appendAnswer("## Goal\n\nFix it.", answer)
+    const rebuilt = once.replace("<!-- slack:1727.9 -->\n", "")
+    expect(appendAnswer(rebuilt, answer)).toBe(rebuilt)
   })
 })
 

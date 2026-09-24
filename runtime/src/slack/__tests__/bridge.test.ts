@@ -6,7 +6,7 @@ import { join } from "node:path"
 import { fileURLToPath } from "node:url"
 import { describe, expect, it } from "vitest"
 import { agentPaths, ConfigSchema } from "../../config.ts"
-import { listNew, putOnce } from "../../fsq.ts"
+import { countIn, listNew, putOnce } from "../../fsq.ts"
 import type { Logger } from "../../log.ts"
 import { threadFor } from "../../threads.ts"
 import { fakeTracker, issue } from "../../__tests__/fakes.ts"
@@ -30,7 +30,7 @@ function setup(seed = [issue({ id: "STEP-7" })], failOn: string[] = []) {
     },
     async react() {},
     async userName(id) {
-      return id === "UNATE" ? "Nate" : id
+      return ({ UNATE: "Nate", UKARL: "Karl" } as Record<string, string>)[id] ?? id
     },
   }
   const deps: BridgeDeps = {
@@ -41,6 +41,7 @@ function setup(seed = [issue({ id: "STEP-7" })], failOn: string[] = []) {
     classifyContext: {
       teamId: "T1",
       botUserId: "UBOT",
+      otherAgentBots: ["UOTHER"],
       allowedUsers: ["UNATE"],
       channels: { agents: "CAG", questions: "CQ", intake: "CIN", releases: "CREL" },
       issueForThread: (channel, ts) => (channel === "CQ" && ts === "1700.1" ? "STEP-7" : null),
@@ -98,6 +99,37 @@ describe("intake", () => {
     expect(fake.called("createIssue")).toHaveLength(0)
     expect(listNew(paths.inbox)).toEqual([])
     expect(outboxTexts(paths)).toEqual([])
+  })
+
+  it("leaves a request that names another agent first to that agent, and answers it as a mention", async () => {
+    const { deps, fake, paths } = setup()
+    expect(await handleEnvelope(deps, mention("app_mention", "<@UOTHER> <@UBOT> The date is wrong on notices"))).toBe("mention")
+    expect(fake.called("createIssue")).toHaveLength(0)
+    expect(listNew(paths.inbox)[0].payload).toMatchObject({ type: "mention", threadTs: "1800.1" })
+    expect(threadFor(paths, "STEP-901")).toBeNull()
+  })
+
+  it("files readable text: Slack's markup decoded and the people it mentions named", async () => {
+    const { deps, fake } = setup()
+    await handleEnvelope(deps, mention("app_mention", "<@UBOT> The <https://test.polads.eu/da|notice page> date &amp; time, as <@UKARL> saw"))
+    expect(fake.called("createIssue")[0][0]).toMatchObject({
+      title: "The notice page date & time, as @Karl saw",
+      description: expect.stringMatching(/^The \[notice page\]\(https:\/\/test\.polads\.eu\/da\) date & time, as @Karl saw\n/),
+    })
+  })
+
+  it("gives up on an intake Linear has refused for a whole day, and says so once", async () => {
+    const { deps, paths } = setup([], ["createIssue"])
+    putOnce(paths.inbox, "msg:CIN:1800.1", {
+      type: "intake", key: "msg:CIN:1800.1", channel: "CIN", ts: "1800.1", user: "UNATE", userName: "Nate",
+      text: "<@UBOT> The date is wrong", receivedAt: "2026-09-23T07:00:00.000Z",
+      linearId: "11111111-2222-4333-8444-555555555555", issue: null, toldUnfiled: true,
+    })
+    await retryPending(deps)
+    await retryPending(deps)
+    expect(listNew(paths.inbox)).toEqual([])
+    expect(countIn(paths.inbox, "failed")).toBe(1)
+    expect(outboxTexts(paths)).toEqual(["Linear refused this for a whole day, so I have stopped trying to file it. Please ask again."])
   })
 
   it("keeps an intake Linear refused, tells the thread once, and files it on a later retry", async () => {
@@ -186,6 +218,32 @@ describe("answers", () => {
     expect(listNew(paths.inbox)).toEqual([])
   })
 
+  it("are written into the issue readably", async () => {
+    const { deps, fake } = setup([issue({ id: "STEP-7", state: "On hold", labels: ["agent-ready", "awaiting-answer"] })])
+    await handleEnvelope(deps, reply("1700.5", "Use <https://x.eu/d|the publication date> &amp; ask <@UKARL>"))
+    expect(fake.issues.get("STEP-7")!.description).toContain("): Use [the publication date](https://x.eu/d) & ask @Karl")
+  })
+
+  it("to an issue Linear no longer has go to failed, with one reply saying so", async () => {
+    const { deps, paths } = setup([])
+    await handleEnvelope(deps, reply("1700.5", "Use the publication date"))
+    await retryPending(deps)
+    expect(listNew(paths.inbox)).toEqual([])
+    expect(countIn(paths.inbox, "failed")).toBe(1)
+    expect(outboxTexts(paths)).toEqual(["I could not add this answer to STEP-7, because STEP-7 is no longer in Linear."])
+  })
+
+  it("that Linear has refused for a whole day go to failed, with one reply saying so", async () => {
+    const { deps, paths } = setup([issue({ id: "STEP-7", state: "On hold" })], ["updateIssue"])
+    putOnce(paths.inbox, "msg:CQ:1700.5", {
+      type: "answer", key: "msg:CQ:1700.5", issue: "STEP-7", channel: "CQ", ts: "1700.5", threadTs: "1700.1",
+      user: "UNATE", userName: "Nate", text: "Yes", receivedAt: "2026-09-23T07:00:00.000Z",
+    })
+    await retryPending(deps)
+    expect(countIn(paths.inbox, "failed")).toBe(1)
+    expect(outboxTexts(paths)).toEqual(["Linear refused this answer for a whole day, so I have stopped trying to add it to STEP-7. Please post it again."])
+  })
+
   it("stay in the inbox when Linear is down and apply on a later retry", async () => {
     const { deps, paths } = setup([issue({ id: "STEP-7", state: "On hold", labels: ["agent-ready", "awaiting-answer"] })], ["updateIssue"])
     await handleEnvelope(deps, reply("1700.5", "Yes"))
@@ -253,6 +311,21 @@ describe("starting", () => {
     expect(run.status).toBe(0)
     const status = JSON.parse(readFileSync(join(h, ".agentd", "state", "bridge.json"), "utf8"))
     expect(status).toMatchObject({ connected: false, error: expect.stringMatching(/mini "eve".*mini "bob"/) })
+  }, 30_000)
+
+  it("as a process, will not run beside another bridge, and leaves that bridge's bridge.json alone", () => {
+    // A live process (this test runner) holds the lock, as launchd's bridge would.
+    const h = home("eve")
+    mkdirSync(join(h, ".agentd", "state"), { recursive: true })
+    writeFileSync(join(h, ".agentd", "state", "slack-bridge.pid"), String(process.pid))
+    const run = spawnSync(join(RUNTIME, "node_modules", ".bin", "tsx"), [join(RUNTIME, "src", "slack", "bridge.ts")], {
+      cwd: h,
+      env: { PATH: process.env.PATH ?? "", HOME: h },
+      encoding: "utf8",
+    })
+    expect(run.status).toBe(1)
+    expect(run.stderr).toMatch(new RegExp(`another bridge is running here, pid ${process.pid}`))
+    expect(() => readFileSync(join(h, ".agentd", "state", "bridge.json"), "utf8")).toThrow(/ENOENT/)
   }, 30_000)
 
   it("exits 1, for launchd to try again, only when Slack could not be reached or had trouble of its own", () => {

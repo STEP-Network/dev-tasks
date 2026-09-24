@@ -7,7 +7,10 @@
  * its own bot and on replies in threads it owns, intake included. The
  * mention is read from the text, never from the event type: the delivery an
  * app_mention subscription brings in proves nothing about whose name the
- * text carries.
+ * text carries. A request that names several agents is filed by the first
+ * agent it names, which owns its thread. Every other agent it names treats it
+ * as a mention, answered in that same thread, and takes none of the thread's
+ * later replies.
  *
  * In order:
  *  1. Another workspace (a Slack Connect channel) is ignored.
@@ -15,12 +18,15 @@
  *  3. People not on the allowlist are ignored. A Slack message can never
  *     grant a permission (spec 11); here it cannot even start work.
  *  4. A reply in a thread that belongs to one of this mini's issues is an answer.
- *  5. A top-level mention of this bot in #polads-intake is intake.
+ *  5. A top-level message in #polads-intake that names this bot before any
+ *     other agent is intake.
  *  6. Any other mention of this bot is a mention, answered in its thread.
  *  7. Everything else is ignored, other agents' mentions included.
  * Both copies of a mentioning message (app_mention and message) get the key
  * msg:<channel>:<ts>, so the queue keeps one.
  */
+
+import { mentionedUsers } from "./text.ts"
 
 export interface SlackEvent {
   type: string
@@ -44,6 +50,8 @@ export interface SlackEnvelope {
 export interface ClassifyContext {
   teamId: string
   botUserId: string
+  /** The other agents' bot user ids (config slack.otherAgentBots). */
+  otherAgentBots: readonly string[]
   allowedUsers: readonly string[]
   channels: { agents: string; questions: string; intake: string; releases: string }
   issueForThread: (channelId: string, threadTs: string) => string | null
@@ -78,13 +86,16 @@ export function classify(envelope: SlackEnvelope, ctx: ClassifyContext): Classif
   const key = `msg:${e.channel}:${e.ts}`
   const text = e.text ?? ""
   const threadTs = e.thread_ts && e.thread_ts !== e.ts ? e.thread_ts : null
-  const mentionsBot = text.includes(`<@${ctx.botUserId}>`)
+  const mentioned = mentionedUsers(text)
 
   if (threadTs) {
     const issue = ctx.issueForThread(e.channel, threadTs)
     if (issue) return { type: "answer", key, issue, channel: e.channel, ts: e.ts, threadTs, user: e.user, text }
   }
-  if (!mentionsBot) return { type: "ignore", reason: "not addressed to the bot" }
-  if (e.channel === ctx.channels.intake && !threadTs) return { type: "intake", key, channel: e.channel, ts: e.ts, user: e.user, text }
+  if (!mentioned.includes(ctx.botUserId)) return { type: "ignore", reason: "not addressed to the bot" }
+  const firstAgent = mentioned.find((id) => id === ctx.botUserId || ctx.otherAgentBots.includes(id))
+  if (e.channel === ctx.channels.intake && !threadTs && firstAgent === ctx.botUserId) {
+    return { type: "intake", key, channel: e.channel, ts: e.ts, user: e.user, text }
+  }
   return { type: "mention", key, channel: e.channel, ts: e.ts, threadTs: threadTs ?? e.ts, user: e.user, text }
 }

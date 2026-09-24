@@ -18,5 +18,12 @@ Then, once per agent (step N2):
 3. Basic Information, App-Level Tokens: make one with the scope `connections:write`. That token (`xapp-...`) is `SLACK_APP_TOKEN`.
 4. Both tokens go in that mini's `~/.config/agentd/slack.env`, chmod 600 (step N3). Each mini holds only its own app's tokens.
 5. `/invite @eve` in `#polads-agents`, `#polads-questions`, `#polads-intake` and `#polads-releases`. The bridge refuses to start while the bot is missing from any of them.
+6. Once a second agent exists, tell each mini about the other's bot: its member ID (the bot's profile in Slack, More, Copy member ID) goes in `slack.otherAgentBots` in the other mini's `~/.agentd/config.json`, and that mini's bridge is restarted.
 
-The four channels are shared by every agent. Each bridge acts only on messages that mention its own bot and on replies in the threads it opened. So mention one agent per request: a message in `#polads-intake` that names two bots is filed by both, as two issues, and both then take the replies in its thread.
+## Who answers what
+
+The four channels are shared by every agent. Each bridge acts only on messages that mention its own bot and on replies in the threads it owns.
+
+A request in `#polads-intake` that names several agents is filed once, by the first agent it names. That agent owns the thread: the "filed" reply, the questions and every later reply there are its own. Every other agent the request names treats it as an ordinary mention, answered in the same thread, and never takes the thread's later replies. People named in the request do not count: in `@nate says @eve should fix the date`, Eve files it.
+
+An agent knows the others only through `slack.otherAgentBots`. With the list empty, a request that names two agents is filed by both.
