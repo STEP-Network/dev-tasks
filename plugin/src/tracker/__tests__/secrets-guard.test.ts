@@ -42,6 +42,15 @@ describe("readTextFile", () => {
     }
   })
 
+  it("refuses a file that ends with a heredoc delimiter, which did not close where it was meant to", () => {
+    for (const tail of ["TEXT_q7m2kd", "TEXT_<random>", "  TEXT_x3f9pa  "]) {
+      writeFileSync(join(dir, "reply.md"), `Thanks, filed.\n${tail}\n`)
+      expect(() => readTextFile(join(dir, "reply.md"), "--text-file", home), tail).toThrow(/heredoc delimiter/)
+    }
+    writeFileSync(join(dir, "reply.md"), "The TEXT_ prefix is ours.\nFiled.\n")
+    expect(readTextFile(join(dir, "reply.md"), "--text-file", home)).toBe("The TEXT_ prefix is ours.\nFiled.\n")
+  })
+
   it("refuses a file named .env anything, anywhere", () => {
     writeFileSync(join(dir, ".env.local"), "X=1\n")
     expect(() => readTextFile(join(dir, ".env.local"), "--text-file", home)).toThrow(/secrets file/)

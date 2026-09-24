@@ -204,13 +204,18 @@ describe("applyFrontDoor", () => {
       ["unparseable", (p) => writeFileSync(frontDoorSettingsPath(p), "{ not json"), /not valid JSON/],
       ["sandbox off", (p) => writeFileSync(frontDoorSettingsPath(p), JSON.stringify({ sandbox: { enabled: false } })), /does not turn the sandbox on/],
       ["escape hatch", (p) => writeFileSync(frontDoorSettingsPath(p), JSON.stringify({ sandbox: { enabled: true } })), /allowUnsandboxedCommands false/],
-      ["no probe", (p) => rmSync(join(p.state, "sandbox-probe.json")), /has not passed on 2\.1\.281.*agentctl probe-sandbox/],
+      ["no probe", (p) => rmSync(join(p.state, "sandbox-probe.json")), /has not passed on \/usr\/local\/bin\/claude, 2\.1\.281.*agentctl probe-sandbox/],
+      [
+        "another binary probed",
+        (p) => recordSandboxProbe(p, { at: NOW.toISOString(), claudePath: "/elsewhere/claude", claudeVersion: VERSION, ok: true, checks: [] }),
+        /last probe passed on 2\.1\.281 .*\/elsewhere\/claude/,
+      ],
       [
         "an updated claude",
-        (p) => recordSandboxProbe(p, { at: NOW.toISOString(), claudePath: "c", claudeVersion: "2.1.278 (Claude Code)", ok: true, checks: [] }),
+        (p) => recordSandboxProbe(p, { at: NOW.toISOString(), claudePath: "/usr/local/bin/claude", claudeVersion: "2.1.278 (Claude Code)", ok: true, checks: [] }),
         /last probe passed on 2\.1\.278/,
       ],
-      ["a failed probe", (p) => recordSandboxProbe(p, { at: NOW.toISOString(), claudePath: "c", claudeVersion: VERSION, ok: false, checks: [] }), /last probe failed/],
+      ["a failed probe", (p) => recordSandboxProbe(p, { at: NOW.toISOString(), claudePath: "/usr/local/bin/claude", claudeVersion: VERSION, ok: false, checks: [] }), /last probe failed/],
     ]
     for (const [name, spoil, why] of cases) {
       const { f, deps, paths } = setup()

@@ -77,7 +77,7 @@ describe("doctorChecks", () => {
 
   it("refuses a pnpm other than 10, and names the fix", async () => {
     const problems = await failed(deps({}, [[/^pnpm --version$/, { stdout: "12.1.0\n" }]]))
-    expect(problems).toEqual([expect.stringMatching(/^pnpm: 12\.1\.0 .*onlyBuiltDependencies.*pnpm@10/)])
+    expect(problems).toEqual([expect.stringMatching(/^pnpm: 12\.1\.0 .*onlyBuiltDependencies.*pnpm self-update 10.*pnpm@10/)])
   })
 
   it("warns on a Node other than 20, and refuses one older than the runtime's floor", async () => {
@@ -112,7 +112,7 @@ describe("doctorChecks", () => {
     rmSync(join(paths.state, "sandbox-probe.json"))
     expect(await warned(deps())).toEqual([expect.stringMatching(/^sandbox probe: never run: agentctl probe-sandbox/)])
     recordSandboxProbe(paths, { at: "2026-09-24T12:00:00.000Z", claudePath: "claude", claudeVersion: "2.1.270 (Claude Code)", ok: true, checks: [] })
-    expect(await warned(deps())).toEqual([expect.stringMatching(/^sandbox probe: passed on 2\.1\.270 .*claude is now 2\.1\.281.*agentctl probe-sandbox/)])
+    expect(await warned(deps())).toEqual([expect.stringMatching(/^sandbox probe: passed on claude 2\.1\.270 .*front door's claude is claude 2\.1\.281.*agentctl probe-sandbox/)])
     recordSandboxProbe(paths, {
       at: "2026-09-24T12:00:00.000Z",
       claudePath: "claude",
@@ -175,6 +175,21 @@ describe("doctorChecks", () => {
     expect(await failed(deps({}, [[/^gh auth status$/, { code: 1, stderr: "You are not logged into any GitHub hosts." }]]))).toEqual([
       expect.stringMatching(/^gh: not logged in.*gh auth login/),
     ])
+  })
+
+  it("sends keychain checks that fail over SSH to the mini's own Terminal, and refuses them there", async () => {
+    // Over SSH the login keychain is locked, so gh and claude see no login
+    // although agentd's LaunchAgents, in the GUI session, have one.
+    const locked: Responses = [
+      [/^gh auth status$/, { code: 1, stderr: "User interaction is not allowed." }],
+      [/^claude auth status$/, { code: 1, stdout: '{"loggedIn":false}' }],
+    ]
+    expect(await failed(deps({ env: { SSH_CONNECTION: "100.64.0.2 51234 100.64.0.9 22" } }, locked))).toEqual([])
+    expect(await warned(deps({ env: { SSH_CONNECTION: "100.64.0.2 51234 100.64.0.9 22" } }, locked))).toEqual([
+      expect.stringMatching(/^gh: not reachable over SSH.*own Terminal/),
+      expect.stringMatching(/^claude login: not reachable over SSH.*own Terminal/),
+    ])
+    expect((await failed(deps({}, locked))).map((f) => f.split(":")[0])).toEqual(["gh", "claude login"])
   })
 
   it("refuses a laptop profile, a missing config and two names for one mini", async () => {

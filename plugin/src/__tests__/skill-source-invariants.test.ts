@@ -207,10 +207,11 @@ describe("/front-door", () => {
   })
 
   it("passes people's words through a file, where no shell expands them", () => {
-    // A new delimiter each time: a fixed one could be a line of a person's text.
-    expect(source).toMatch(/<<'TEXT_[a-z0-9]{6}'/)
+    // A new delimiter each time: a fixed one could be a line of a person's
+    // text, and a concrete example is one a model copies.
+    expect(source).toMatch(/<<'TEXT_<random>'/)
     expect(source).toMatch(/new delimiter every time/)
-    expect(source).not.toMatch(/<<'TEXT'/)
+    expect(source).not.toMatch(/<<'TEXT(_[a-z0-9]+)?'/)
     expect(source).toMatch(/agentctl slack reply --channel "<channel>" --thread "<threadTs>" --text-file ~\/\.front-door\/reply-<threadTs>\.md/)
     expect(source).toMatch(/trackerctl create --title "[^"]*" --description-file ~\/\.front-door\/intake-<ts>\.md/)
     expect(source).not.toMatch(/--text "</)
@@ -251,10 +252,11 @@ describe("/refine", () => {
 
   it("writes its brief and questions in ~/.front-door, the one place the front door's sandbox lets it write", () => {
     expect(source).toMatch(/--description-file ~\/\.front-door\/refine-STEP-<n>\.md/)
-    // A new delimiter each time: a fixed one could be a line of a person's text.
-    expect(source).toMatch(/<<'TEXT_[a-z0-9]{6}'/)
+    // A new delimiter each time: a fixed one could be a line of a person's
+    // text, and a concrete example is one a model copies.
+    expect(source).toMatch(/<<'TEXT_<random>'/)
     expect(source).toMatch(/new delimiter every time/)
-    expect(source).not.toMatch(/<<'TEXT'/)
+    expect(source).not.toMatch(/<<'TEXT(_[a-z0-9]+)?'/)
     expect(source).toMatch(/agentctl ask --issue STEP-<n> --text-file ~\/\.front-door\/ask-STEP-<n>\.md/)
     expect(source).not.toMatch(/\/tmp\/refine/)
     expect(source).not.toMatch(/--text "</)
