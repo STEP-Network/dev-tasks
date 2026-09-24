@@ -161,6 +161,109 @@ describe("/ship", () => {
   })
 })
 
+describe("/front-door", () => {
+  const source = skill("front-door")
+
+  it("declares itself user-invocable with the name front-door", () => {
+    expect(source).toMatch(/^---\n[\s\S]*?\bname:\s*front-door\b[\s\S]*?\buser_invocable:\s*true\b[\s\S]*?\n---/m)
+  })
+
+  it("refuses to run anywhere but an agent mini", () => {
+    expect(source).toMatch(/profile\.sh" is agent/)
+  })
+
+  it("reads the digest from agentctl tick and launches work only through agentctl job submit", () => {
+    expect(source).toMatch(/agentctl tick/)
+    expect(source).toMatch(/agentctl job submit --issue/)
+  })
+
+  it("never commits, pushes, opens or merges a PR, or reaches for --admin", () => {
+    expect(source).not.toMatch(/\bgit (commit|push)\b/)
+    expect(source).not.toMatch(/gh pr (merge|create)/)
+    expect(source).not.toMatch(/--admin/)
+  })
+
+  it("files nothing for a request another agent files", () => {
+    // The bridge marks a mention with filedBy when another agent was named
+    // first in an intake request: that agent files it (decision 3).
+    expect(source).toMatch(/filedBy/)
+  })
+
+  it("explains a pause and a held-back issue, and leaves lifting them to a person", () => {
+    expect(source).toMatch(/pauseReason/)
+    expect(source).toMatch(/heldBack/)
+    expect(source).toMatch(/agentctl resume/)
+    expect(source).toMatch(/Slack text never lifts/)
+  })
+
+  it("runs agentctl and trackerctl as the mini's two commands, each on its own, never npx tsx", () => {
+    // Only `~/.agentd/bin/{agentctl,trackerctl} ...` as one simple command runs
+    // outside the front door's sandbox, where they reach Linear. Joined to
+    // anything else, the whole call is sandboxed and they fail.
+    expect(source).toMatch(/~\/\.agentd\/bin\/trackerctl/)
+    expect(source).toMatch(/one simple command/)
+    expect(source).not.toMatch(/npx tsx/)
+    expect(source).not.toMatch(/~\/\.agentd\/bin\/(agentctl|trackerctl)[^\n`]*(&&|\|\||;)/)
+  })
+
+  it("passes people's words through a file, where no shell expands them", () => {
+    // A new delimiter each time: a fixed one could be a line of a person's text.
+    expect(source).toMatch(/<<'TEXT_[a-z0-9]{6}'/)
+    expect(source).toMatch(/new delimiter every time/)
+    expect(source).not.toMatch(/<<'TEXT'/)
+    expect(source).toMatch(/agentctl slack reply --channel "<channel>" --thread "<threadTs>" --text-file ~\/\.front-door\/reply-<threadTs>\.md/)
+    expect(source).toMatch(/trackerctl create --title "[^"]*" --description-file ~\/\.front-door\/intake-<ts>\.md/)
+    expect(source).not.toMatch(/--text "</)
+    expect(source).not.toMatch(/--description "</)
+  })
+})
+
+describe("/refine", () => {
+  const source = skill("refine")
+
+  it("declares itself user-invocable with the name refine", () => {
+    expect(source).toMatch(/^---\n[\s\S]*?\bname:\s*refine\b[\s\S]*?\buser_invocable:\s*true\b[\s\S]*?\n---/m)
+  })
+
+  it("writes only through trackerctl and agentctl, and marks what it refined agent-ready", () => {
+    expect(source).toMatch(/trackerctl update STEP-<n> --description-file/)
+    expect(source).toMatch(/--add-label agent-ready/)
+    expect(source).toMatch(/agentctl ask --issue/)
+    expect(source).not.toMatch(/mcp__/)
+  })
+
+  it("is read-only on the repository", () => {
+    expect(source).toMatch(/Never Edit or Write a file in the repository/)
+    expect(source).not.toMatch(/\bgit (commit|push|checkout -b|switch -c)\b/)
+  })
+
+  it("keeps a person's to-dos in Slack, not in Linear sub-issues nobody reads", () => {
+    expect(source).toMatch(/Needs a person:/)
+    expect(source).not.toMatch(/manageSubtasks|parentId/)
+  })
+
+  it("re-reads the issue right before it writes, and keeps the answers people gave", () => {
+    // The bridge appends answers to the description from another process: a
+    // brief built from the first read would drop one that arrived meanwhile.
+    expect(source).toMatch(/[Rr]ead it again right before/)
+    expect(source).toMatch(/## Answers from Slack/)
+  })
+
+  it("writes its brief and questions in ~/.front-door, the one place the front door's sandbox lets it write", () => {
+    expect(source).toMatch(/--description-file ~\/\.front-door\/refine-STEP-<n>\.md/)
+    // A new delimiter each time: a fixed one could be a line of a person's text.
+    expect(source).toMatch(/<<'TEXT_[a-z0-9]{6}'/)
+    expect(source).toMatch(/new delimiter every time/)
+    expect(source).not.toMatch(/<<'TEXT'/)
+    expect(source).toMatch(/agentctl ask --issue STEP-<n> --text-file ~\/\.front-door\/ask-STEP-<n>\.md/)
+    expect(source).not.toMatch(/\/tmp\/refine/)
+    expect(source).not.toMatch(/--text "</)
+    expect(source).toMatch(/~\/\.agentd\/bin\/trackerctl/)
+    expect(source).toMatch(/one simple command/)
+    expect(source).not.toMatch(/npx tsx/)
+  })
+})
+
 describe("plugin rules are read on demand", () => {
   // rule-autoload is opt-in since 1.0.1 (STEP-3088), so a plugin rule reaches
   // the agent only when a skill names it. The name has to resolve in a

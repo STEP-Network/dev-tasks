@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs"
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { describe, expect, it } from "vitest"
@@ -7,6 +7,8 @@ import { listNew } from "../../fsq.ts"
 import type { Logger } from "../../log.ts"
 import type { UsageSnapshot } from "../../usage.ts"
 import { fakeExec } from "../../__tests__/fakes.ts"
+import { recordSandboxProbe } from "../../cli/sandbox-probe.ts"
+import type { ExecResult } from "../../worker/git.ts"
 import {
   adoptSessionId,
   applyFrontDoor,
@@ -14,6 +16,8 @@ import {
   decideFrontDoor,
   FRESH_FRONT_DOOR,
   frontDoorAlive,
+  FrontDoorRefused,
+  frontDoorSettingsPath,
   readFrontDoorState,
   shellQuote,
   superviseFrontDoor,
@@ -79,18 +83,26 @@ describe("adoptSessionId", () => {
     expect(adoptSessionId(s, usage("s-old", minutesAgo(9)))).toBe(s)
     expect(adoptSessionId(s, null)).toBe(s)
   })
+
+  it("ignores the previous id that a person's own session wrote back after the start", () => {
+    // Any session on the mini records the limits and keeps the front door's
+    // id and its time as it found them (bin/statusline.sh).
+    const s = state({ sessionId: null, lastStartAt: minutesAgo(5) })
+    expect(adoptSessionId(s, { ...usage("s-old", minutesAgo(1)), sessionAt: minutesAgo(9) })).toBe(s)
+    expect(adoptSessionId(s, { ...usage("s-new", minutesAgo(1)), sessionAt: minutesAgo(2) }).sessionId).toBe("s-new")
+  })
 })
 
 describe("claudeCommand", () => {
   it("resumes with the model, auto mode, no prompts, and re-arms the loop", () => {
-    expect(claudeCommand({ claudePath: "/Users/eve/.local/bin/claude", resumeId: "0f3c", model: "sonnet" })).toBe(
-      "/Users/eve/.local/bin/claude --resume 0f3c --model sonnet --permission-mode auto --permission-prompts none '/loop /dev-tasks:front-door'",
+    expect(claudeCommand({ claudePath: "/Users/eve/.local/bin/claude", resumeId: "0f3c", model: "sonnet", settingsPath: "/Users/eve/.agentd/front-door-settings.json" })).toBe(
+      "/Users/eve/.local/bin/claude --resume 0f3c --settings /Users/eve/.agentd/front-door-settings.json --model sonnet --permission-mode auto --permission-prompts none '/loop /dev-tasks:front-door'",
     )
   })
 
   it("starts a new session without pinning an id", () => {
-    expect(claudeCommand({ claudePath: "claude", resumeId: null, model: "sonnet" })).toBe(
-      "claude --model sonnet --permission-mode auto --permission-prompts none '/loop /dev-tasks:front-door'",
+    expect(claudeCommand({ claudePath: "claude", resumeId: null, model: "sonnet", settingsPath: "/s.json" })).toBe(
+      "claude --settings /s.json --model sonnet --permission-mode auto --permission-prompts none '/loop /dev-tasks:front-door'",
     )
   })
 
@@ -103,29 +115,48 @@ describe("claudeCommand", () => {
 
 const quiet: Logger = { info() {}, warn() {}, error() {} }
 
-function setup(responses: Parameters<typeof fakeExec>[0] = []) {
+const VERSION = "2.1.281 (Claude Code)"
+
+/** A mini where the front door may start: its settings rendered, and the sandbox probe passed on the installed claude. */
+function setup(responses: Array<[RegExp, Partial<ExecResult>]> = []) {
   const paths = agentPaths(mkdtempSync(join(tmpdir(), "agentd-fd-")))
   const config = ConfigSchema.parse({ mini: "eve", repo: { path: "/Users/eve/polads" }, pluginRoot: "/p", slack: { allowedUsers: ["UNATE"] }, frontDoor: { claudePath: "/usr/local/bin/claude" } })
-  const f = fakeExec(responses)
-  return { paths, config, f, deps: { paths, config, exec: f.exec, now: () => NOW, log: quiet } }
+  mkdirSync(paths.state, { recursive: true })
+  writeFileSync(frontDoorSettingsPath(paths), JSON.stringify({ sandbox: { enabled: true, allowUnsandboxedCommands: false } }))
+  recordSandboxProbe(paths, { at: NOW.toISOString(), claudePath: "/usr/local/bin/claude", claudeVersion: VERSION, ok: true, checks: [] })
+  const exec = fakeExec([...responses, [/ --version$/, { stdout: `${VERSION}\n` }]])
+  // The version check before each start is not what these tests look at.
+  const f = { ...exec, lines: () => exec.lines().filter((l) => !l.endsWith(" --version")) }
+  return { paths, config, f, deps: { paths, config, exec: exec.exec, now: () => NOW, log: quiet } }
 }
 
 describe("frontDoorAlive", () => {
   it("asks tmux for the session by its exact name, since a bare name also matches frontdoor-old", async () => {
     const alive = setup()
     expect(await frontDoorAlive(alive.deps)).toBe(true)
-    expect(alive.f.lines()).toEqual(["tmux has-session -t =frontdoor"])
+    expect(alive.f.lines()).toEqual(["tmux -L agentd has-session -t =frontdoor"])
     const gone = setup([[/has-session/, { code: 1, stderr: "can't find session: =frontdoor" }]])
     expect(await frontDoorAlive(gone.deps)).toBe(false)
+  })
+
+  it("runs the tmux that install.sh recorded, on the front door's own server", async () => {
+    // A LaunchAgent gets no login shell's PATH, and a server a person started
+    // would hand the front door that person's shell environment.
+    const { f, deps } = setup()
+    const config = { ...deps.config, frontDoor: { ...deps.config.frontDoor, tmuxPath: "/opt/homebrew/bin/tmux" } }
+    await frontDoorAlive({ ...deps, config })
+    await applyFrontDoor({ ...deps, config }, FRESH_FRONT_DOOR, { kind: "start", mode: "new", reason: "first start", fastExits: 0 })
+    expect(f.lines().map((l) => l.split(" ").slice(0, 3).join(" "))).toEqual(["/opt/homebrew/bin/tmux -L agentd", "/opt/homebrew/bin/tmux -L agentd"])
   })
 })
 
 describe("applyFrontDoor", () => {
   it("starts a new session in tmux in the PolAds checkout and records it", async () => {
-    const { f, deps } = setup()
+    const { f, deps, paths } = setup()
     const next = await applyFrontDoor(deps, FRESH_FRONT_DOOR, { kind: "start", mode: "new", reason: "first start", fastExits: 0 })
+    // Its own settings file, which install.sh renders: a person's own sessions keep the user's settings.
     expect(f.lines()[0]).toBe(
-      "tmux new-session -d -s frontdoor -x 220 -y 60 -c /Users/eve/polads /usr/local/bin/claude --model sonnet --permission-mode auto --permission-prompts none '/loop /dev-tasks:front-door'",
+      `tmux -L agentd new-session -d -s frontdoor -e AGENTD_FRONT_DOOR=1 -x 220 -y 60 -c /Users/eve/polads /usr/local/bin/claude --settings ${paths.root}/front-door-settings.json --model sonnet --permission-mode auto --permission-prompts none '/loop /dev-tasks:front-door'`,
     )
     expect(next).toMatchObject({ sessionId: null, lastStartAt: NOW.toISOString(), starts: [NOW.toISOString()], waitUntil: null, kickedAt: null })
   })
@@ -133,14 +164,14 @@ describe("applyFrontDoor", () => {
   it("kills the stuck session before resuming it", async () => {
     const { f, deps } = setup()
     await applyFrontDoor(deps, state(), { kind: "restart", reason: "no wakeup for 50 minutes" })
-    expect(f.lines()[0]).toBe("tmux kill-session -t =frontdoor")
+    expect(f.lines()[0]).toBe("tmux -L agentd kill-session -t =frontdoor")
     expect(f.lines()[1]).toContain("--resume s-1")
   })
 
   it("types the loop prompt, then Enter, into the session for a kick", async () => {
     const { f, deps } = setup()
     const next = await applyFrontDoor(deps, state(), { kind: "kick", reason: "no wakeup in the 5 minutes since the start" })
-    expect(f.lines()).toEqual(["tmux send-keys -t =frontdoor: -l /loop /dev-tasks:front-door", "tmux send-keys -t =frontdoor: Enter"])
+    expect(f.lines()).toEqual(["tmux -L agentd send-keys -t =frontdoor: -l /loop /dev-tasks:front-door", "tmux -L agentd send-keys -t =frontdoor: Enter"])
     expect(next.kickedAt).toBe(NOW.toISOString())
   })
 
@@ -163,6 +194,31 @@ describe("applyFrontDoor", () => {
     const waited = await applyFrontDoor(deps, busy, action)
     const later = new Date(NOW.getTime() + 31 * 60_000)
     expect(decideFrontDoor({ ...input({ alive: false, state: waited }), now: later })).toMatchObject({ kind: "start" })
+  })
+
+  it("starts nothing, and kills nothing, while the settings or the sandbox probe are not right", async () => {
+    // claude refuses a missing settings file, but starts on an unparseable one
+    // with no sandbox and no deny rules, and the sandbox leans on how the
+    // claude it runs treats them.
+    const cases: Array<[string, (paths: ReturnType<typeof setup>["paths"]) => void, RegExp]> = [
+      ["unparseable", (p) => writeFileSync(frontDoorSettingsPath(p), "{ not json"), /not valid JSON/],
+      ["sandbox off", (p) => writeFileSync(frontDoorSettingsPath(p), JSON.stringify({ sandbox: { enabled: false } })), /does not turn the sandbox on/],
+      ["escape hatch", (p) => writeFileSync(frontDoorSettingsPath(p), JSON.stringify({ sandbox: { enabled: true } })), /allowUnsandboxedCommands false/],
+      ["no probe", (p) => rmSync(join(p.state, "sandbox-probe.json")), /has not passed on 2\.1\.281.*agentctl probe-sandbox/],
+      [
+        "an updated claude",
+        (p) => recordSandboxProbe(p, { at: NOW.toISOString(), claudePath: "c", claudeVersion: "2.1.278 (Claude Code)", ok: true, checks: [] }),
+        /last probe passed on 2\.1\.278/,
+      ],
+      ["a failed probe", (p) => recordSandboxProbe(p, { at: NOW.toISOString(), claudePath: "c", claudeVersion: VERSION, ok: false, checks: [] }), /last probe failed/],
+    ]
+    for (const [name, spoil, why] of cases) {
+      const { f, deps, paths } = setup()
+      spoil(paths)
+      await expect(applyFrontDoor(deps, state(), { kind: "restart", reason: "no wakeup for 50 minutes" }), name).rejects.toThrow(FrontDoorRefused)
+      await expect(applyFrontDoor(deps, state(), { kind: "restart", reason: "no wakeup for 50 minutes" }), name).rejects.toThrow(why)
+      expect(f.lines(), name).toEqual([])
+    }
   })
 
   it("throws with tmux's own words when the session cannot start", async () => {

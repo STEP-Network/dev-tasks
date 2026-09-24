@@ -18,6 +18,7 @@ import {
   loadLinearKey,
   resetLinearClientForTests,
   LINEAR_ENDPOINT,
+  linearEndpoint,
 } from "../linear-client.ts"
 import { createLinearTracker } from "../linear.ts"
 
@@ -351,5 +352,40 @@ describe("a create that landed is never reported as failed (adapter and transpor
     )
     expect(await create()).toBe("rejected: Linear: Argument Validation Error: title must not be empty")
     expect(fake.stored.size).toBe(0)
+  })
+})
+
+describe("linearEndpoint", () => {
+  const testKey = { LINEAR_API_KEY: "lin_api_test_key" }
+
+  it("is Linear unless a test names a loopback server, with its own key", () => {
+    expect(linearEndpoint({})).toBe(LINEAR_ENDPOINT)
+    expect(linearEndpoint({ ...testKey, DEV_TASKS_LINEAR_ENDPOINT: "http://127.0.0.1:4567/graphql" })).toBe("http://127.0.0.1:4567/graphql")
+    expect(linearEndpoint({ ...testKey, DEV_TASKS_LINEAR_ENDPOINT: "http://localhost:4567/graphql" })).toBe("http://localhost:4567/graphql")
+  })
+
+  it("refuses any other host, since the key travels with every request", () => {
+    for (const url of ["https://attacker.example/graphql", "http://127.0.0.1.attacker.example/", "https://127.0.0.1/graphql", "http://user:pw@attacker.example/", "not a url"]) {
+      expect(() => linearEndpoint({ ...testKey, DEV_TASKS_LINEAR_ENDPOINT: url }), url).toThrow(/DEV_TASKS_LINEAR_ENDPOINT/)
+    }
+  })
+
+  it("refuses the override with the key file's key: it is for a test's own key only", () => {
+    expect(() => linearEndpoint({ DEV_TASKS_LINEAR_ENDPOINT: "http://127.0.0.1:4567/graphql" })).toThrow(/never with the key file/)
+    expect(() => linearEndpoint({ LINEAR_API_KEY: " ", DEV_TASKS_LINEAR_ENDPOINT: "http://127.0.0.1:4567/graphql" })).toThrow(/never with the key file/)
+  })
+
+  it("is where requests go", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ data: { ok: true } }))
+    vi.stubGlobal("fetch", fetchMock)
+    process.env.DEV_TASKS_LINEAR_ENDPOINT = "http://127.0.0.1:4567/graphql"
+    try {
+      await linearRequest("query { ok }")
+    } finally {
+      delete process.env.DEV_TASKS_LINEAR_ENDPOINT
+    }
+    expect(fetchMock.mock.calls[0][0]).toBe("http://127.0.0.1:4567/graphql")
+    // A redirect would be followed with the key: none is.
+    expect(fetchMock.mock.calls[0][1]).toMatchObject({ redirect: "error" })
   })
 })

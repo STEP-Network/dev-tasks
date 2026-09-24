@@ -18,6 +18,33 @@ import { join } from "node:path"
 
 export const LINEAR_ENDPOINT = "https://api.linear.app/graphql"
 
+const LOOPBACK = new Set(["127.0.0.1", "localhost", "[::1]"])
+
+/**
+ * Where requests go: Linear, or, for a test that runs the real Claude Code
+ * binary end to end, a server on this machine named by
+ * DEV_TASKS_LINEAR_ENDPOINT. The key travels with every request, so the
+ * override needs the test's own key in LINEAR_API_KEY (never the key file's)
+ * and names a loopback http server, or it is refused.
+ */
+export function linearEndpoint(env: NodeJS.ProcessEnv = process.env): string {
+  const override = env.DEV_TASKS_LINEAR_ENDPOINT
+  if (!override) return LINEAR_ENDPOINT
+  if (!env.LINEAR_API_KEY?.trim()) {
+    throw new Error("DEV_TASKS_LINEAR_ENDPOINT is for tests, with their own LINEAR_API_KEY in the environment: never with the key file")
+  }
+  let url: URL
+  try {
+    url = new URL(override)
+  } catch {
+    throw new Error("DEV_TASKS_LINEAR_ENDPOINT is not a URL")
+  }
+  if (url.protocol !== "http:" || !LOOPBACK.has(url.hostname)) {
+    throw new Error("DEV_TASKS_LINEAR_ENDPOINT may only name an http server on this machine's loopback (for tests): the Linear key travels with every request")
+  }
+  return url.toString()
+}
+
 const MIN_INTERVAL_MS = 1500
 const MAX_ATTEMPTS = 6
 const MAX_BACKOFF_MS = 60_000
@@ -100,6 +127,7 @@ export async function linearRequest<T>(
   }
 
   const key = loadLinearKey()
+  const endpoint = linearEndpoint()
 
   let lastStatus: number | undefined
 
@@ -108,10 +136,12 @@ export async function linearRequest<T>(
     if (wait > 0) await sleep(wait)
     lastCall = Date.now()
 
-    const res = await fetch(LINEAR_ENDPOINT, {
+    const res = await fetch(endpoint, {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: key },
       body: JSON.stringify({ query, variables }),
+      // Linear answers GraphQL without redirects. One would be followed with the key.
+      redirect: "error",
     })
 
     if (res.status === 429 || res.status >= 500) {

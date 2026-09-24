@@ -12,10 +12,18 @@
  * not submitted.
  *
  * tmux targets name the session exactly (`=frontdoor`): a bare name also
- * matches any session it begins, such as a person's `frontdoor-old`.
+ * matches any session it begins, such as a person's `frontdoor-old`. And the
+ * front door has a tmux server of its own (`tmux -L agentd`): a session takes
+ * its server's global environment, and a server a person started from their
+ * own shell would hand the front door whatever that shell exported (an
+ * ANTHROPIC_API_KEY would bill the API). agentd starts this one with its own
+ * scrubbed environment. The session is marked AGENTD_FRONT_DOOR=1, so the
+ * status line records its session id and no other session's.
  */
 
+import { readFileSync } from "node:fs"
 import { join } from "node:path"
+import { readSandboxProbe } from "../cli/sandbox-probe.ts"
 import type { AgentConfig, AgentPaths } from "../config.ts"
 import { readJson, writeJsonAtomic } from "../fsq.ts"
 import { appendLedger, type Logger } from "../log.ts"
@@ -25,6 +33,65 @@ import { limitedUntil, type UsageSnapshot } from "../usage.ts"
 import type { Exec } from "../worker/git.ts"
 
 export const LOOP_PROMPT = "/loop /dev-tasks:front-door"
+/** The front door's own tmux server: `tmux -L agentd attach -t =frontdoor`. */
+export const TMUX_SOCKET = "agentd"
+
+/**
+ * The front door's own settings (sandbox, deny rules, status line, Remote
+ * Control), rendered by install.sh from runtime/templates/claude-settings.json
+ * and passed with --settings, so a person's own claude sessions on the mini
+ * keep the user's settings as they are.
+ */
+export const frontDoorSettingsPath = (paths: AgentPaths) => join(paths.root, "front-door-settings.json")
+
+/**
+ * What is wrong with the front door's settings file, or null. claude refuses
+ * a missing file, but starts on an unparseable one with no sandbox and no
+ * deny rules at all, so the file is read here first.
+ */
+export function frontDoorSettingsProblem(paths: AgentPaths): string | null {
+  const file = frontDoorSettingsPath(paths)
+  let text: string
+  try {
+    text = readFileSync(file, "utf8")
+  } catch {
+    return `${file} is missing: run install.sh`
+  }
+  let settings: { sandbox?: { enabled?: unknown; allowUnsandboxedCommands?: unknown } }
+  try {
+    settings = JSON.parse(text)
+  } catch {
+    return `${file} is not valid JSON, and claude would start without its sandbox: run install.sh`
+  }
+  if (settings?.sandbox?.enabled !== true || settings.sandbox.allowUnsandboxedCommands !== false) {
+    return `${file} does not turn the sandbox on (sandbox.enabled true, allowUnsandboxedCommands false): run install.sh`
+  }
+  return null
+}
+
+/** agentd would not start the front door: agentd.json and agentctl status say why. */
+export class FrontDoorRefused extends Error {}
+
+/**
+ * Why the front door must not start now, or null: its settings, and a
+ * sandbox probe that has not passed on the claude it would run. The sandbox
+ * leans on how that Claude Code treats the settings (cli/sandbox-probe.ts), so
+ * a claude someone updated starts only once agentctl probe-sandbox passes on it.
+ */
+export async function frontDoorRefusal(deps: { paths: AgentPaths; config: AgentConfig; exec: Exec }): Promise<string | null> {
+  const problem = frontDoorSettingsProblem(deps.paths)
+  if (problem) return problem
+  const claude = deps.config.frontDoor.claudePath
+  const r = await deps.exec(claude, ["--version"], { timeoutMs: TMUX_TIMEOUT_MS })
+  const version = r.code === 0 ? r.stdout.trim().split("\n")[0] : ""
+  if (!version) return `${claude} --version failed (${r.code}): ${r.stderr.trim()}`
+  const probe = readSandboxProbe(deps.paths)
+  if (!probe?.ok || probe.claudeVersion !== version) {
+    const last = probe ? ` (the last probe ${probe.ok ? "passed" : "failed"} on ${probe.claudeVersion})` : ""
+    return `the sandbox probe has not passed on ${version}${last}: a person runs agentctl probe-sandbox`
+  }
+  return null
+}
 const KICK_AFTER_MINUTES = 5
 /** tmux answers at once. One that hangs must not hold up the job launcher behind it. */
 const TMUX_TIMEOUT_MS = 30_000
@@ -98,10 +165,14 @@ export function decideFrontDoor(i: FrontDoorInput): FrontDoorAction {
   return { kind: "restart", reason: `no wakeup for ${Math.round((now - since) / 60_000)} minutes` }
 }
 
-/** The status line reports the running session's id. Adopt it once it is newer than the last start. */
+/**
+ * The status line reports the running session's id. Adopt it once the front
+ * door reported it after the last start: a person's own session writes the
+ * snapshot too, keeping the id it found, which may be the previous one.
+ */
 export function adoptSessionId(state: FrontDoorState, usage: UsageSnapshot | null): FrontDoorState {
   if (!usage?.sessionId || usage.sessionId === state.sessionId || !state.lastStartAt) return state
-  if (Date.parse(usage.at) < Date.parse(state.lastStartAt)) return state
+  if (Date.parse(usage.sessionAt ?? usage.at) < Date.parse(state.lastStartAt)) return state
   return { ...state, sessionId: usage.sessionId }
 }
 
@@ -110,10 +181,12 @@ export function shellQuote(s: string): string {
 }
 
 /** The front door's command line (spec 6.1), as one shell string for tmux. */
-export function claudeCommand(o: { claudePath: string; resumeId: string | null; model: string }): string {
+export function claudeCommand(o: { claudePath: string; resumeId: string | null; model: string; settingsPath: string }): string {
   return [
     o.claudePath,
     ...(o.resumeId ? ["--resume", o.resumeId] : []),
+    "--settings",
+    o.settingsPath,
     "--model",
     o.model,
     "--permission-mode",
@@ -138,8 +211,13 @@ export function lastTickAt(paths: AgentPaths): Date | null {
   return tick ? new Date(tick.at) : null
 }
 
+/** tmux on the front door's own server, by the absolute path install.sh recorded. */
+function tmuxOn(deps: { exec: Exec; config: AgentConfig }, args: string[]) {
+  return deps.exec(deps.config.frontDoor.tmuxPath, ["-L", TMUX_SOCKET, ...args], { timeoutMs: TMUX_TIMEOUT_MS })
+}
+
 export async function frontDoorAlive(deps: { exec: Exec; config: AgentConfig }): Promise<boolean> {
-  return (await deps.exec("tmux", ["has-session", "-t", `=${deps.config.frontDoor.tmuxSession}`], { timeoutMs: TMUX_TIMEOUT_MS })).code === 0
+  return (await tmuxOn(deps, ["has-session", "-t", `=${deps.config.frontDoor.tmuxSession}`])).code === 0
 }
 
 export interface FrontDoorDeps {
@@ -153,7 +231,7 @@ export interface FrontDoorDeps {
 export async function applyFrontDoor(deps: FrontDoorDeps, state: FrontDoorState, action: FrontDoorAction): Promise<FrontDoorState> {
   const now = deps.now()
   const session = deps.config.frontDoor.tmuxSession
-  const tmux = (args: string[]) => deps.exec("tmux", args, { timeoutMs: TMUX_TIMEOUT_MS })
+  const tmux = (args: string[]) => tmuxOn(deps, args)
   if (action.kind === "none") return state
   if (action.kind === "wait") {
     const alertDue = action.alert && (!state.lastAlertAt || now.getTime() - Date.parse(state.lastAlertAt) > 3_600_000)
@@ -181,10 +259,18 @@ export async function applyFrontDoor(deps: FrontDoorDeps, state: FrontDoorState,
     deps.log.warn("front door kicked", { reason: action.reason })
     return { ...state, kickedAt: now.toISOString() }
   }
+  // Checked before a restart kills anything: a refused start leaves the session as it is.
+  const refusal = await frontDoorRefusal(deps)
+  if (refusal) throw new FrontDoorRefused(refusal)
   if (action.kind === "restart") await tmux(["kill-session", "-t", `=${session}`])
   const resumeId = action.kind === "restart" || action.mode === "resume" ? state.sessionId : null
-  const command = claudeCommand({ claudePath: deps.config.frontDoor.claudePath, resumeId, model: deps.config.frontDoor.model })
-  const r = await tmux(["new-session", "-d", "-s", session, "-x", "220", "-y", "60", "-c", deps.config.repo.path, command])
+  const command = claudeCommand({
+    claudePath: deps.config.frontDoor.claudePath,
+    resumeId,
+    model: deps.config.frontDoor.model,
+    settingsPath: frontDoorSettingsPath(deps.paths),
+  })
+  const r = await tmux(["new-session", "-d", "-s", session, "-e", "AGENTD_FRONT_DOOR=1", "-x", "220", "-y", "60", "-c", deps.config.repo.path, command])
   if (r.code !== 0) throw new Error(`tmux new-session failed (${r.code}): ${r.stderr.trim()}`)
   const mode = resumeId ? "resume" : "new"
   appendLedger(deps.paths, { type: "frontdoor.start", mode, reason: action.reason }, now)

@@ -21,7 +21,7 @@ import { createLinearTracker, type Tracker } from "../tracker.ts"
 import { readUsage } from "../usage.ts"
 import { realExec, type Exec } from "../worker/git.ts"
 import { heartbeatAndSweep } from "./claims.ts"
-import { frontDoorAlive, lastTickAt, readFrontDoorState, superviseFrontDoor } from "./frontdoor.ts"
+import { frontDoorAlive, FrontDoorRefused, lastTickAt, readFrontDoorState, superviseFrontDoor } from "./frontdoor.ts"
 import { cleanup, Every, healthStatus, inboxStuck, linearDownNotice, refreshCheckout, sentryCheckInUrl, watchPrs, type BridgeHeartbeat } from "./health.ts"
 import { spawnWorkerProcess, superviseJobs, workerLiveness, type Liveness } from "./jobrunner.ts"
 
@@ -73,9 +73,11 @@ export interface DutyMemo {
   outboxFailedSeen: number | null
   /** The last checkout refresh's result, for the health check. */
   lastRefresh: string | null
+  /** Why the front door was not started, while that lasts: agentd.json carries it for agentctl status. */
+  frontDoorRefused: string | null
 }
 
-export const freshMemo = (): DutyMemo => ({ linearDown: { downSince: null, notified: false }, outboxFailedSeen: null, lastRefresh: null })
+export const freshMemo = (): DutyMemo => ({ linearDown: { downSince: null, notified: false }, outboxFailedSeen: null, lastRefresh: null, frontDoorRefused: null })
 
 const message = (error: unknown) => (error instanceof Error ? error.message : String(error))
 
@@ -89,7 +91,17 @@ export async function runDuties(d: DutyDeps, memo: DutyMemo): Promise<void> {
       log.error(`${name} failed`, { error: message(error) })
     }
   }
-  await step("front door", () => superviseFrontDoor({ paths, config, exec: d.exec, now, log, usage: () => readUsage(paths) }))
+  await step("front door", async () => {
+    try {
+      await superviseFrontDoor({ paths, config, exec: d.exec, now, log, usage: () => readUsage(paths) })
+      memo.frontDoorRefused = null
+    } catch (error) {
+      if (!(error instanceof FrontDoorRefused)) throw error
+      // Once per reason, not every 15 seconds.
+      if (memo.frontDoorRefused !== error.message) log.error("front door not started", { reason: error.message })
+      memo.frontDoorRefused = error.message
+    }
+  })
   await step("jobs", () => superviseJobs({ paths, config, now, log, bootAt: d.bootAt, liveness: d.liveness, kill: d.kill, spawnWorker: d.spawnWorker }))
   // The main checkout and its worktrees change only between jobs: a job
   // fetches into the same repository, and its session loads the project's
@@ -204,7 +216,7 @@ async function main(): Promise<void> {
     running = true
     try {
       await runDuties(deps, memo)
-      status()
+      status(memo.frontDoorRefused ? { frontDoorRefused: memo.frontDoorRefused } : {})
     } finally {
       running = false
     }

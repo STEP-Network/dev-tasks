@@ -12,7 +12,10 @@ import { readJson } from "./fsq.ts"
 
 export interface UsageSnapshot {
   at: string
+  /** The front door's session. Any session of the user writes the limits, only the front door this (bin/statusline.sh). */
   sessionId?: string | null
+  /** When the front door last reported sessionId. */
+  sessionAt?: string | null
   fiveHourPct: number | null
   /** Epoch seconds. */
   fiveHourResetsAt: number | null

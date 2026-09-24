@@ -6885,6 +6885,10 @@ var require_dist = __commonJS({
   }
 });
 
+// src/server.ts
+import { execFileSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
+
 // node_modules/zod/v3/external.js
 var external_exports = {};
 __export(external_exports, {
@@ -24047,10 +24051,10 @@ async function getEpic(args) {
         const taskPriority = getColumnText(taskColMap, TASK_COLUMNS.priority) || "\u2014";
         const taskType = getColumnText(taskColMap, TASK_COLUMNS.type) || "\u2014";
         const est = getMirrorDisplayValue(taskColMap, TASK_COLUMNS.estimatedHours) || "\u2014";
-        const agent = getColumnText(taskColMap, TASK_COLUMNS.agentId) || "\u2014";
+        const agent2 = getColumnText(taskColMap, TASK_COLUMNS.agentId) || "\u2014";
         const check2 = taskStatus === "Done" ? "[x]" : "[ ]";
         lines.push(`- ${check2} **${task.name}** (#${task.id})`);
-        lines.push(`  Status: ${taskStatus} | Priority: ${taskPriority} | Type: ${taskType} | Hours: ${est} | Agent: ${agent}`);
+        lines.push(`  Status: ${taskStatus} | Priority: ${taskPriority} | Type: ${taskType} | Hours: ${est} | Agent: ${agent2}`);
       }
       lines.push("");
     }
@@ -29211,12 +29215,29 @@ function registerAllTools(server2) {
 }
 
 // src/server.ts
+function machineProfile() {
+  const reader = fileURLToPath(new URL("../hooks/lib/profile.sh", import.meta.url));
+  try {
+    return execFileSync("bash", [reader, "get", "profile"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
+  } catch {
+    return "human";
+  }
+}
 var server = new McpServer({
   name: "dev-tasks",
   version: "0.13.0"
 });
-registerAllTools(server);
+var agent = machineProfile() === "agent";
+if (agent) {
+  server.server.registerCapabilities({ tools: {} });
+  server.server.setRequestHandler(ListToolsRequestSchema, () => ({ tools: [] }));
+} else {
+  registerAllTools(server);
+}
 var transport = new StdioServerTransport();
 await server.connect(transport);
-process.stderr.write(`[dev-tasks] connected (stdio), 47 tools registered
-`);
+process.stderr.write(
+  agent ? `[dev-tasks] connected (stdio), 0 tools registered (agent profile)
+` : `[dev-tasks] connected (stdio), 47 tools registered
+`
+);

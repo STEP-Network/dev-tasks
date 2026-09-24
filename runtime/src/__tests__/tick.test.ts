@@ -76,7 +76,16 @@ describe("buildDigest", () => {
     const other = setup()
     mkdirSync(other.paths.root, { recursive: true })
     writeFileSync(other.paths.pauseFile, "")
-    expect(await buildDigest(other.deps)).toMatchObject({ paused: true, develop: null, refine: null, developBlockedBy: "paused" })
+    expect(await buildDigest(other.deps)).toMatchObject({ paused: true, pauseReason: "", develop: null, refine: null, developBlockedBy: "paused" })
+  })
+
+  it("says why the mini is paused, so the front door can tell people in Slack", async () => {
+    const { paths, deps } = setup()
+    expect((await buildDigest(deps)).pauseReason).toBeNull()
+    mkdirSync(paths.root, { recursive: true })
+    // The shape agentctl pause, agentd and the runner all write.
+    writeFileSync(paths.pauseFile, JSON.stringify({ at: NOW.toISOString(), reason: "early losses on two different issues in a row (STEP-1, STEP-2): a fault on this mini" }))
+    expect(await buildDigest(deps)).toMatchObject({ paused: true, pauseReason: "early losses on two different issues in a row (STEP-1, STEP-2): a fault on this mini" })
   })
 
   it("holds develop back in light mode, and still refines", async () => {

@@ -10,7 +10,9 @@
  *   trackerctl read STEP-123
  *   trackerctl branch STEP-123
  *   trackerctl create --title "Fix the thing" --description "$BODY" --label chore
+ *   trackerctl create --title "Fix the thing" --description-file request.md --label polads --state Triage
  *   trackerctl comment STEP-123 --body "opened PR #42"
+ *   trackerctl comment STEP-123 --body-file note.md
  *   trackerctl attach STEP-123 --url https://github.com/... --title "PR #42"
  *   trackerctl ready --limit 10
  *   trackerctl claim STEP-123
@@ -34,9 +36,9 @@
  */
 
 import { execFileSync } from "node:child_process"
-import { readFileSync } from "node:fs"
 import { fileURLToPath } from "node:url"
 import { resolveTracker } from "../src/tracker/index.ts"
+import { assertNoSecretText, readTextFile } from "../src/tracker/secrets-guard.ts"
 import { branchNameFor, type IssuePatch } from "../src/tracker/types.ts"
 
 export interface ParsedArgs {
@@ -148,6 +150,28 @@ export function buildPatch(flags: ParsedArgs["flags"], readText: (path: string) 
   return patch
 }
 
+/**
+ * A text flag, given inline (`--description "..."`) or as a file
+ * (`--description-file brief.md`), never both. An agent mini's skills pass
+ * people's words through a file, where no shell expands them. Either way,
+ * a secrets file and text that carries a key or a token are refused
+ * (src/tracker/secrets-guard.ts): on a mini trackerctl runs outside the front
+ * door's sandbox and can read the Linear key, so the sandbox cannot be what
+ * keeps that key out of an issue.
+ */
+export function textFlag(
+  flags: ParsedArgs["flags"],
+  name: string,
+  readText: (path: string) => string = (path) => readTextFile(path, `--${name}-file`),
+): string | undefined {
+  const inline = str(flags, name)
+  const file = str(flags, `${name}-file`)
+  if (inline !== undefined && file !== undefined) throw new Error(`${USAGE}\n--${name} and --${name}-file are two ways to give one text: give one`)
+  const text = file !== undefined ? readText(file) : inline
+  if (text !== undefined) assertNoSecretText(text, `--${name}`)
+  return text
+}
+
 // The plugin's one profile reader. The phase 0 rule is exactly one, in bash,
 // the one the hooks consult, so trackerctl asks it instead of parsing
 // ~/.claude/dev-tasks-profile.json again and drifting from it.
@@ -200,6 +224,12 @@ async function main(): Promise<void> {
   const parsed = parseArgs(process.argv.slice(2))
   const tracker = resolveTracker()
   const { command, positional, flags } = parsed
+  // A required text flag that reaches the tracker: never one that carries a key or a token.
+  const sent = (name: string): string => {
+    const value = requireArg(str(flags, name), name)
+    assertNoSecretText(value, `--${name}`)
+    return value
+  }
 
   switch (command) {
     case "read": {
@@ -220,8 +250,8 @@ async function main(): Promise<void> {
     }
     case "create": {
       const issue = await tracker.createIssue({
-        title: requireArg(str(flags, "title"), "title"),
-        description: str(flags, "description"),
+        title: sent("title"),
+        description: textFlag(flags, "description"),
         labels: list(flags, "label"),
         state: str(flags, "state"),
       })
@@ -231,7 +261,7 @@ async function main(): Promise<void> {
     case "comment": {
       await tracker.comment(
         requireArg(positional[0], "ref (positional)"),
-        requireArg(str(flags, "body"), "body"),
+        requireArg(textFlag(flags, "body"), "body or --body-file"),
       )
       process.stdout.write(JSON.stringify({ ok: true }) + "\n")
       return
@@ -239,8 +269,8 @@ async function main(): Promise<void> {
     case "attach": {
       await tracker.attachLink(
         requireArg(positional[0], "ref (positional)"),
-        requireArg(str(flags, "url"), "url"),
-        requireArg(str(flags, "title"), "title"),
+        sent("url"),
+        sent("title"),
       )
       process.stdout.write(JSON.stringify({ ok: true }) + "\n")
       return
@@ -263,7 +293,7 @@ async function main(): Promise<void> {
       return
     }
     case "update": {
-      const patch = buildPatch(flags, (path) => readFileSync(path, "utf8"))
+      const patch = buildPatch(flags, (path) => readTextFile(path, "--description-file"))
       const issue = await tracker.updateIssue(requireArg(positional[0], "ref (positional)"), patch)
       process.stdout.write(JSON.stringify(issue) + "\n")
       return
@@ -277,7 +307,7 @@ async function main(): Promise<void> {
     case "release": {
       await tracker.releaseIssue(
         requireArg(positional[0], "ref (positional)"),
-        requireArg(str(flags, "reason"), "reason"),
+        sent("reason"),
       )
       process.stdout.write(JSON.stringify({ ok: true }) + "\n")
       return

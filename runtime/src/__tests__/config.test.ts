@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { afterEach, describe, expect, it } from "vitest"
-import { agentPaths, assertProfileMini, loadConfig, MINI_RE, readProfileMini } from "../config.ts"
+import { agentPaths, assertProfileMini, loadConfig, MINI_RE, readProfile, readProfileMini } from "../config.ts"
 
 const MINIMAL = {
   mini: "eve",
@@ -87,6 +87,15 @@ describe("the mini has one name (decision 2)", () => {
     expect(readProfileMini(env)).toBe("eve")
     writeFileSync(profile, "{ this is not json")
     expect(readProfileMini(env)).toBeNull()
+  })
+
+  it("asks the same reader for the profile, as agentctl doctor does", () => {
+    const home = mkdtempSync(join(tmpdir(), "agentd-profile-"))
+    const env = { ...process.env, HOME: home, DEV_TASKS_PROFILE: "" }
+    expect(readProfile(env)).toBe("human")
+    mkdirSync(join(home, ".claude"))
+    writeFileSync(join(home, ".claude", "dev-tasks-profile.json"), '{ "profile": "agent", "devSurface": "preview", "mini": "eve" }')
+    expect(readProfile(env)).toBe("agent")
   })
 
   it("throws when the reader itself is broken, rather than pass for a machine without a mini", () => {
