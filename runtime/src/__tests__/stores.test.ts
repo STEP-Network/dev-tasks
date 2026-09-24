@@ -18,6 +18,14 @@ describe("the outbox", () => {
     enqueueSlack(p, { kind: "post", channel: "agents", text: "later" }, new Date("2026-09-24T08:00:01.000Z"))
     expect(listNew<OutboxMessage & { text: string }>(p.outbox).map((e) => e.payload.text)).toEqual(["first", "second", "third", "fourth", "later"])
   })
+
+  it("never writes a token-shaped string to the queue", () => {
+    // Worker and git error text reach the outbox; the files sit on disk until agentd cleans them.
+    const p = paths()
+    enqueueSlack(p, { kind: "post", channel: "agents", text: "push failed: https://x-access-token:xoxb-1-2-abc@github.com" })
+    const [entry] = listNew<{ text: string }>(p.outbox)
+    expect(entry.payload.text).toBe("push failed: https://x-access-token:[redacted]@github.com")
+  })
 })
 
 describe("threads", () => {

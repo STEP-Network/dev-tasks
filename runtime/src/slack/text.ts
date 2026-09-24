@@ -18,25 +18,63 @@ export function truncateChars(text: string, max: number): string {
   return chars.length <= max ? text : chars.slice(0, Math.max(0, max - 3)).join("").trimEnd() + "..."
 }
 
+// A user mention as Slack writes it: <@U123>, or the older <@U123|name>.
+const MENTION_RE = /<@([UW][A-Z0-9]+)(?:\|[^>]*)?>/g
+
+/** The user ids a message mentions, people and bots alike, in the order it names them. */
+export function mentionedUsers(text: string): string[] {
+  return Array.from(text.matchAll(MENTION_RE), (m) => m[1])
+}
+
 export function stripMention(text: string, botUserId: string): string {
-  return text.split(`<@${botUserId}>`).join("").replace(/[ \t]+/g, " ").trim()
+  return text.replace(MENTION_RE, (whole, id: string) => (id === botUserId ? "" : whole)).replace(/[ \t]+/g, " ").trim()
+}
+
+/**
+ * Slack's message markup made readable, for Linear, which people read too
+ * (decision 4): <@U1> becomes @Name (from `names`, else the id), <#C1|name>
+ * #name, <!here> @here, a link [label](url) in Markdown or its label in plain
+ * text, and &lt; &gt; &amp; the characters Slack escaped.
+ */
+export function fromSlack(text: string, names: Readonly<Record<string, string>> = {}, format: "markdown" | "plain" = "markdown"): string {
+  const readable = text.replace(/<([^<>]*)>/g, (_whole, inner: string) => {
+    const bar = inner.indexOf("|")
+    const target = bar === -1 ? inner : inner.slice(0, bar)
+    const label = bar === -1 ? "" : inner.slice(bar + 1)
+    if (target.startsWith("@")) return `@${label || names[target.slice(1)] || target.slice(1)}`
+    if (target.startsWith("#")) return `#${label || target.slice(1)}`
+    // <!here>, <!channel>, and labelled specials such as <!subteam^S1|@devs>
+    if (target.startsWith("!")) return label || `@${target.slice(1)}`
+    if (!label) return target
+    return format === "plain" ? label : `[${label}](${target})`
+  })
+  return readable.replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&")
 }
 
 export interface IntakeMeta {
   userName: string
   permalink: string
   botUserId: string
+  /** The other agents' bots: their names are no part of the request's title. */
+  otherAgentBots?: readonly string[]
   product: string
+  /** Display names for the users the request mentions, by id. */
+  names?: Readonly<Record<string, string>>
 }
 
-/** The Triage issue an intake mention becomes. null when the mention carries no request. */
+/**
+ * The Triage issue an intake mention becomes. null when the mention carries
+ * no request, only agents' names. The description keeps the other agents'
+ * names; the title leaves them out.
+ */
 export function intakeIssue(text: string, meta: IntakeMeta): CreateIssueInput | null {
   const body = stripMention(text, meta.botUserId)
-  if (!body) return null
-  const firstLine = body.split("\n").find((line) => line.trim())!.trim()
+  const request = (meta.otherAgentBots ?? []).reduce((rest, bot) => stripMention(rest, bot), body)
+  if (!request) return null
+  const firstLine = request.split("\n").find((line) => line.trim())!.trim()
   return {
-    title: truncateChars(firstLine, 80),
-    description: `${body}\n\n---\nFiled from Slack by ${meta.userName}: ${meta.permalink}`,
+    title: truncateChars(fromSlack(firstLine, meta.names, "plain"), 80),
+    description: `${fromSlack(body, meta.names)}\n\n---\nFiled from Slack by ${meta.userName}: ${meta.permalink}`,
     labels: [meta.product],
     state: "Triage",
   }
@@ -51,10 +89,14 @@ export interface SlackAnswer {
 
 export const ANSWERS_HEADING = "## Answers from Slack"
 
-/** Appends once per Slack message: the ts marker makes a redelivery a no-op. */
+/**
+ * Appends once per Slack message: the ts marker makes a redelivery a no-op.
+ * Linear rebuilds a description from its own document model and may drop an
+ * HTML comment, so the answer's Slack link, when it has one, counts too.
+ */
 export function appendAnswer(description: string, answer: SlackAnswer): string {
   const marker = `<!-- slack:${answer.ts} -->`
-  if (description.includes(marker)) return description
+  if (description.includes(marker) || (answer.permalink && description.includes(`(${answer.permalink})`))) return description
   const link = answer.permalink ? ` ([Slack](${answer.permalink}))` : ""
   const entry = `${marker}\n**${answer.userName}**${link}: ${answer.text}`
   const base = description.trimEnd()

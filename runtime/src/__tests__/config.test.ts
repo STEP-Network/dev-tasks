@@ -42,6 +42,7 @@ describe("loadConfig", () => {
     const config = loadConfig(withConfig(MINIMAL))
     expect(config.repo).toEqual({ path: "/Users/eve/polads", slug: "STEP-Network/v0-politiske-annoncer", base: "staging", product: "polads" })
     expect(config.slack.channels).toEqual({ agents: "polads-agents", questions: "polads-questions", intake: "polads-intake", releases: "polads-releases" })
+    expect(config.slack.otherAgentBots).toEqual([])
     expect(config.worker).toEqual({ defaultModel: "sonnet", complexModel: "opus", maxTurns: 250, maxBudgetUsd: 15, wallClockMinutes: 90 })
     expect(config.queue.mode).toBe("allowlist")
     expect(config.claims).toEqual({ heartbeatMinutes: 15, ttlHours: 6 })
@@ -51,6 +52,12 @@ describe("loadConfig", () => {
   it("names the file and the field when the file is invalid", () => {
     expect(() => loadConfig(withConfig({ ...MINIMAL, mini: "Eve!" }))).toThrow(/config\.json is invalid: mini/)
     expect(() => loadConfig(withConfig({ ...MINIMAL, slack: { allowedUsers: [] } }))).toThrow(/slack\.allowedUsers/)
+  })
+
+  it("takes Slack member ids only, where a bot or app id would quietly match nobody", () => {
+    expect(() => loadConfig(withConfig({ ...MINIMAL, slack: { allowedUsers: ["nate"] } }))).toThrow(/slack\.allowedUsers\.0 .*member id/)
+    expect(() => loadConfig(withConfig({ ...MINIMAL, slack: { ...MINIMAL.slack, otherAgentBots: ["B0123ABC"] } }))).toThrow(/slack\.otherAgentBots\.0 .*member id/)
+    expect(loadConfig(withConfig({ ...MINIMAL, slack: { ...MINIMAL.slack, otherAgentBots: ["U0BOBBOT1"] } })).slack.otherAgentBots).toEqual(["U0BOBBOT1"])
   })
 
   it("says where to start when there is no file", () => {
@@ -78,6 +85,13 @@ describe("the mini has one name (decision 2)", () => {
     expect(readProfileMini(env)).toBeNull()
     writeFileSync(profile, '{ "profile": "agent", "devSurface": "preview", "mini": "eve" }')
     expect(readProfileMini(env)).toBe("eve")
+    writeFileSync(profile, "{ this is not json")
+    expect(readProfileMini(env)).toBeNull()
+  })
+
+  it("throws when the reader itself is broken, rather than pass for a machine without a mini", () => {
+    // plugin 1.1.1's rule for trackerctl too: a moved or failing reader is not a laptop.
+    expect(() => readProfileMini(process.env, join(tmpdir(), "no-such-profile.sh"))).toThrow(/no-such-profile\.sh could not report this machine's mini/)
   })
 
   it("refuses a config.json that names another mini than the machine profile, naming both", () => {
