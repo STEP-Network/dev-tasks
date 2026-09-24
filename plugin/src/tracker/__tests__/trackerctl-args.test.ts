@@ -96,6 +96,7 @@ describe("buildPatch", () => {
     [["--state", "", "--add-label", "awaiting-answer"]],
     [["--assign", "--state", "Ready"]],
     [["--add-label", " ", "--state", "Ready"]],
+    [["--description-file", "", "--state", "Ready"]],
   ])("refuses %j, a flag with no value, rather than write the rest", (args) => {
     // `--state "$STATE" --add-label awaiting-answer` with STATE empty would
     // add the label and skip the move: a park that silently did less.
