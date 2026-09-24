@@ -14,6 +14,9 @@ A Mac mini running agents uses:
 { "profile": "agent", "devSurface": "preview", "mini": "eve" }
 ```
 
+A mini's whole setup, the agent runtime included, is in
+[`agent-mini-runbook.md`](agent-mini-runbook.md).
+
 `mini` is that machine's name (`eve` on Eve's mini, `bob` on Bob's). Since
 1.1.0, `trackerctl claim` and `trackerctl heartbeat` act as that mini, and on
 a machine without one (a laptop) they are refused, as `trackerctl claims` is
@@ -26,7 +29,7 @@ a machine somebody configured must not silently disarm its own guards.
 Check it:
 
 ```bash
-bash ~/.claude/plugins/cache/dev-tasks-marketplace/dev-tasks/1.1.2/hooks/lib/profile.sh get profile
+bash ~/.claude/plugins/cache/dev-tasks-marketplace/dev-tasks/1.2.0/hooks/lib/profile.sh get profile
 ```
 
 ## 2. Refresh the plugin cache
@@ -56,7 +59,7 @@ Confirm the version:
 ```bash
 ls ~/.claude/plugins/cache/dev-tasks-marketplace/dev-tasks/
 ```
-Expected: `1.1.2`.
+Expected: `1.2.0`.
 
 ## 3. `.claude/project-config.json`
 
@@ -122,7 +125,7 @@ argument. `LINEAR_API_KEY` in the environment wins over the file.
 
 ```bash
 cd <consumer-project>
-npx tsx ~/.claude/plugins/cache/dev-tasks-marketplace/dev-tasks/1.1.2/scripts/trackerctl.ts ready --limit 3
+npx tsx ~/.claude/plugins/cache/dev-tasks-marketplace/dev-tasks/1.2.0/scripts/trackerctl.ts ready --limit 3
 ```
 
 Expected: one line of JSON, an array of up to three issues. An empty array is
