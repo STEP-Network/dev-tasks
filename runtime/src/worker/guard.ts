@@ -49,9 +49,6 @@ const PATH_FIELDS: Record<string, string[]> = {
 
 const WRITES = new Set(["Write", "Edit", "MultiEdit", "NotebookEdit"])
 
-/** The file tools the PreToolUse hook is registered for (a matcher is a regex over the tool name). */
-export const FILE_TOOL_MATCHER = `^(${Object.keys(PATH_FIELDS).join("|")})$`
-
 /** Where a path really leads: symlinks resolved as far as the path exists. */
 function real(path: string): string {
   try {
@@ -122,9 +119,10 @@ export async function denyBannedBash(input: HookInputLike) {
 }
 
 /**
- * The file tools' PreToolUse hook. A hook sees every call: canUseTool only
- * hears about the ones that would prompt, and acceptEdits never prompts for
- * an edit inside the worktree, nor any tool for a read.
+ * An SDK PreToolUse hook callback for every tool (Task 12), which answers only
+ * the file tools. A hook sees every call: canUseTool only hears about the
+ * ones that would prompt, and neither an edit acceptEdits allows nor a read
+ * inside the worktree ever prompts.
  */
 export function denyWorkerPaths(scope: WorkerScope) {
   return async (input: HookInputLike) => {
