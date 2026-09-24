@@ -21,7 +21,9 @@
  * status line records its session id and no other session's.
  */
 
+import { readFileSync } from "node:fs"
 import { join } from "node:path"
+import { readSandboxProbe } from "../cli/sandbox-probe.ts"
 import type { AgentConfig, AgentPaths } from "../config.ts"
 import { readJson, writeJsonAtomic } from "../fsq.ts"
 import { appendLedger, type Logger } from "../log.ts"
@@ -41,6 +43,55 @@ export const TMUX_SOCKET = "agentd"
  * keep the user's settings as they are.
  */
 export const frontDoorSettingsPath = (paths: AgentPaths) => join(paths.root, "front-door-settings.json")
+
+/**
+ * What is wrong with the front door's settings file, or null. claude refuses
+ * a missing file, but starts on an unparseable one with no sandbox and no
+ * deny rules at all, so the file is read here first.
+ */
+export function frontDoorSettingsProblem(paths: AgentPaths): string | null {
+  const file = frontDoorSettingsPath(paths)
+  let text: string
+  try {
+    text = readFileSync(file, "utf8")
+  } catch {
+    return `${file} is missing: run install.sh`
+  }
+  let settings: { sandbox?: { enabled?: unknown; allowUnsandboxedCommands?: unknown } }
+  try {
+    settings = JSON.parse(text)
+  } catch {
+    return `${file} is not valid JSON, and claude would start without its sandbox: run install.sh`
+  }
+  if (settings?.sandbox?.enabled !== true || settings.sandbox.allowUnsandboxedCommands !== false) {
+    return `${file} does not turn the sandbox on (sandbox.enabled true, allowUnsandboxedCommands false): run install.sh`
+  }
+  return null
+}
+
+/** agentd would not start the front door: agentd.json and agentctl status say why. */
+export class FrontDoorRefused extends Error {}
+
+/**
+ * Why the front door must not start now, or null: its settings, and a
+ * sandbox probe that has not passed on the claude it would run. The sandbox
+ * leans on how that Claude Code treats the settings (cli/sandbox-probe.ts), so
+ * a claude someone updated starts only once agentctl probe-sandbox passes on it.
+ */
+export async function frontDoorRefusal(deps: { paths: AgentPaths; config: AgentConfig; exec: Exec }): Promise<string | null> {
+  const problem = frontDoorSettingsProblem(deps.paths)
+  if (problem) return problem
+  const claude = deps.config.frontDoor.claudePath
+  const r = await deps.exec(claude, ["--version"], { timeoutMs: TMUX_TIMEOUT_MS })
+  const version = r.code === 0 ? r.stdout.trim().split("\n")[0] : ""
+  if (!version) return `${claude} --version failed (${r.code}): ${r.stderr.trim()}`
+  const probe = readSandboxProbe(deps.paths)
+  if (!probe?.ok || probe.claudeVersion !== version) {
+    const last = probe ? ` (the last probe ${probe.ok ? "passed" : "failed"} on ${probe.claudeVersion})` : ""
+    return `the sandbox probe has not passed on ${version}${last}: a person runs agentctl probe-sandbox`
+  }
+  return null
+}
 const KICK_AFTER_MINUTES = 5
 /** tmux answers at once. One that hangs must not hold up the job launcher behind it. */
 const TMUX_TIMEOUT_MS = 30_000
@@ -208,6 +259,9 @@ export async function applyFrontDoor(deps: FrontDoorDeps, state: FrontDoorState,
     deps.log.warn("front door kicked", { reason: action.reason })
     return { ...state, kickedAt: now.toISOString() }
   }
+  // Checked before a restart kills anything: a refused start leaves the session as it is.
+  const refusal = await frontDoorRefusal(deps)
+  if (refusal) throw new FrontDoorRefused(refusal)
   if (action.kind === "restart") await tmux(["kill-session", "-t", `=${session}`])
   const resumeId = action.kind === "restart" || action.mode === "resume" ? state.sessionId : null
   const command = claudeCommand({

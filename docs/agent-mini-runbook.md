@@ -91,7 +91,7 @@ vercel login
 ```
 
 Check: `node --version` starts with v20 (20.18.1 or later), `pnpm --version`
-with 10, `claude --version` is 2.1.259 or later, `gh auth status` names
+with 10, `claude --version` is 2.1.278 or later, `gh auth status` names
 `eve-polads`, `git config --global --show-origin user.email` shows
 `file:/Users/eve/.gitconfig`, and `~/.config/git/config` does not exist. The
 worker's sandbox cannot read `~/.config`, and git reads that file whenever it
@@ -223,10 +223,17 @@ absolute paths of `claude` and `tmux` in `config.json`, and loads the two
 LaunchAgents with an explicit PATH it has checked. Run it again after any
 change to a tool's location: it is idempotent.
 
-agentd starts the front door with `--settings ~/.agentd/front-door-settings.json`,
-so those settings are the front door's alone. `~/.claude/settings.json` is
-left as it was, and a person's own `claude` on the mini (the handbook's
-`/dev`, `/preview` and `/ship` smoke test, say) runs without them.
+agentd starts the front door with `--settings ~/.agentd/front-door-settings.json`.
+Those settings are added on top of the user's (`~/.claude/settings.json`)
+and the checkout's, not put in their place, so a `sandbox` block or
+`permissions.allow` rules in `~/.claude/settings.json` or
+`~/polads/.claude/settings.local.json` would reach the front door and could
+loosen its sandbox: `agentctl doctor` fails on either. install.sh leaves
+`~/.claude/settings.json` as it was, and a person's own `claude` on the mini
+(the handbook's `/dev`, `/preview` and `/ship` smoke test, say) runs without
+the front door's settings. agentd starts nothing on a front-door settings
+file it cannot parse or that turns the sandbox off: claude would start on
+one it cannot parse with no sandbox at all.
 
 The front door's settings, from `runtime/templates/claude-settings.json`:
 
@@ -269,7 +276,22 @@ cd ~/polads && ~/.agentd/bin/trackerctl ready --limit 3       # a JSON list
 
 ## 9. First start, paused
 
-Within two minutes `agentctl status` reads, line by line: `eve PAUSED
+agentd starts the front door only once the sandbox probe has passed on the
+`claude` it runs, so the probe comes first, at a terminal:
+
+```bash
+~/.agentd/bin/agentctl probe-sandbox
+```
+
+It is free and takes a few seconds: one front-door session with the front
+door's own `claude`, its settings and the two commands, in a throwaway home
+with fake secrets, against local fakes of the Messages API and Linear. Every
+line must say `ok`. It records the Claude Code version it passed on. If a
+line says FAIL, the sandbox does not hold on this Claude Code: keep the mini
+paused and report it. Until it passes, `agentctl status` says
+`front door: NOT RUNNING ... NOT STARTED: the sandbox probe has not passed`.
+
+Then, within two minutes, `agentctl status` reads, line by line: `eve PAUSED
 (first start, not watched yet)`, `agentd: running`, `front door: running`
 with a wakeup 0 or 1 min ago, `worker: idle`, `bridge: connected`, a
 `usage:` line with numbers, and `linear: ok (eve@polads.eu)`.
@@ -284,14 +306,6 @@ with a wakeup 0 or 1 min ago, `worker: idle`, `bridge: connected`, a
 - On the phone or claude.ai, signed in as Eve, the front door appears under
   Remote Control. If it does not, attach, run `/remote-control` once, and
   detach.
-- `~/.agentd/bin/agentctl probe-sandbox` (free, a few seconds, at a
-  terminal): one front-door session with the front door's own `claude`, its
-  settings and the two commands, in a throwaway home with fake secrets,
-  against local fakes of the Messages API and Linear. Every line must say
-  `ok`. It records the Claude Code version it passed on, and `agentctl
-  doctor` warns while the installed `claude` is another version. If a line
-  says FAIL, the sandbox does not hold on this Claude Code: keep the mini
-  paused and report it.
 - `~/.agentd/bin/agentctl probe-hooks` (a few cents): a real SDK session in
   a throwaway repository proves the plugin's hooks and the worker's own
   guard fire. Expected: `"pluginHookFired":true`, `"workerGuardFired":true`,
@@ -366,9 +380,9 @@ tmux -L agentd kill-session -t =frontdoor        # agentd resumes it within 15 s
 ```
 
 The front door's Claude Code does not update itself (agentd's LaunchAgent
-sets `DISABLE_AUTOUPDATER`), so its sandbox is always the one last probed.
-To update it: pause, `claude update`, `agentctl probe-sandbox`, restart the
-front door as above, resume. The same after a runtime update that moves the
+sets `DISABLE_AUTOUPDATER`), and agentd starts the front door only on a
+`claude` the sandbox probe passed on. To update it: pause, `claude update`,
+`agentctl probe-sandbox`, restart the front door as above, resume. The same after a runtime update that moves the
 SDK's version, and `cd ~/dev-tasks/runtime && npm test` runs the probe with
 the SDK's own binary.
 
@@ -403,8 +417,11 @@ was: `/dev`, `/preview` and `/ship` on their laptops.
    (decision 7). A mini that cannot run them any more has its claims released
    with its key: on another agent machine, with that mini's key in
    `~/.config/linear/.env` and its name as `mini` in the profile for the two
-   commands, then both put back. Or a person unassigns its issues in Linear
-   (people have Linear accounts). Parked issues (On hold,
+   commands, then both put back. Pause the borrowing mini first
+   (`agentctl pause --reason "releasing <mini>'s claims"`) and wait until
+   `agentctl status` shows `worker: idle`: its own worker would otherwise
+   heartbeat and claim as the other mini meanwhile. Or a person unassigns its
+   issues in Linear (people have Linear accounts). Parked issues (On hold,
    assigned to Eve) can stay, or be unassigned with
    `~/.agentd/bin/trackerctl update STEP-<n> --assign none`. A worker's open PR is an
    ordinary PR: let it merge, or close it with `gh pr close <n> --comment "<why>"`.

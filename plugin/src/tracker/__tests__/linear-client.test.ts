@@ -385,5 +385,7 @@ describe("linearEndpoint", () => {
       delete process.env.DEV_TASKS_LINEAR_ENDPOINT
     }
     expect(fetchMock.mock.calls[0][0]).toBe("http://127.0.0.1:4567/graphql")
+    // A redirect would be followed with the key: none is.
+    expect(fetchMock.mock.calls[0][1]).toMatchObject({ redirect: "error" })
   })
 })

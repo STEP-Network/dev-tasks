@@ -49,6 +49,7 @@ refuses() {
   if run; then bad "$1: it installed"; elif grep -q "$2" "$T/out.log"; then ok "$1"; else bad "$1: $(cat "$T/out.log")"; fi
 }
 
+AGENTD_HOME="$T/elsewhere-agentd" refuses "refuses an AGENTD_HOME other than ~/.agentd" "must be ~/.agentd"
 refuses "refuses without the agent profile" '"profile": "agent"'
 echo '{ "profile": "agent", "devSurface": "preview", "mini": "eve" }' > "$HOME/.claude/dev-tasks-profile.json"
 

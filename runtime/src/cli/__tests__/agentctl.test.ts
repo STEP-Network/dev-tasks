@@ -100,6 +100,30 @@ describe("run", () => {
     await expect(run(["ask", "--issue", "STEP-7"], out, deps())).rejects.toThrow(/--text or --text-file/)
   })
 
+  it("spends a reply file in ~/.front-door once it is queued, and leaves any other file alone", async () => {
+    const realHome = process.env.HOME
+    process.env.HOME = join(root, "home")
+    try {
+      mkdirSync(join(root, "home", ".front-door"), { recursive: true })
+      const reply = join(root, "home", ".front-door", "reply-1790000000.000100.md")
+      const other = join(root, "notes.md")
+      writeFileSync(reply, "Filed STEP-9.\n")
+      writeFileSync(other, "Kept.\n")
+      await run(["slack", "reply", "--channel", "C0INTAKE", "--thread", "1790000000.000100", "--text-file", reply], out, deps())
+      await run(["slack", "post", "--channel", "agents", "--text-file", other], out, deps())
+      expect(existsSync(reply)).toBe(false)
+      expect(existsSync(other)).toBe(true)
+      expect(listNew<{ text: string }>(agentPaths().outbox).map((e) => e.payload.text)).toEqual(["Filed STEP-9.", "Kept."])
+    } finally {
+      process.env.HOME = realHome
+    }
+  })
+
+  it("keeps a token out of a pause's reason, which status and the digest show", async () => {
+    await expect(run(["pause", "--reason", "SLACK_BOT_TOKEN=xoxb-1234-abcdef"], out, deps())).rejects.toBeInstanceOf(UsageError)
+    expect(existsSync(agentPaths().pauseFile)).toBe(false)
+  })
+
   it("sends no secrets file and no token, from a file or inline", async () => {
     // agentctl runs outside the front door's sandbox, so it keeps them out itself.
     const tokens = join(root, "notes.md")

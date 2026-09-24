@@ -224,6 +224,12 @@ async function main(): Promise<void> {
   const parsed = parseArgs(process.argv.slice(2))
   const tracker = resolveTracker()
   const { command, positional, flags } = parsed
+  // A required text flag that reaches the tracker: never one that carries a key or a token.
+  const sent = (name: string): string => {
+    const value = requireArg(str(flags, name), name)
+    assertNoSecretText(value, `--${name}`)
+    return value
+  }
 
   switch (command) {
     case "read": {
@@ -243,10 +249,8 @@ async function main(): Promise<void> {
       return
     }
     case "create": {
-      const title = requireArg(str(flags, "title"), "title")
-      assertNoSecretText(title, "--title")
       const issue = await tracker.createIssue({
-        title,
+        title: sent("title"),
         description: textFlag(flags, "description"),
         labels: list(flags, "label"),
         state: str(flags, "state"),
@@ -265,8 +269,8 @@ async function main(): Promise<void> {
     case "attach": {
       await tracker.attachLink(
         requireArg(positional[0], "ref (positional)"),
-        requireArg(str(flags, "url"), "url"),
-        requireArg(str(flags, "title"), "title"),
+        sent("url"),
+        sent("title"),
       )
       process.stdout.write(JSON.stringify({ ok: true }) + "\n")
       return
@@ -303,7 +307,7 @@ async function main(): Promise<void> {
     case "release": {
       await tracker.releaseIssue(
         requireArg(positional[0], "ref (positional)"),
-        requireArg(str(flags, "reason"), "reason"),
+        sent("reason"),
       )
       process.stdout.write(JSON.stringify({ ok: true }) + "\n")
       return

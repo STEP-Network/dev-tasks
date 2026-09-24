@@ -22,6 +22,9 @@ export AGENTD_HOME
 
 fail() { echo "install: $*" >&2; exit 1; }
 
+# The front door's settings and the skills name ~/.agentd/bin as it is spelt.
+[ "$AGENTD_HOME" = "$HOME/.agentd" ] || fail "AGENTD_HOME is $AGENTD_HOME: on a mini it must be ~/.agentd, which the front door's settings and the skills name"
+
 [ "$(id -u)" -ne 0 ] || fail "run this as the agent user, not as root"
 # What agentctl doctor itself needs. It checks everything else.
 command -v jq >/dev/null || fail "jq is missing: brew install jq, from the admin account"

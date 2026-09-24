@@ -122,6 +122,8 @@ export async function linearRequest(query, variables = {}) {
             method: "POST",
             headers: { "Content-Type": "application/json", Authorization: key },
             body: JSON.stringify({ query, variables }),
+            // Linear answers GraphQL without redirects. One would be followed with the key.
+            redirect: "error",
         });
         if (res.status === 429 || res.status >= 500) {
             lastStatus = res.status;

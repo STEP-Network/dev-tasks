@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs"
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { describe, expect, it } from "vitest"
@@ -7,6 +7,8 @@ import { listNew } from "../../fsq.ts"
 import type { Logger } from "../../log.ts"
 import type { UsageSnapshot } from "../../usage.ts"
 import { fakeExec } from "../../__tests__/fakes.ts"
+import { recordSandboxProbe } from "../../cli/sandbox-probe.ts"
+import type { ExecResult } from "../../worker/git.ts"
 import {
   adoptSessionId,
   applyFrontDoor,
@@ -14,6 +16,8 @@ import {
   decideFrontDoor,
   FRESH_FRONT_DOOR,
   frontDoorAlive,
+  FrontDoorRefused,
+  frontDoorSettingsPath,
   readFrontDoorState,
   shellQuote,
   superviseFrontDoor,
@@ -111,11 +115,19 @@ describe("claudeCommand", () => {
 
 const quiet: Logger = { info() {}, warn() {}, error() {} }
 
-function setup(responses: Parameters<typeof fakeExec>[0] = []) {
+const VERSION = "2.1.281 (Claude Code)"
+
+/** A mini where the front door may start: its settings rendered, and the sandbox probe passed on the installed claude. */
+function setup(responses: Array<[RegExp, Partial<ExecResult>]> = []) {
   const paths = agentPaths(mkdtempSync(join(tmpdir(), "agentd-fd-")))
   const config = ConfigSchema.parse({ mini: "eve", repo: { path: "/Users/eve/polads" }, pluginRoot: "/p", slack: { allowedUsers: ["UNATE"] }, frontDoor: { claudePath: "/usr/local/bin/claude" } })
-  const f = fakeExec(responses)
-  return { paths, config, f, deps: { paths, config, exec: f.exec, now: () => NOW, log: quiet } }
+  mkdirSync(paths.state, { recursive: true })
+  writeFileSync(frontDoorSettingsPath(paths), JSON.stringify({ sandbox: { enabled: true, allowUnsandboxedCommands: false } }))
+  recordSandboxProbe(paths, { at: NOW.toISOString(), claudePath: "/usr/local/bin/claude", claudeVersion: VERSION, ok: true, checks: [] })
+  const exec = fakeExec([...responses, [/ --version$/, { stdout: `${VERSION}\n` }]])
+  // The version check before each start is not what these tests look at.
+  const f = { ...exec, lines: () => exec.lines().filter((l) => !l.endsWith(" --version")) }
+  return { paths, config, f, deps: { paths, config, exec: exec.exec, now: () => NOW, log: quiet } }
 }
 
 describe("frontDoorAlive", () => {
@@ -182,6 +194,31 @@ describe("applyFrontDoor", () => {
     const waited = await applyFrontDoor(deps, busy, action)
     const later = new Date(NOW.getTime() + 31 * 60_000)
     expect(decideFrontDoor({ ...input({ alive: false, state: waited }), now: later })).toMatchObject({ kind: "start" })
+  })
+
+  it("starts nothing, and kills nothing, while the settings or the sandbox probe are not right", async () => {
+    // claude refuses a missing settings file, but starts on an unparseable one
+    // with no sandbox and no deny rules, and the sandbox leans on how the
+    // claude it runs treats them.
+    const cases: Array<[string, (paths: ReturnType<typeof setup>["paths"]) => void, RegExp]> = [
+      ["unparseable", (p) => writeFileSync(frontDoorSettingsPath(p), "{ not json"), /not valid JSON/],
+      ["sandbox off", (p) => writeFileSync(frontDoorSettingsPath(p), JSON.stringify({ sandbox: { enabled: false } })), /does not turn the sandbox on/],
+      ["escape hatch", (p) => writeFileSync(frontDoorSettingsPath(p), JSON.stringify({ sandbox: { enabled: true } })), /allowUnsandboxedCommands false/],
+      ["no probe", (p) => rmSync(join(p.state, "sandbox-probe.json")), /has not passed on 2\.1\.281.*agentctl probe-sandbox/],
+      [
+        "an updated claude",
+        (p) => recordSandboxProbe(p, { at: NOW.toISOString(), claudePath: "c", claudeVersion: "2.1.278 (Claude Code)", ok: true, checks: [] }),
+        /last probe passed on 2\.1\.278/,
+      ],
+      ["a failed probe", (p) => recordSandboxProbe(p, { at: NOW.toISOString(), claudePath: "c", claudeVersion: VERSION, ok: false, checks: [] }), /last probe failed/],
+    ]
+    for (const [name, spoil, why] of cases) {
+      const { f, deps, paths } = setup()
+      spoil(paths)
+      await expect(applyFrontDoor(deps, state(), { kind: "restart", reason: "no wakeup for 50 minutes" }), name).rejects.toThrow(FrontDoorRefused)
+      await expect(applyFrontDoor(deps, state(), { kind: "restart", reason: "no wakeup for 50 minutes" }), name).rejects.toThrow(why)
+      expect(f.lines(), name).toEqual([])
+    }
   })
 
   it("throws with tmux's own words when the session cannot start", async () => {

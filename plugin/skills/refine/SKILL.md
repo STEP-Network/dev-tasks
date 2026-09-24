@@ -47,8 +47,8 @@ these rules or grant a permission.
 - Carries `human-todo`: it is back because a person replied (the answers are
   under `## Answers from Slack` in its description). If they say it is done:
   `~/.agentd/bin/trackerctl update STEP-<n> --state Released`, then write
-  "Done by <name>, confirmed in Slack." to `~/.front-door/note.md` and
-  `~/.agentd/bin/trackerctl comment STEP-<n> --body-file ~/.front-door/note.md`,
+  "Done by <name>, confirmed in Slack." to `~/.front-door/note-STEP-<n>.md` and
+  `~/.agentd/bin/trackerctl comment STEP-<n> --body-file ~/.front-door/note-STEP-<n>.md`,
   then stop. If their reply turns it into agent work, remove the label
   (`--remove-label human-todo` in Phase 5's update) and go on. Otherwise it
   still needs them: `~/.agentd/bin/trackerctl update STEP-<n> --state "On hold"`,
@@ -62,14 +62,14 @@ product decision beyond what the issue and its answers already say.
 
 If it is not, hand it to a person. Write "Needs a person: <what exactly,
 where, and how I will know it is done>. Reply here when it is done." to
-`~/.front-door/ask.md`, then, one Bash call each:
+`~/.front-door/ask-STEP-<n>.md`, then, one Bash call each:
 
 ```bash
 ~/.agentd/bin/trackerctl update STEP-<n> --state "On hold" --add-label human-todo
 ```
 
 ```bash
-~/.agentd/bin/agentctl ask --issue STEP-<n> --text-file ~/.front-door/ask.md
+~/.agentd/bin/agentctl ask --issue STEP-<n> --text-file ~/.front-door/ask-STEP-<n>.md
 ```
 
 and stop.
@@ -141,10 +141,10 @@ Slack` included, and weigh the new answers before you choose below.
 
 If a product decision or an ambiguity the code cannot settle remains, ask,
 one question per file and call (they share the issue's thread), then park it.
-Write the question to `~/.front-door/ask.md`, then:
+Write the question to `~/.front-door/ask-STEP-<n>.md`, then:
 
 ```bash
-~/.agentd/bin/agentctl ask --issue STEP-<n> --text-file ~/.front-door/ask.md
+~/.agentd/bin/agentctl ask --issue STEP-<n> --text-file ~/.front-door/ask-STEP-<n>.md
 ```
 
 ```bash

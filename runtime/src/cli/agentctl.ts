@@ -8,8 +8,8 @@
  * it with a clean environment and `node --import <tsx's loader>`.
  */
 
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
-import { join } from "node:path"
+import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs"
+import { join, sep } from "node:path"
 import { fileURLToPath } from "node:url"
 import { agentPaths, loadConfig, readProfile, readProfileMini } from "../config.ts"
 import { ack, readJson } from "../fsq.ts"
@@ -89,7 +89,21 @@ export async function run(argv: string[], out: (line: string) => void, overrides
       throw new UsageError(message(error).replace(/^usage: /, ""))
     }
     if (!text.trim()) throw new UsageError("the text is empty")
+    if (file !== undefined) textFiles.push(file)
     return text.replace(/\n+$/, "")
+  }
+  // A reply or a question file in ~/.front-door is spent once queued: a write
+  // that failed later must not send an old one again. Nothing elsewhere is touched.
+  const textFiles: string[] = []
+  const spend = () => {
+    for (const file of textFiles) {
+      try {
+        const real = realpathSync(file)
+        if (real.startsWith(realpathSync(join(paths.home, ".front-door")) + sep)) rmSync(real, { force: true })
+      } catch {
+        // Gone already, or no ~/.front-door: nothing to spend.
+      }
+    }
   }
   const issueFlag = () => {
     const issue = need("issue")
@@ -141,6 +155,7 @@ export async function run(argv: string[], out: (line: string) => void, overrides
     }
     case "ask": {
       print({ queued: enqueueSlack(paths, { kind: "issue", issue: issueFlag(), text: textFlag(), question: true }, now()) })
+      spend()
       return 0
     }
     case "slack": {
@@ -148,6 +163,7 @@ export async function run(argv: string[], out: (line: string) => void, overrides
         const channel = need("channel")
         if (!CHANNELS.includes(channel as ChannelKey)) throw new UsageError(`--channel must be one of ${CHANNELS.join(", ")}`)
         print({ queued: enqueueSlack(paths, { kind: "post", channel: channel as ChannelKey, text: textFlag() }, now()) })
+        spend()
         return 0
       }
       if (rest[0] === "reply") {
@@ -157,13 +173,21 @@ export async function run(argv: string[], out: (line: string) => void, overrides
         if (!CHANNEL_ID_RE.test(channelId)) throw new UsageError(`--channel must be a Slack channel id (C...), as the event carries it, got ${channelId}`)
         if (!THREAD_TS_RE.test(threadTs)) throw new UsageError(`--thread must be a Slack message ts (1790000000.000100), got ${threadTs}`)
         print({ queued: enqueueSlack(paths, { kind: "reply", channelId, threadTs, text }, now()) })
+        spend()
         return 0
       }
       throw new UsageError("usage: agentctl slack post --channel <key> --text <t> | agentctl slack reply --channel <id> --thread <ts> --text <t> (or --text-file <path> for either)")
     }
     case "pause": {
+      const reason = typeof flags.reason === "string" ? flags.reason : ""
+      try {
+        // agentctl status and the front door's digest show it to people.
+        assertNoSecretText(reason, "--reason")
+      } catch (error) {
+        throw new UsageError(message(error).replace(/^usage: /, ""))
+      }
       mkdirSync(paths.root, { recursive: true })
-      writeFileSync(paths.pauseFile, JSON.stringify({ at: now().toISOString(), reason: typeof flags.reason === "string" ? flags.reason : "" }))
+      writeFileSync(paths.pauseFile, JSON.stringify({ at: now().toISOString(), reason }))
       print({ paused: true })
       return 0
     }
@@ -194,7 +218,7 @@ export async function run(argv: string[], out: (line: string) => void, overrides
         statusReport({
           mini: config.mini,
           paused: pauseReason(paths),
-          agentd: readJson<{ pid: number; at: string; error?: string }>(join(paths.state, "agentd.json")),
+          agentd: readJson<NonNullable<StatusInput["agentd"]>>(join(paths.state, "agentd.json")),
           frontDoor: {
             alive: await frontDoorAlive({ exec: deps.exec, config }),
             lastWakeAt: lastTickAt(paths),

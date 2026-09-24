@@ -9,6 +9,8 @@ import { writeJsonAtomic } from "../../fsq.ts"
 import { submitJob } from "../../jobs.ts"
 import type { Logger } from "../../log.ts"
 import { fakeExec, fakeTracker } from "../../__tests__/fakes.ts"
+import { recordSandboxProbe } from "../../cli/sandbox-probe.ts"
+import { frontDoorSettingsPath } from "../frontdoor.ts"
 import { Every } from "../health.ts"
 import { checkLocal, freshMemo, killGroup, runDuties, type DutyDeps } from "../main.ts"
 
@@ -56,7 +58,14 @@ describe("runDuties", () => {
   function duties(over: Partial<DutyDeps> = {}) {
     const paths = agentPaths(mkdtempSync(join(tmpdir(), "agentd-duties-")))
     const config = ConfigSchema.parse({ ...CONFIG, repo: { path: "/r" } })
-    const f = fakeExec([[/ls-remote/, { stdout: `${SHA}\trefs/heads/staging\n` }]])
+    const f = fakeExec([
+      [/ls-remote/, { stdout: `${SHA}\trefs/heads/staging\n` }],
+      [/ --version$/, { stdout: "2.1.281 (Claude Code)\n" }],
+    ])
+    // A mini where the front door may start: its settings, and the sandbox probe passed on its claude.
+    mkdirSync(paths.state, { recursive: true })
+    writeFileSync(frontDoorSettingsPath(paths), JSON.stringify({ sandbox: { enabled: true, allowUnsandboxedCommands: false } }))
+    recordSandboxProbe(paths, { at: NOW.toISOString(), claudePath: "claude", claudeVersion: "2.1.281 (Claude Code)", ok: true, checks: [] })
     let t = NOW.getTime()
     const problems: string[][] = []
     const log: Logger = {
@@ -116,6 +125,21 @@ describe("runDuties", () => {
     bridge(0)
     await runDuties(d, freshMemo())
     expect(problems.flat().filter((p) => p.includes("front door"))).toEqual([])
+  })
+
+  it("keeps why it would not start the front door, and says it once", async () => {
+    const errors: string[] = []
+    const { d, paths } = duties()
+    const log: Logger = { info() {}, warn() {}, error: (msg) => void errors.push(msg) }
+    writeFileSync(frontDoorSettingsPath(paths), "{ not json")
+    const memo = freshMemo()
+    await runDuties({ ...d, log }, memo)
+    await runDuties({ ...d, log }, memo)
+    expect(memo.frontDoorRefused).toMatch(/not valid JSON/)
+    expect(errors.filter((m) => m === "front door not started")).toHaveLength(1)
+    writeFileSync(frontDoorSettingsPath(paths), JSON.stringify({ sandbox: { enabled: true, allowUnsandboxedCommands: false } }))
+    await runDuties({ ...d, log }, memo)
+    expect(memo.frontDoorRefused).toBeNull()
   })
 
   it("reports messages Slack refused for good only when their count grows past what it first saw", async () => {

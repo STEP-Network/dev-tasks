@@ -67,6 +67,18 @@ describe("statusReport", () => {
     expect(statusReport({ ...healthy, bridge: null }).split("\n")[4]).toBe("bridge: NO HEARTBEAT (never written)")
   })
 
+  it("says why agentd would not start the front door", () => {
+    const text = statusReport({
+      ...healthy,
+      agentd: { pid: 4100, at: ago(10_000), frontDoorRefused: "the sandbox probe has not passed on 2.1.290 (Claude Code): a person runs agentctl probe-sandbox" },
+      frontDoor: { alive: false, lastWakeAt: null, startsLastHour: 0, waitUntil: null },
+    })
+    expect(text.split("\n")[1]).toBe("agentd: running, pid 4100")
+    expect(text.split("\n")[2]).toBe(
+      "front door: NOT RUNNING, last wakeup never, 0 start(s) in the last hour, NOT STARTED: the sandbox probe has not passed on 2.1.290 (Claude Code): a person runs agentctl probe-sandbox",
+    )
+  })
+
   it("shows a front door that is not running or waits", () => {
     const text = statusReport({ ...healthy, frontDoor: { alive: false, lastWakeAt: null, startsLastHour: 0, waitUntil: "2026-09-24T12:30:00.000Z" } })
     expect(text.split("\n")[2]).toBe("front door: NOT RUNNING, last wakeup never, 0 start(s) in the last hour, waiting until 2026-09-24T12:30:00.000Z")

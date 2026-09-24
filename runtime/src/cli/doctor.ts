@@ -10,7 +10,7 @@
 import { existsSync, readFileSync, statSync } from "node:fs"
 import { dirname, join } from "node:path"
 import { assertProfileMini, loadConfig, type AgentConfig, type AgentPaths } from "../config.ts"
-import { frontDoorSettingsPath } from "../agentd/frontdoor.ts"
+import { frontDoorSettingsPath, frontDoorSettingsProblem } from "../agentd/frontdoor.ts"
 import { readSandboxProbe } from "./sandbox-probe.ts"
 import { agentdSecretsPath, assertLinearKeyFile, claudeTokenPath, linearKeyPath, slackSecretsPath } from "../secrets.ts"
 import type { Exec } from "../worker/git.ts"
@@ -42,8 +42,12 @@ export interface DoctorDeps {
 
 /** runtime/package.json's engines floor. */
 const NODE_FLOOR = [20, 18, 1]
-/** `--permission-prompts none`, which the front door's command line uses. */
-const CLAUDE_FLOOR = [2, 1, 259]
+/**
+ * The oldest Claude Code the front door's sandbox was verified on: the
+ * sandbox leans on how excludedCommands matches a command (2.1.278 and
+ * 2.1.281 checked), and the command line on --permission-prompts none.
+ */
+const CLAUDE_FLOOR = [2, 1, 278]
 
 const semver = (text: string): number[] | null => {
   const m = /(\d+)\.(\d+)\.(\d+)/.exec(text)
@@ -191,6 +195,31 @@ function sandboxProbeCheck(d: DoctorDeps, installed: string): Check {
   return { level: "ok", name, detail: `passed on ${probe.claudeVersion}, ${probe.at}` }
 }
 
+/**
+ * The front door's --settings are added to the user's and the project's, not
+ * put in their place: a `sandbox` block or `permissions.allow` rules in the
+ * user's settings or the checkout's settings.local.json reach the front door
+ * too, and can loosen its sandbox (an excludedCommands entry runs that command
+ * outside it). PolAds's own .claude/settings.json is reviewed code.
+ */
+function looseningSettings(home: string, repo: string): Check {
+  const name = "settings the front door inherits"
+  const found: string[] = []
+  for (const file of [join(home, ".claude", "settings.json"), join(repo, ".claude", "settings.local.json")]) {
+    let settings: { sandbox?: unknown; permissions?: { allow?: unknown } }
+    try {
+      settings = JSON.parse(readFileSync(file, "utf8"))
+    } catch {
+      continue
+    }
+    if (settings?.sandbox !== undefined) found.push(`${file} has a sandbox block`)
+    if (Array.isArray(settings?.permissions?.allow) && settings.permissions.allow.length) found.push(`${file} has permissions.allow rules`)
+  }
+  return found.length
+    ? { level: "fail", name, detail: `${found.join(", ")}: the front door inherits them, and they can loosen its sandbox. Move them out` }
+    : { level: "ok", name, detail: "no sandbox block and no allow rules in the user's settings or settings.local.json" }
+}
+
 export async function doctorChecks(d: DoctorDeps): Promise<Check[]> {
   const checks: Check[] = []
   const add = (c: Check | null) => {
@@ -262,9 +291,11 @@ export async function doctorChecks(d: DoctorDeps): Promise<Check[]> {
     )
     add(frontDoorPlugin(d, config))
     // install.sh writes it after doctor --fresh passes, so only a later doctor looks for it.
-    if (!d.fresh && !existsSync(frontDoorSettingsPath(d.paths))) {
-      add({ level: "warn", name: "front door settings", detail: `${frontDoorSettingsPath(d.paths)} is missing, and the front door cannot start without it: run install.sh` })
+    if (!d.fresh) {
+      const problem = frontDoorSettingsProblem(d.paths)
+      add(problem ? { level: "fail", name: "front door settings", detail: problem } : { level: "ok", name: "front door settings", detail: frontDoorSettingsPath(d.paths) })
     }
+    add(looseningSettings(d.paths.home, config.repo.path))
   }
   if (d.env.MONDAY_API_KEY) {
     add({ level: "warn", name: "monday", detail: "MONDAY_API_KEY is set in this environment. Monday is read-only for agents: remove it from the shell profile" })

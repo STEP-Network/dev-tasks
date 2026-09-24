@@ -39,7 +39,7 @@ beforeEach(() => {
     JSON.stringify({ "dev-tasks-marketplace": { source: { source: "directory", path: join(home, "dev-tasks") } } }),
   )
   writeFileSync(join(home, ".claude", "plugins", "installed_plugins.json"), JSON.stringify({ version: 2, plugins: { "dev-tasks@dev-tasks-marketplace": [{ scope: "user" }] } }))
-  writeFileSync(join(paths.root, "front-door-settings.json"), "{}")
+  writeFileSync(join(paths.root, "front-door-settings.json"), JSON.stringify({ sandbox: { enabled: true, allowUnsandboxedCommands: false } }))
   recordSandboxProbe(paths, { at: "2026-09-24T12:00:00.000Z", claudePath: "claude", claudeVersion: "2.1.281 (Claude Code)", ok: true, checks: [] })
 })
 
@@ -123,11 +123,39 @@ describe("doctorChecks", () => {
     expect(await failed(deps())).toEqual([expect.stringMatching(/^sandbox probe: failed on 2\.1\.281 .*a substitution runs sandboxed.*paused/)])
   })
 
-  it("warns, after an install, when the front door's settings file is gone", async () => {
-    rmSync(join(paths.root, "front-door-settings.json"))
-    expect(await warned(deps())).toEqual([expect.stringMatching(/^front door settings: .*front-door-settings\.json is missing.*install\.sh/)])
+  it("fails, after an install, on front door settings that are gone, unparseable or without the sandbox", async () => {
+    const file = join(paths.root, "front-door-settings.json")
+    rmSync(file)
+    expect(await failed(deps())).toEqual([expect.stringMatching(/^front door settings: .*front-door-settings\.json is missing.*install\.sh/)])
     // Before the first install (doctor --fresh), it is not there yet.
-    expect(await warned(deps({ fresh: true }))).toEqual([])
+    expect(await failed(deps({ fresh: true }))).toEqual([])
+    // claude would start on this one with no sandbox and no deny rules.
+    writeFileSync(file, "{ not json")
+    expect(await failed(deps())).toEqual([expect.stringMatching(/^front door settings: .*not valid JSON/)])
+    writeFileSync(file, JSON.stringify({ sandbox: { enabled: true, allowUnsandboxedCommands: true } }))
+    expect(await failed(deps())).toEqual([expect.stringMatching(/^front door settings: .*does not turn the sandbox on/)])
+  })
+
+  it("fails on a sandbox block or allow rules the front door would inherit", async () => {
+    // Its --settings are added to the user's and the checkout's local settings, not put in their place.
+    const repo = join(home, "polads")
+    mkdirSync(join(repo, ".claude"), { recursive: true })
+    const config = JSON.parse(readFileSync(paths.config, "utf8"))
+    writeFileSync(paths.config, JSON.stringify({ ...config, repo: { path: repo } }))
+    const answers: Responses = [[/rev-parse --is-inside-work-tree$/, { stdout: "true\n" }]]
+    writeFileSync(join(home, ".claude", "settings.json"), JSON.stringify({ enabledPlugins: {}, permissions: { deny: ["Bash(rm:*)"] } }))
+    expect(await failed(deps({}, answers))).toEqual([])
+    writeFileSync(join(home, ".claude", "settings.json"), JSON.stringify({ sandbox: { excludedCommands: ["touch:*"] } }))
+    writeFileSync(join(repo, ".claude", "settings.local.json"), JSON.stringify({ permissions: { allow: ["Bash(npm test:*)"] } }))
+    expect(await failed(deps({}, answers))).toEqual([
+      expect.stringMatching(/^settings the front door inherits: .*settings\.json has a sandbox block, .*settings\.local\.json has permissions\.allow rules/),
+    ])
+  })
+
+  it("refuses a Claude Code older than the one the sandbox was verified on", async () => {
+    expect(await failed(deps({}, [[/^claude --version$/, { stdout: "2.1.270 (Claude Code)\n" }]]))).toEqual([
+      expect.stringMatching(/^claude: 2\.1\.270 .* older than 2\.1\.278/),
+    ])
   })
 
   it("refuses a secrets file other users can read, and a missing one, without printing a value", async () => {

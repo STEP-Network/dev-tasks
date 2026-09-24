@@ -7,7 +7,7 @@ export interface StatusInput {
   /** null when not paused; the reason otherwise ("" when none was given). */
   paused: string | null
   /** state/agentd.json, which agentd writes after every loop, with `error` when it could not start. */
-  agentd: { pid: number; at: string; error?: string } | null
+  agentd: { pid: number; at: string; error?: string; frontDoorRefused?: string } | null
   frontDoor: { alive: boolean; lastWakeAt: Date | null; startsLastHour: number; waitUntil: string | null }
   worker: { issue: string; minutes: number; pid: number | null } | null
   pending: string[]
@@ -57,7 +57,7 @@ export function statusReport(s: StatusInput): string {
   return [
     `${s.mini}${s.paused !== null ? ` PAUSED (${s.paused || "no reason given"}). agentctl resume lifts it` : ""}`,
     `agentd: ${agentdLine(s)}`,
-    `front door: ${fd.alive ? "running" : "NOT RUNNING"}, last wakeup ${fd.lastWakeAt ? minutesAgo(s.now, fd.lastWakeAt) : "never"}, ${fd.startsLastHour} start(s) in the last hour${fd.waitUntil ? `, waiting until ${fd.waitUntil}` : ""}`,
+    `front door: ${fd.alive ? "running" : "NOT RUNNING"}, last wakeup ${fd.lastWakeAt ? minutesAgo(s.now, fd.lastWakeAt) : "never"}, ${fd.startsLastHour} start(s) in the last hour${fd.waitUntil ? `, waiting until ${fd.waitUntil}` : ""}${s.agentd?.frontDoorRefused ? `, NOT STARTED: ${s.agentd.frontDoorRefused}` : ""}`,
     `worker: ${s.worker ? `${s.worker.issue}, ${s.worker.minutes} min${s.worker.pid ? `, pid ${s.worker.pid}` : ""}` : "idle"}${s.pending.length ? `, queued: ${s.pending.join(", ")}` : ""}`,
     ...(s.heldBack.length
       ? [`held back: ${s.heldBack.join(", ")}. Its last two workers were lost early. agentctl job submit --issue <id> runs one by hand`]

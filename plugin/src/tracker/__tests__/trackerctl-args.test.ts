@@ -211,14 +211,19 @@ describe("the claimant is this machine's mini", () => {
     expect(() => claimantFor({}, "Eve")).toThrow(/Eve/)
   })
 
-  it("refuses a title that carries a key before it reaches the tracker", () => {
-    const run = spawnSync(join(PLUGIN_ROOT, "node_modules", ".bin", "tsx"), [join(PLUGIN_ROOT, "scripts", "trackerctl.ts"), "create", "--title", "key lin_api_abcdefghijkl"], {
+  it.each([
+    [["create", "--title", "key lin_api_abcdefghijkl"], "--title"],
+    [["attach", "STEP-1", "--url", "https://x.example/?t=lin_api_abcdefghijkl", "--title", "PR"], "--url"],
+    [["attach", "STEP-1", "--url", "https://x.example/", "--title", "xoxb-1234-abcdefghijkl"], "--title"],
+    [["release", "STEP-1", "--reason", "SLACK_BOT_TOKEN=abcdefghijkl"], "--reason"],
+  ])("refuses %j before it reaches the tracker: the text carries a key", (args, flag) => {
+    const run = spawnSync(join(PLUGIN_ROOT, "node_modules", ".bin", "tsx"), [join(PLUGIN_ROOT, "scripts", "trackerctl.ts"), ...args], {
       cwd: home,
       // Should the refusal ever go, Linear is still out of reach: a dead loopback port.
       env: { PATH: process.env.PATH ?? "", HOME: home, DEV_TASKS_TRACKER: "linear", TRACKERCTL_MAX_WRITES: "0", LINEAR_API_KEY: "lin_api_notreal", DEV_TASKS_LINEAR_ENDPOINT: "http://127.0.0.1:9/graphql" },
       encoding: "utf8",
     })
-    expect(run.stderr).toMatch(/^usage: --title looks like it carries a key or a token/)
+    expect(run.stderr).toMatch(new RegExp(`^usage: ${flag} looks like it carries a key or a token`))
     expect(run.stderr).not.toContain("abcdefghijkl")
     expect(run.status).toBe(64)
   }, 30_000)
