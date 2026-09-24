@@ -9,6 +9,7 @@
  * particular mini.
  */
 import { describe, it, expect, beforeEach, vi } from "vitest"
+import { claimCommentBody, newestClaim, parseClaim, withHeartbeat } from "../types.ts"
 
 const requestMock = vi.fn()
 vi.mock("../linear-client.ts", () => ({
@@ -162,5 +163,139 @@ describe("createIssue with a caller-chosen id", () => {
     // identifier: the create would come back as an unrelated issue.
     await expect(createLinearTracker().createIssue({ title: "x", clientId: "STEP-5" })).rejects.toThrow(/clientId/)
     expect(sent(/issueCreate/)).toHaveLength(0)
+  })
+})
+
+describe("claimIssue", () => {
+  it("assigns the key's owner, moves to In Progress, and leaves a claim comment naming the mini", async () => {
+    await createLinearTracker().claimIssue("STEP-7", "eve")
+    const [update] = sent(/issueUpdate/)
+    expect(update[1].input).toEqual({ assigneeId: "user-eve", stateId: "state-progress" })
+    const [comment] = sent(/commentCreate/)
+    expect(comment[1].input.body).toMatch(/^claimed by eve at \d{4}-\d{2}-\d{2}T/)
+    expect(sent(/users\s*\(/)).toHaveLength(0)
+  })
+})
+
+describe("claim comments", () => {
+  it("parse back, and a heartbeat keeps the claim line and replaces the previous beat", () => {
+    const body = claimCommentBody("eve", "2026-09-24T08:00:00.000Z")
+    expect(parseClaim(body)).toEqual({ claimant: "eve", claimedAt: "2026-09-24T08:00:00.000Z" })
+    const beaten = withHeartbeat(withHeartbeat(body, "2026-09-24T08:15:00.000Z"), "2026-09-24T08:30:00.000Z")
+    expect(beaten).toBe("claimed by eve at 2026-09-24T08:00:00.000Z\nheartbeat 2026-09-24T08:30:00.000Z")
+    expect(parseClaim(beaten)?.claimant).toBe("eve")
+    expect(parseClaim("released: stale")).toBeNull()
+  })
+
+  it("pick the newest claim, for one claimant when asked, with the edit time as the heartbeat", () => {
+    const comments = [
+      { id: "c1", body: "claimed by eve at 2026-09-24T06:00:00.000Z", createdAt: "2026-09-24T06:00:00.000Z", editedAt: null },
+      { id: "c2", body: "claimed by bob at 2026-09-24T07:00:00.000Z", createdAt: "2026-09-24T07:00:00.000Z", editedAt: "2026-09-24T07:45:00.000Z" },
+    ]
+    expect(newestClaim(comments)).toEqual({
+      claimant: "bob",
+      commentId: "c2",
+      claimedAt: "2026-09-24T07:00:00.000Z",
+      heartbeatAt: "2026-09-24T07:45:00.000Z",
+    })
+    expect(newestClaim(comments, "eve")?.heartbeatAt).toBe("2026-09-24T06:00:00.000Z")
+    expect(newestClaim([], "eve")).toBeNull()
+  })
+})
+
+describe("touchClaim", () => {
+  it("edits the mini's newest claim comment, and reports false when the mini holds none", async () => {
+    route(/startsWith/, () => ({
+      issue: {
+        comments: {
+          nodes: [{ id: "c1", body: "claimed by eve at 2026-09-24T06:00:00.000Z", createdAt: "2026-09-24T06:00:00.000Z", editedAt: null }],
+        },
+      },
+    }))
+    const tracker = createLinearTracker()
+    expect(await tracker.touchClaim("STEP-7", "eve")).toBe(true)
+    const [edit] = sent(/commentUpdate/)
+    expect(edit[1].id).toBe("c1")
+    expect(edit[1].input.body).toMatch(/^claimed by eve at 2026-09-24T06:00:00\.000Z\nheartbeat \d{4}-/)
+    expect(await tracker.touchClaim("STEP-7", "bob")).toBe(false)
+    expect(sent(/commentUpdate/)).toHaveLength(1)
+  })
+})
+
+describe("releaseIssue", () => {
+  it("unassigns, puts the issue back in Ready and says why", async () => {
+    await createLinearTracker().releaseIssue("STEP-7", "claim by eve has had no heartbeat for 7 hours")
+    expect(sent(/issueUpdate/)[0][1].input).toEqual({ stateId: "state-ready", assigneeId: null })
+    expect(sent(/commentCreate/)[0][1].input.body).toBe("released: claim by eve has had no heartbeat for 7 hours")
+  })
+})
+
+describe("listClaims", () => {
+  const held = (n: number, assignee: string, claims: string[]) => ({
+    ...ISSUE,
+    id: `uuid-${n}`,
+    identifier: `STEP-${n}`,
+    state: { name: "In Progress" },
+    assignee: { id: assignee },
+    comments: {
+      nodes: claims.map((body, i) => ({ id: `c${n}-${i}`, body, createdAt: "2026-09-24T06:00:00.000Z", editedAt: "2026-09-24T06:15:00.000Z" })),
+    },
+  })
+
+  it("returns In Progress, assigned issues that carry a claim comment, and skips the rest", async () => {
+    route(/startsWith/, () => ({
+      issues: {
+        nodes: [held(7, "user-eve", ["claimed by eve at 2026-09-24T06:00:00.000Z"]), held(9, "user-nate", [])],
+        pageInfo: PAGE_END,
+      },
+    }))
+    const claims = await createLinearTracker().listClaims()
+    expect(claims).toHaveLength(1)
+    expect(claims[0]).toMatchObject({ claimant: "eve", commentId: "c7-0", heartbeatAt: "2026-09-24T06:15:00.000Z" })
+    expect(claims[0].issue).toMatchObject({ id: "STEP-7", assigneeId: "user-eve" })
+    const [[query, variables]] = sent(/startsWith/)
+    expect(query).toMatch(/"In Progress"/)
+    expect(query).toMatch(/assignee:\s*\{\s*null:\s*false\s*\}/)
+    expect(variables).toMatchObject({ prefix: "claimed by " })
+  })
+
+  it("reads every page, so a claim past the first page is still swept", async () => {
+    // The sweeper releases what this returns. A claim on a page it never read
+    // would hold its issue forever.
+    route(/startsWith/, (variables) =>
+      variables.after
+        ? { issues: { nodes: [held(2, "user-bob", ["claimed by bob at 2026-09-24T02:00:00.000Z"])], pageInfo: PAGE_END } }
+        : {
+            issues: {
+              nodes: [held(1, "user-eve", ["claimed by eve at 2026-09-24T01:00:00.000Z"])],
+              pageInfo: { hasNextPage: true, endCursor: "claims-1" },
+            },
+          },
+    )
+    const claims = await createLinearTracker().listClaims()
+    expect(claims.map((c) => [c.issue.id, c.claimant])).toEqual([
+      ["STEP-1", "eve"],
+      ["STEP-2", "bob"],
+    ])
+    expect(sent(/startsWith/).map(([, variables]) => variables.after)).toEqual([null, "claims-1"])
+  })
+})
+
+describe("listByState", () => {
+  it("ranks the named state like listReady and fetches the winners in full", async () => {
+    const triage = [
+      { ...ISSUE, id: "uuid-1", identifier: "STEP-1", priority: 4 },
+      { ...ISSUE, id: "uuid-2", identifier: "STEP-2", priority: 1 },
+    ]
+    // The ranking query and the full fetch both filter on the state; only
+    // the full fetch names ids.
+    route(/stateName/, (variables) => ({
+      issues: { nodes: variables.ids ? triage.filter((i) => variables.ids.includes(i.id)) : triage, pageInfo: PAGE_END },
+    }))
+    const issues = await createLinearTracker().listByState("Triage", 10)
+    const queries = sent(/stateName/)
+    expect(queries).toHaveLength(2)
+    for (const [, variables] of queries) expect(variables).toMatchObject({ stateName: "Triage" })
+    expect(issues.map((i) => i.id)).toEqual(["STEP-2", "STEP-1"])
   })
 })

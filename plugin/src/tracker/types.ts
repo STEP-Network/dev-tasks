@@ -66,6 +66,54 @@ export interface IssuePatch {
   assignee?: "me" | null
 }
 
+/** Every claim comment starts with this. The heartbeat edits the same comment (spec 6.5). */
+export const CLAIM_PREFIX = "claimed by "
+
+export interface ClaimRecord {
+  issue: TrackerIssue
+  /** The mini named in the claim comment: the machine profile's `mini`, e.g. "eve". */
+  claimant: string
+  commentId: string
+  claimedAt: string
+  /** The claim comment's last edit (its heartbeat), or its creation when never edited. */
+  heartbeatAt: string
+}
+
+export interface ClaimComment {
+  id: string
+  body: string
+  createdAt: string
+  editedAt: string | null
+}
+
+const CLAIM_RE = /^claimed by (\S+) at (\S+)/
+
+export function claimCommentBody(claimant: string, at: string): string {
+  return `${CLAIM_PREFIX}${claimant} at ${at}`
+}
+
+export function parseClaim(body: string): { claimant: string; claimedAt: string } | null {
+  const m = CLAIM_RE.exec(body)
+  return m ? { claimant: m[1], claimedAt: m[2] } : null
+}
+
+/** Keeps the claim line and replaces any earlier heartbeat line. */
+export function withHeartbeat(body: string, at: string): string {
+  return `${body.split("\n")[0]}\nheartbeat ${at}`
+}
+
+/** The newest claim among `comments`, optionally only `claimant`'s. */
+export function newestClaim(comments: ClaimComment[], claimant?: string): Omit<ClaimRecord, "issue"> | null {
+  let best: Omit<ClaimRecord, "issue"> | null = null
+  for (const c of comments) {
+    const parsed = parseClaim(c.body)
+    if (!parsed || (claimant !== undefined && parsed.claimant !== claimant)) continue
+    const record = { claimant: parsed.claimant, commentId: c.id, claimedAt: parsed.claimedAt, heartbeatAt: c.editedAt ?? c.createdAt }
+    if (!best || record.claimedAt > best.claimedAt) best = record
+  }
+  return best
+}
+
 export interface Tracker {
   readonly kind: "linear" | "monday"
 
@@ -73,9 +121,9 @@ export interface Tracker {
   readIssue(ref: string): Promise<TrackerIssue>
 
   /**
-   * Moves the issue to In Progress and records who took it. `claimant` is a
-   * machine or person name (the `mini` field, or `whoami`); an implementation
-   * that cannot resolve it to a user still records the claim as a comment.
+   * Assigns the issue to the key's owner (on a mini, that agent's member
+   * account), moves it to In Progress, and leaves a `claimed by <claimant>
+   * at <time>` comment. The comment's edit time is the heartbeat.
    */
   claimIssue(ref: string, claimant: string): Promise<TrackerIssue>
 
@@ -96,6 +144,18 @@ export interface Tracker {
 
   /** Applies `patch` in one write and returns the issue as it now is. */
   updateIssue(ref: string, patch: IssuePatch): Promise<TrackerIssue>
+
+  /** Refreshes the heartbeat on `claimant`'s newest claim comment. false when there is none. */
+  touchClaim(ref: string, claimant: string): Promise<boolean>
+
+  /** Unassigns, puts the issue back in Ready, and comments why. */
+  releaseIssue(ref: string, reason: string): Promise<void>
+
+  /** In Progress, assigned issues with their newest claim: what the 6-hour sweeper reads. */
+  listClaims(): Promise<ClaimRecord[]>
+
+  /** Every issue in a state, sorted by byPriorityThenAge, cut to `limit`. */
+  listByState(state: string, limit?: number): Promise<TrackerIssue[]>
 }
 
 /**

@@ -201,5 +201,9 @@ export function createMondayTracker(): Tracker {
 
     whoami: linearOnly("whoami"),
     updateIssue: linearOnly("updateIssue"),
+    touchClaim: linearOnly("touchClaim"),
+    releaseIssue: linearOnly("releaseIssue"),
+    listClaims: linearOnly("listClaims"),
+    listByState: linearOnly("listByState"),
   }
 }
