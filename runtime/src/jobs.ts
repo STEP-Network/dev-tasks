@@ -76,3 +76,27 @@ export function updateJob(paths: AgentPaths, state: JobState, id: string, patch:
   const job = readJson<JobRecord>(path)
   if (job) writeJsonAtomic(path, { ...job, ...patch })
 }
+
+/** PRs a worker opened, until they merge or close. agentd's PR watcher reads them (Task 14). */
+export interface WatchedPr {
+  issue: string
+  url: string
+  openedAt: string
+  /** `<head sha>:<failing checks>` last reported, so one failure is reported once. */
+  notified?: string
+}
+
+const watchedPath = (paths: AgentPaths) => join(paths.state, "prs.json")
+
+export function readWatchedPrs(paths: AgentPaths): WatchedPr[] {
+  return readJson<WatchedPr[]>(watchedPath(paths)) ?? []
+}
+
+export function writeWatchedPrs(paths: AgentPaths, list: WatchedPr[]): void {
+  writeJsonAtomic(watchedPath(paths), list)
+}
+
+export function recordPr(paths: AgentPaths, pr: WatchedPr): void {
+  const list = readWatchedPrs(paths)
+  if (!list.some((p) => p.url === pr.url)) writeWatchedPrs(paths, [...list, pr])
+}

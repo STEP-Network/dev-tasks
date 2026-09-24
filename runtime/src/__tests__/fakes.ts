@@ -1,6 +1,7 @@
 /** Test helpers shared by the runtime's tests. Not a test file (no .test.ts). */
 
 import type { IssuePatch, Tracker, TrackerIssue, TrackerUser } from "../tracker.ts"
+import type { Exec, ExecResult } from "../worker/git.ts"
 
 export const EVE: TrackerUser = { id: "user-eve", name: "Eve", email: "eve@polads.eu" }
 
@@ -104,4 +105,16 @@ export function fakeTracker(seed: TrackerIssue[] = [], me: TrackerUser = EVE, fa
     },
   }
   return { tracker, calls, issues, called: (method: string) => calls.filter((c) => c.method === method).map((c) => c.args) }
+}
+
+/** Records every command, and answers from the first matching pattern, else with success and no output. */
+export function fakeExec(responses: Array<[RegExp, Partial<ExecResult>]> = []) {
+  const calls: Array<{ line: string; cwd?: string }> = []
+  const exec: Exec = async (cmd, args, opts = {}) => {
+    const line = `${cmd} ${args.join(" ")}`
+    calls.push({ line, cwd: opts.cwd })
+    for (const [re, r] of responses) if (re.test(line)) return { code: 0, stdout: "", stderr: "", ...r }
+    return { code: 0, stdout: "", stderr: "" }
+  }
+  return { exec, calls, lines: () => calls.map((c) => c.line) }
 }
