@@ -132,7 +132,7 @@ case "$VERDICT" in
     echo "  4. Update local-state parentStatus mirror in .claude/active-task.json"
     echo "     (the orchestrator-handoff escape hatch is 'reviewAddressed': 'handoff-to-orchestrator')."
     echo ""
-    echo "Reference: .claude/rules/agent-coordination.md Orchestrator post-merge checklist."
+    echo "Reference: ${CLAUDE_PLUGIN_ROOT:-<plugin>}/rules/agent-orchestration.md 'Orchestrator post-merge checklist'."
     exit 2
     ;;
   *)

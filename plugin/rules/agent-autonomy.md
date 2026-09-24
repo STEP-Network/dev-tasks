@@ -1,5 +1,9 @@
 # Agent Autonomy
 
+> **Monday provider only.** The `/pickup-task` → `/ship-pr` ownership model,
+> with a Stuck workflow written as Monday `updateTask` and `createUpdate` calls.
+> Under `tracker.provider: linear` this rule does not apply.
+
 Codifies what an agent does autonomously vs. when it must stop. Branches on execution context.
 
 ## Execution context

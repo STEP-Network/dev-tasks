@@ -53,4 +53,4 @@ One level out — process / tooling / docs. Usually doesn't ship in same PR; sur
 
 ## Reference
 
-Complements `.claude/rules/ship-readiness.md` (BLOCKER / IMPROVEMENT / POLISH triage). This skill is the diagnostic lens; ship-readiness is the decision gate.
+Complements `${CLAUDE_PLUGIN_ROOT}/rules/ship-readiness.md` (BLOCKER / IMPROVEMENT / POLISH triage). This skill is the diagnostic lens; ship-readiness is the decision gate.

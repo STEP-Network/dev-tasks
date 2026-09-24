@@ -88,7 +88,7 @@ No schedule. Run:
 
 ## Related
 
-- `versions-lifecycle.md` — historical-not-planned model
-- `versioning.md` — semver math + v1.0 gate
-- `release-flow.md` — three release modes
+- `${CLAUDE_PLUGIN_ROOT}/rules/versions-lifecycle.md` — historical-not-planned model
+- `${CLAUDE_PLUGIN_ROOT}/rules/versioning.md` — semver math + v1.0 gate
+- `${CLAUDE_PLUGIN_ROOT}/rules/release-flow.md` — three release modes
 - `/dev-tasks:release-version` — actual release ceremony

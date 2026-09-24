@@ -48,8 +48,8 @@ cat >&2 <<EOF
   it ("no local build" is not a valid skip — staging is screenshot-reachable).
 
   Cheaper to write the E2E + visual diff alongside the implementation than
-  to discover the gap at review time. See .claude/rules/testing.md and
-  .claude/skills/visual-diff/SKILL.md.
+  to discover the gap at review time. See ${CLAUDE_PLUGIN_ROOT:-<plugin>}/rules/testing.md
+  and the /dev-tasks:visual-diff skill.
 
   This reminder fires once per session — won't repeat on further UI edits.
 

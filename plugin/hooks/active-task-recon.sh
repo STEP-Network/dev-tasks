@@ -22,6 +22,10 @@
 #
 # Silent no-op when:
 #   - cwd is NOT under .claude/worktrees/ (main checkout — nothing to reconcile)
+#   - the tracker provider is linear (tracker.provider or DEV_TASKS_TRACKER).
+#     Every case here is Monday state, and the 1.0 flow never writes
+#     active-task.json, so under Linear Case D fired in every worktree session
+#     and pointed the agent at /pickup-task, a Monday-only skill.
 #   - MONDAY_API_KEY is unset (can't reach the source of truth)
 #   - curl or jq missing (env can't run the check)
 #   - Monday API request fails or times out
@@ -34,10 +38,15 @@
 set -u
 shopt -s nullglob
 
+source "$(dirname "${BASH_SOURCE[0]}")/lib/config-reader.sh"
+
 # Only run inside a plugin worktree
 if [[ "$PWD" != *"/.claude/worktrees/"* ]]; then
   exit 0
 fi
+
+# Monday provider only
+[ "$(tracker_provider "$PWD")" = "monday" ] || exit 0
 
 STATE_FILE=".claude/active-task.json"
 
@@ -49,16 +58,19 @@ if [ ! -f "$STATE_FILE" ]; then
   exit 0
 fi
 
-# Cases A + B require querying Monday. Bail silently if env can't.
-if [ -z "${MONDAY_API_KEY:-}" ]; then exit 0; fi
-command -v curl >/dev/null 2>&1 || exit 0
-command -v jq   >/dev/null 2>&1 || exit 0
+command -v jq >/dev/null 2>&1 || exit 0
 
+# A broken state file is worth one line whether or not Monday is reachable,
+# so this runs before the MONDAY_API_KEY bail below.
 TASK_ID=$(jq -r '.taskId // empty' "$STATE_FILE" 2>/dev/null)
 if [ -z "$TASK_ID" ]; then
   echo "[active-task-recon] active-task.json present but taskId empty/malformed; skipping drift check."
   exit 0
 fi
+
+# Cases A + B require querying Monday. Bail silently if env can't.
+if [ -z "${MONDAY_API_KEY:-}" ]; then exit 0; fi
+command -v curl >/dev/null 2>&1 || exit 0
 
 # Query Monday for the task's status + agent
 QUERY_PAYLOAD=$(jq -n --arg id "$TASK_ID" \

@@ -1,5 +1,9 @@
 # Versioning
 
+> **Monday provider only.** Versions live on the Monday Versions board and
+> link to tasks on the Monday `Waiting for UAT` transition.
+> Under `tracker.provider: linear` this rule does not apply.
+
 Semver math, bump gates, v1.0 milestone gate. See `versions-lifecycle.md` for WHY versions are historical.
 
 ## TL;DR

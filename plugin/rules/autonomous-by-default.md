@@ -1,5 +1,9 @@
 # Autonomous by Default
 
+> **Monday provider only.** It chains the legacy `/refine-task` →
+> `/pickup-task` → `/ship-pr` pipeline, which runs on the Monday MCP tools.
+> Under `tracker.provider: linear` this rule does not apply.
+
 > **dev-tasks 1.0:** in a `/dev` → `/preview` → `/ship` session (the two-flow
 > model), the `/refine-task` → `/pickup-task` → `/plan-task` → `/self-review`
 > → `/ship-pr` chain below does not apply: `/dev` makes no tracker writes and

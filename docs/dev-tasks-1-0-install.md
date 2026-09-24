@@ -21,7 +21,7 @@ a machine somebody configured must not silently disarm its own guards.
 Check it:
 
 ```bash
-bash ~/.claude/plugins/cache/dev-tasks-marketplace/dev-tasks/1.0.0/hooks/lib/profile.sh get profile
+bash ~/.claude/plugins/cache/dev-tasks-marketplace/dev-tasks/1.0.1/hooks/lib/profile.sh get profile
 ```
 
 ## 2. Refresh the plugin cache
@@ -46,7 +46,7 @@ Confirm the version:
 ```bash
 ls ~/.claude/plugins/cache/dev-tasks-marketplace/dev-tasks/
 ```
-Expected: `1.0.0`.
+Expected: `1.0.1`.
 
 ## 3. `.claude/project-config.json`
 
@@ -88,6 +88,13 @@ ALSO keyed on `.claude/active-task.json` existing, which the 1.0 `/dev` flow
 never creates, so on a mini it stays inert too until a future phase-2 worker
 writes a task file. One config serves both profiles regardless.
 
+**Plugin rules (1.0.1).** `rule-autoload` no longer runs by default: skills
+read `${CLAUDE_PLUGIN_ROOT}/rules/<file>` when they need a rule. A Monday
+project that wants the 1.0.0 behaviour back (lifecycle rules injected on the
+first matching edit of a session) adds `"rule-autoload"` to `hooks.enabled[]`.
+Under `linear`, leave it out: 11 of the 17 rules describe the Monday pipeline.
+A project's own `rules.extraRules` files surface without that entry.
+
 ## 4. The Linear key (only when `provider` is `linear`)
 
 ```bash
@@ -105,7 +112,7 @@ argument. `LINEAR_API_KEY` in the environment wins over the file.
 
 ```bash
 cd <consumer-project>
-npx tsx ~/.claude/plugins/cache/dev-tasks-marketplace/dev-tasks/1.0.0/scripts/trackerctl.ts ready --limit 3
+npx tsx ~/.claude/plugins/cache/dev-tasks-marketplace/dev-tasks/1.0.1/scripts/trackerctl.ts ready --limit 3
 ```
 
 Expected: one line of JSON, an array of up to three issues. An empty array is

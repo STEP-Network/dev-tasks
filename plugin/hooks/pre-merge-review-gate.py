@@ -186,7 +186,8 @@ def main():
                 block(
                     f"Source \"{source_name}\" has {polish_count} POLISH finding(s) "
                     f"but no decline replies recorded.\n"
-                    "  Per ship-readiness.md, POLISH items must be declined via PR comment.\n"
+                    f"  Per {os.environ.get('CLAUDE_PLUGIN_ROOT') or '<plugin>'}/rules/ship-readiness.md, "
+                    "POLISH items must be declined via PR comment.\n"
                     "  Post decline comments, then record their IDs in "
                     "  reviewAddressed.sources.{source}.replies[]."
                 )

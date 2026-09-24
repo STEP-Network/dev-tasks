@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft-07/schema",
-  "comment": "Maps file path globs to rule files in plugin/rules/. The rule-autoload PreToolUse hook reads this on every Edit|Write, matches the file against each rule's globs, and injects matching rules via additionalContext. Patterns use bash globstar (** matches any path segments). Rules inject at most once per session (per rule file) — subsequent Edit|Write of files matching the same rules skip re-injection.",
+  "comment": "Maps file path globs to rule files in plugin/rules/. Read only when a project lists `rule-autoload` in hooks.enabled[] (off by default since 1.0.1; skills name the rule they need instead). The rule-autoload PreToolUse hook then reads this on every Edit|Write, matches the file against each rule's globs, and injects matching rules via additionalContext. Patterns use bash globstar (** matches any path segments). Rules inject at most once per session (per rule file) — subsequent Edit|Write of files matching the same rules skip re-injection.",
   "rules": [
     {
       "file": "task-lifecycle.md",

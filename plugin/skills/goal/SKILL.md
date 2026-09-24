@@ -32,8 +32,7 @@ auto-compacts (pre/post-compaction hooks preserve state across summarization),
 and durable state lives in Monday + memory + the open PR + git history. A long
 or laggy-feeling session is not a finished session.
 
-The only legitimate reasons to stop are the **3 pause reasons** (see
-`autonomous-by-default.md`):
+The only legitimate reasons to stop are the **3 pause reasons**:
 
 1. **External blocker** — waiting on a system/person you cannot unblock.
 2. **Irreversible human decision needed** — a choice you have no authority to make.
@@ -150,6 +149,6 @@ opt-in machinery as the other workflow Stop hooks.
 
 ## Cross-references
 
-- `autonomous-by-default.md` — the 3 legitimate pause reasons + autonomous stance.
-- `agent-autonomy.md` — the Stuck criterion + escape vocabulary.
+- `${CLAUDE_PLUGIN_ROOT}/rules/autonomous-by-default.md` — the legacy pipeline's autonomous stance (Monday provider only).
+- `${CLAUDE_PLUGIN_ROOT}/rules/agent-autonomy.md` — the Stuck criterion + escape vocabulary (Monday provider only).
 - `plugin/hooks/stop-goal-persistence.sh` + `stop-goal-persistence-logic.py` — the enforcing hook.

@@ -2,7 +2,7 @@
 # .claude/scripts/find-worktree-for-task.sh
 #
 # Given a Monday task ID, print the matching worktree path (and branch).
-# Uses the convention documented in .claude/rules/worktree-discipline.md:
+# Uses the convention documented in rules/worktree-discipline.md:
 #
 #   Monday Branch column (text_mm0pvs3n) → "feat/foo-bar"
 #   Worktree path                        → ".claude/worktrees/feat-foo-bar"

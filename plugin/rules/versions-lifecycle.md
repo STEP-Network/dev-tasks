@@ -1,5 +1,8 @@
 # Versions Lifecycle
 
+> **Monday provider only.** The lifecycle of the Monday Versions board.
+> Under `tracker.provider: linear` this rule does not apply.
+
 ## TL;DR
 
 **Versions are HISTORICAL containers, not future-planning artifacts.**

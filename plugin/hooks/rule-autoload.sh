@@ -16,8 +16,24 @@
 #
 # Fail-open: any error / missing config / empty match → exits 0 silently and
 # does NOT block the Edit/Write.
+#
+# Opt-in since 1.0.1: the plugin's rules inject only when
+# .claude/project-config.json lists "rule-autoload" in hooks.enabled[]. Before
+# that they went into every project, ~23 KB on the first edit of any .ts file,
+# most of it the Monday-era lifecycle. Plugin rules are read on demand now: a
+# skill that needs one names ${CLAUDE_PLUGIN_ROOT}/rules/<file>.
+# rules.extraRules needs no hooks.enabled entry. Listing a file there is the
+# project asking for it, so a non-empty list surfaces those files either way.
 
 set -uo pipefail
+
+source "$(dirname "${BASH_SOURCE[0]}")/lib/config-reader.sh"
+PLUGIN_RULES=0
+hook_enabled "rule-autoload" && PLUGIN_RULES=1
+if [ "$PLUGIN_RULES" -eq 0 ] && [ -z "$(read_project_config '.rules.extraRules[]?')" ]; then
+  exit 0
+fi
+
 # extglob enables extended patterns; globstar (** crosses dirs) only exists in bash 4+,
 # but bash 3.2's [[ ]] pattern matching treats * as "any chars including slashes" anyway,
 # so ** in our routing globs works either way. Silence the warning on 3.2.
@@ -32,13 +48,13 @@ SESSION_ID=$(printf '%s' "$INPUT" | jq -r '.session_id // ""' 2>/dev/null || pri
 [ -z "$FILE_PATH" ] && exit 0
 
 # --- locate plugin assets ----------------------------------------------------
+# Without them the plugin's rules are off, but extraRules can still surface.
 PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-}"
-[ -z "$PLUGIN_ROOT" ] && exit 0
-
 ROUTING_FILE="$PLUGIN_ROOT/rules-routing.json"
 RULES_DIR="$PLUGIN_ROOT/rules"
-[ ! -f "$ROUTING_FILE" ] && exit 0
-[ ! -d "$RULES_DIR" ] && exit 0
+if [ -z "$PLUGIN_ROOT" ] || [ ! -f "$ROUTING_FILE" ] || [ ! -d "$RULES_DIR" ]; then
+  PLUGIN_RULES=0
+fi
 
 # --- session-scoped dedup setup ----------------------------------------------
 MARKER_FILE=""
@@ -62,26 +78,28 @@ already_injected() {
 # --- find matching plugin rule files -----------------------------------------
 # Read rules-routing.json as TSV: <file>\t<json-array-of-globs>
 declare -a TO_INJECT=()
-while IFS=$'\t' read -r rule_file patterns_json; do
-  [ -z "$rule_file" ] && continue
+if [ "$PLUGIN_RULES" -eq 1 ]; then
+  while IFS=$'\t' read -r rule_file patterns_json; do
+    [ -z "$rule_file" ] && continue
 
-  # Skip if already injected this session
-  already_injected "$rule_file" && continue
+    # Skip if already injected this session
+    already_injected "$rule_file" && continue
 
-  # Check if any glob matches the file path
-  matched=0
-  while IFS= read -r pattern; do
-    [ -z "$pattern" ] && continue
-    if [[ "$FILE_PATH" == $pattern ]]; then
-      matched=1
-      break
+    # Check if any glob matches the file path
+    matched=0
+    while IFS= read -r pattern; do
+      [ -z "$pattern" ] && continue
+      if [[ "$FILE_PATH" == $pattern ]]; then
+        matched=1
+        break
+      fi
+    done < <(printf '%s' "$patterns_json" | jq -r '.[]' 2>/dev/null || printf '')
+
+    if [ "$matched" -eq 1 ]; then
+      TO_INJECT+=("$rule_file")
     fi
-  done < <(printf '%s' "$patterns_json" | jq -r '.[]' 2>/dev/null || printf '')
-
-  if [ "$matched" -eq 1 ]; then
-    TO_INJECT+=("$rule_file")
-  fi
-done < <(jq -r '.rules[] | [.file, (.match | @json)] | @tsv' "$ROUTING_FILE" 2>/dev/null || printf '')
+  done < <(jq -r '.rules[] | [.file, (.match | @json)] | @tsv' "$ROUTING_FILE" 2>/dev/null || printf '')
+fi
 
 # --- gather consumer extra rules (rules.extraRules) --------------------------
 # Project-specific rule files in <project>/.claude/rules/, listed in
