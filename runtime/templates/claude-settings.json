@@ -1,0 +1,25 @@
+{
+  "remoteControlAtStartup": true,
+  "autoContinueAtUsageLimit": true,
+  "statusLine": { "type": "command", "command": "__AGENTD_HOME__/bin/statusline" },
+  "permissions": {
+    "allow": ["Edit(~/.agentd/tmp/**)"],
+    "deny": [
+      "Read(~/.config/agentd/**)",
+      "Read(~/.config/linear/**)",
+      "Edit(/__REPO__/**)",
+      "Write(/__REPO__/**)",
+      "Bash(git push:*)",
+      "Bash(gh pr create:*)",
+      "Bash(gh pr merge:*)"
+    ]
+  },
+  "sandbox": {
+    "enabled": true,
+    "autoAllowBashIfSandboxed": true,
+    "allowUnsandboxedCommands": false,
+    "network": { "allowedDomains": ["api.linear.app", "registry.npmjs.org"] },
+    "filesystem": { "allowWrite": ["__AGENTD_HOME__"], "allowRead": ["~/.config/linear/.env"] }
+  },
+  "enabledPlugins": { "dev-tasks@dev-tasks-marketplace": true }
+}

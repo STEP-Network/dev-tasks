@@ -1,0 +1,14 @@
+{
+  "mini": "eve",
+  "repo": { "path": "/Users/eve/polads", "slug": "STEP-Network/v0-politiske-annoncer", "base": "staging", "product": "polads" },
+  "pluginRoot": "/Users/eve/dev-tasks/plugin",
+  "slack": {
+    "channels": { "agents": "polads-agents", "questions": "polads-questions", "intake": "polads-intake", "releases": "polads-releases" },
+    "allowedUsers": ["U06LHEHFD3P"],
+    "otherAgentBots": []
+  },
+  "frontDoor": { "model": "sonnet", "tmuxSession": "frontdoor", "staleTickMinutes": 75 },
+  "worker": { "defaultModel": "sonnet", "complexModel": "opus", "maxTurns": 250, "maxBudgetUsd": 15, "wallClockMinutes": 90 },
+  "queue": { "mode": "allowlist", "allow": [], "refineWhenReadyBelow": 5, "lightModeWeeklyPct": 80, "fiveHourStopPct": 90, "timeZone": "Europe/Copenhagen" },
+  "claims": { "heartbeatMinutes": 15, "ttlHours": 6 }
+}

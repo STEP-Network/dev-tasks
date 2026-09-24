@@ -79,6 +79,14 @@ describe("adoptSessionId", () => {
     expect(adoptSessionId(s, usage("s-old", minutesAgo(9)))).toBe(s)
     expect(adoptSessionId(s, null)).toBe(s)
   })
+
+  it("ignores the previous id that a person's own session wrote back after the start", () => {
+    // Any session on the mini records the limits and keeps the front door's
+    // id and its time as it found them (bin/statusline.sh).
+    const s = state({ sessionId: null, lastStartAt: minutesAgo(5) })
+    expect(adoptSessionId(s, { ...usage("s-old", minutesAgo(1)), sessionAt: minutesAgo(9) })).toBe(s)
+    expect(adoptSessionId(s, { ...usage("s-new", minutesAgo(1)), sessionAt: minutesAgo(2) }).sessionId).toBe("s-new")
+  })
 })
 
 describe("claudeCommand", () => {

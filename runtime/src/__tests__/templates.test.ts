@@ -1,0 +1,79 @@
+/** The files install.sh renders and what Nate copies: runtime/templates and runtime/launchd. */
+
+import { readFileSync } from "node:fs"
+import { fileURLToPath } from "node:url"
+import { describe, expect, it } from "vitest"
+import { ConfigSchema } from "../config.ts"
+
+const read = (path: string) => readFileSync(fileURLToPath(new URL(`../../${path}`, import.meta.url)), "utf8")
+
+describe("templates/config.example.json", () => {
+  const example = JSON.parse(read("templates/config.example.json"))
+
+  it("is a valid config for Eve, starting on the allowlist with nothing on it", () => {
+    const config = ConfigSchema.parse(example)
+    expect(config).toMatchObject({ mini: "eve", repo: { path: "/Users/eve/polads" }, pluginRoot: "/Users/eve/dev-tasks/plugin" })
+    expect(config.queue).toMatchObject({ mode: "allowlist", allow: [] })
+    expect(config.slack.otherAgentBots).toEqual([])
+  })
+
+  it("leaves the binaries' paths to install.sh", () => {
+    expect(example.frontDoor.claudePath).toBeUndefined()
+    expect(example.frontDoor.tmuxPath).toBeUndefined()
+  })
+})
+
+describe("templates/claude-settings.json, the front door's settings", () => {
+  const text = read("templates/claude-settings.json")
+  const rendered = JSON.parse(text.replaceAll("__AGENTD_HOME__", "/Users/eve/.agentd").replaceAll("__REPO__", "/Users/eve/polads"))
+
+  it("uses only the placeholders install.sh fills in", () => {
+    expect([...new Set(text.match(/__[A-Z_]+__/g))].sort()).toEqual(["__AGENTD_HOME__", "__REPO__"])
+  })
+
+  it("keeps the front door out of the code and out of the secrets (spec 6.1, decision 8)", () => {
+    expect(rendered.permissions.deny).toEqual(
+      expect.arrayContaining([
+        "Edit(//Users/eve/polads/**)",
+        "Write(//Users/eve/polads/**)",
+        "Read(~/.config/agentd/**)",
+        "Read(~/.config/linear/**)",
+        "Bash(git push:*)",
+        "Bash(gh pr create:*)",
+        "Bash(gh pr merge:*)",
+      ]),
+    )
+  })
+
+  it("lets sandboxed commands read the Linear key file and no other secret, and write only ~/.agentd", () => {
+    // trackerctl and agentctl run through Bash and read the key themselves.
+    expect(rendered.sandbox).toMatchObject({ enabled: true, autoAllowBashIfSandboxed: true, allowUnsandboxedCommands: false })
+    expect(rendered.sandbox.filesystem).toEqual({ allowWrite: ["/Users/eve/.agentd"], allowRead: ["~/.config/linear/.env"] })
+    expect(rendered.sandbox.network.allowedDomains).toEqual(["api.linear.app", "registry.npmjs.org"])
+  })
+
+  it("lets /refine write its brief, and turns on the status line and Remote Control", () => {
+    expect(rendered.permissions.allow).toEqual(["Edit(~/.agentd/tmp/**)"])
+    expect(rendered.statusLine).toEqual({ type: "command", command: "/Users/eve/.agentd/bin/statusline" })
+    expect(rendered).toMatchObject({ remoteControlAtStartup: true, autoContinueAtUsageLimit: true, enabledPlugins: { "dev-tasks@dev-tasks-marketplace": true } })
+  })
+})
+
+describe("launchd/*.plist", () => {
+  for (const [label, entry] of [
+    ["eu.polads.agentd", "src/agentd/main.ts"],
+    ["eu.polads.slack-bridge", "src/slack/bridge.ts"],
+  ]) {
+    const plist = read(`launchd/${label}.plist`)
+
+    it(`${label} runs ${entry} with an explicit PATH, restarting only a failed exit`, () => {
+      expect(plist).toContain(`<string>${label}</string>`)
+      expect(plist).toContain(`<string>__RUNTIME__/${entry}</string>`)
+      expect(plist).toMatch(/<key>PATH<\/key>\s*<string>__PATH__<\/string>/)
+      expect(plist).toMatch(/<key>AGENTD_HOME<\/key>\s*<string>__AGENTD_HOME__<\/string>/)
+      expect(plist).toMatch(/<key>SuccessfulExit<\/key>\s*<false\/>/)
+      expect(plist).toContain(`__AGENTD_HOME__/logs/${label.replace("eu.polads.", "")}.launchd.log`)
+      expect([...new Set(plist.match(/__[A-Z_]+__/g))].sort()).toEqual(["__AGENTD_HOME__", "__NODE__", "__PATH__", "__RUNTIME__"])
+    })
+  }
+})

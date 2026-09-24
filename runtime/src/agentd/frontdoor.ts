@@ -106,10 +106,14 @@ export function decideFrontDoor(i: FrontDoorInput): FrontDoorAction {
   return { kind: "restart", reason: `no wakeup for ${Math.round((now - since) / 60_000)} minutes` }
 }
 
-/** The status line reports the running session's id. Adopt it once it is newer than the last start. */
+/**
+ * The status line reports the running session's id. Adopt it once the front
+ * door reported it after the last start: a person's own session writes the
+ * snapshot too, keeping the id it found, which may be the previous one.
+ */
 export function adoptSessionId(state: FrontDoorState, usage: UsageSnapshot | null): FrontDoorState {
   if (!usage?.sessionId || usage.sessionId === state.sessionId || !state.lastStartAt) return state
-  if (Date.parse(usage.at) < Date.parse(state.lastStartAt)) return state
+  if (Date.parse(usage.sessionAt ?? usage.at) < Date.parse(state.lastStartAt)) return state
   return { ...state, sessionId: usage.sessionId }
 }
 
