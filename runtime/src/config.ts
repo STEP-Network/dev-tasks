@@ -57,6 +57,12 @@ export function agentPaths(home: string = homedir()): AgentPaths {
  */
 export const MINI_RE = /^[a-z][a-z0-9-]*$/
 
+/**
+ * A Slack member id, the one a mention carries (<@U123>). A bot id (B...), an
+ * app id (A...) or a name would pass as a string and quietly match nobody.
+ */
+const MEMBER_ID = z.string().regex(/^[UW][A-Z0-9]+$/, "must be a Slack member id (U...): the person's or bot's profile, More, Copy member ID")
+
 export const ConfigSchema = z.object({
   /** The mini's name: the claim comment, the Slack prefix, the profile's `mini`. */
   mini: z.string().regex(MINI_RE),
@@ -80,13 +86,13 @@ export const ConfigSchema = z.object({
       })
       .prefault({}),
     /** Slack user ids whose messages count. Everyone else is ignored (spec 11). */
-    allowedUsers: z.array(z.string().min(1)).min(1),
+    allowedUsers: z.array(MEMBER_ID).min(1),
     /**
      * The bot user ids of the other agents' Slack apps (decision 3: one app
      * per agent). A request that names several agents is filed by the first
      * one it mentions, so each bridge must know the others' bots.
      */
-    otherAgentBots: z.array(z.string().min(1)).default([]),
+    otherAgentBots: z.array(MEMBER_ID).default([]),
   }),
   frontDoor: z
     .object({

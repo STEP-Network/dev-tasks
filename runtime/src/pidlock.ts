@@ -1,61 +1,56 @@
 /**
  * One process of a kind per mini. A second slack-bridge beside launchd's (a
  * manual `npx tsx src/slack/bridge.ts`, say) would drain the same outbox and
- * post every message twice. The lock is a file holding the holder's pid,
- * created with O_EXCL. A lock is stale when its process is gone, or when it
- * was written before this boot: after a power cut its pid can belong to any
- * process.
+ * post every message twice. The lock is a file holding the holder's pid. It
+ * counts only while that pid is alive AND its command line still names the
+ * holder's kind (`marker`): after a crash or a power cut the old pid can
+ * belong to any process, and no clock is involved in telling.
  */
 
-import { closeSync, openSync, readFileSync, rmSync, statSync, writeSync } from "node:fs"
-import { uptime } from "node:os"
+import { execFileSync } from "node:child_process"
+import { randomUUID } from "node:crypto"
+import { linkSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 
-function alive(pid: number): boolean {
+/** The pid holding `path`, or null when no live process of the marker's kind does. */
+function holderOf(path: string, marker: string, pid: number): number | null {
+  let holder: number
   try {
-    process.kill(pid, 0)
-    return true
-  } catch (error) {
-    // EPERM: the process exists, it is only someone else's.
-    return (error as NodeJS.ErrnoException).code === "EPERM"
-  }
-}
-
-/** The pid holding `path`, or null when nobody live holds it. */
-function holderOf(path: string, pid: number): number | null {
-  let text: string
-  let written: number
-  try {
-    text = readFileSync(path, "utf8")
-    written = statSync(path).mtimeMs
+    holder = Number.parseInt(readFileSync(path, "utf8"), 10)
   } catch {
     return null
   }
-  const holder = Number.parseInt(text, 10)
-  const bootedAt = Date.now() - uptime() * 1000
-  if (!Number.isInteger(holder) || holder === pid || written < bootedAt || !alive(holder)) return null
-  return holder
+  if (!Number.isInteger(holder) || holder <= 0 || holder === pid) return null
+  let command: string
+  try {
+    command = execFileSync("ps", ["-p", String(holder), "-o", "command="], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] })
+  } catch {
+    return null // ps exits 1 when there is no such process
+  }
+  return command.includes(marker) ? holder : null
 }
 
-export function takePidLock(path: string, pid: number = process.pid): { ok: true } | { ok: false; holder: number } {
-  // A stale lock is removed and the create tried again. A process that wins
-  // the race to re-create it in between is a live holder like any other.
-  for (let attempt = 0; attempt < 3; attempt++) {
-    try {
-      const fd = openSync(path, "wx")
+export function takePidLock(path: string, marker: string, pid: number = process.pid): { ok: true } | { ok: false; holder: number } {
+  // The pid is written first and linked into place, so no reader ever sees
+  // an empty lock. A stale lock is removed and the link tried again; a
+  // process that wins the race to re-create it in between is a live holder.
+  const tmp = `${path}.${pid}.${randomUUID()}.tmp`
+  writeFileSync(tmp, String(pid))
+  try {
+    for (let attempt = 0; attempt < 3; attempt++) {
       try {
-        writeSync(fd, String(pid))
-      } finally {
-        closeSync(fd)
+        linkSync(tmp, path)
+        return { ok: true }
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error
+        const holder = holderOf(path, marker, pid)
+        if (holder !== null) return { ok: false, holder }
+        rmSync(path, { force: true })
       }
-      return { ok: true }
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error
-      const holder = holderOf(path, pid)
-      if (holder !== null) return { ok: false, holder }
-      rmSync(path, { force: true })
     }
+    throw new Error(`pidlock: ${path} keeps changing hands`)
+  } finally {
+    rmSync(tmp, { force: true })
   }
-  throw new Error(`pidlock: ${path} keeps changing hands`)
 }
 
 /** Removes the lock if `pid` holds it. Never throws: it runs on the way out. */

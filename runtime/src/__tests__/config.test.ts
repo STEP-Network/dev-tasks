@@ -54,6 +54,12 @@ describe("loadConfig", () => {
     expect(() => loadConfig(withConfig({ ...MINIMAL, slack: { allowedUsers: [] } }))).toThrow(/slack\.allowedUsers/)
   })
 
+  it("takes Slack member ids only, where a bot or app id would quietly match nobody", () => {
+    expect(() => loadConfig(withConfig({ ...MINIMAL, slack: { allowedUsers: ["nate"] } }))).toThrow(/slack\.allowedUsers\.0 .*member id/)
+    expect(() => loadConfig(withConfig({ ...MINIMAL, slack: { ...MINIMAL.slack, otherAgentBots: ["B0123ABC"] } }))).toThrow(/slack\.otherAgentBots\.0 .*member id/)
+    expect(loadConfig(withConfig({ ...MINIMAL, slack: { ...MINIMAL.slack, otherAgentBots: ["U0BOBBOT1"] } })).slack.otherAgentBots).toEqual(["U0BOBBOT1"])
+  })
+
   it("says where to start when there is no file", () => {
     expect(() => loadConfig(agentPaths(mkdtempSync(join(tmpdir(), "agentd-empty-"))))).toThrow(/templates\/config\.example\.json/)
   })

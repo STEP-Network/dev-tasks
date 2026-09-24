@@ -24,6 +24,6 @@ Then, once per agent (step N2):
 
 The four channels are shared by every agent. Each bridge acts only on messages that mention its own bot and on replies in the threads it owns.
 
-A request in `#polads-intake` that names several agents is filed once, by the first agent it names. That agent owns the thread: the "filed" reply, the questions and every later reply there are its own. Every other agent the request names treats it as an ordinary mention, answered in the same thread, and never takes the thread's later replies. People named in the request do not count: in `@nate says @eve should fix the date`, Eve files it.
+A request in `#polads-intake` that names several agents is filed once, by the first agent it names. That agent owns the thread: the "filed" reply, the questions and every later reply there are its own. Every other agent the request names treats it as an ordinary mention, answered in the same thread, and never applies the thread's later replies as answers: a later reply there that names it is only a mention for it. People named in the request do not count: in `@nate says @eve should fix the date`, Eve files it.
 
 An agent knows the others only through `slack.otherAgentBots`. With the list empty, a request that names two agents is filed by both.

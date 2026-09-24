@@ -55,16 +55,23 @@ export interface IntakeMeta {
   userName: string
   permalink: string
   botUserId: string
+  /** The other agents' bots: their names are no part of the request's title. */
+  otherAgentBots?: readonly string[]
   product: string
   /** Display names for the users the request mentions, by id. */
   names?: Readonly<Record<string, string>>
 }
 
-/** The Triage issue an intake mention becomes. null when the mention carries no request. */
+/**
+ * The Triage issue an intake mention becomes. null when the mention carries
+ * no request, only agents' names. The description keeps the other agents'
+ * names; the title leaves them out.
+ */
 export function intakeIssue(text: string, meta: IntakeMeta): CreateIssueInput | null {
   const body = stripMention(text, meta.botUserId)
-  if (!body) return null
-  const firstLine = body.split("\n").find((line) => line.trim())!.trim()
+  const request = (meta.otherAgentBots ?? []).reduce((rest, bot) => stripMention(rest, bot), body)
+  if (!request) return null
+  const firstLine = request.split("\n").find((line) => line.trim())!.trim()
   return {
     title: truncateChars(fromSlack(firstLine, meta.names, "plain"), 80),
     description: `${fromSlack(body, meta.names)}\n\n---\nFiled from Slack by ${meta.userName}: ${meta.permalink}`,

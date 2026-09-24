@@ -9,6 +9,7 @@
 import { randomUUID } from "node:crypto"
 import type { AgentPaths } from "./config.ts"
 import { putOnce } from "./fsq.ts"
+import { redact } from "./log.ts"
 
 export type ChannelKey = "agents" | "questions" | "intake" | "releases"
 
@@ -27,6 +28,9 @@ let sequence = 0
 export function enqueueSlack(paths: AgentPaths, message: OutboxMessage, now: Date = new Date()): string {
   sequence = (sequence + 1) % 1_000_000
   const key = `${String(now.getTime()).padStart(15, "0")}-${String(sequence).padStart(6, "0")}-${randomUUID()}`
-  putOnce(paths.outbox, key, { ...message, queuedAt: now.toISOString() })
+  // Worker and git error text come through here, and the queue files stay on
+  // disk: token-shaped strings are redacted before they are written.
+  const safe = "text" in message ? { ...message, text: redact(message.text) } : message
+  putOnce(paths.outbox, key, { ...safe, queuedAt: now.toISOString() })
   return key
 }

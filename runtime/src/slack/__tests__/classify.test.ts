@@ -102,10 +102,13 @@ describe("classify beside other agents' bots", () => {
   it("files a request that names two agents only when this one comes first, and answers it as a mention otherwise", () => {
     // The first agent named files it and owns its thread; the others reply in that thread and take none of its answers.
     expect(classify(envelope({ type: "message", channel: "CIN", ts: "2000.7", text: "<@UBOT> <@UOTHER> the date is wrong" }), CTX)).toMatchObject({ type: "intake" })
+    // filedBy tells the front door another agent is filing it, so it files nothing itself.
     expect(classify(envelope({ type: "app_mention", channel: "CIN", ts: "2000.8", text: "<@UOTHER> and <@UBOT|eve>, the date is wrong" }), CTX)).toMatchObject({
       type: "mention",
       threadTs: "2000.8",
+      filedBy: "UOTHER",
     })
+    expect(classify(envelope({ type: "app_mention", channel: "CAG", ts: "2000.9", text: "<@UBOT> status?" }), CTX)).not.toHaveProperty("filedBy")
   })
 
   it("counts only agents for who comes first: a person named before this bot does not stop the filing", () => {

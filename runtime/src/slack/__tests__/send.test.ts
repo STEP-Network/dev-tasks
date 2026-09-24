@@ -3,7 +3,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { describe, expect, it } from "vitest"
 import { agentPaths } from "../../config.ts"
-import { countIn, listNew } from "../../fsq.ts"
+import { countIn, listNew, putOnce } from "../../fsq.ts"
 import type { Logger } from "../../log.ts"
 import { enqueueSlack } from "../../outbox.ts"
 import { threadFor } from "../../threads.ts"
@@ -68,6 +68,20 @@ describe("sendOutboxMessage", () => {
     await sendOutboxMessage(ctx, { kind: "issue", issue: "STEP-7", text: "And the label?", question: true })
     expect(threadFor(ctx.paths, "STEP-7")?.permalink).toBe("https://step.slack.com/archives/CQ/p90011")
     expect(attached).toEqual([["STEP-7", "https://step.slack.com/archives/CQ/p90011"]])
+  })
+
+  it("tries the Linear link again with the thread's next message when it failed", async () => {
+    let attempts = 0
+    const { ctx } = context({
+      attachThread: async () => {
+        if (++attempts === 1) throw new Error("Linear: down")
+      },
+    })
+    await sendOutboxMessage(ctx, { kind: "issue", issue: "STEP-7", text: "Which date?", question: true })
+    expect(threadFor(ctx.paths, "STEP-7")?.permalink).toBeNull()
+    await sendOutboxMessage(ctx, { kind: "issue", issue: "STEP-7", text: "And the label?", question: true })
+    expect(attempts).toBe(2)
+    expect(threadFor(ctx.paths, "STEP-7")?.permalink).toBe("https://step.slack.com/archives/CQ/p90011")
   })
 
   it("posts with just the id when Linear cannot describe the issue", async () => {
@@ -209,7 +223,7 @@ describe("drainOutbox", () => {
     expect(posts.map((p) => p.text)).toEqual(["eve: one"])
   })
 
-  it("stops for good when Slack refuses the app, keeps every message, and says why once", async () => {
+  it("pauses when Slack refuses the app, keeps every message, tries again after the pause, and says why once", async () => {
     let tries = 0
     const { ctx } = context()
     ctx.web.postMessage = async () => {
@@ -218,13 +232,52 @@ describe("drainOutbox", () => {
     }
     enqueueSlack(ctx.paths, { kind: "post", channel: "agents", text: "one" }, new Date(1))
     enqueueSlack(ctx.paths, { kind: "post", channel: "agents", text: "two" }, new Date(2))
-    const reasons: string[] = []
-    const stop = startOutbox(ctx, quiet, (reason) => void reasons.push(reason), 5)
-    await new Promise((resolve) => setTimeout(resolve, 60))
+    const reasons: Array<string | null> = []
+    const stop = startOutbox(ctx, quiet, (reason) => void reasons.push(reason), 5, 30)
+    await new Promise((resolve) => setTimeout(resolve, 100))
     stop()
-    expect(tries).toBe(1)
+    expect(tries).toBeGreaterThanOrEqual(2)
+    expect(tries).toBeLessThanOrEqual(4)
     expect(reasons).toEqual([expect.stringMatching(/token_revoked/)])
     expect(countIn(ctx.paths.outbox, "new")).toBe(2)
+  })
+
+  it("goes on, and clears the reason, once Slack takes a message again: a re-invited bot needs no restart", async () => {
+    const outOf = Object.assign(new Error("An API error occurred: not_in_channel"), { data: { error: "not_in_channel" } })
+    const { ctx, posts } = context({}, [outOf])
+    enqueueSlack(ctx.paths, { kind: "post", channel: "agents", text: "one" }, new Date(1))
+    enqueueSlack(ctx.paths, { kind: "post", channel: "agents", text: "two" }, new Date(2))
+    const reasons: Array<string | null> = []
+    const stop = startOutbox(ctx, quiet, (reason) => void reasons.push(reason), 5, 20)
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    stop()
+    expect(posts.map((p) => p.text)).toEqual(["eve: one", "eve: two"])
+    expect(reasons).toEqual([expect.stringMatching(/not_in_channel/), null])
+  })
+
+  it("takes every kind of message off the queue once it is sent", async () => {
+    // A kind that forgot to say it was posted would go out again every 2 seconds.
+    const { ctx } = context()
+    enqueueSlack(ctx.paths, { kind: "post", channel: "agents", text: "claimed STEP-7" }, new Date(1))
+    enqueueSlack(ctx.paths, { kind: "reply", channelId: "CIN", threadTs: "1800.1", text: "filed STEP-7" }, new Date(2))
+    enqueueSlack(ctx.paths, { kind: "react", channelId: "CQ", ts: "1700.5", name: "white_check_mark" }, new Date(3))
+    enqueueSlack(ctx.paths, { kind: "issue", issue: "STEP-7", text: "Which date?", question: true }, new Date(4))
+    enqueueSlack(ctx.paths, { kind: "issue", issue: "STEP-7", text: "And the label?", question: true }, new Date(5))
+    expect(await drainOutbox(ctx, quiet)).toBe(5)
+    expect(countIn(ctx.paths.outbox, "new")).toBe(0)
+    expect(countIn(ctx.paths.outbox, "done")).toBe(5)
+  })
+
+  it("moves an entry it cannot read as a message to failed, rather than let it hold up the queue", async () => {
+    // A hand-written entry, or one from another version of agentctl.
+    const { ctx, posts } = context()
+    putOnce(ctx.paths.outbox, "000000000000001-000001-a", { kind: "shout", text: "?" })
+    putOnce(ctx.paths.outbox, "000000000000002-000001-b", { kind: "post", channel: "alerts", text: "?" })
+    putOnce(ctx.paths.outbox, "000000000000003-000001-c", { kind: "reply", channelId: "CIN", text: "no thread" })
+    enqueueSlack(ctx.paths, { kind: "post", channel: "agents", text: "kept" }, new Date(4))
+    expect(await drainOutbox(ctx, quiet)).toBe(1)
+    expect(countIn(ctx.paths.outbox, "failed")).toBe(3)
+    expect(posts.map((p) => p.text)).toEqual(["eve: kept"])
   })
 
   it("records each posted question in the ledger", async () => {

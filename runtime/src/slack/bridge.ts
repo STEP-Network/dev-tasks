@@ -47,8 +47,10 @@ type IntakeEntry = Extract<Classified, { type: "intake" }> & {
   linearId: string
   issue: string | null
   toldUnfiled?: boolean
+  /** When Linear first refused it: the give-up day counts from here, not from the delivery. */
+  failingSince?: string
 }
-type AnswerEntry = Extract<Classified, { type: "answer" }> & { userName: string; receivedAt: string }
+type AnswerEntry = Extract<Classified, { type: "answer" }> & { userName: string; receivedAt: string; failingSince?: string }
 
 export async function handleEnvelope(deps: BridgeDeps, envelope: SlackEnvelope): Promise<Classified["type"]> {
   const c = classify(envelope, deps.classifyContext)
@@ -79,7 +81,23 @@ export async function handleEnvelope(deps: BridgeDeps, envelope: SlackEnvelope):
 /** How long an intake or an answer Linear keeps refusing waits in the inbox before the bridge gives up and says so. */
 const GIVE_UP_MS = 24 * 60 * 60_000
 
-const waitedADay = (deps: BridgeDeps, receivedAt: string) => deps.now().getTime() - Date.parse(receivedAt) > GIVE_UP_MS
+/**
+ * Whether Linear has refused an entry for a whole day, counted from its first
+ * refusal, which it records on the entry: time the bridge was down is not
+ * Linear refusing.
+ */
+function refusedForADay(deps: BridgeDeps, path: string, entry: { failingSince?: string }): boolean {
+  if (!entry.failingSince) {
+    writeJsonAtomic(path, { ...entry, failingSince: deps.now().toISOString() })
+    return false
+  }
+  return deps.now().getTime() - Date.parse(entry.failingSince) > GIVE_UP_MS
+}
+
+/** An error that says Linear has no such issue, in the adapter's own words (plugin/src/tracker/linear.ts). */
+export function isIssueGone(error: unknown): boolean {
+  return error instanceof Error && error.message.startsWith("Linear: no issue ")
+}
 
 /** Display names for the users a message mentions, for Linear, where <@U1> means nothing. */
 async function namesFor(deps: BridgeDeps, text: string): Promise<Record<string, string>> {
@@ -112,6 +130,7 @@ export async function fileIntake(deps: BridgeDeps, key: string): Promise<void> {
       userName: entry.userName,
       permalink: permalink ?? "(no link)",
       botUserId: deps.classifyContext.botUserId,
+      otherAgentBots: deps.classifyContext.otherAgentBots,
       product: deps.config.repo.product,
       names: await namesFor(deps, entry.text),
     })
@@ -141,14 +160,15 @@ export async function fileIntake(deps: BridgeDeps, key: string): Promise<void> {
       }
     } catch (error) {
       deps.log.warn("intake not filed yet", { key, error: String(error) })
-      if (waitedADay(deps, entry.receivedAt)) {
+      if (refusedForADay(deps, path, entry)) {
         fail(deps.paths.inbox, key)
         reply("Linear refused this for a whole day, so I have stopped trying to file it. Please ask again.")
         deps.log.error("intake given up", { key, error: String(error) })
         return
       }
       if (!entry.toldUnfiled) {
-        writeJsonAtomic(path, { ...entry, toldUnfiled: true })
+        const current = readJson<IntakeEntry>(path) ?? entry
+        writeJsonAtomic(path, { ...current, toldUnfiled: true })
         reply("Linear is unreachable right now. I will file this as soon as it is back.")
       }
     }
@@ -157,7 +177,8 @@ export async function fileIntake(deps: BridgeDeps, key: string): Promise<void> {
 
 export async function applyAnswer(deps: BridgeDeps, key: string): Promise<void> {
   await once(deps, key, async () => {
-    const entry = readJson<AnswerEntry>(entryPath(deps.paths.inbox, key))
+    const path = entryPath(deps.paths.inbox, key)
+    const entry = readJson<AnswerEntry>(path)
     if (!entry) return
     // One answer per issue at a time: an apply reads the description and
     // writes it back, so two at once would both read the same text and the
@@ -176,9 +197,8 @@ export async function applyAnswer(deps: BridgeDeps, key: string): Promise<void> 
         appendLedger(deps.paths, { type: "answer.applied", issue: entry.issue, movedTo: move.state ?? null }, deps.now())
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error)
-        // The adapter's own words (plugin/src/tracker/linear.ts) for an issue Linear does not have.
-        const gone = message.startsWith("Linear: no issue ")
-        if (gone || waitedADay(deps, entry.receivedAt)) {
+        const gone = isIssueGone(error)
+        if (gone || refusedForADay(deps, path, entry)) {
           fail(deps.paths.inbox, key)
           const text = gone
             ? `I could not add this answer to ${entry.issue}, because ${entry.issue} is no longer in Linear.`
@@ -305,6 +325,30 @@ async function setup(paths: AgentPaths) {
   return { config, appToken, client, lookups, teamId: auth.team_id, botUserId: auth.user_id, channelIds }
 }
 
+export interface BridgeState {
+  connected: boolean
+  lastEventAt: string | null
+  /** Why the outbox is paused: Slack refused the app. null once a message goes out again. */
+  refused: string | null
+}
+
+/**
+ * ~/.agentd/state/bridge.json, written every 30 seconds and on every change.
+ * `error` is set while the outbox is paused, so agentctl status and the
+ * health check see why nothing is posted even though the bridge is running.
+ */
+export function bridgeStatus(paths: AgentPaths, state: BridgeState, now: Date = new Date()): Record<string, unknown> {
+  return {
+    pid: process.pid,
+    at: now.toISOString(),
+    connected: state.connected,
+    lastEventAt: state.lastEventAt,
+    outboxWaiting: countIn(paths.outbox, "new"),
+    outboxFailed: countIn(paths.outbox, "failed"),
+    ...(state.refused ? { error: state.refused } : {}),
+  }
+}
+
 async function main(): Promise<void> {
   const paths = agentPaths()
   const log = createLogger(paths, "slack-bridge")
@@ -314,7 +358,7 @@ async function main(): Promise<void> {
   // bridge's, and exits 1, so launchd's copy takes over once the other ends.
   mkdirSync(paths.state, { recursive: true })
   const lockPath = join(paths.state, "slack-bridge.pid")
-  const lock = takePidLock(lockPath)
+  const lock = takePidLock(lockPath, "slack/bridge.ts")
   if (!lock.ok) {
     log.error("another bridge is running", { pid: lock.holder })
     console.error(`slack-bridge: another bridge is running here, pid ${lock.holder}`)
@@ -324,21 +368,9 @@ async function main(): Promise<void> {
   process.on("SIGTERM", () => process.exit(143))
   process.on("SIGINT", () => process.exit(130))
 
-  let connected = false
-  let lastEventAt: string | null = null
-  // Why the outbox stopped: Slack refused the app. Reported until a restart.
-  let refused: string | null = null
+  const state: BridgeState = { connected: false, lastEventAt: null, refused: null }
   const writeStatus = (extra: Record<string, unknown> = {}) =>
-    writeJsonAtomic(join(paths.state, "bridge.json"), {
-      pid: process.pid,
-      at: new Date().toISOString(),
-      connected,
-      lastEventAt,
-      outboxWaiting: countIn(paths.outbox, "new"),
-      outboxFailed: countIn(paths.outbox, "failed"),
-      ...(refused ? { error: refused } : {}),
-      ...extra,
-    })
+    writeJsonAtomic(join(paths.state, "bridge.json"), { ...bridgeStatus(paths, state), ...extra })
   const halt = (error: unknown): never => {
     const message = redact(error instanceof Error ? error.message : String(error))
     writeStatus({ error: message })
@@ -417,10 +449,10 @@ async function main(): Promise<void> {
     {
       handle: (body) => handleEnvelope(deps, body),
       received: () => {
-        lastEventAt = new Date().toISOString()
+        state.lastEventAt = new Date().toISOString()
       },
       connected: (value) => {
-        connected = value
+        state.connected = value
         writeStatus()
       },
     },
@@ -429,10 +461,11 @@ async function main(): Promise<void> {
 
   // Before the connection, which waits out a Slack outage: the outbox, the
   // heartbeat and the intake retry must not wait with it. When Slack refuses
-  // the app, the outbox stops with every message kept, and the bridge runs on:
-  // intake still reaches Linear, and bridge.json says why nothing is posted.
+  // the app, the outbox pauses with every message kept and tries again every
+  // few minutes, and the bridge runs on: intake still reaches Linear, and
+  // bridge.json says why nothing is posted until a message goes out again.
   startOutbox(sendContext, log, (reason) => {
-    refused = redact(reason)
+    state.refused = reason === null ? null : redact(reason)
     writeStatus()
   })
   setInterval(() => {
