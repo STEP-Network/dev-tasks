@@ -187,6 +187,26 @@ describe("claimIssue", () => {
     expect(sent(/issueUpdate/)).toHaveLength(0)
   })
 
+  it("refuses when the team has no In Progress state, before writing anything", async () => {
+    // Assigned but left in its old state, the issue would be invisible to
+    // listClaims, which reads In Progress only: held, and never swept.
+    route(/teams\s*\(/, () => ({
+      teams: {
+        nodes: [
+          {
+            id: "team-uuid",
+            key: "STEP",
+            name: "STEP",
+            states: { nodes: STATES.filter((s) => s.name !== "In Progress") },
+            labels: { nodes: LABELS, pageInfo: PAGE_END },
+          },
+        ],
+      },
+    }))
+    await expect(createLinearTracker().claimIssue("STEP-7", "eve")).rejects.toThrow(/In Progress/)
+    expect(sent(/commentCreate|issueUpdate/)).toHaveLength(0)
+  })
+
   it("refuses an issue someone else holds, before writing anything", async () => {
     route(/issues\s*\(/, () => ({ issues: { nodes: [{ ...ISSUE, assignee: { id: "user-nate" } }], pageInfo: PAGE_END } }))
     await expect(createLinearTracker().claimIssue("STEP-7", "eve")).rejects.toThrow(/STEP-7/)
@@ -213,6 +233,19 @@ describe("claim comments", () => {
     // for the one format claimCommentBody is given (toISOString).
     expect(parseClaim("claimed by nate at noon")).toBeNull()
     expect(parseClaim("claimed by eve at 2026-09-24T08:00:00Z")).toBeNull()
+  })
+
+  it.each([
+    ["a backslash break", "claimed by eve at 2026-09-24T08:00:00.000Z\\\nheartbeat 2026-09-24T08:15:00.000Z"],
+    ["a space", "claimed by eve at 2026-09-24T08:00:00.000Z heartbeat 2026-09-24T08:15:00.000Z"],
+  ])("still parse when Linear gives the heartbeat break back as %s, and the next beat rebuilds a clean body", (_, body) => {
+    // Linear derives `body` from its own document model, so the break we
+    // wrote may not be the break we read back. The claim must still parse,
+    // and the next heartbeat must not carry the old one along with it.
+    expect(parseClaim(body)).toEqual({ claimant: "eve", claimedAt: "2026-09-24T08:00:00.000Z" })
+    expect(withHeartbeat(body, "2026-09-24T08:30:00.000Z")).toBe(
+      "claimed by eve at 2026-09-24T08:00:00.000Z\nheartbeat 2026-09-24T08:30:00.000Z",
+    )
   })
 
   it("pick the newest claim, for one claimant when asked, with the edit time as the heartbeat", () => {
@@ -301,9 +334,10 @@ describe("listClaims", () => {
   it("reads every page, so a claim past the first page is still swept", async () => {
     // The sweeper releases what this returns. A claim on a page it never read
     // would hold its issue forever.
+    // Both pages hold the key owner's issues: isMe returns nothing else.
     route(/startsWith/, (variables) =>
       variables.after
-        ? { issues: { nodes: [held(2, "user-bob", ["claimed by bob at 2026-09-24T02:00:00.000Z"])], pageInfo: PAGE_END } }
+        ? { issues: { nodes: [held(2, "user-eve", ["claimed by eve at 2026-09-24T02:00:00.000Z"])], pageInfo: PAGE_END } }
         : {
             issues: {
               nodes: [held(1, "user-eve", ["claimed by eve at 2026-09-24T01:00:00.000Z"])],
@@ -312,9 +346,9 @@ describe("listClaims", () => {
           },
     )
     const claims = await createLinearTracker().listClaims()
-    expect(claims.map((c) => [c.issue.id, c.claimant])).toEqual([
-      ["STEP-1", "eve"],
-      ["STEP-2", "bob"],
+    expect(claims.map((c) => [c.issue.id, c.claimant, c.claimedAt])).toEqual([
+      ["STEP-1", "eve", "2026-09-24T01:00:00.000Z"],
+      ["STEP-2", "eve", "2026-09-24T02:00:00.000Z"],
     ])
     expect(sent(/startsWith/).map(([, variables]) => variables.after)).toEqual([null, "claims-1"])
   })
