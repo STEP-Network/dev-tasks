@@ -3,9 +3,9 @@
  * command. The runner is a plain Node process, outside the worker's hooks and
  * sandbox, so the push guard lives here in code. It pushes and opens PRs with
  * the mini's own gh login (decision 5): nothing it runs carries a token in its
- * arguments or its environment. Every git it runs turns git's hooks and
- * fsmonitor off: the worker writes into the worktree and the shared .git, and
- * nothing it wrote may run outside the sandbox.
+ * arguments or its environment. Every git it runs turns git's replace refs,
+ * hooks and fsmonitor off: the worker writes into the worktree and the shared
+ * .git, and nothing it wrote may run outside the sandbox.
  */
 
 import { execFile } from "node:child_process"
@@ -49,8 +49,15 @@ export async function must(exec: Exec, cmd: string, args: string[], opts?: ExecO
   return r.stdout
 }
 
-/** Ahead of every git subcommand the runner runs: no hook and no fsmonitor, whatever a config says. */
-export const SAFE_GIT = ["-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false"]
+/**
+ * Ahead of every git subcommand the runner and agentd run: no replace refs, no
+ * hook and no fsmonitor, whatever a config or a ref says. The worker may write
+ * <repo>/.git, refs/replace included, and git follows a replace ref by
+ * default: `git replace <origin's commit> <its own>` would make every checkout
+ * of origin's commit write the worker's tree. The option, not
+ * core.useReplaceRefs, because an older git ignores a config key it does not know.
+ */
+export const SAFE_GIT = ["--no-replace-objects", "-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false"]
 
 export function git(exec: Exec, args: string[], opts?: ExecOptions): Promise<ExecResult> {
   return exec("git", [...SAFE_GIT, ...args], opts)

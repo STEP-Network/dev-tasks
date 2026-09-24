@@ -373,7 +373,8 @@ describe("starting", () => {
     })
     expect(run.status).toBe(0)
     const status = JSON.parse(readFileSync(join(h, ".agentd", "state", "bridge.json"), "utf8"))
-    expect(status).toMatchObject({ connected: false, error: expect.stringMatching(/mini "eve".*mini "bob"/) })
+    // stopped: agentd's health tells this from a paused outbox, whose error comes with a fresh heartbeat too.
+    expect(status).toMatchObject({ connected: false, stopped: true, error: expect.stringMatching(/mini "eve".*mini "bob"/) })
   }, 30_000)
 
   it("as a process, will not run beside another bridge, and leaves that bridge's bridge.json alone", () => {

@@ -151,7 +151,7 @@ describe("applyFrontDoor", () => {
     await applyFrontDoor(deps, first, action)
     const posts = listNew<{ text: string }>(paths.outbox)
     expect(posts).toHaveLength(1)
-    expect(posts[0].payload.text).toBe("front door: the front door exited 3 times in the last hour. Trying again at 12:30 UTC.")
+    expect(posts[0].payload.text).toBe("The front door exited 3 times in the last hour. Trying again at 14:30 (Europe/Copenhagen).")
     expect(first.waitUntil).toBe("2026-09-24T12:30:00.000Z")
   })
 

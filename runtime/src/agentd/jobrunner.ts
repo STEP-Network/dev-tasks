@@ -2,16 +2,21 @@
  * agentd's job launcher: one develop job at a time (spec 6.3). The worker is
  * its own detached process group, so restarting agentd or the front door
  * never kills it. agentd starts it, notices when it dies, and stops it if it
- * overruns the runner's own wall clock by ten minutes. No task logic.
+ * overruns the runner's own limits. No task logic.
  *
  * A dead worker's commits are not pushed from here. They stay on this mini's
  * local STEP-<n>-<slug> branch, which the runner's prepareWorktree starts
  * from on the next run of that issue here, and pushing is the runner's job
  * (decision 2), from its own guarded path.
+ *
+ * Two workers in a row that die within minutes of their start, or cannot be
+ * started, pause the mini: the next would die the same way (a broken install,
+ * a secrets file the runner refuses), and the issue it was given stays Ready
+ * and would be offered again at every wakeup.
  */
 
 import { spawn } from "node:child_process"
-import { closeSync, existsSync, mkdirSync, openSync, rmSync } from "node:fs"
+import { closeSync, existsSync, mkdirSync, openSync, rmSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import type { AgentConfig, AgentPaths } from "../config.ts"
 import { jobPath, listJobs, moveJob, updateJob, type JobRecord } from "../jobs.ts"
@@ -34,17 +39,38 @@ export interface JobRunnerDeps {
   spawnWorker(jobId: string): number
 }
 
-const GRACE_MINUTES = 10
+/** Before its session the runner claims and prepares the worktree, pnpm install included (up to 20 minutes). */
+export const PREP_ALLOWANCE_MINUTES = 45
+/** After its own wall clock the runner still pushes, opens the PR and writes to Linear. */
+export const FINISH_GRACE_MINUTES = 15
+/** A worker that dies this soon after its start died of something the next one would meet too. */
+export const EARLY_DEATH_MINUTES = 10
+
+/**
+ * When a still-running worker is stuck: its session's wall clock plus the
+ * time to finish, counted from the session's start, which the runner marks.
+ * Until it does, the runner is preparing, and that has its own allowance.
+ */
+function deadline(job: JobRecord, startedAt: number, config: AgentConfig): number {
+  if (job.sessionStartedAt) return Date.parse(job.sessionStartedAt) + (config.worker.wallClockMinutes + FINISH_GRACE_MINUTES) * 60_000
+  return startedAt + PREP_ALLOWANCE_MINUTES * 60_000
+}
 
 /**
  * Moves a job that will never report to done, as blocked, and tells
- * #polads-agents. Nothing is said when the job has left running meanwhile:
- * its runner reported after all, in the moment before it exited.
+ * #polads-agents. Nothing is said, and nothing overwritten, when the job has
+ * reached done meanwhile: its runner reported after all, in the moment
+ * before it exited.
  */
-function endBlocked(deps: JobRunnerDeps, job: JobRecord, reason: string, startedAt: number, notice: string): boolean {
+function endBlocked(deps: JobRunnerDeps, job: JobRecord, reason: string, startedAt: number, notice: string, lostEarly: boolean): boolean {
   const now = deps.now()
+  if (existsSync(jobPath(deps.paths, "done", job.id))) {
+    rmSync(jobPath(deps.paths, "running", job.id), { force: true })
+    return false
+  }
   const moved = moveJob(deps.paths, job.id, "running", "done", {
     endedAt: now.toISOString(),
+    ...(lostEarly ? { lostEarly } : {}),
     result: {
       status: "blocked",
       reason,
@@ -58,7 +84,32 @@ function endBlocked(deps: JobRunnerDeps, job: JobRecord, reason: string, started
   if (!moved) return false
   appendLedger(deps.paths, { type: "worker.end", issue: job.issue, status: "blocked", reason }, now)
   enqueueSlack(deps.paths, { kind: "post", channel: "agents", text: `${job.issue}: ${reason}. ${notice}` }, now)
+  if (lostEarly) pauseAfterTwoEarlyLosses(deps, now)
   return true
+}
+
+/** Pauses the mini when the last two jobs to finish were both lost early. A person resumes it. */
+function pauseAfterTwoEarlyLosses(deps: JobRunnerDeps, now: Date): void {
+  const lastTwo = listJobs(deps.paths, "done")
+    .filter((j) => j.endedAt)
+    .sort((a, b) => a.endedAt!.localeCompare(b.endedAt!))
+    .slice(-2)
+  if (lastTwo.length < 2 || !lastTwo.every((j) => j.lostEarly) || existsSync(deps.paths.pauseFile)) return
+  const reason = `two workers in a row stopped within ${EARLY_DEATH_MINUTES} minutes of starting`
+  mkdirSync(deps.paths.root, { recursive: true })
+  // The shape agentctl pause writes.
+  writeFileSync(deps.paths.pauseFile, JSON.stringify({ at: now.toISOString(), reason }))
+  appendLedger(deps.paths, { type: "paused", reason }, now)
+  enqueueSlack(
+    deps.paths,
+    {
+      kind: "post",
+      channel: "agents",
+      text: `Paused: ${reason}, so the next would too. Their logs are ${lastTwo.map((j) => `worker-${j.id}.log`).join(" and ")} in ~/.agentd/logs. Run agentctl resume once it is fixed.`,
+    },
+    now,
+  )
+  deps.log.error("paused after two early losses", { jobs: lastTwo.map((j) => j.id) })
 }
 
 export function superviseJobs(deps: JobRunnerDeps): void {
@@ -73,26 +124,32 @@ export function superviseJobs(deps: JobRunnerDeps): void {
     const startedAt = Date.parse(job.startedAt ?? job.submittedAt)
     // A pid survives a reboot in the job file, and macOS reuses pids: a job
     // from before the boot is dead whatever that pid is now.
-    const dead = !job.pid || startedAt < deps.bootAt.getTime() || !deps.isAlive(job.pid, job.id)
+    const beforeBoot = startedAt < deps.bootAt.getTime()
+    const dead = !job.pid || beforeBoot || !deps.isAlive(job.pid, job.id)
     if (dead) {
-      const reason = job.killRequestedAt
-        ? `the worker overran its wall clock of ${deps.config.worker.wallClockMinutes} minutes and was stopped`
-        : "the worker process died before reporting"
+      const reason = !job.killRequestedAt
+        ? "the worker process died before reporting"
+        : job.sessionStartedAt
+          ? `the worker overran its wall clock of ${deps.config.worker.wallClockMinutes} minutes and was stopped`
+          : `the worker was still preparing its worktree after ${PREP_ALLOWANCE_MINUTES} minutes and was stopped`
+      // A reboot or a stop is no sign that the next worker will die too.
+      const lostEarly = !beforeBoot && !job.killRequestedAt && now.getTime() - startedAt < EARLY_DEATH_MINUTES * 60_000
       const said = endBlocked(
         deps,
         job,
         reason,
         startedAt,
         `Anything it committed stays on this mini's local branch, where the next run of ${job.issue} here starts from it. ` +
-          `Its claim is released after ${deps.config.claims.ttlHours} hours unless someone takes the issue first.`,
+          `If it had claimed the issue, the claim is released after ${deps.config.claims.ttlHours} hours unless someone takes the issue first.`,
+        lostEarly,
       )
       if (said) deps.log.warn("worker gone without reporting", { issue: job.issue, pid: job.pid, reason })
       continue
     }
     busy = true
-    if (now.getTime() - startedAt <= (deps.config.worker.wallClockMinutes + GRACE_MINUTES) * 60_000) continue
-    // The runner stops itself at its wall clock. One still running ten minutes
-    // later is stuck: its whole group goes, and the dead path above reports it.
+    if (now.getTime() <= deadline(job, startedAt, deps.config)) continue
+    // The runner stops itself at its wall clock. One still running past the
+    // deadline is stuck: its whole group goes, and the dead path above reports it.
     if (!job.killRequestedAt) {
       deps.kill(-job.pid!, "SIGTERM")
       updateJob(deps.paths, "running", job.id, { killRequestedAt: now.toISOString() })
@@ -111,7 +168,7 @@ export function superviseJobs(deps: JobRunnerDeps): void {
     pid = deps.spawnWorker(next.id)
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
-    endBlocked(deps, next, `the worker could not be started: ${message}`, now.getTime(), "A person needs to look.")
+    endBlocked(deps, next, `the worker could not be started: ${message}`, now.getTime(), "A person needs to look.", true)
     deps.log.error("worker not started", { issue: next.issue, error: message })
     return
   }
@@ -124,10 +181,13 @@ export function superviseJobs(deps: JobRunnerDeps): void {
  * Whether `pid` is still the worker for `jobId`: a live process whose command
  * line is run.ts with that job id (spawnWorkerProcess). Any other process
  * that now has the pid, after a crash of agentd or a reboot, is not ours, and
- * signalling its group would hit a stranger.
+ * signalling its group would hit a stranger. When ps itself fails, nobody can
+ * tell, and a live worker must not be written off: it counts as alive.
  */
-export function isWorkerAlive(pid: number, jobId: string): boolean {
-  const args = commandOf(pid)?.trim().split(/\s+/) ?? []
+export function isWorkerAlive(pid: number, jobId: string, ps?: string): boolean {
+  const command = commandOf(pid, ps)
+  if (command === undefined) return true
+  const args = command?.trim().split(/\s+/) ?? []
   return args.some((a) => a.endsWith("worker/run.ts")) && args.includes(jobId)
 }
 

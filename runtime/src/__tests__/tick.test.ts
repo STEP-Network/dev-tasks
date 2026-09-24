@@ -37,9 +37,9 @@ describe("buildDigest", () => {
 
   it("carries filedBy on a mention another agent files, so the front door files nothing for it", async () => {
     const { paths, deps } = setup()
-    putOnce(paths.inbox, "msg:CIN:5", { ...base, key: "msg:CIN:5", type: "mention", threadTs: "1800.1", filedBy: "U0BOBBOT1" })
+    putOnce(paths.inbox, "msg:CIN:5", { ...base, key: "msg:CIN:5", type: "mention", threadTs: "1800.1", filedBy: "U0OTHERBOT1" })
     const [event] = (await buildDigest(deps)).events
-    expect(event).toMatchObject({ type: "mention", filedBy: "U0BOBBOT1" })
+    expect(event).toMatchObject({ type: "mention", filedBy: "U0OTHERBOT1" })
   })
 
   it("shows at most ten events, oldest first", async () => {
@@ -100,6 +100,11 @@ describe("buildDigest", () => {
     const short = setup()
     await buildDigest(short.deps)
     expect(short.fake.called("listByState").map((args) => args[0])).toEqual(["Triage", "Refining"])
+  })
+
+  it("still offers the develop job when only the refine lists fail", async () => {
+    const { deps } = setup(undefined, ["listByState"])
+    expect(await buildDigest(deps)).toMatchObject({ develop: { id: "STEP-1" }, readyEligible: 1, refine: null, linearError: expect.stringMatching(/listByState failed/) })
   })
 
   it("reports Linear being down instead of failing the wakeup", async () => {

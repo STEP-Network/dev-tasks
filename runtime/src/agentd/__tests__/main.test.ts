@@ -4,8 +4,13 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { fileURLToPath } from "node:url"
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
-import { agentPaths } from "../../config.ts"
-import { checkLocal } from "../main.ts"
+import { agentPaths, ConfigSchema } from "../../config.ts"
+import { writeJsonAtomic } from "../../fsq.ts"
+import { submitJob } from "../../jobs.ts"
+import type { Logger } from "../../log.ts"
+import { fakeExec, fakeTracker } from "../../__tests__/fakes.ts"
+import { Every } from "../health.ts"
+import { checkLocal, freshMemo, killGroup, runDuties, type DutyDeps } from "../main.ts"
 
 const CONFIG = { mini: "eve", repo: { path: "/r" }, pluginRoot: "/p", slack: { allowedUsers: ["UNATE"] } }
 const RUNTIME = fileURLToPath(new URL("../../..", import.meta.url))
@@ -43,6 +48,94 @@ const runAgentd = (h: string) =>
     encoding: "utf8",
     timeout: 30_000,
   })
+
+describe("runDuties", () => {
+  const NOW = new Date("2026-09-24T12:00:00.000Z")
+  const SHA = "0123456789abcdef0123456789abcdef01234567"
+
+  function duties(over: Partial<DutyDeps> = {}) {
+    const paths = agentPaths(mkdtempSync(join(tmpdir(), "agentd-duties-")))
+    const config = ConfigSchema.parse({ ...CONFIG, repo: { path: "/r" } })
+    const f = fakeExec([[/ls-remote/, { stdout: `${SHA}\trefs/heads/staging\n` }]])
+    let t = NOW.getTime()
+    const problems: string[][] = []
+    const log: Logger = {
+      info() {},
+      warn: (msg, fields) => {
+        if (msg === "unhealthy") problems.push((fields as { problems: string[] }).problems)
+      },
+      error() {},
+    }
+    const checkIns: string[] = []
+    const d: DutyDeps = {
+      paths, config, log, exec: f.exec, tracker: fakeTracker([]).tracker, now: () => new Date(t), every: new Every(() => t),
+      bootAt: new Date(NOW.getTime() - 86_400_000), isAlive: () => true, kill: () => {}, spawnWorker: () => 5001,
+      sentryUrl: null,
+      checkIn: async (url) => {
+        checkIns.push(url)
+        return { ok: true, status: 200 }
+      },
+      ...over,
+    }
+    const bridge = (outboxFailed: number) =>
+      writeJsonAtomic(join(paths.state, "bridge.json"), { at: new Date(t).toISOString(), connected: true, outboxWaiting: 0, outboxFailed })
+    return { d, f, paths, problems, checkIns, bridge, advance: (minutes: number) => void (t += minutes * 60_000) }
+  }
+
+  it("refreshes the checkout and cleans up only while no job is pending or running", async () => {
+    const busy = duties()
+    submitJob(busy.paths, "STEP-1", null, NOW)
+    await runDuties(busy.d, freshMemo())
+    expect(busy.f.lines().some((l) => l.includes(" ls-remote ") || l.includes(" worktree prune"))).toBe(false)
+
+    const idle = duties()
+    await runDuties(idle.d, freshMemo())
+    expect(idle.f.lines().some((l) => l.includes(" ls-remote "))).toBe(true)
+    expect(idle.f.lines().some((l) => l.includes(" worktree prune"))).toBe(true)
+  })
+
+  it("checks in to Sentry only when a check-in URL is configured", async () => {
+    const without = duties()
+    await runDuties(without.d, freshMemo())
+    expect(without.checkIns).toEqual([])
+    const withUrl = duties({ sentryUrl: "https://o1.ingest.de.sentry.io/api/2/cron/eve-mini/k/" })
+    await runDuties(withUrl.d, freshMemo())
+    expect(withUrl.checkIns).toEqual([expect.stringMatching(/^https:\/\/o1\.ingest\.de\.sentry\.io\/api\/2\/cron\/eve-mini\/k\/\?status=(ok|error)$/)])
+  })
+
+  it("says nothing of a front door it has just started, as after a reboot", async () => {
+    const { d, problems, bridge } = duties()
+    bridge(0)
+    await runDuties(d, freshMemo())
+    expect(problems.flat().filter((p) => p.includes("front door"))).toEqual([])
+  })
+
+  it("reports messages Slack refused for good only when their count grows past what it first saw", async () => {
+    const { d, problems, bridge, advance } = duties()
+    const memo = freshMemo()
+    bridge(2)
+    await runDuties(d, memo)
+    expect(problems.flat().some((p) => p.startsWith("Slack refused"))).toBe(false)
+    advance(5)
+    bridge(3)
+    await runDuties(d, memo)
+    expect(problems.flat()).toContain("Slack refused 1 more message for good, kept in ~/.agentd/outbox/failed")
+  })
+
+  it("reports a checkout the refresh had to leave alone", async () => {
+    const { d, problems } = duties({ exec: fakeExec([[/status --porcelain/, { stdout: " M lib/x.ts\n" }]]).exec })
+    await runDuties(d, freshMemo())
+    expect(problems.flat()).toContain("the PolAds checkout has local changes, so it is no longer kept on origin's base")
+  })
+})
+
+describe("killGroup", () => {
+  it("ignores a group that has already gone, and nothing else", () => {
+    // Signal 0 only asks: nothing is delivered to anyone.
+    expect(() => killGroup(-999999, 0)).not.toThrow()
+    expect(() => killGroup(1, 0)).toThrow(/EPERM/)
+  })
+})
 
 describe("starting agentd", () => {
   it("refuses when config.json and the machine profile name different minis, before it reads a secret (decision 2)", () => {

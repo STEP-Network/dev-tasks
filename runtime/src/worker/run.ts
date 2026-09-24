@@ -14,7 +14,7 @@ import { readFileSync } from "node:fs"
 import { basename, join } from "node:path"
 import { agentPaths, assertProfileMini, loadConfig, readProfileMini, type AgentConfig, type AgentPaths } from "../config.ts"
 import { readJson } from "../fsq.ts"
-import { jobPath, moveJob, type JobRecord, type JobResult } from "../jobs.ts"
+import { jobPath, moveJob, updateJob, type JobRecord, type JobResult } from "../jobs.ts"
 import { appendLedger, createLogger, type Logger } from "../log.ts"
 import { enqueueSlack } from "../outbox.ts"
 import { loadClaudeOauthToken } from "../secrets.ts"
@@ -258,6 +258,8 @@ export async function runJob(deps: RunDeps, jobId: string): Promise<JobResult> {
   let result: ResultMessageLike | null = null
   let thrown: string | null = null
   let initProblem: string | null = null
+  // agentd's backstop counts the wall clock from here, not from the spawn: preparing the worktree can take 20 minutes.
+  updateJob(paths, "running", jobId, { sessionStartedAt: deps.now().toISOString() })
   log.info("worker session starting", { issue: issue.id, model, worktree: worktree.path, resumed: worktree.resumed })
   try {
     const stream = deps.query({

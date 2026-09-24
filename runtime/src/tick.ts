@@ -131,13 +131,14 @@ export async function buildDigest(deps: DigestDeps): Promise<Digest> {
     const me = await deps.tracker.whoami()
     const ready = await deps.tracker.listReady(250)
     const firstPass = selectNext({ ready, triage: [], refining: [], meId: me.id, policy, developBlockedBy, refineBlockedBy })
+    readyEligible = firstPass.readyEligible
+    // Develop needs only the Ready list: a failure below loses the refine, not this.
+    if (firstPass.develop) develop = { id: firstPass.develop.id, title: firstPass.develop.title, url: firstPass.develop.url, mine: firstPass.develop.assigneeId === me.id }
     // Only ask Linear for Triage and Refining when refining is actually due.
     const wantRefine = !paused && firstPass.readyEligible < policy.refineWhenReadyBelow
     const triage: TrackerIssue[] = wantRefine ? await deps.tracker.listByState("Triage", 20) : []
     const refining: TrackerIssue[] = wantRefine ? await deps.tracker.listByState("Refining", 20) : []
     const s = selectNext({ ready, triage, refining, meId: me.id, policy, developBlockedBy, refineBlockedBy })
-    readyEligible = s.readyEligible
-    if (s.develop) develop = { id: s.develop.id, title: s.develop.title, url: s.develop.url, mine: s.develop.assigneeId === me.id }
     if (s.refine) refine = { id: s.refine.id, title: s.refine.title, url: s.refine.url, state: s.refine.state }
   } catch (error) {
     linearError = error instanceof Error ? error.message : String(error)

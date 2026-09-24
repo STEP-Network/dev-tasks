@@ -3,7 +3,7 @@ import { mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 import { afterEach, describe, expect, it } from "vitest"
-import { releasePidLock, takePidLock } from "../pidlock.ts"
+import { commandOf, releasePidLock, takePidLock } from "../pidlock.ts"
 
 const MARKER = "pidlock-test-holder"
 const lockFile = () => join(mkdtempSync(join(tmpdir(), "pidlock-")), "slack-bridge.pid")
@@ -50,6 +50,19 @@ describe("takePidLock", () => {
     const path = lockFile()
     writeFileSync(path, String(process.pid))
     expect(takePidLock(path, MARKER, 4242)).toEqual({ ok: true })
+  })
+
+  it("tells a live process from a gone one, and says so when ps itself fails", () => {
+    expect(commandOf(liveHolder())).toContain(MARKER)
+    expect(commandOf(deadPid())).toBeNull()
+    expect(commandOf(process.pid, "/nonexistent/ps")).toBeUndefined()
+  })
+
+  it("keeps a lock held when ps cannot say who has it, rather than let a second one in", () => {
+    const path = lockFile()
+    const holder = deadPid()
+    writeFileSync(path, String(holder))
+    expect(takePidLock(path, MARKER, 4242, "/nonexistent/ps")).toEqual({ ok: false, holder })
   })
 
   it("releases only its own lock", () => {

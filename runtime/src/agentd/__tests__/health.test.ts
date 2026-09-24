@@ -1,4 +1,5 @@
-import { existsSync, mkdirSync, mkdtempSync, utimesSync, writeFileSync } from "node:fs"
+import { execFileSync } from "node:child_process"
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, utimesSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { describe, expect, it } from "vitest"
@@ -6,15 +7,15 @@ import { agentPaths, ConfigSchema } from "../../config.ts"
 import { listNew, putOnce } from "../../fsq.ts"
 import { moveJob, readWatchedPrs, recordPr, submitJob } from "../../jobs.ts"
 import type { Logger } from "../../log.ts"
-import type { Exec } from "../../worker/git.ts"
+import { realExec, type Exec } from "../../worker/git.ts"
 import { fakeExec } from "../../__tests__/fakes.ts"
 import { cleanup, Every, healthStatus, inboxStuck, linearDownNotice, prAttention, refreshCheckout, sentryCheckInUrl, watchPrs } from "../health.ts"
 
 const quiet: Logger = { info() {}, warn() {}, error() {} }
 const NOW = new Date("2026-09-24T12:00:00.000Z")
 const REQUIRED = ["Lint", "TypeScript (no-emit)", "Test", "Vercel – v0-politiske-annoncer", "i18n", "Task trace", "Claude review"]
-/** Every git agentd runs: no hook and no fsmonitor, whatever a config under .git says. */
-const GIT = "git -c core.hooksPath=/dev/null -c core.fsmonitor=false"
+/** Every git agentd runs: no replace refs, no hook and no fsmonitor, whatever a config or ref under .git says. */
+const GIT = "git --no-replace-objects -c core.hooksPath=/dev/null -c core.fsmonitor=false"
 const SHA = "0123456789abcdef0123456789abcdef01234567"
 
 describe("prAttention", () => {
@@ -165,6 +166,25 @@ describe("healthStatus and sentryCheckInUrl", () => {
     expect(healthStatus({ ...ok, bridge: stale }).problems).toEqual(["the Slack bridge has no recent heartbeat"])
   })
 
+  it("calls a bridge that wrote stopped a stop, even while its last heartbeat is fresh", () => {
+    expect(healthStatus({ ...ok, bridge: { ...fresh, error: "slack-bridge: invalid_auth", stopped: true } }).problems).toEqual(["the Slack bridge stopped: slack-bridge: invalid_auth"])
+  })
+
+  it("gives a front door that just started ten minutes for its first wakeup, and no more", () => {
+    // After a reboot the last tick is hours old: that is not news until the new session has had time to wake.
+    const started = (minutes: number) => ({ ...ok, lastWakeAt: new Date(NOW.getTime() - 5 * 60 * 60_000), lastStartAt: new Date(NOW.getTime() - minutes * 60_000) })
+    expect(healthStatus(started(2)).ok).toBe(true)
+    expect(healthStatus(started(11)).problems).toEqual(["the front door has not woken up for 300 minutes"])
+    expect(healthStatus({ ...ok, lastWakeAt: null, lastStartAt: new Date(NOW.getTime() - 11 * 60_000) }).problems).toEqual(["the front door has never woken up"])
+  })
+
+  it("reports a checkout the refresh has to leave alone", () => {
+    expect(healthStatus({ ...ok, checkout: "left alone: the checkout has local changes" }).problems).toEqual([
+      "the PolAds checkout has local changes, so it is no longer kept on origin's base",
+    ])
+    expect(healthStatus({ ...ok, checkout: "up to date at 0123456" }).ok).toBe(true)
+  })
+
   it("reports messages Slack refused for good since the last check, once", () => {
     const grew = { ...ok, bridge: { ...fresh, outboxFailed: 3 }, outboxFailedBefore: 1 }
     expect(healthStatus(grew).problems).toEqual(["Slack refused 2 more messages for good, kept in ~/.agentd/outbox/failed"])
@@ -216,6 +236,13 @@ describe("refreshCheckout", () => {
     ])
   })
 
+  it("takes the base's own line from ls-remote, not a ref that merely ends the same way", async () => {
+    const other = "fedcba9876543210fedcba9876543210fedcba98"
+    const f = fakeExec([[/ls-remote/, { stdout: `${other}\trefs/heads/x/refs/heads/staging\n${SHA}\trefs/heads/staging\n` }]])
+    expect(await refreshCheckout(f.exec, "/r", "staging")).toBe("up to date at 0123456")
+    expect(f.lines().at(-1)).toBe(`${GIT} -C /r checkout --detach ${SHA}`)
+  })
+
   it("moves nothing when origin cannot be asked, or names no commit", async () => {
     const down = fakeExec([[/ls-remote/, { code: 128, stderr: "fatal: unable to access\n" }]])
     expect(await refreshCheckout(down.exec, "/r", "staging")).toBe("ls-remote failed: fatal: unable to access")
@@ -223,6 +250,45 @@ describe("refreshCheckout", () => {
     expect(await refreshCheckout(odd.exec, "/r", "staging")).toBe("origin named no commit for staging")
     expect([...down.lines(), ...odd.lines()].some((l) => l.includes("checkout --detach"))).toBe(false)
   })
+})
+
+describe("refreshCheckout, with real git", () => {
+  const env = { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1", GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@t", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@t" }
+  const sh = (cwd: string, ...args: string[]) => execFileSync("git", args, { cwd, env, encoding: "utf8" }).trim()
+
+  it("checks out origin's tree even when a worker has written a replace ref for origin's commit", async () => {
+    // Local repositories only. The worker's sandbox may write <repo>/.git, refs/replace included.
+    const root = mkdtempSync(join(tmpdir(), "agentd-replace-"))
+    sh(root, "init", "-q", "--bare", "-b", "staging", "origin.git")
+    sh(root, "clone", "-q", "origin.git", "seed")
+    const seed = join(root, "seed")
+    sh(seed, "checkout", "-q", "-b", "staging")
+    mkdirSync(join(seed, ".claude"))
+    writeFileSync(join(seed, ".claude", "settings.json"), '{"safe": true}\n')
+    sh(seed, "add", "-A")
+    sh(seed, "commit", "-q", "-m", "C1")
+    sh(seed, "push", "-q", "origin", "staging")
+    sh(root, "clone", "-q", "origin.git", "main")
+    const main = join(root, "main")
+    sh(main, "checkout", "-q", "--detach", "origin/staging")
+    writeFileSync(join(seed, "README"), "two\n")
+    sh(seed, "add", "-A")
+    sh(seed, "commit", "-q", "-m", "C2")
+    sh(seed, "push", "-q", "origin", "staging")
+    const c2 = sh(seed, "rev-parse", "HEAD")
+    // A job fetched C2, and its worker, from its own worktree, replaced C2 with its own commit.
+    sh(main, "fetch", "-q", "origin", "staging")
+    const wt = join(root, "wt")
+    sh(main, "worktree", "add", "-q", "--detach", wt, "origin/staging")
+    writeFileSync(join(wt, ".claude", "settings.json"), '{"evil": true}\n')
+    sh(wt, "add", "-A")
+    sh(wt, "commit", "-q", "-m", "evil")
+    sh(wt, "replace", c2, sh(wt, "rev-parse", "HEAD"))
+
+    expect(await refreshCheckout(realExec, main, "staging")).toBe(`up to date at ${c2.slice(0, 7)}`)
+    expect(readFileSync(join(main, ".claude", "settings.json"), "utf8")).toBe('{"safe": true}\n')
+    expect(readFileSync(join(main, "README"), "utf8")).toBe("two\n")
+  }, 30_000)
 })
 
 describe("cleanup", () => {

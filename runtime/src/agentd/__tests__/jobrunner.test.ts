@@ -1,5 +1,5 @@
 import { spawn, spawnSync, type ChildProcess } from "node:child_process"
-import { mkdtempSync, writeFileSync } from "node:fs"
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { afterEach, describe, expect, it } from "vitest"
@@ -101,7 +101,7 @@ describe("superviseJobs", () => {
 
   it("says a stopped worker was stopped, once, when it has gone", () => {
     const { paths, deps } = setup()
-    const job = running(paths, "STEP-1", { startedAt: "2026-09-24T10:00:00.000Z" })
+    const job = running(paths, "STEP-1", { startedAt: "2026-09-24T09:50:00.000Z", sessionStartedAt: "2026-09-24T10:10:00.000Z" })
     superviseJobs(deps)
     expect(outbox(paths)).toEqual([])
     updateJob(paths, "running", job.id, { killRequestedAt: "2026-09-24T11:59:00.000Z" })
@@ -109,6 +109,46 @@ describe("superviseJobs", () => {
     expect(listJobs(paths, "done")[0].result).toMatchObject({ status: "blocked", reason: "the worker overran its wall clock of 90 minutes and was stopped" })
     expect(outbox(paths)).toHaveLength(1)
     expect(outbox(paths)[0]).toMatch(/^STEP-1: the worker overran its wall clock of 90 minutes and was stopped\./)
+  })
+
+  it("counts the wall clock from the session's start, so a slow worktree does not cut a session short", () => {
+    // Spawned 115 minutes ago, 25 of them preparing: the session is at 90 minutes, and the runner is finishing.
+    const { paths, deps, kills } = setup()
+    running(paths, "STEP-1", { startedAt: "2026-09-24T10:05:00.000Z", sessionStartedAt: "2026-09-24T10:30:00.000Z" })
+    superviseJobs(deps)
+    expect(kills).toEqual([])
+    // 90 minutes of session and 15 to finish have passed.
+    superviseJobs({ ...deps, now: () => new Date("2026-09-24T12:15:01.000Z") })
+    expect(kills).toEqual([[-4242, "SIGTERM"]])
+  })
+
+  it("stops a worker still preparing its worktree after 45 minutes, and says so", () => {
+    const { paths, deps, kills } = setup()
+    const job = running(paths, "STEP-1", { startedAt: "2026-09-24T11:14:00.000Z" })
+    superviseJobs(deps)
+    expect(kills).toEqual([[-4242, "SIGTERM"]])
+    expect(listJobs(paths, "running")[0].killRequestedAt).toBe(NOW.toISOString())
+    superviseJobs({ ...deps, isAlive: () => false })
+    expect(listJobs(paths, "done").find((j) => j.id === job.id)?.result?.reason).toBe(
+      "the worker was still preparing its worktree after 45 minutes and was stopped",
+    )
+  })
+
+  it("never overwrites the result a runner wrote just before it died", () => {
+    // The runner wrote done, then died before it removed its running file.
+    const { paths, deps } = setup()
+    const job = running(paths, "STEP-1", {})
+    const result = { status: "done" as const, reason: "done", prUrl: "https://github.com/x/pull/9", branch: "STEP-1-x", costUsd: 2, turns: 40, minutes: 30 }
+    superviseJobs({
+      ...deps,
+      isAlive: () => {
+        writeJsonAtomic(join(paths.jobs, "done", `${job.id}.json`), { ...job, result })
+        return false
+      },
+    })
+    expect(listJobs(paths, "done")[0].result).toEqual(result)
+    expect(listJobs(paths, "running")).toEqual([])
+    expect(outbox(paths)).toEqual([])
   })
 
   it("says nothing of a worker that reported in the moment before it exited", () => {
@@ -149,7 +189,73 @@ describe("superviseJobs", () => {
   })
 })
 
+describe("two early losses in a row", () => {
+  // A worker that dies before it claims leaves its issue Ready, and the front door would offer it again at every wakeup.
+  const deadEarly = (paths: JobRunnerDeps["paths"], issue: string, at: string) => running(paths, issue, { startedAt: at })
+
+  it("pause the mini with the reason, and say where the logs are", () => {
+    const { paths, deps } = setup({ isAlive: () => false })
+    const first = deadEarly(paths, "STEP-1", "2026-09-24T11:55:00.000Z")
+    superviseJobs(deps)
+    expect(existsSync(paths.pauseFile)).toBe(false)
+    const second = submitJob(paths, "STEP-2", null, NOW)
+    moveJob(paths, second.id, "pending", "running", { pid: 4243, startedAt: "2026-09-24T11:57:00.000Z" })
+    superviseJobs({ ...deps, now: () => new Date("2026-09-24T12:01:00.000Z") })
+    expect(JSON.parse(readFileSync(paths.pauseFile, "utf8"))).toEqual({ at: "2026-09-24T12:01:00.000Z", reason: "two workers in a row stopped within 10 minutes of starting" })
+    expect(outbox(paths).at(-1)).toBe(
+      `Paused: two workers in a row stopped within 10 minutes of starting, so the next would too. Their logs are worker-${first.id}.log and worker-${second.id}.log in ~/.agentd/logs. Run agentctl resume once it is fixed.`,
+    )
+    // Paused: the next pending job waits.
+    submitJob(paths, "STEP-3", null, NOW)
+    const spawned: string[] = []
+    superviseJobs({ ...deps, spawnWorker: (id) => (spawned.push(id), 1) })
+    expect(spawned).toEqual([])
+  })
+
+  it("count a worker that could not be started", () => {
+    const { paths, deps } = setup({
+      spawnWorker: () => {
+        throw new Error("spawn EAGAIN")
+      },
+    })
+    submitJob(paths, "STEP-1", null, new Date("2026-09-24T11:00:00.000Z"))
+    superviseJobs(deps)
+    submitJob(paths, "STEP-2", null, new Date("2026-09-24T11:01:00.000Z"))
+    superviseJobs(deps)
+    expect(existsSync(paths.pauseFile)).toBe(true)
+  })
+
+  it("do not count a worker that ran a while, one lost to a reboot, or one a finished job came between", () => {
+    const late = setup({ isAlive: () => false })
+    running(late.paths, "STEP-1", { startedAt: "2026-09-24T11:30:00.000Z" })
+    superviseJobs(late.deps)
+    running(late.paths, "STEP-2", { startedAt: "2026-09-24T11:55:00.000Z" })
+    superviseJobs(late.deps)
+    expect(existsSync(late.paths.pauseFile)).toBe(false)
+
+    const reboot = setup({ isAlive: () => false, bootAt: new Date("2026-09-24T11:58:00.000Z") })
+    running(reboot.paths, "STEP-1", { startedAt: "2026-09-24T11:55:00.000Z" })
+    superviseJobs(reboot.deps)
+    running(reboot.paths, "STEP-2", { startedAt: "2026-09-24T11:59:00.000Z" })
+    superviseJobs(reboot.deps)
+    expect(existsSync(reboot.paths.pauseFile)).toBe(false)
+
+    const between = setup({ isAlive: () => false })
+    deadEarly(between.paths, "STEP-1", "2026-09-24T11:55:00.000Z")
+    superviseJobs(between.deps)
+    const ok = submitJob(between.paths, "STEP-5", null, new Date("2026-09-24T11:56:00.000Z"))
+    moveJob(between.paths, ok.id, "pending", "done", { endedAt: "2026-09-24T12:00:30.000Z", result: { status: "done", reason: "done", prUrl: null, branch: null, costUsd: null, turns: null, minutes: 4 } })
+    deadEarly(between.paths, "STEP-2", "2026-09-24T11:58:00.000Z")
+    superviseJobs({ ...between.deps, now: () => new Date("2026-09-24T12:01:00.000Z") })
+    expect(existsSync(between.paths.pauseFile)).toBe(false)
+  })
+})
+
 describe("isWorkerAlive", () => {
+  it("counts a worker as alive when ps itself fails, rather than write a live one off", () => {
+    expect(isWorkerAlive(process.pid, "STEP-7-20260924090000", "/nonexistent/ps")).toBe(true)
+  })
+
   const children: ChildProcess[] = []
   afterEach(() => {
     for (const child of children.splice(0)) child.kill()

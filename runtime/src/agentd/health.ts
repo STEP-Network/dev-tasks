@@ -10,8 +10,12 @@
  *   cleanup of old queue entries, jobs, big logs and abandoned worktrees
  *
  * gh and git run as the mini's own login through realExec's scrubbed
- * environment (decision 5), and every git is the runner's hardened one: the
- * worker writes under <repo>/.git, and nothing it wrote may steer agentd.
+ * environment (decision 5), and every git is the runner's hardened one, with
+ * no replace refs, hooks or fsmonitor: the worker writes under <repo>/.git.
+ * That closes what a ref or a config could do, not all of it: the worker can
+ * also overwrite a loose object in the shared store, and a checkout does not
+ * re-hash what it reads. Only a clone of its own for the worker closes that
+ * (a residual risk, in the PR that added this file).
  */
 
 import { existsSync, readdirSync, readFileSync, renameSync, rmSync, statSync } from "node:fs"
@@ -123,14 +127,22 @@ export interface BridgeHeartbeat {
   connected: boolean
   /** While the bridge runs: why its outbox is paused. After it stopped: why it stopped. */
   error?: string
+  /** Written by the bridge's halt: it has exited, whatever `at` says. */
+  stopped?: boolean
   outboxFailed?: number
 }
 
 const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`
 
+/** A front door started this recently has not had its first wakeup yet, and is not late for it. */
+export const STARTUP_GRACE_MINUTES = 10
+
 export function healthStatus(input: {
   frontDoorAlive: boolean
+  /** Its last tick, never its last start: a front door that restarts without ever waking must show up here. */
   lastWakeAt: Date | null
+  /** Its last start: until STARTUP_GRACE_MINUTES after it, no wakeup is due (a reboot, a restart). */
+  lastStartAt?: Date | null
   bridge: BridgeHeartbeat | null
   now: Date
   staleTickMinutes: number
@@ -138,20 +150,26 @@ export function healthStatus(input: {
   outboxFailedBefore?: number | null
   /** Answers and intakes the bridge has retried against Linear for over an hour (inboxStuck). */
   stuckInbox?: number
+  /** The last checkout refresh's result. */
+  checkout?: string | null
 }): { ok: boolean; problems: string[] } {
   const problems: string[] = []
+  const now = input.now.getTime()
+  const wake = input.lastWakeAt?.getTime() ?? null
+  const start = input.lastStartAt?.getTime() ?? null
+  const starting = start !== null && (wake === null || wake < start) && now - start <= STARTUP_GRACE_MINUTES * 60_000
   if (!input.frontDoorAlive) problems.push("the front door is not running")
-  else if (!input.lastWakeAt || input.now.getTime() - input.lastWakeAt.getTime() > input.staleTickMinutes * 60_000) {
-    const minutes = input.lastWakeAt ? Math.round((input.now.getTime() - input.lastWakeAt.getTime()) / 60_000) : null
-    problems.push(minutes === null ? "the front door has never woken up" : `the front door has not woken up for ${minutes} minutes`)
+  else if (!starting && (wake === null || now - wake > input.staleTickMinutes * 60_000)) {
+    problems.push(wake === null ? "the front door has never woken up" : `the front door has not woken up for ${Math.round((now - wake) / 60_000)} minutes`)
   }
   const bridge = input.bridge
-  const fresh = bridge !== null && input.now.getTime() - Date.parse(bridge.at) <= 3 * 60_000
+  const fresh = bridge !== null && now - Date.parse(bridge.at) <= 3 * 60_000
   // A running bridge writes its heartbeat every 30 seconds, error or not: an
   // error with a fresh heartbeat is the outbox paused, not the bridge stopped.
-  if (!bridge || !fresh) problems.push(bridge?.error ? `the Slack bridge stopped: ${bridge.error}` : "the Slack bridge has no recent heartbeat")
+  if (!bridge || !fresh || bridge.stopped) problems.push(bridge?.error ? `the Slack bridge stopped: ${bridge.error}` : "the Slack bridge has no recent heartbeat")
   else if (bridge.error) problems.push(`the Slack bridge's outbox is paused: ${bridge.error}`)
   else if (!bridge.connected) problems.push("the Slack bridge is disconnected")
+  if (input.checkout === CHECKOUT_LEFT_ALONE) problems.push("the PolAds checkout has local changes, so it is no longer kept on origin's base")
   const failed = bridge?.outboxFailed ?? 0
   const before = input.outboxFailedBefore
   // A message Slack refused for good goes to outbox/failed, and nothing else says so.
@@ -183,21 +201,31 @@ export function sentryCheckInUrl(base: string, ok: boolean): string {
   return url.toString()
 }
 
+/** The message a dirty checkout's refresh returns: health reports it, since /refine then reads a stale checkout. */
+export const CHECKOUT_LEFT_ALONE = "left alone: the checkout has local changes"
+
 /**
  * Moves a clean main checkout to the commit origin names for the base. The
- * commit comes from `ls-remote`, never from a ref under .git: the worker can
- * write refs there, origin/<base> included, and a checkout of its commit
+ * commit comes from `ls-remote`, never from a ref under .git, origin/<base>
+ * included: the worker can write refs there, and a checkout of its commit
  * would put its settings and hooks where every later session loads them.
+ * SAFE_GIT's --no-replace-objects keeps a replace ref from swapping the tree.
  */
 export async function refreshCheckout(exec: Exec, repo: string, base: string): Promise<string> {
   try {
-    if (await isDirty(exec, repo)) return "left alone: the checkout has local changes"
+    if (await isDirty(exec, repo)) return CHECKOUT_LEFT_ALONE
   } catch (error) {
     return `git status failed: ${error instanceof Error ? error.message : String(error)}`
   }
-  const remote = await git(exec, ["-C", repo, "ls-remote", "--exit-code", "origin", `refs/heads/${base}`], { timeoutMs: 60_000 })
+  const ref = `refs/heads/${base}`
+  const remote = await git(exec, ["-C", repo, "ls-remote", "--exit-code", "origin", ref], { timeoutMs: 60_000 })
   if (remote.code !== 0) return `ls-remote failed: ${remote.stderr.trim()}`
-  const sha = remote.stdout.trim().split(/\s+/)[0] ?? ""
+  // The pattern matches ref tails too (refs/heads/x/refs/heads/staging): only the exact ref counts.
+  const line = remote.stdout
+    .split("\n")
+    .map((l) => l.trim().split(/\s+/))
+    .find((parts) => parts[1] === ref)
+  const sha = line?.[0] ?? ""
   if (!/^[0-9a-f]{40}([0-9a-f]{24})?$/.test(sha)) return `origin named no commit for ${base}`
   const fetched = await git(exec, ["-C", repo, "fetch", "origin", base, "--prune"], { timeoutMs: 5 * 60_000 })
   if (fetched.code !== 0) return `fetch failed: ${fetched.stderr.trim()}`

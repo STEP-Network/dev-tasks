@@ -75,6 +75,14 @@ describe("runJob", () => {
     expect(outbox()).toEqual(["claimed STEP-7 Fix the date", `STEP-7 PR opened: ${PR} (auto-merge armed)`])
   })
 
+  it("marks when the session starts, after the worktree, for agentd's wall-clock backstop", async () => {
+    const { deps, job, paths } = setup()
+    let marked: string | undefined
+    const query = deps.query
+    await runJob({ ...deps, query: (args) => ((marked = listJobs(paths, "running")[0]?.sessionStartedAt), query(args)) }, job.id)
+    expect(marked).toBe("2026-09-24T09:40:00.000Z")
+  })
+
   it("never hands the session an API key, whatever the runner's own environment holds", async () => {
     const saved = process.env.ANTHROPIC_API_KEY
     process.env.ANTHROPIC_API_KEY = "sk-ant-not-a-real-key"

@@ -4,8 +4,8 @@ import { assertPushable, commitsAhead, isDirty, prepareWorktree, pushBranch, rea
 
 const OPTS = { repo: "/Users/eve/polads", worktreesDir: "/Users/eve/.agentd/worktrees", branch: "STEP-7-fix-the-date", base: "staging" }
 const WT = "/Users/eve/.agentd/worktrees/STEP-7-fix-the-date"
-/** Every git the runner runs: no hook and no fsmonitor, whatever a config the worker wrote says. */
-const GIT = "git -c core.hooksPath=/dev/null -c core.fsmonitor=false"
+/** Every git the runner runs: no replace refs, no hook and no fsmonitor, whatever a config or ref the worker wrote says. */
+const GIT = "git --no-replace-objects -c core.hooksPath=/dev/null -c core.fsmonitor=false"
 
 const ABSENT = [/ls-remote/, { code: 2 }] as const
 const PRESENT = [/ls-remote/, { code: 0 }] as const

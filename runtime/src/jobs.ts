@@ -33,7 +33,11 @@ export interface JobRecord {
   submittedAt: string
   pid?: number
   startedAt?: string
+  /** When the runner began the SDK session, after preparing the worktree: agentd's backstop counts the wall clock from here. */
+  sessionStartedAt?: string
   killRequestedAt?: string
+  /** Set by agentd when the worker died within minutes of its start, or never started: two in a row pause the mini. */
+  lostEarly?: boolean
   endedAt?: string
   result?: JobResult
   /** Set once `agentctl tick` has shown the finished job to the front door. */

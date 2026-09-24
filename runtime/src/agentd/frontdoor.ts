@@ -158,7 +158,10 @@ export async function applyFrontDoor(deps: FrontDoorDeps, state: FrontDoorState,
   if (action.kind === "wait") {
     const alertDue = action.alert && (!state.lastAlertAt || now.getTime() - Date.parse(state.lastAlertAt) > 3_600_000)
     if (alertDue) {
-      enqueueSlack(deps.paths, { kind: "post", channel: "agents", text: `front door: ${action.reason}. Trying again at ${action.until.slice(11, 16)} UTC.` }, now)
+      const zone = deps.config.queue.timeZone
+      const at = new Intl.DateTimeFormat("en-GB", { timeZone: zone, hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(new Date(action.until))
+      const reason = action.reason.charAt(0).toUpperCase() + action.reason.slice(1)
+      enqueueSlack(deps.paths, { kind: "post", channel: "agents", text: `${reason}. Trying again at ${at} (${zone}).` }, now)
     }
     deps.log.warn("front door waiting", { reason: action.reason, until: action.until })
     return {

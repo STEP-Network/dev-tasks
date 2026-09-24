@@ -13,13 +13,13 @@ import { fileURLToPath } from "node:url"
 import { agentPaths, assertProfileMini, loadConfig, readProfileMini, type AgentConfig, type AgentPaths } from "../config.ts"
 import { readJson, writeJsonAtomic } from "../fsq.ts"
 import { listJobs } from "../jobs.ts"
-import { appendLedger, createLogger, redact } from "../log.ts"
+import { appendLedger, createLogger, redact, type Logger } from "../log.ts"
 import { enqueueSlack } from "../outbox.ts"
 import { releasePidLock, takePidLock } from "../pidlock.ts"
 import { assertLinearKeyFile, loadSentryCronUrl } from "../secrets.ts"
-import { createLinearTracker } from "../tracker.ts"
+import { createLinearTracker, type Tracker } from "../tracker.ts"
 import { readUsage } from "../usage.ts"
-import { realExec } from "../worker/git.ts"
+import { realExec, type Exec } from "../worker/git.ts"
 import { heartbeatAndSweep } from "./claims.ts"
 import { frontDoorAlive, lastTickAt, readFrontDoorState, superviseFrontDoor } from "./frontdoor.ts"
 import { cleanup, Every, healthStatus, inboxStuck, linearDownNotice, refreshCheckout, sentryCheckInUrl, watchPrs, type BridgeHeartbeat } from "./health.ts"
@@ -40,7 +40,113 @@ export function checkLocal(paths: AgentPaths, profileMini: string | null): { con
   return { config, sentryUrl: loadSentryCronUrl(paths.home) }
 }
 
+/** Signals a process group, ignoring one that ended between the liveness check and the signal. */
+export function killGroup(pid: number, signal: NodeJS.Signals | number): void {
+  try {
+    process.kill(pid, signal)
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error
+  }
+}
+
+export interface DutyDeps {
+  paths: AgentPaths
+  config: AgentConfig
+  log: Logger
+  exec: Exec
+  tracker: Tracker
+  now: () => Date
+  every: Every
+  bootAt: Date
+  isAlive: (pid: number, jobId: string) => boolean
+  kill: (pid: number, signal: NodeJS.Signals) => void
+  spawnWorker: (jobId: string) => number
+  sentryUrl: string | null
+  /** One GET of the Sentry check-in URL. */
+  checkIn: (url: string) => Promise<{ ok: boolean; status: number }>
+}
+
+/** What agentd carries from one loop to the next. */
+export interface DutyMemo {
+  linearDown: { downSince: string | null; notified: boolean }
+  /** outbox/failed's count at the last health check. null until the first: what was there when agentd started is not news. */
+  outboxFailedSeen: number | null
+  /** The last checkout refresh's result, for the health check. */
+  lastRefresh: string | null
+}
+
+export const freshMemo = (): DutyMemo => ({ linearDown: { downSince: null, notified: false }, outboxFailedSeen: null, lastRefresh: null })
+
 const message = (error: unknown) => (error instanceof Error ? error.message : String(error))
+
+/** One pass of the loop: every duty that is due, each caught on its own. */
+export async function runDuties(d: DutyDeps, memo: DutyMemo): Promise<void> {
+  const { paths, config, log, now } = d
+  const step = async (name: string, fn: () => unknown) => {
+    try {
+      await fn()
+    } catch (error) {
+      log.error(`${name} failed`, { error: message(error) })
+    }
+  }
+  await step("front door", () => superviseFrontDoor({ paths, config, exec: d.exec, now, log, usage: () => readUsage(paths) }))
+  await step("jobs", () => superviseJobs({ paths, config, now, log, bootAt: d.bootAt, isAlive: d.isAlive, kill: d.kill, spawnWorker: d.spawnWorker }))
+  // The main checkout and its worktrees change only between jobs: a job
+  // fetches into the same repository, and its session loads the project's
+  // settings and hooks from this checkout (projectConfigRoot).
+  const jobActive = listJobs(paths, "running").length > 0 || listJobs(paths, "pending").length > 0
+  if (d.every.due("claims", config.claims.heartbeatMinutes * 60_000)) {
+    await step("claims", async () => {
+      let ok = false
+      try {
+        const r = await heartbeatAndSweep({ tracker: d.tracker, paths, config, now, isAlive: d.isAlive, log })
+        if (r.refreshed || r.released) log.info("claims", r)
+        ok = true
+      } finally {
+        const notice = linearDownNotice(memo.linearDown, ok, now())
+        memo.linearDown = notice.state
+        if (notice.message) enqueueSlack(paths, { kind: "post", channel: "agents", text: notice.message }, now())
+      }
+    })
+  }
+  if (d.every.due("prs", 15 * 60_000)) await step("prs", () => watchPrs({ exec: d.exec, paths, config, now, log }))
+  if (!jobActive && d.every.due("checkout", 10 * 60_000)) {
+    await step("checkout", async () => {
+      memo.lastRefresh = await refreshCheckout(d.exec, config.repo.path, config.repo.base)
+      log.info("checkout", { result: memo.lastRefresh })
+    })
+  }
+  if (d.every.due("health", 5 * 60_000)) {
+    await step("health", async () => {
+      const fd = readFrontDoorState(paths)
+      const bridge = readJson<BridgeHeartbeat>(join(paths.state, "bridge.json"))
+      const verdict = healthStatus({
+        frontDoorAlive: await frontDoorAlive({ exec: d.exec, config }),
+        lastWakeAt: lastTickAt(paths),
+        lastStartAt: fd.lastStartAt ? new Date(fd.lastStartAt) : null,
+        bridge,
+        now: now(),
+        staleTickMinutes: config.frontDoor.staleTickMinutes,
+        outboxFailedBefore: memo.outboxFailedSeen,
+        stuckInbox: inboxStuck(paths, now()),
+        checkout: memo.lastRefresh,
+      })
+      memo.outboxFailedSeen = bridge?.outboxFailed ?? memo.outboxFailedSeen
+      if (!verdict.ok) log.warn("unhealthy", { problems: verdict.problems })
+      if (!d.sentryUrl) return
+      // The URL carries the monitor's key: it is never logged.
+      const res = await d.checkIn(sentryCheckInUrl(d.sentryUrl, verdict.ok))
+      if (!res.ok) log.warn("Sentry check-in refused", { status: res.status })
+    })
+  }
+  if (d.every.due("usage", 60 * 60_000)) {
+    await step("usage", () => {
+      const u = readUsage(paths)
+      if (u) appendLedger(paths, { type: "usage", fiveHourPct: u.fiveHourPct, sevenDayPct: u.sevenDayPct }, now())
+    })
+  }
+  if (!jobActive && d.every.due("cleanup", 24 * 60 * 60_000)) await step("cleanup", () => cleanup({ paths, config, exec: d.exec, now }))
+}
 
 async function main(): Promise<void> {
   const paths = agentPaths()
@@ -75,88 +181,29 @@ async function main(): Promise<void> {
   }
   const { config, sentryUrl } = setup
   const runtimeDir = join(dirname(fileURLToPath(import.meta.url)), "..", "..")
-  const tracker = createLinearTracker()
-  const every = new Every(() => Date.now())
   const bootAt = new Date(Date.now() - uptime() * 1000)
-  const now = () => new Date()
-  const spawnWorker = spawnWorkerProcess(paths, runtimeDir)
-  const kill = (pid: number, signal: NodeJS.Signals) => {
-    try {
-      process.kill(pid, signal)
-    } catch (error) {
-      // The group ended between the liveness check and the signal.
-      if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error
-    }
+  const deps: DutyDeps = {
+    paths,
+    config,
+    log,
+    exec: realExec,
+    tracker: createLinearTracker(),
+    now: () => new Date(),
+    every: new Every(() => Date.now()),
+    bootAt,
+    isAlive: isWorkerAlive,
+    kill: killGroup,
+    spawnWorker: spawnWorkerProcess(paths, runtimeDir),
+    sentryUrl,
+    checkIn: (url) => fetch(url, { signal: AbortSignal.timeout(10_000) }),
   }
-  let linearDown = { downSince: null as string | null, notified: false }
-  // What was in outbox/failed when agentd started is not news: only growth is.
-  let outboxFailedSeen: number | null = null
+  const memo = freshMemo()
   let running = false
-
-  const step = async (name: string, fn: () => unknown) => {
-    try {
-      await fn()
-    } catch (error) {
-      log.error(`${name} failed`, { error: message(error) })
-    }
-  }
-
   const loop = async () => {
     if (running) return
     running = true
     try {
-      await step("front door", () => superviseFrontDoor({ paths, config, exec: realExec, now, log, usage: () => readUsage(paths) }))
-      await step("jobs", () => superviseJobs({ paths, config, now, log, bootAt, isAlive: isWorkerAlive, kill, spawnWorker }))
-      // The main checkout and its worktrees change only between jobs: a job
-      // fetches into the same repository, and its session loads the
-      // project's settings and hooks from this checkout (projectConfigRoot).
-      const jobActive = listJobs(paths, "running").length > 0 || listJobs(paths, "pending").length > 0
-      if (every.due("claims", config.claims.heartbeatMinutes * 60_000)) {
-        await step("claims", async () => {
-          let ok = false
-          try {
-            const r = await heartbeatAndSweep({ tracker, paths, config, now, isAlive: isWorkerAlive, log })
-            if (r.refreshed || r.released) log.info("claims", r)
-            ok = true
-          } finally {
-            const notice = linearDownNotice(linearDown, ok, now())
-            linearDown = notice.state
-            if (notice.message) enqueueSlack(paths, { kind: "post", channel: "agents", text: notice.message }, now())
-          }
-        })
-      }
-      if (every.due("prs", 15 * 60_000)) await step("prs", () => watchPrs({ exec: realExec, paths, config, now, log }))
-      if (!jobActive && every.due("checkout", 10 * 60_000)) {
-        await step("checkout", async () => log.info("checkout", { result: await refreshCheckout(realExec, config.repo.path, config.repo.base) }))
-      }
-      if (every.due("health", 5 * 60_000)) {
-        await step("health", async () => {
-          const fd = readFrontDoorState(paths)
-          const bridge = readJson<BridgeHeartbeat>(join(paths.state, "bridge.json"))
-          const verdict = healthStatus({
-            frontDoorAlive: await frontDoorAlive({ exec: realExec, config }),
-            lastWakeAt: lastTickAt(paths) ?? (fd.lastStartAt ? new Date(fd.lastStartAt) : null),
-            bridge,
-            now: now(),
-            staleTickMinutes: config.frontDoor.staleTickMinutes,
-            outboxFailedBefore: outboxFailedSeen,
-            stuckInbox: inboxStuck(paths, now()),
-          })
-          outboxFailedSeen = bridge?.outboxFailed ?? outboxFailedSeen
-          if (!verdict.ok) log.warn("unhealthy", { problems: verdict.problems })
-          if (!sentryUrl) return
-          // The URL carries the monitor's key: it is never logged.
-          const res = await fetch(sentryCheckInUrl(sentryUrl, verdict.ok), { signal: AbortSignal.timeout(10_000) })
-          if (!res.ok) log.warn("Sentry check-in refused", { status: res.status })
-        })
-      }
-      if (every.due("usage", 60 * 60_000)) {
-        await step("usage", () => {
-          const u = readUsage(paths)
-          if (u) appendLedger(paths, { type: "usage", fiveHourPct: u.fiveHourPct, sevenDayPct: u.sevenDayPct }, now())
-        })
-      }
-      if (!jobActive && every.due("cleanup", 24 * 60 * 60_000)) await step("cleanup", () => cleanup({ paths, config, exec: realExec, now }))
+      await runDuties(deps, memo)
       status()
     } finally {
       running = false

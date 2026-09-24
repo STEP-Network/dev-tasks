@@ -12,7 +12,7 @@ import type { Outcome } from "../outcome.ts"
 const PR = "https://github.com/STEP-Network/v0-politiske-annoncer/pull/1700"
 const REPO = "/Users/eve/polads"
 const WT = "/Users/eve/.agentd/worktrees/STEP-7-fix-the-date"
-const GIT = "git -c core.hooksPath=/dev/null -c core.fsmonitor=false"
+const GIT = "git --no-replace-objects -c core.hooksPath=/dev/null -c core.fsmonitor=false"
 const PUSH = `${GIT} -C ${WT} push -u origin HEAD:refs/heads/STEP-7-fix-the-date`
 const done: Outcome = {
   status: "done", reason: "done", costUsd: 3.1, turns: 42, sessionId: "s",
