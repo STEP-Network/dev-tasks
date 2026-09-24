@@ -7,9 +7,10 @@
  * it, because a checkout has node_modules.
  *
  * So these tests start the committed dist/server.js from a copy of plugin/
- * without node_modules, check that an npm install run in that copy anyway
- * would not try to build, and check that the committed bundle is the one the
- * build makes from src/ now.
+ * without node_modules, list and call its tools there, and check that an npm
+ * install run in that copy anyway would not try to build. They also check
+ * that the committed bundle is the one the build makes from src/ now, and
+ * that it leaves nothing for Node to resolve at run time.
  */
 
 import { describe, it, expect, beforeAll, afterAll } from "vitest"
@@ -42,11 +43,13 @@ afterAll(() => {
 })
 
 // The server the way .mcp.json starts it, inheriting nothing that could hand
-// it a package (NODE_PATH, a NODE_OPTIONS loader) or a Monday key.
+// it a package (NODE_PATH, a NODE_OPTIONS loader) or a tracker key
+// (MONDAY_API_KEY, or a key file under the real HOME): no call it makes can
+// reach Monday.
 function startServer() {
   const child = spawn(process.execPath, [join(plugin, "dist", "server.js")], {
     cwd: root,
-    env: { PATH: process.env.PATH ?? "" },
+    env: { PATH: process.env.PATH ?? "", HOME: root },
   })
   const timer = setTimeout(() => child.kill("SIGKILL"), KILL_AFTER_MS)
   let stdout = ""
@@ -80,7 +83,7 @@ describe("the bundled MCP server, installed without node_modules", () => {
     expect(stdout).toBe("")
   }, 10_000)
 
-  it("lists every registered tool to an MCP client", async () => {
+  it("lists every registered tool to an MCP client, and runs one", async () => {
     const { child, exited } = startServer()
     const send = (message: object) => child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", ...message })}\n`)
     send({
@@ -90,12 +93,16 @@ describe("the bundled MCP server, installed without node_modules", () => {
     })
     send({ method: "notifications/initialized" })
     send({ id: 2, method: "tools/list" })
-    // Close stdin once the tools/list reply is whole, as a client that is done would.
+    // A call runs code that starting and listing never reach: argument
+    // validation, a tool, the Monday client. With no key anywhere it stops
+    // at the key check, before any request.
+    send({ id: 3, method: "tools/call", params: { name: "getTask", arguments: { itemId: 1 } } })
+    // Close stdin once the last reply is whole, as a client that is done would.
     let pending = ""
     child.stdout.on("data", (chunk: string) => {
       const lines = (pending + chunk).split("\n")
       pending = lines.pop() ?? ""
-      if (lines.some((line) => JSON.parse(line).id === 2)) child.stdin.end()
+      if (lines.some((line) => JSON.parse(line).id === 3)) child.stdin.end()
     })
 
     const { code, signal, stdout, stderr } = await exited
@@ -105,6 +112,8 @@ describe("the bundled MCP server, installed without node_modules", () => {
     const names: string[] = replies.get(2)?.result?.tools?.map((tool: { name: string }) => tool.name) ?? []
     expect(names).toHaveLength(REGISTERED)
     expect(new Set(names).size).toBe(REGISTERED)
+    // getTask reports its own failure as text: "# Error ... Failed to fetch task: No Monday auth: ...".
+    expect(replies.get(3)?.result?.content?.[0]?.text).toMatch(/Failed to fetch task: No Monday auth/)
   }, 10_000)
 
   it("has no npm script an install would run, should someone run one in it", () => {
@@ -120,10 +129,24 @@ describe("the bundled MCP server, installed without node_modules", () => {
 describe("the committed bundle", () => {
   it("is what `npm run build` makes from src/ now", async () => {
     // dist/ is committed and the bundle is a megabyte nobody reviews by eye:
-    // this is what says it matches the source. On a failure, run
-    // `npm run build` and commit dist/.
+    // this is what says it matches the source. The build bundles whatever is
+    // in node_modules, so on a failure run `npm ci && npm run build` (not the
+    // build alone) and commit dist/.
     const { server, licenses } = await bundleServer()
-    expect(readFileSync(SERVER_PATH, "utf8") === server, "dist/server.js is stale: run `npm run build`").toBe(true)
+    expect(readFileSync(SERVER_PATH, "utf8") === server, "dist/server.js is stale: run `npm ci && npm run build`").toBe(true)
     expect(readFileSync(LICENSE_PATH, "utf8")).toBe(licenses)
   }, 30_000)
+
+  it("leaves Node nothing to resolve while the server runs", () => {
+    // esbuild, without a warning, turns a require() in a CommonJS package
+    // (even of a built-in) into a stand-in that throws "Dynamic require of
+    // ... is not supported" in an ESM bundle, and leaves an import() of a
+    // computed name for run time. The start and the one call above need not
+    // reach such a line. createRequire would resolve from a node_modules an
+    // install does not have. An import() of a node: built-in is fine.
+    const server = readFileSync(SERVER_PATH, "utf8")
+    expect(server).not.toContain("Dynamic require of")
+    expect(server).not.toContain("createRequire")
+    expect(server.match(/\bimport\((?!["']node:)[^)\n]*\)?/g) ?? []).toEqual([])
+  })
 })
