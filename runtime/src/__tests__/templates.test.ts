@@ -10,10 +10,11 @@ const read = (path: string) => readFileSync(fileURLToPath(new URL(`../../${path}
 describe("templates/config.example.json", () => {
   const example = JSON.parse(read("templates/config.example.json"))
 
-  it("is a valid config for Eve, starting on the allowlist with nothing on it", () => {
+  it("is a valid config for Eve, starting supervised: on the allowlist with nothing on it, and a person merging", () => {
     const config = ConfigSchema.parse(example)
     expect(config).toMatchObject({ mini: "eve", repo: { path: "/Users/eve/polads" }, pluginRoot: "/Users/eve/dev-tasks/plugin" })
     expect(config.queue).toMatchObject({ mode: "allowlist", allow: [] })
+    expect(config.worker.autoMerge).toBe(false)
     expect(config.slack.otherAgentBots).toEqual([])
   })
 

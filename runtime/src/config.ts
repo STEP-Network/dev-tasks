@@ -113,6 +113,8 @@ export const ConfigSchema = z.object({
       maxTurns: z.number().int().positive().default(250),
       maxBudgetUsd: z.number().positive().default(15),
       wallClockMinutes: z.number().int().positive().default(90),
+      /** false while a mini is supervised: its worker still opens PRs, and a person merges them. */
+      autoMerge: z.boolean().default(true),
     })
     .prefault({}),
   queue: z

@@ -188,6 +188,14 @@ exists, each lists the other's bot in `slack.otherAgentBots`
 (`runtime/slack/README.md`). The `PAUSE` file keeps anything from being
 developed or refined before someone is watching.
 
+`worker.autoMerge` decides whether this mini's PRs merge on their own.
+Supervised phases set it to `false`, as the example does: the worker still
+opens the PR, and the PR and its Slack notice say "auto-merge off on this
+mini: a person merges". With `true` (the default when it is left out),
+auto-merge is armed whenever the project's policy for the base branch is
+`auto-after-checks-and-review`. The worker reads it at the start of each
+job, so a change needs no restart.
+
 ## 7. The first interactive run, and the plugin (at the mini or over Screen Sharing)
 
 Once, with the permission mode the front door uses, so its one-time prompts
