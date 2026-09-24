@@ -10,7 +10,7 @@ import { existsSync } from "node:fs"
 import { join } from "node:path"
 import type { AgentConfig, AgentPaths } from "./config.ts"
 import { listNew, writeJsonAtomic } from "./fsq.ts"
-import { listJobs, updateJob } from "./jobs.ts"
+import { heldBackIssues, listJobs, updateJob } from "./jobs.ts"
 import { nextWakeupSeconds, selectNext, type QueuePolicy } from "./select.ts"
 import type { Tracker, TrackerIssue } from "./tracker.ts"
 import { developBlockedByUsage, readUsage } from "./usage.ts"
@@ -45,6 +45,8 @@ export interface Digest {
   developBlockedBy: string | null
   refine: { id: string; title: string; url: string; state: string } | null
   readyEligible: number
+  /** Ready issues no job is offered for: their last two workers were lost early (heldBackIssues). A person runs one by hand. */
+  heldBack: string[]
   linearError: string | null
   nextWakeupSeconds: number
 }
@@ -126,10 +128,15 @@ export async function buildDigest(deps: DigestDeps): Promise<Digest> {
   let develop: Digest["develop"] = null
   let refine: Digest["refine"] = null
   let readyEligible = 0
+  let heldBack: string[] = []
   let linearError: string | null = null
   try {
     const me = await deps.tracker.whoami()
-    const ready = await deps.tracker.listReady(250)
+    const listed = await deps.tracker.listReady(250)
+    // An issue whose last two workers were lost early would most likely lose a third.
+    const held = heldBackIssues(paths)
+    heldBack = listed.filter((i) => held.has(i.id)).map((i) => i.id)
+    const ready = listed.filter((i) => !held.has(i.id))
     const firstPass = selectNext({ ready, triage: [], refining: [], meId: me.id, policy, developBlockedBy, refineBlockedBy })
     readyEligible = firstPass.readyEligible
     // Develop needs only the Ready list: a failure below loses the refine, not this.
@@ -167,6 +174,7 @@ export async function buildDigest(deps: DigestDeps): Promise<Digest> {
     developBlockedBy,
     refine,
     readyEligible,
+    heldBack,
     linearError,
     nextWakeupSeconds: nextWakeupSeconds({ acted, now, timeZone: config.queue.timeZone }),
   }

@@ -9,17 +9,17 @@
  * from on the next run of that issue here, and pushing is the runner's job
  * (decision 2), from its own guarded path.
  *
- * Two workers in a row that die within minutes of their start, or cannot be
- * started, pause the mini: the next would die the same way (a broken install,
- * a secrets file the runner refuses), and the issue it was given stays Ready
- * and would be offered again at every wakeup.
+ * A worker that dies within minutes of its start, or cannot be started, is
+ * lost early: its issue stays Ready and would be offered again at every
+ * wakeup. After two in a row for one issue the digest holds it back
+ * (heldBackIssues), and the second loss's notice says so.
  */
 
 import { spawn } from "node:child_process"
-import { closeSync, existsSync, mkdirSync, openSync, rmSync, writeFileSync } from "node:fs"
+import { closeSync, existsSync, mkdirSync, openSync, rmSync } from "node:fs"
 import { join } from "node:path"
 import type { AgentConfig, AgentPaths } from "../config.ts"
-import { jobPath, listJobs, moveJob, updateJob, type JobRecord } from "../jobs.ts"
+import { heldBackIssues, jobPath, listJobs, moveJob, updateJob, type JobRecord } from "../jobs.ts"
 import { appendLedger, type Logger } from "../log.ts"
 import { enqueueSlack } from "../outbox.ts"
 import { commandOf } from "../pidlock.ts"
@@ -43,7 +43,7 @@ export interface JobRunnerDeps {
 export const PREP_ALLOWANCE_MINUTES = 45
 /** After its own wall clock the runner still pushes, opens the PR and writes to Linear. */
 export const FINISH_GRACE_MINUTES = 15
-/** A worker that dies this soon after its start died of something the next one would meet too. */
+/** A worker that dies this soon after its start most likely died of something the next one would meet too. */
 export const EARLY_DEATH_MINUTES = 10
 
 /**
@@ -83,33 +83,14 @@ function endBlocked(deps: JobRunnerDeps, job: JobRecord, reason: string, started
   })
   if (!moved) return false
   appendLedger(deps.paths, { type: "worker.end", issue: job.issue, status: "blocked", reason }, now)
-  enqueueSlack(deps.paths, { kind: "post", channel: "agents", text: `${job.issue}: ${reason}. ${notice}` }, now)
-  if (lostEarly) pauseAfterTwoEarlyLosses(deps, now)
+  // The second early loss in a row holds the issue back: said once, here, in the notice of the loss itself.
+  const held = lostEarly && heldBackIssues(deps.paths).has(job.issue)
+  const hold = held
+    ? ` Its last two workers stopped within ${EARLY_DEATH_MINUTES} minutes of starting, so ${job.issue} is held back from new jobs until a person runs it by hand (agentctl job submit --issue ${job.issue}). The logs are in ~/.agentd/logs/worker-${job.issue}-*.log.`
+    : ""
+  enqueueSlack(deps.paths, { kind: "post", channel: "agents", text: `${job.issue}: ${reason}. ${notice}${hold}` }, now)
+  if (held) deps.log.error("issue held back after two early losses", { issue: job.issue })
   return true
-}
-
-/** Pauses the mini when the last two jobs to finish were both lost early. A person resumes it. */
-function pauseAfterTwoEarlyLosses(deps: JobRunnerDeps, now: Date): void {
-  const lastTwo = listJobs(deps.paths, "done")
-    .filter((j) => j.endedAt)
-    .sort((a, b) => a.endedAt!.localeCompare(b.endedAt!))
-    .slice(-2)
-  if (lastTwo.length < 2 || !lastTwo.every((j) => j.lostEarly) || existsSync(deps.paths.pauseFile)) return
-  const reason = `two workers in a row stopped within ${EARLY_DEATH_MINUTES} minutes of starting`
-  mkdirSync(deps.paths.root, { recursive: true })
-  // The shape agentctl pause writes.
-  writeFileSync(deps.paths.pauseFile, JSON.stringify({ at: now.toISOString(), reason }))
-  appendLedger(deps.paths, { type: "paused", reason }, now)
-  enqueueSlack(
-    deps.paths,
-    {
-      kind: "post",
-      channel: "agents",
-      text: `Paused: ${reason}, so the next would too. Their logs are ${lastTwo.map((j) => `worker-${j.id}.log`).join(" and ")} in ~/.agentd/logs. Run agentctl resume once it is fixed.`,
-    },
-    now,
-  )
-  deps.log.error("paused after two early losses", { jobs: lastTwo.map((j) => j.id) })
 }
 
 export function superviseJobs(deps: JobRunnerDeps): void {

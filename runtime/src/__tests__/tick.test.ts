@@ -102,6 +102,18 @@ describe("buildDigest", () => {
     expect(short.fake.called("listByState").map((args) => args[0])).toEqual(["Triage", "Refining"])
   })
 
+  it("holds back an issue whose last two workers were lost early, and offers the next one", async () => {
+    const { paths, deps } = setup([issue({ id: "STEP-1", labels: ["polads", "agent-ready"] }), issue({ id: "STEP-2", labels: ["polads", "agent-ready"] })])
+    const lost = (at: string) => {
+      const job = submitJob(paths, "STEP-1", null, new Date(at))
+      moveJob(paths, job.id, "pending", "done", { endedAt: at, lostEarly: true, reported: true, result: { status: "blocked", reason: "the worker process died before reporting", prUrl: null, branch: null, costUsd: null, turns: null, minutes: 1 } })
+    }
+    lost("2026-09-24T09:00:00.000Z")
+    expect((await buildDigest(deps)).develop).toMatchObject({ id: "STEP-1" })
+    lost("2026-09-24T09:10:00.000Z")
+    expect(await buildDigest(deps)).toMatchObject({ develop: { id: "STEP-2" }, heldBack: ["STEP-1"], readyEligible: 1 })
+  })
+
   it("still offers the develop job when only the refine lists fail", async () => {
     const { deps } = setup(undefined, ["listByState"])
     expect(await buildDigest(deps)).toMatchObject({ develop: { id: "STEP-1" }, readyEligible: 1, refine: null, linearError: expect.stringMatching(/listByState failed/) })

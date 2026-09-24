@@ -1,11 +1,11 @@
 import { spawn, spawnSync, type ChildProcess } from "node:child_process"
-import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs"
+import { existsSync, mkdtempSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { afterEach, describe, expect, it } from "vitest"
 import { agentPaths, ConfigSchema } from "../../config.ts"
 import { listNew, writeJsonAtomic } from "../../fsq.ts"
-import { listJobs, moveJob, submitJob, updateJob } from "../../jobs.ts"
+import { heldBackIssues, listJobs, moveJob, submitJob, updateJob } from "../../jobs.ts"
 import type { Logger } from "../../log.ts"
 import { isWorkerAlive, superviseJobs, type JobRunnerDeps } from "../jobrunner.ts"
 
@@ -111,7 +111,7 @@ describe("superviseJobs", () => {
     expect(outbox(paths)[0]).toMatch(/^STEP-1: the worker overran its wall clock of 90 minutes and was stopped\./)
   })
 
-  it("counts the wall clock from the session's start, so a slow worktree does not cut a session short", () => {
+  it("counts the wall clock from the session's start, so a slow worktree never cuts a session or its finish short", () => {
     // Spawned 115 minutes ago, 25 of them preparing: the session is at 90 minutes, and the runner is finishing.
     const { paths, deps, kills } = setup()
     running(paths, "STEP-1", { startedAt: "2026-09-24T10:05:00.000Z", sessionStartedAt: "2026-09-24T10:30:00.000Z" })
@@ -189,27 +189,33 @@ describe("superviseJobs", () => {
   })
 })
 
-describe("two early losses in a row", () => {
+describe("two early losses in a row for one issue", () => {
   // A worker that dies before it claims leaves its issue Ready, and the front door would offer it again at every wakeup.
-  const deadEarly = (paths: JobRunnerDeps["paths"], issue: string, at: string) => running(paths, issue, { startedAt: at })
+  const lose = (paths: JobRunnerDeps["paths"], issue: string, submitted: string, started: string) => {
+    const job = submitJob(paths, issue, null, new Date(submitted))
+    moveJob(paths, job.id, "pending", "running", { pid: 4242, startedAt: started })
+    return job
+  }
 
-  it("pause the mini with the reason, and say where the logs are", () => {
+  it("hold the issue back, and say so once, in the second loss's own notice", () => {
     const { paths, deps } = setup({ isAlive: () => false })
-    const first = deadEarly(paths, "STEP-1", "2026-09-24T11:55:00.000Z")
+    lose(paths, "STEP-1", "2026-09-24T11:50:00.000Z", "2026-09-24T11:55:00.000Z")
     superviseJobs(deps)
-    expect(existsSync(paths.pauseFile)).toBe(false)
-    const second = submitJob(paths, "STEP-2", null, NOW)
-    moveJob(paths, second.id, "pending", "running", { pid: 4243, startedAt: "2026-09-24T11:57:00.000Z" })
+    expect(heldBackIssues(paths)).toEqual(new Set())
+    expect(outbox(paths)[0]).not.toMatch(/held back/)
+    lose(paths, "STEP-1", "2026-09-24T11:56:00.000Z", "2026-09-24T11:57:00.000Z")
     superviseJobs({ ...deps, now: () => new Date("2026-09-24T12:01:00.000Z") })
-    expect(JSON.parse(readFileSync(paths.pauseFile, "utf8"))).toEqual({ at: "2026-09-24T12:01:00.000Z", reason: "two workers in a row stopped within 10 minutes of starting" })
-    expect(outbox(paths).at(-1)).toBe(
-      `Paused: two workers in a row stopped within 10 minutes of starting, so the next would too. Their logs are worker-${first.id}.log and worker-${second.id}.log in ~/.agentd/logs. Run agentctl resume once it is fixed.`,
+    expect(heldBackIssues(paths)).toEqual(new Set(["STEP-1"]))
+    expect(outbox(paths)).toHaveLength(2)
+    expect(outbox(paths)[1]).toMatch(
+      /Its last two workers stopped within 10 minutes of starting, so STEP-1 is held back from new jobs until a person runs it by hand \(agentctl job submit --issue STEP-1\)\. The logs are in ~\/\.agentd\/logs\/worker-STEP-1-\*\.log\.$/,
     )
-    // Paused: the next pending job waits.
-    submitJob(paths, "STEP-3", null, NOW)
-    const spawned: string[] = []
-    superviseJobs({ ...deps, spawnWorker: (id) => (spawned.push(id), 1) })
-    expect(spawned).toEqual([])
+    // The mini is not paused: other issues go on.
+    expect(existsSync(paths.pauseFile)).toBe(false)
+    // A person runs it by hand, and that job ends the ordinary way: the hold is lifted.
+    const byHand = submitJob(paths, "STEP-1", null, new Date("2026-09-24T12:10:00.000Z"))
+    moveJob(paths, byHand.id, "pending", "done", { endedAt: "2026-09-24T12:40:00.000Z", result: { status: "done", reason: "done", prUrl: null, branch: null, costUsd: null, turns: null, minutes: 30 } })
+    expect(heldBackIssues(paths)).toEqual(new Set())
   })
 
   it("count a worker that could not be started", () => {
@@ -220,36 +226,37 @@ describe("two early losses in a row", () => {
     })
     submitJob(paths, "STEP-1", null, new Date("2026-09-24T11:00:00.000Z"))
     superviseJobs(deps)
-    submitJob(paths, "STEP-2", null, new Date("2026-09-24T11:01:00.000Z"))
-    superviseJobs(deps)
-    expect(existsSync(paths.pauseFile)).toBe(true)
+    submitJob(paths, "STEP-1", null, new Date("2026-09-24T11:01:00.000Z"))
+    superviseJobs({ ...deps, now: () => new Date("2026-09-24T12:00:10.000Z") })
+    expect(heldBackIssues(paths)).toEqual(new Set(["STEP-1"]))
   })
 
-  it("do not count a worker that ran a while, one lost to a reboot, or one a finished job came between", () => {
+  it("do not count a worker that ran a while, one lost to a reboot, or a job of the issue that ended otherwise in between", () => {
     const late = setup({ isAlive: () => false })
-    running(late.paths, "STEP-1", { startedAt: "2026-09-24T11:30:00.000Z" })
+    lose(late.paths, "STEP-1", "2026-09-24T11:00:00.000Z", "2026-09-24T11:30:00.000Z")
     superviseJobs(late.deps)
-    running(late.paths, "STEP-2", { startedAt: "2026-09-24T11:55:00.000Z" })
-    superviseJobs(late.deps)
-    expect(existsSync(late.paths.pauseFile)).toBe(false)
+    lose(late.paths, "STEP-1", "2026-09-24T11:50:00.000Z", "2026-09-24T11:55:00.000Z")
+    superviseJobs({ ...late.deps, now: () => new Date("2026-09-24T12:01:00.000Z") })
+    expect(heldBackIssues(late.paths)).toEqual(new Set())
 
     const reboot = setup({ isAlive: () => false, bootAt: new Date("2026-09-24T11:58:00.000Z") })
-    running(reboot.paths, "STEP-1", { startedAt: "2026-09-24T11:55:00.000Z" })
+    lose(reboot.paths, "STEP-1", "2026-09-24T11:50:00.000Z", "2026-09-24T11:55:00.000Z")
     superviseJobs(reboot.deps)
-    running(reboot.paths, "STEP-2", { startedAt: "2026-09-24T11:59:00.000Z" })
-    superviseJobs(reboot.deps)
-    expect(existsSync(reboot.paths.pauseFile)).toBe(false)
+    lose(reboot.paths, "STEP-1", "2026-09-24T11:58:30.000Z", "2026-09-24T11:59:00.000Z")
+    superviseJobs({ ...reboot.deps, now: () => new Date("2026-09-24T12:01:00.000Z") })
+    expect(heldBackIssues(reboot.paths)).toEqual(new Set())
 
     const between = setup({ isAlive: () => false })
-    deadEarly(between.paths, "STEP-1", "2026-09-24T11:55:00.000Z")
+    lose(between.paths, "STEP-1", "2026-09-24T11:50:00.000Z", "2026-09-24T11:55:00.000Z")
     superviseJobs(between.deps)
-    const ok = submitJob(between.paths, "STEP-5", null, new Date("2026-09-24T11:56:00.000Z"))
-    moveJob(between.paths, ok.id, "pending", "done", { endedAt: "2026-09-24T12:00:30.000Z", result: { status: "done", reason: "done", prUrl: null, branch: null, costUsd: null, turns: null, minutes: 4 } })
-    deadEarly(between.paths, "STEP-2", "2026-09-24T11:58:00.000Z")
+    const ok = submitJob(between.paths, "STEP-1", null, new Date("2026-09-24T11:56:00.000Z"))
+    moveJob(between.paths, ok.id, "pending", "done", { endedAt: "2026-09-24T12:00:30.000Z", result: { status: "skipped", reason: "the issue is In Review, not Ready", prUrl: null, branch: null, costUsd: null, turns: null, minutes: 0 } })
+    lose(between.paths, "STEP-1", "2026-09-24T11:57:00.000Z", "2026-09-24T11:58:00.000Z")
     superviseJobs({ ...between.deps, now: () => new Date("2026-09-24T12:01:00.000Z") })
-    expect(existsSync(between.paths.pauseFile)).toBe(false)
+    expect(heldBackIssues(between.paths)).toEqual(new Set())
   })
 })
+
 
 describe("isWorkerAlive", () => {
   it("counts a worker as alive when ps itself fails, rather than write a live one off", () => {

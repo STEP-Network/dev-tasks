@@ -36,7 +36,7 @@ export interface JobRecord {
   /** When the runner began the SDK session, after preparing the worktree: agentd's backstop counts the wall clock from here. */
   sessionStartedAt?: string
   killRequestedAt?: string
-  /** Set by agentd when the worker died within minutes of its start, or never started: two in a row pause the mini. */
+  /** Set by agentd when the worker died within minutes of its start, or never started: two in a row hold the issue back (heldBackIssues). */
   lostEarly?: boolean
   endedAt?: string
   result?: JobResult
@@ -64,6 +64,23 @@ export function submitJob(paths: AgentPaths, issue: string, model: string | null
   const job: JobRecord = { id: `${issue}-${stamp}`, issue, kind: "develop", model, submittedAt: now.toISOString() }
   writeJsonAtomic(jobPath(paths, "pending", job.id), job)
   return job
+}
+
+/**
+ * Issues whose last two jobs were both lost early: a runner that dies before
+ * it claims leaves its issue Ready, and the next job for it would most likely
+ * die the same way. The digest offers them no more until a person runs one
+ * by hand (agentctl job submit), and a job that ends any other way lifts it.
+ */
+export function heldBackIssues(paths: AgentPaths): Set<string> {
+  const byIssue = new Map<string, JobRecord[]>()
+  for (const job of listJobs(paths, "done")) if (job.endedAt) byIssue.set(job.issue, [...(byIssue.get(job.issue) ?? []), job])
+  const held = new Set<string>()
+  for (const [issue, jobs] of byIssue) {
+    const lastTwo = jobs.sort((a, b) => a.endedAt!.localeCompare(b.endedAt!)).slice(-2)
+    if (lastTwo.length === 2 && lastTwo.every((j) => j.lostEarly)) held.add(issue)
+  }
+  return held
 }
 
 /** false when the job is no longer in `from` (another process moved it first). */
