@@ -5,17 +5,17 @@ import { fakeExec } from "../../__tests__/fakes.ts"
 import { PROBE_PROMPT, probeHooks, probeVerdict } from "../probe.ts"
 import type { QueryFn, SdkMessage } from "../run.ts"
 
-const INIT: SdkMessage = { type: "system", subtype: "init", plugins: [{ name: "dev-tasks", path: "/p" }] }
+const INIT: SdkMessage = { type: "system", subtype: "init", apiKeySource: "none", plugins: [{ name: "dev-tasks", path: "/p" }] }
 const PLUGIN_BLOCK: SdkMessage = { type: "user", message: { content: [{ type: "tool_result", content: "BLOCKED: Destructive command detected: 'git reset --hard'" }] } }
 const WORKER_BLOCK: SdkMessage = { type: "user", message: { content: [{ type: "tool_result", content: "Workers never push. The launcher pushes your commits after you report." }] } }
 
 describe("probeVerdict", () => {
-  it("finds both block messages and the loaded plugins in the session's messages", () => {
-    expect(probeVerdict([INIT, PLUGIN_BLOCK, WORKER_BLOCK])).toEqual({ pluginHookFired: true, workerGuardFired: true, loadedPlugins: ["dev-tasks"] })
+  it("finds both block messages, the loaded plugins and what the session bills in its messages", () => {
+    expect(probeVerdict([INIT, PLUGIN_BLOCK, WORKER_BLOCK])).toEqual({ pluginHookFired: true, workerGuardFired: true, loadedPlugins: ["dev-tasks"], apiKeySource: "none" })
   })
 
   it("reports what did not fire", () => {
-    expect(probeVerdict([{ type: "result", subtype: "success" }])).toEqual({ pluginHookFired: false, workerGuardFired: false, loadedPlugins: [] })
+    expect(probeVerdict([{ type: "result", subtype: "success" }])).toEqual({ pluginHookFired: false, workerGuardFired: false, loadedPlugins: [], apiKeySource: null })
   })
 })
 
@@ -34,11 +34,12 @@ describe("probeHooks", () => {
       })()
     }
     expect(await probeHooks({ query, config, exec: f.exec, claudeToken: null, home: "/Users/eve" })).toEqual({
-      pluginHookFired: true, workerGuardFired: true, loadedPlugins: ["dev-tasks"],
+      pluginHookFired: true, workerGuardFired: true, loadedPlugins: ["dev-tasks"], apiKeySource: "none",
     })
-    expect(f.lines()[0]).toMatch(/^git init -b staging \S*hook-probe-/)
+    expect(f.lines()[0]).toMatch(/^git -c core\.hooksPath=\/dev\/null -c core\.fsmonitor=false init -b staging \S*hook-probe-/)
     expect(seen[0].prompt).toBe(PROBE_PROMPT)
-    expect(seen[0].options).toMatchObject({ maxTurns: 8, maxBudgetUsd: 1, cwd: expect.stringMatching(/hook-probe-/) })
+    // The worker's own settings, the main checkout's project config included, capped.
+    expect(seen[0].options).toMatchObject({ maxTurns: 8, maxBudgetUsd: 1, cwd: expect.stringMatching(/hook-probe-/), projectConfigRoot: "/Users/eve/polads" })
     expect(seen[0].options.outputFormat).toBeUndefined()
   })
 
@@ -49,7 +50,7 @@ describe("probeHooks", () => {
         throw new Error("spawn claude ENOENT")
       })()
     expect(await probeHooks({ query, config, exec: fakeExec().exec, claudeToken: null, home: "/Users/eve" })).toEqual({
-      pluginHookFired: false, workerGuardFired: false, loadedPlugins: [],
+      pluginHookFired: false, workerGuardFired: false, loadedPlugins: [], apiKeySource: null,
     })
   })
 })

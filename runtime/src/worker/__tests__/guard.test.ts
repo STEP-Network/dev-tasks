@@ -87,7 +87,7 @@ describe("workerPathDenial", () => {
       ["Read", { file_path: "~/.config/agentd/slack.env" }],
       ["Read", { file_path: join(worktree, "lib", "key.txt") }],
       ["Read", { file_path: join(worktree, ".env.local") }],
-      ["Read", { file_path: ".env.example" }],
+      ["Read", { file_path: ".env.production" }],
       ["Write", { file_path: join(worktree, ".env") }],
       ["Grep", { pattern: "KEY", path: join(home, ".config") }],
       ["Grep", { pattern: "KEY", path: worktree, glob: ".env*" }],
@@ -100,6 +100,48 @@ describe("workerPathDenial", () => {
     ] as const) {
       expect(workerPathDenial(tool, input, scope), `${tool} ${JSON.stringify(input)}`).toMatch(SECRETS)
     }
+  })
+
+  it("lets the tracked .env.example template through, and nothing that only starts with its name", () => {
+    const { worktree, scope } = machine()
+    expect(workerPathDenial("Read", { file_path: ".env.example" }, scope)).toBeNull()
+    expect(workerPathDenial("Edit", { file_path: join(worktree, ".env.example") }, scope)).toBeNull()
+    expect(workerBashDenial("git diff -- .env.example")).toBeNull()
+    expect(workerPathDenial("Read", { file_path: ".env.example.local" }, scope)).toMatch(SECRETS)
+    expect(workerBashDenial("cat .env.example.local")).toMatch(SECRETS)
+  })
+
+  it("takes a relative path from the session's own directory, which a cd can move", () => {
+    const { home, worktree, scope } = machine()
+    expect(workerPathDenial("Grep", { pattern: "lin_api", path: "." }, scope, home)).toMatch(SECRETS)
+    expect(workerPathDenial("Grep", { pattern: "lin_api", path: "." }, scope, worktree)).toBeNull()
+    expect(workerPathDenial("Write", { file_path: "notes.md" }, scope, home)).toMatch(/^Workers write only inside their worktree/)
+  })
+
+  it("knows ~/.config by where it really is when it is a symlink", () => {
+    const { home, scope } = machine()
+    const other = mkdtempSync(join(tmpdir(), "agentd-guard-home-"))
+    mkdirSync(join(other, "dotfiles", "config", "agentd"), { recursive: true })
+    symlinkSync(join(other, "dotfiles", "config"), join(other, ".config"))
+    const linked = { ...scope, home: other }
+    expect(workerPathDenial("Read", { file_path: join(other, "dotfiles", "config", "agentd", "slack.env") }, linked)).toMatch(SECRETS)
+    expect(workerPathDenial("Read", { file_path: join(home, "dotfiles", "notes.md") }, scope)).toBeNull()
+  })
+
+  it("reads Grep's glob the way the tool splits it, and lets an exclusion through", () => {
+    const { scope } = machine()
+    expect(workerPathDenial("Grep", { pattern: "KEY", glob: "*.ts,.env*" }, scope)).toMatch(SECRETS)
+    expect(workerPathDenial("Grep", { pattern: "KEY", glob: "src/**/*.ts .env.local" }, scope)).toMatch(SECRETS)
+    expect(workerPathDenial("Grep", { pattern: "KEY", glob: "*.{ts,tsx} !.env*" }, scope)).toBeNull()
+  })
+
+  it("refuses changing the agent configuration Claude Code runs outside the sandbox, and lets it be read", () => {
+    const { worktree, scope } = machine()
+    for (const file of [join(".claude", "hooks", "e2e-gate-guard.sh"), join(".claude", "settings.json"), join(".claude", "settings.local.json"), ".mcp.json"]) {
+      expect(workerPathDenial("Write", { file_path: join(worktree, file) }, scope), file).toMatch(/^Workers never change the project's agent configuration/)
+      expect(workerPathDenial("Read", { file_path: join(worktree, file) }, scope), file).toBeNull()
+    }
+    expect(workerPathDenial("Edit", { file_path: join(worktree, ".claude", "rules", "copy.md") }, scope)).toBeNull()
   })
 
   it("refuses writing outside the worktree, through a symlink too, and git's own files", () => {
@@ -134,6 +176,10 @@ describe("denyWorkerPaths and workerToolDenial", () => {
       hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: expect.stringMatching(SECRETS) },
     })
     expect(await hook({ hook_event_name: "PreToolUse", tool_name: "Read", tool_input: { file_path: "lib/x.ts" } })).toEqual({})
+    // The hook takes a relative path from the cwd in its input.
+    expect(await hook({ hook_event_name: "PreToolUse", tool_name: "Grep", tool_input: { pattern: "k", path: "." }, cwd: home })).toMatchObject({
+      hookSpecificOutput: { permissionDecision: "deny" },
+    })
     expect(workerToolDenial("Read", input, scope)).toMatch(SECRETS)
     expect(workerToolDenial("Bash", { command: "cat ~/.config/linear/.env" }, scope)).toMatch(SECRETS)
     expect(workerToolDenial("Bash", { command: "git push" }, scope)).toMatch(/^Workers never push/)

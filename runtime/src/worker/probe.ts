@@ -3,14 +3,17 @@
  * A throwaway repository, two commands no worker may run, and a verdict read
  * from the session's own messages. `git reset --hard` is refused only by the
  * plugin's bash-guard (gate a), so it proves the PLUGIN's hooks load;
- * `git push` is refused by the worker's own guard. Spends a few cents.
+ * `git push` is refused by the worker's own guard. The session takes its
+ * project settings from the main checkout, as a worker's does
+ * (projectConfigRoot), so a second copy of the plugin enabled there shows in
+ * loadedPlugins here first. Spends a few cents.
  */
 
 import { mkdtempSync } from "node:fs"
 import { homedir, tmpdir } from "node:os"
 import { join } from "node:path"
 import type { AgentConfig } from "../config.ts"
-import { must, type Exec } from "./git.ts"
+import { mustGit, type Exec } from "./git.ts"
 import { workerEnv } from "./guard.ts"
 import { sdkOptions, type QueryFn } from "./run.ts"
 
@@ -26,24 +29,27 @@ export interface ProbeVerdict {
   pluginHookFired: boolean
   workerGuardFired: boolean
   loadedPlugins: string[]
+  /** What the session bills: "none" is the subscription (spec 1), and the worker refuses anything that is an API key. */
+  apiKeySource: string | null
 }
 
 export function probeVerdict(messages: unknown[]): ProbeVerdict {
   const text = messages.map((m) => JSON.stringify(m)).join("\n")
   const init = messages.find((m) => (m as { type?: string; subtype?: string })?.type === "system" && (m as { subtype?: string }).subtype === "init") as
-    | { plugins?: Array<{ name: string }> }
+    | { plugins?: Array<{ name: string }>; apiKeySource?: unknown }
     | undefined
   return {
     pluginHookFired: text.includes("Destructive command detected"),
     workerGuardFired: text.includes("Workers never push"),
     loadedPlugins: (init?.plugins ?? []).map((p) => p.name),
+    apiKeySource: typeof init?.apiKeySource === "string" ? init.apiKeySource : null,
   }
 }
 
 export async function probeHooks(deps: { query: QueryFn; config: AgentConfig; exec: Exec; claudeToken: string | null; home?: string }): Promise<ProbeVerdict> {
   const repo = mkdtempSync(join(tmpdir(), "hook-probe-"))
-  await must(deps.exec, "git", ["init", "-b", "staging", repo])
-  await must(deps.exec, "git", ["-C", repo, "-c", "user.name=probe", "-c", "user.email=probe@localhost", "commit", "--allow-empty", "-m", "probe"])
+  await mustGit(deps.exec, ["init", "-b", "staging", repo])
+  await mustGit(deps.exec, ["-C", repo, "-c", "user.name=probe", "-c", "user.email=probe@localhost", "commit", "--allow-empty", "-m", "probe"])
   const options = sdkOptions({
     config: deps.config,
     cwd: repo,

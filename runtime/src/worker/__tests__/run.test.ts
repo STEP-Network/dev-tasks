@@ -44,7 +44,9 @@ function setup(
   const f = fakeExec([
     ...(opts.exec ?? []),
     [/gh pr list/, { stdout: opts.gh ?? "" }],
+    // A new branch: not on origin, and no local one.
     [/ls-remote/, { code: 2 }],
+    [/rev-parse --verify/, { code: 1 }],
     [/rev-list --count/, { stdout: "2\n" }],
     [/gh pr create/, { stdout: `${PR}\n` }],
   ])
@@ -134,6 +136,31 @@ describe("runJob", () => {
     expect(outbox().at(-1)).toBe("STEP-7 blocked: the worker process failed: Claude Code process exited with code 1")
   })
 
+  it("refuses to resume a branch that changes the agent configuration, before any session, and says why", async () => {
+    const { deps, job, q, fake, outbox } = setup({ exec: [[/ls-remote/, { code: 0 }], [/diff --name-only/, { stdout: ".claude/hooks/e2e-gate-guard.sh\n" }]] })
+    const reason = "the branch changes the agent configuration (.claude/hooks/e2e-gate-guard.sh), so a person must review it before a worker continues it"
+    expect(await runJob(deps, job.id)).toMatchObject({ status: "blocked", reason })
+    expect(q.seen).toEqual([])
+    expect(fake.issues.get("STEP-7")!.state).toBe("On hold")
+    expect(outbox().at(-1)).toBe(`STEP-7 blocked: ${reason}`)
+  })
+
+  it("stops before any tool runs when the session never sent its init message, hook events aside", async () => {
+    const { deps, job, f } = setup({ messages: [DONE] })
+    expect(await runJob(deps, job.id)).toMatchObject({ status: "blocked", reason: "the session sent no init message, so the plugin and billing checks could not run" })
+    expect(f.lines().some((l) => l.startsWith("gh pr create"))).toBe(false)
+    const hookFirst = setup({ messages: [{ type: "system", subtype: "hook_started", hook_event_name: "SessionStart" }, INIT, DONE] })
+    expect(await runJob(hookFirst.deps, hookFirst.job.id)).toMatchObject({ status: "done" })
+  })
+
+  it("keeps the reason a session that never started gives", async () => {
+    const failed: SdkMessage = { type: "result", subtype: "error_during_execution", errors: ["sandbox dependencies are missing"] }
+    const { deps, job } = setup({ messages: [failed] })
+    expect(await runJob(deps, job.id)).toMatchObject({
+      status: "blocked", reason: "the session sent no init message, so the plugin and billing checks could not run (sandbox dependencies are missing)",
+    })
+  })
+
   it("is blocked, with nothing pushed, when the worktree cannot be prepared", async () => {
     const { deps, job, q, f } = setup({ exec: [[/pnpm install/, { code: 1, stderr: "ERR_PNPM_OUTDATED_LOCKFILE" }]] })
     expect(await runJob(deps, job.id)).toMatchObject({ status: "blocked", reason: expect.stringMatching(/^the worktree could not be prepared: pnpm install .* failed \(1\): ERR_PNPM_OUTDATED_LOCKFILE/) })
@@ -141,12 +168,22 @@ describe("runJob", () => {
     expect(f.lines().some((l) => l.includes(" push "))).toBe(false)
   })
 
-  it("still records the job as done, blocked, when Linear fails while finishing (Review Focus 5)", async () => {
+  it("still records the job as done once, blocked but with its PR, when Linear fails while finishing (Review Focus 5)", async () => {
     const { deps, job, paths, outbox } = setup({ failOn: ["attachLink"] })
-    expect(await runJob(deps, job.id)).toMatchObject({ status: "blocked", reason: expect.stringMatching(/^finishing the job failed: Linear: attachLink failed/) })
+    expect(await runJob(deps, job.id)).toMatchObject({ status: "blocked", reason: expect.stringMatching(/^finishing the job failed: Linear: attachLink failed/), prUrl: PR })
     expect(listJobs(paths, "done")).toHaveLength(1)
+    expect(listJobs(paths, "done")[0].result).toMatchObject({ prUrl: PR })
     expect(listJobs(paths, "running")).toEqual([])
     expect(outbox().at(-1)).toMatch(/^STEP-7: finishing the job failed/)
+  })
+
+  it("is blocked with the push's own error, and no PR, when the push fails", async () => {
+    const { deps, job, paths, outbox } = setup({ exec: [[/ push /, { code: 1, stderr: "remote: Repository not found." }]] })
+    expect(await runJob(deps, job.id)).toMatchObject({
+      status: "blocked", prUrl: null, reason: expect.stringMatching(/^finishing the job failed: git -C .* push -u origin HEAD:refs\/heads\/STEP-7-fix-the-date failed \(1\): remote: Repository not found\.$/),
+    })
+    expect(listJobs(paths, "done")).toHaveLength(1)
+    expect(outbox()).toEqual(["claimed STEP-7 Fix the date", expect.stringMatching(/^STEP-7: finishing the job failed/)])
   })
 })
 
@@ -175,13 +212,14 @@ describe("modelFor, checkPlugins and checkBilling", () => {
 
 describe("sdkOptions", () => {
   const config = ConfigSchema.parse({ mini: "eve", repo: { path: "/Users/eve/polads" }, pluginRoot: "/Users/eve/dev-tasks/plugin", slack: { allowedUsers: ["UNATE"] } })
+  const WT = "/Users/eve/.agentd/worktrees/STEP-7-fix-the-date"
   const options = () =>
-    sdkOptions({ config, cwd: "/w", model: "sonnet", abortController: new AbortController(), rules: "R", pnpmStore: "/store", env: { PATH: "/bin" }, home: "/Users/eve" }) as any
+    sdkOptions({ config, cwd: WT, model: "sonnet", abortController: new AbortController(), rules: "R", pnpmStore: "/store", env: { PATH: "/bin" }, home: "/Users/eve" }) as any
 
   it("wires the plugin, the project settings, the guard, the sandbox and the limits", async () => {
     const o = options()
     expect(o).toMatchObject({
-      cwd: "/w", model: "sonnet", maxTurns: 250, maxBudgetUsd: 15, permissionMode: "acceptEdits",
+      cwd: WT, model: "sonnet", maxTurns: 250, maxBudgetUsd: 15, permissionMode: "acceptEdits",
       settingSources: ["project"],
       plugins: [{ type: "local", path: "/Users/eve/dev-tasks/plugin", skipMcpDiscovery: true }],
       disallowedTools: ["WebFetch", "WebSearch", "Agent", "Task", "Skill"],
@@ -190,15 +228,29 @@ describe("sdkOptions", () => {
       env: { PATH: "/bin" },
     })
     expect(o.sandbox).toMatchObject({ enabled: true, failIfUnavailable: true, allowUnsandboxedCommands: false })
+    expect(o.sandbox.network).toEqual({ allowedDomains: ["registry.npmjs.org"], allowLocalBinding: true, strictAllowlist: true })
     expect(o.sandbox.filesystem.allowWrite).toEqual(["/Users/eve/polads/.git", "/store"])
     expect(o.hooks.PreToolUse[0].matcher).toBe("Bash")
     expect(await o.canUseTool("WebFetch", {})).toMatchObject({ behavior: "deny" })
   })
 
+  it("takes the project's settings, hooks and MCP servers from the main checkout, never from the worker's branch", () => {
+    expect(options()).toMatchObject({ projectConfigRoot: "/Users/eve/polads", strictMcpConfig: true })
+  })
+
   it("keeps the worker away from the machine's secrets: no read of ~/.config or a .env file, no token in its commands", async () => {
     const o = options()
     expect(o.sandbox.filesystem.denyRead).toEqual(["/Users/eve/.config", "/Users/eve/**/.env*"])
+    expect(o.sandbox.filesystem.allowRead).toEqual(["/Users/eve/**/.env.example"])
     expect(o.sandbox.credentials.envVars).toEqual([{ name: "CLAUDE_CODE_OAUTH_TOKEN", mode: "deny" }])
+    expect(o.settings.permissions.deny).toEqual([
+      "Read(~/.config/**)",
+      "Edit(~/.config/**)",
+      `Edit(/${WT}/.claude/hooks/**)`,
+      `Edit(/${WT}/.claude/settings*.json)`,
+      `Edit(/${WT}/.mcp.json)`,
+    ])
+    expect(o.settings.permissions.deny[2]).toBe("Edit(//Users/eve/.agentd/worktrees/STEP-7-fix-the-date/.claude/hooks/**)")
     expect(await o.canUseTool("Read", { file_path: "/Users/eve/.config/linear/.env" })).toMatchObject({
       behavior: "deny", message: expect.stringMatching(/^Workers never read or write ~\/\.config or \.env files/),
     })
@@ -208,17 +260,28 @@ describe("sdkOptions", () => {
       hookSpecificOutput: { permissionDecision: "deny" },
     })
     expect(await pathHook.hooks[0]({ hook_event_name: "PreToolUse", tool_name: "Write", tool_input: { file_path: "/Users/eve/polads/lib/x.ts" } })).toMatchObject({
-      hookSpecificOutput: { permissionDecision: "deny", permissionDecisionReason: "Workers write only inside their worktree, /w." },
+      hookSpecificOutput: { permissionDecision: "deny", permissionDecisionReason: `Workers write only inside their worktree, ${WT}.` },
     })
-    expect(await pathHook.hooks[0]({ hook_event_name: "PreToolUse", tool_name: "Edit", tool_input: { file_path: "/w/lib/x.ts" } })).toEqual({})
+    expect(await pathHook.hooks[0]({ hook_event_name: "PreToolUse", tool_name: "Edit", tool_input: { file_path: `${WT}/lib/x.ts` } })).toEqual({})
+    expect(await pathHook.hooks[0]({ hook_event_name: "PreToolUse", tool_name: "Edit", tool_input: { file_path: `${WT}/.claude/hooks/e2e-gate-guard.sh` } })).toMatchObject({
+      hookSpecificOutput: { permissionDecision: "deny", permissionDecisionReason: expect.stringMatching(/^Workers never change the project's agent configuration/) },
+    })
   })
 
-  it("never lets the worker rewrite git's pointers, which would send the runner's own git elsewhere", () => {
+  it("never lets the worker rewrite git's pointers or the agent configuration, which run outside the sandbox", () => {
     expect(options().sandbox.filesystem.denyWrite).toEqual([
-      "/w/.git",
+      `${WT}/.git`,
       "/Users/eve/polads/.git/commondir",
+      "/Users/eve/polads/.git/worktrees/STEP-7-fix-the-date/commondir",
+      "/Users/eve/polads/.git/worktrees/STEP-7-fix-the-date/gitdir",
+      "/Users/eve/polads/.git/worktrees/STEP-7-fix-the-date/config.worktree",
       "/Users/eve/polads/.git/worktrees/*/commondir",
       "/Users/eve/polads/.git/worktrees/*/gitdir",
+      "/Users/eve/polads/.git/worktrees/*/config.worktree",
+      `${WT}/.claude/hooks`,
+      `${WT}/.claude/settings.json`,
+      `${WT}/.claude/settings.local.json`,
+      `${WT}/.mcp.json`,
     ])
   })
 })

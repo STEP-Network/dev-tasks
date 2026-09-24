@@ -11,7 +11,7 @@
 
 import type { Options } from "@anthropic-ai/claude-agent-sdk"
 import { readFileSync } from "node:fs"
-import { join } from "node:path"
+import { basename, join } from "node:path"
 import { agentPaths, assertProfileMini, loadConfig, readProfileMini, type AgentConfig, type AgentPaths } from "../config.ts"
 import { readJson } from "../fsq.ts"
 import { jobPath, moveJob, type JobRecord, type JobResult } from "../jobs.ts"
@@ -20,9 +20,9 @@ import { enqueueSlack } from "../outbox.ts"
 import { loadClaudeOauthToken } from "../secrets.ts"
 import { branchNameFor, createLinearTracker, type Tracker, type TrackerIssue } from "../tracker.ts"
 import { buildBrief, WORKER_RESULT_SCHEMA, workerRules, type BriefInput } from "./brief.ts"
-import { finalize } from "./finalize.ts"
-import { prepareWorktree, realExec, type Exec } from "./git.ts"
-import { denyBannedBash, denyWorkerPaths, workerEnv, workerToolDenial } from "./guard.ts"
+import { finalize, FinalizeFailed } from "./finalize.ts"
+import { prepareWorktree, realExec, WorktreeRefused, type Exec } from "./git.ts"
+import { denyBannedBash, denyWorkerPaths, ENV_TEMPLATE, workerEnv, workerToolDenial } from "./guard.ts"
 import { toOutcome, type Outcome, type ResultMessageLike } from "./outcome.ts"
 
 export type SdkMessage = { type: string; subtype?: string; [key: string]: unknown }
@@ -77,6 +77,9 @@ export interface SdkOptionsInput {
   home: string
 }
 
+/** git's files that say where a worktree's repository, config and common directory are. */
+const GIT_POINTERS = ["commondir", "gitdir", "config.worktree"]
+
 /** Typed as the SDK's own Options: a misspelt or retired option fails the typecheck. */
 export function sdkOptions(o: SdkOptionsInput): Options {
   const repoGit = join(o.config.repo.path, ".git")
@@ -103,7 +106,28 @@ export function sdkOptions(o: SdkOptionsInput): Options {
     // PolAds's CLAUDE.md and project hooks. Not "user": that is the front door's
     // settings (Remote Control, the status line), not the worker's.
     settingSources: ["project"],
+    // The project's settings, hooks and .claude trees come from the main
+    // checkout, which agentd keeps at the base, not from the branch in the
+    // worktree: a branch's own copy is a worker's, unreviewed, and hooks run
+    // outside the sandbox. No MCP server but the ones passed here (none).
+    projectConfigRoot: o.config.repo.path,
+    strictMcpConfig: true,
     plugins: [{ type: "local", path: o.config.pluginRoot, skipMcpDiscovery: true }],
+    // Claude Code's own deny rules, beside the hook below: the secrets, and the
+    // agent configuration in the worktree (`//` is an absolute path). A deny
+    // rule has no exceptions, so .env files, where .env.example must stay
+    // readable, are held by the hook and the sandbox.
+    settings: {
+      permissions: {
+        deny: [
+          "Read(~/.config/**)",
+          "Edit(~/.config/**)",
+          `Edit(/${o.cwd}/.claude/hooks/**)`,
+          `Edit(/${o.cwd}/.claude/settings*.json)`,
+          `Edit(/${o.cwd}/.mcp.json)`,
+        ],
+      },
+    },
     hooks: {
       PreToolUse: [
         { matcher: "Bash", hooks: [denyBannedBash] },
@@ -116,17 +140,33 @@ export function sdkOptions(o: SdkOptionsInput): Options {
       failIfUnavailable: true,
       autoAllowBashIfSandboxed: true,
       allowUnsandboxedCommands: false,
-      network: { allowedDomains: ["registry.npmjs.org"], allowLocalBinding: true },
+      // strictAllowlist: another host is refused outright, never a prompt (decision 7).
+      network: { allowedDomains: ["registry.npmjs.org"], allowLocalBinding: true, strictAllowlist: true },
       filesystem: {
         // The worktree is the cwd and writable by default. Commits also write the
         // repository's shared .git, and `pnpm add` writes the pnpm store. The
         // sandbox itself keeps .git/config and .git/hooks read-only.
         allowWrite: [repoGit, ...(o.pnpmStore ? [o.pnpmStore] : [])],
-        // git's pointers between the worktree and the repository. Rewritten, they
-        // would point the runner's own git, which runs outside this sandbox, at a
-        // config the worker wrote.
-        denyWrite: [join(o.cwd, ".git"), join(repoGit, "commondir"), join(repoGit, "worktrees", "*", "commondir"), join(repoGit, "worktrees", "*", "gitdir")],
+        denyWrite: [
+          // git's pointers between the worktree and the repository. Rewritten, they
+          // would point the runner's own git, which runs outside this sandbox, at a
+          // config the worker wrote. git reads a commondir in any git directory,
+          // the main one included, so that one is refused before it exists. This
+          // worktree's own are named outright as well as by wildcard.
+          join(o.cwd, ".git"),
+          join(repoGit, "commondir"),
+          ...GIT_POINTERS.map((file) => join(repoGit, "worktrees", basename(o.cwd), file)),
+          ...GIT_POINTERS.map((file) => join(repoGit, "worktrees", "*", file)),
+          // The project's agent configuration: Claude Code runs these hooks, and
+          // would load these settings and MCP servers, outside this sandbox.
+          join(o.cwd, ".claude", "hooks"),
+          join(o.cwd, ".claude", "settings.json"),
+          join(o.cwd, ".claude", "settings.local.json"),
+          join(o.cwd, ".mcp.json"),
+        ],
         denyRead: [join(o.home, ".config"), join(o.home, "**", ".env*")],
+        // PolAds's tracked template holds no secret, and git stats every tracked file.
+        allowRead: [join(o.home, "**", ENV_TEMPLATE)],
       },
       // The worker's own process needs the Claude token. Its commands never do.
       credentials: { envVars: [{ name: "CLAUDE_CODE_OAUTH_TOKEN", mode: "deny" }] },
@@ -182,14 +222,19 @@ export async function runJob(deps: RunDeps, jobId: string): Promise<JobResult> {
   const limits = { maxTurns: config.worker.maxTurns, maxBudgetUsd: config.worker.maxBudgetUsd, wallClockMinutes: config.worker.wallClockMinutes }
   const autoMerge = readAutoMergePolicy(config.repo.path, config.repo.base) === "auto-after-checks-and-review"
   const finishWith = async (worktree: string | null, outcome: Outcome): Promise<JobResult> => {
+    let result: JobResult
     try {
       const fin = await finalize({ exec, tracker, paths, config, issue, branch, worktree, autoMerge, model, minutes: minutes(), now: deps.now }, outcome)
-      return finish({ status: fin.status, reason: fin.reason, prUrl: fin.prUrl, branch, costUsd: outcome.costUsd, turns: outcome.turns, minutes: minutes() })
+      result = { status: fin.status, reason: fin.reason, prUrl: fin.prUrl, branch, costUsd: outcome.costUsd, turns: outcome.turns, minutes: minutes() }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
       enqueueSlack(paths, { kind: "post", channel: "agents", text: `${issue.id}: finishing the job failed (${message}). A person needs to look.` }, deps.now())
-      return finish({ status: "blocked", reason: `finishing the job failed: ${message}`, prUrl: null, branch, costUsd: outcome.costUsd, turns: outcome.turns, minutes: minutes() })
+      // A PR that opened before the failure is still this job's.
+      const prUrl = error instanceof FinalizeFailed ? error.prUrl : null
+      result = { status: "blocked", reason: `finishing the job failed: ${message}`, prUrl, branch, costUsd: outcome.costUsd, turns: outcome.turns, minutes: minutes() }
     }
+    // Outside the try: the job reaches done once, whatever finalize did (Review Focus 5).
+    return finish(result)
   }
   const blockedBefore = (reason: string): Outcome => ({ status: "blocked", reason, report: null, costUsd: null, turns: null, sessionId: null })
 
@@ -198,7 +243,8 @@ export async function runJob(deps: RunDeps, jobId: string): Promise<JobResult> {
   try {
     worktree = await prepareWorktree(exec, { repo: config.repo.path, worktreesDir: paths.worktrees, branch, base: config.repo.base })
   } catch (error) {
-    return finishWith(null, blockedBefore(`the worktree could not be prepared: ${error instanceof Error ? error.message : String(error)}`))
+    const message = error instanceof Error ? error.message : String(error)
+    return finishWith(null, blockedBefore(error instanceof WorktreeRefused ? message : `the worktree could not be prepared: ${message}`))
   }
 
   // 3. the session
@@ -227,13 +273,20 @@ export async function runJob(deps: RunDeps, jobId: string): Promise<JobResult> {
         home: paths.home,
       }),
     })
+    let sawInit = false
     for await (const message of stream) {
       if (message.type === "system" && message.subtype === "init") {
+        sawInit = true
         initProblem = checkPlugins(message.plugins) ?? checkBilling(message.apiKeySource)
-        if (initProblem) {
-          abortController.abort()
-          break
-        }
+      } else if (!sawInit && ["assistant", "user", "result"].includes(message.type)) {
+        // The conversation began, or ended, without the checks (hook events may
+        // come first). A session that failed to start says why in its result.
+        const said = [...(Array.isArray(message.errors) ? message.errors : []), typeof message.result === "string" ? message.result : ""].filter(Boolean).join(". ")
+        initProblem = `the session sent no init message, so the plugin and billing checks could not run${said ? ` (${said})` : ""}`
+      }
+      if (initProblem) {
+        abortController.abort()
+        break
       }
       if (message.type === "result") result = message as unknown as ResultMessageLike
     }

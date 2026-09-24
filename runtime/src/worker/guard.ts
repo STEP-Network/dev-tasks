@@ -1,26 +1,43 @@
 /**
  * The worker's own last line of defence, independent of whether the plugin's
- * hooks load in an SDK session (Task 19 proves they do). Two kinds of ban:
+ * hooks load in an SDK session (Task 19 proves they do). Three kinds of ban:
  * what a worker never needs because the launcher does it (decision 2: push,
- * PR, merge), and this machine's secrets, which it never reads. ~/.config
- * holds the Linear key, the Slack tokens and the Claude token, and no task
- * needs a .env file. The sandbox (Task 12) refuses the same reads to Bash.
- * The file tools run outside it, so these checks are what holds them.
+ * PR, merge), this machine's secrets, which it never reads (~/.config holds
+ * the Linear key, the Slack tokens and the Claude token, and no task needs a
+ * .env file), and the project's agent configuration, which runs outside the
+ * sandbox. The sandbox (Task 12) refuses the same to Bash. The file tools run
+ * outside it, so these checks are what holds them.
  */
 
 import { realpathSync } from "node:fs"
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path"
 
 const SECRETS = "Workers never read or write ~/.config or .env files: this machine's secrets live there, and no task needs them."
+const AGENT_CONFIG_REASON =
+  "Workers never change the project's agent configuration (.claude/hooks, .claude/settings*.json, .mcp.json): Claude Code runs and loads it outside the sandbox."
+
+/**
+ * Paths relative to a checkout's root that Claude Code runs (hooks) or loads
+ * (settings, MCP servers) outside the sandbox. The runner also refuses to
+ * resume a branch that changes one (git.ts).
+ */
+export const AGENT_CONFIG = /^(\.claude\/hooks(\/|$)|\.claude\/settings[^/]*\.json$|\.mcp\.json$)/
+
+/** PolAds's tracked template holds no secret, and git stats every tracked file, so it is the one .env file allowed. */
+export const ENV_TEMPLATE = ".env.example"
 
 const BANS: Array<{ re: RegExp; reason: string }> = [
+  // The sandbox's network allowlist (npm's registry only) is what stops a push
+  // written some other way (`git -C x push`, a path to the binary): these
+  // name the rule for the ordinary spelling.
   { re: /(^|[\s;&|(])git\s+push\b/, reason: "Workers never push. The launcher pushes your commits after you report." },
   { re: /(^|[\s;&|(])gh\s+pr\s+(create|merge)\b/, reason: "Workers never open or merge PRs. The launcher opens the PR and arms auto-merge." },
   { re: /--admin\b/, reason: "--admin is banned outright (spec section 11)." },
   // A path segment `.config` (so not jest.config.ts) and a `.env` file name
-  // (so not process.env). The sandbox refuses the read itself: this says why.
+  // (so not process.env) other than the template. The sandbox refuses the
+  // read itself: this says why.
   { re: /(^|[\s'"=:(<>|;&/~])\.config(?![\w-])/, reason: SECRETS },
-  { re: /(^|[\s'"=:(<>|;&/])\.env/, reason: SECRETS },
+  { re: /(^|[\s'"=:(<>|;&/])\.env(?!\.example(?![\w.-]))/, reason: SECRETS },
 ]
 
 export function workerBashDenial(command: string): string | null {
@@ -29,7 +46,7 @@ export function workerBashDenial(command: string): string | null {
 }
 
 export interface WorkerScope {
-  /** The worker's own worktree: its cwd, and the only place its file tools write. */
+  /** The worker's own worktree: the only place its file tools write. */
   worktree: string
   /** The machine user's home, whose ~/.config the worker never reads. */
   home: string
@@ -66,30 +83,46 @@ function within(path: string, dir: string): boolean {
   return rel === "" || (!rel.startsWith(`..${sep}`) && rel !== ".." && !isAbsolute(rel))
 }
 
+/** Grep's glob as the tool splits it: on whitespace, then on commas outside a {a,b} group. An exclusion (!x) narrows the search, so it is not checked. */
+function grepGlobs(glob: string): string[] {
+  const parts: string[] = []
+  for (const piece of glob.split(/\s+/)) {
+    if (piece.includes("{") && piece.includes("}")) parts.push(piece)
+    else parts.push(...piece.split(","))
+  }
+  return parts.filter((p) => p && !p.startsWith("!"))
+}
+
 /**
- * Why a file tool's call is refused, or null. Every path is checked as
- * written and as it resolves, so a symlink in the worktree reaches neither
- * ~/.config nor anywhere outside the worktree. A search is refused when
- * ~/.config lies inside what it would walk.
+ * Why a file tool's call is refused, or null. A relative path is taken from
+ * `cwd`, the session's own directory (a hook's input carries it). Every path
+ * is checked as written and as it resolves, so a symlink in the worktree
+ * reaches neither ~/.config nor anywhere outside the worktree. A search is
+ * refused when ~/.config lies inside what it would walk.
  */
-export function workerPathDenial(toolName: string, input: unknown, scope: WorkerScope): string | null {
+export function workerPathDenial(toolName: string, input: unknown, scope: WorkerScope, cwd: string = scope.worktree): string | null {
   const fields = PATH_FIELDS[toolName]
   if (!fields || !input || typeof input !== "object") return null
-  const configs = [join(scope.home, ".config"), join(real(scope.home), ".config")]
+  const config = join(scope.home, ".config")
+  const configs = [config, join(real(scope.home), ".config"), real(config)]
   const worktree = real(scope.worktree)
   for (const field of fields) {
     const raw = (input as Record<string, unknown>)[field]
     if (typeof raw !== "string" || !raw) continue
-    const expanded = raw === "~" || raw.startsWith("~/") ? join(scope.home, raw.slice(1)) : raw
-    const written = resolve(scope.worktree, expanded)
-    const resolved = real(written)
-    for (const path of [written, resolved]) {
-      if (configs.some((dir) => within(path, dir) || (SEARCHES.has(toolName) && within(dir, path)))) return SECRETS
-      if (path.split(sep).some((segment) => segment.startsWith(".env"))) return SECRETS
+    for (const value of toolName === "Grep" && field === "glob" ? grepGlobs(raw) : [raw]) {
+      const expanded = value === "~" || value.startsWith("~/") ? join(scope.home, value.slice(1)) : value
+      const written = resolve(cwd, expanded)
+      const resolved = real(written)
+      for (const path of [written, resolved]) {
+        if (configs.some((dir) => within(path, dir) || (SEARCHES.has(toolName) && within(dir, path)))) return SECRETS
+        if (path.split(sep).some((segment) => segment.startsWith(".env") && segment !== ENV_TEMPLATE)) return SECRETS
+      }
+      if (!WRITES.has(toolName)) continue
+      if (!within(resolved, worktree)) return `Workers write only inside their worktree, ${scope.worktree}.`
+      const inside = relative(worktree, resolved).split(sep)
+      if (inside.includes(".git")) return "Workers never edit git's own files. Commit with git instead."
+      if (AGENT_CONFIG.test(inside.join("/"))) return AGENT_CONFIG_REASON
     }
-    if (!WRITES.has(toolName)) continue
-    if (!within(resolved, worktree)) return `Workers write only inside their worktree, ${scope.worktree}.`
-    if (relative(worktree, resolved).split(sep).includes(".git")) return "Workers never edit git's own files. Commit with git instead."
   }
   return null
 }
@@ -105,6 +138,8 @@ interface HookInputLike {
   hook_event_name: string
   tool_name?: string
   tool_input?: unknown
+  /** The session's current directory, which a Bash `cd` can move. */
+  cwd?: string
 }
 
 function deny(reason: string) {
@@ -130,7 +165,7 @@ export async function denyBannedBash(input: HookInputLike) {
 export function denyWorkerPaths(scope: WorkerScope) {
   return async (input: HookInputLike) => {
     if (input.hook_event_name !== "PreToolUse" || !input.tool_name) return {}
-    const reason = workerPathDenial(input.tool_name, input.tool_input, scope)
+    const reason = workerPathDenial(input.tool_name, input.tool_input, scope, input.cwd || scope.worktree)
     return reason ? deny(reason) : {}
   }
 }

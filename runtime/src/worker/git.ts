@@ -3,12 +3,14 @@
  * command. The runner is a plain Node process, outside the worker's hooks and
  * sandbox, so the push guard lives here in code. It pushes and opens PRs with
  * the mini's own gh login (decision 5): nothing it runs carries a token in its
- * arguments or its environment.
+ * arguments or its environment. Every git it runs turns git's hooks and
+ * fsmonitor off: the worker writes into the worktree and the shared .git, and
+ * nothing it wrote may run outside the sandbox.
  */
 
 import { execFile } from "node:child_process"
 import { join } from "node:path"
-import { workerEnv } from "./guard.ts"
+import { AGENT_CONFIG, workerEnv } from "./guard.ts"
 
 export interface ExecResult {
   code: number
@@ -16,7 +18,9 @@ export interface ExecResult {
   stderr: string
 }
 
-export type Exec = (cmd: string, args: string[], opts?: { cwd?: string; timeoutMs?: number }) => Promise<ExecResult>
+export type ExecOptions = { cwd?: string; timeoutMs?: number }
+
+export type Exec = (cmd: string, args: string[], opts?: ExecOptions) => Promise<ExecResult>
 
 export const realExec: Exec = (cmd, args, opts = {}) =>
   new Promise((resolve) => {
@@ -35,9 +39,27 @@ export const realExec: Exec = (cmd, args, opts = {}) =>
     )
   })
 
-export async function must(exec: Exec, cmd: string, args: string[], opts?: { cwd?: string; timeoutMs?: number }): Promise<string> {
+function failed(command: string, r: ExecResult): Error {
+  return new Error(`${command} failed (${r.code}): ${r.stderr.trim().slice(0, 500)}`)
+}
+
+export async function must(exec: Exec, cmd: string, args: string[], opts?: ExecOptions): Promise<string> {
   const r = await exec(cmd, args, opts)
-  if (r.code !== 0) throw new Error(`${cmd} ${args.join(" ")} failed (${r.code}): ${r.stderr.trim().slice(0, 500)}`)
+  if (r.code !== 0) throw failed(`${cmd} ${args.join(" ")}`, r)
+  return r.stdout
+}
+
+/** Ahead of every git subcommand the runner runs: no hook and no fsmonitor, whatever a config says. */
+export const SAFE_GIT = ["-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false"]
+
+export function git(exec: Exec, args: string[], opts?: ExecOptions): Promise<ExecResult> {
+  return exec("git", [...SAFE_GIT, ...args], opts)
+}
+
+/** git that must succeed. Its error names the command without the SAFE_GIT prefix, for people to read. */
+export async function mustGit(exec: Exec, args: string[], opts?: ExecOptions): Promise<string> {
+  const r = await git(exec, args, opts)
+  if (r.code !== 0) throw failed(`git ${args.join(" ")}`, r)
   return r.stdout
 }
 
@@ -58,23 +80,62 @@ export interface WorktreeOptions {
   base: string
 }
 
+/** What a person must look at before a worker may continue, as opposed to a step that failed. The message is the reason. */
+export class WorktreeRefused extends Error {}
+
+/**
+ * Where the branch starts: its own local commits when any never reached
+ * origin (a push that failed, a runner that died before it pushed), else
+ * origin's copy of the branch, else the base. So `checkout -B` below never
+ * resets a branch past a commit that exists nowhere else.
+ */
+async function startPoint(exec: Exec, o: WorktreeOptions): Promise<string> {
+  const remote = await git(exec, ["-C", o.repo, "ls-remote", "--exit-code", "--heads", "origin", o.branch])
+  // 0: origin has the branch. 2: it does not. Anything else: git could not ask.
+  if (remote.code !== 0 && remote.code !== 2) throw failed(`git ls-remote --exit-code --heads origin ${o.branch}`, remote)
+  const onOrigin = remote.code === 0
+  if (onOrigin) await mustGit(exec, ["-C", o.repo, "fetch", "origin", o.branch])
+  const local = await git(exec, ["-C", o.repo, "rev-parse", "--verify", "--quiet", `refs/heads/${o.branch}`])
+  if (local.code === 0) {
+    const elsewhere = [`origin/${o.base}`, ...(onOrigin ? [`origin/${o.branch}`] : [])]
+    const unpushed = Number.parseInt((await mustGit(exec, ["-C", o.repo, "rev-list", "--count", `refs/heads/${o.branch}`, "--not", ...elsewhere])).trim(), 10) || 0
+    if (unpushed > 0) return `refs/heads/${o.branch}`
+  }
+  return onOrigin ? `origin/${o.branch}` : `origin/${o.base}`
+}
+
 export async function prepareWorktree(exec: Exec, o: WorktreeOptions): Promise<{ path: string; resumed: boolean }> {
   const path = join(o.worktreesDir, o.branch)
-  await must(exec, "git", ["-C", o.repo, "fetch", "origin", o.base, "--prune"])
-  // A leftover from an earlier run of this issue. Its commits were pushed, or
-  // live on in the branch ref; only uncommitted changes are lost, as the brief says.
-  await exec("git", ["-C", o.repo, "worktree", "remove", "--force", path])
-  await must(exec, "git", ["-C", o.repo, "worktree", "prune"])
-  const remote = await exec("git", ["-C", o.repo, "ls-remote", "--exit-code", "--heads", "origin", o.branch])
-  const resumed = remote.code === 0
-  if (resumed) await must(exec, "git", ["-C", o.repo, "fetch", "origin", o.branch])
-  await must(exec, "git", ["-C", o.repo, "worktree", "add", "-B", o.branch, path, resumed ? `origin/${o.branch}` : `origin/${o.base}`])
+  await mustGit(exec, ["-C", o.repo, "fetch", "origin", o.base, "--prune"])
+  // A leftover from an earlier run of this issue. Its commits live on in the
+  // branch ref, which startPoint keeps; only uncommitted changes are lost, as
+  // the brief says. Forced, so git does not look inside it.
+  await git(exec, ["-C", o.repo, "worktree", "remove", "--force", path])
+  await mustGit(exec, ["-C", o.repo, "worktree", "prune"])
+  const start = await startPoint(exec, o)
+  const resumed = start !== `origin/${o.base}`
+  if (resumed) {
+    // Earlier work is a worker's, pushed with no review, and the session runs
+    // the project's hooks outside the sandbox.
+    const touched = (await mustGit(exec, ["-C", o.repo, "diff", "--name-only", `origin/${o.base}...${start}`]))
+      .split("\n")
+      .map((f) => f.trim())
+      .filter((f) => AGENT_CONFIG.test(f))
+    if (touched.length) {
+      throw new WorktreeRefused(`the branch changes the agent configuration (${touched.join(", ")}), so a person must review it before a worker continues it`)
+    }
+  }
+  // Installed at the base, which people reviewed: pnpm runs the project's own
+  // scripts, and this runs outside the sandbox. The branch's own dependency
+  // changes the worker installs itself, inside it (workerRules).
+  await mustGit(exec, ["-C", o.repo, "worktree", "add", "--detach", path, `origin/${o.base}`])
   await must(exec, "pnpm", ["install", "--frozen-lockfile", "--prefer-offline"], { cwd: path, timeoutMs: 20 * 60_000 })
+  await mustGit(exec, ["-C", path, "checkout", "-B", o.branch, start])
   return { path, resumed }
 }
 
 export async function commitsAhead(exec: Exec, path: string, base: string): Promise<number> {
-  return Number.parseInt((await must(exec, "git", ["-C", path, "rev-list", "--count", `origin/${base}..HEAD`])).trim(), 10) || 0
+  return Number.parseInt((await mustGit(exec, ["-C", path, "rev-list", "--count", `origin/${base}..HEAD`])).trim(), 10) || 0
 }
 
 /**
@@ -83,12 +144,12 @@ export async function commitsAhead(exec: Exec, path: string, base: string): Prom
  * outside the sandbox.
  */
 export async function isDirty(exec: Exec, path: string): Promise<boolean> {
-  return (await must(exec, "git", ["-C", path, "status", "--porcelain", "--ignore-submodules=all"])).trim().length > 0
+  return (await mustGit(exec, ["-C", path, "status", "--porcelain", "--ignore-submodules=all"])).trim().length > 0
 }
 
 export async function pushBranch(exec: Exec, path: string, branch: string, issueId: string): Promise<void> {
   assertPushable(branch, issueId)
-  await must(exec, "git", ["-C", path, "push", "-u", "origin", `HEAD:refs/heads/${branch}`])
+  await mustGit(exec, ["-C", path, "push", "-u", "origin", `HEAD:refs/heads/${branch}`])
 }
 
 /**
@@ -97,5 +158,5 @@ export async function pushBranch(exec: Exec, path: string, branch: string, issue
  * person; agentd clears it after three days.
  */
 export async function removeWorktree(exec: Exec, repo: string, path: string): Promise<boolean> {
-  return (await exec("git", ["-C", repo, "worktree", "remove", "--force", path])).code === 0
+  return (await git(exec, ["-C", repo, "worktree", "remove", "--force", path])).code === 0
 }

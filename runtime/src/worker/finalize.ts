@@ -12,7 +12,8 @@
  * Local records (the watched PR, the ledger, the outbox) are written before
  * Linear is asked: when Linear is down, the Slack messages still go out and
  * the PR is still watched, and the runner reports the failed write
- * (Review Focus 5). Linear's GitHub integration would move the issue to In
+ * (Review Focus 5) with the branch it pushed and the PR it opened
+ * (FinalizeFailed). Linear's GitHub integration would move the issue to In
  * Review on its own; setting it here as well means the 6-hour sweeper never
  * mistakes a finished job for a dead claim. Nothing here writes an issue's
  * description, so the answers the bridge appended to it stay as they are.
@@ -27,7 +28,7 @@ import { enqueueSlack } from "../outbox.ts"
 import { truncateChars } from "../slack/text.ts"
 import type { Tracker, TrackerIssue } from "../tracker.ts"
 import { commitsAhead, isDirty, must, pushBranch, removeWorktree, type Exec } from "./git.ts"
-import type { Outcome, WorkerReport } from "./outcome.ts"
+import { clause, type Outcome, type WorkerReport } from "./outcome.ts"
 
 export interface FinalizeContext {
   exec: Exec
@@ -83,11 +84,19 @@ export function prBody(
   ].join("\n")
 }
 
+/** The worker's summary past the reason: its first line is the reason itself when the worker reported blocked. */
+function beyondReason(reason: string, summary: string | undefined): string {
+  const lines = (summary ?? "").trim().split("\n")
+  if (clause(lines[0]) === clause(reason)) lines.shift()
+  return lines.join("\n").trim()
+}
+
 export function blockedReport(reason: string, report: WorkerReport | null, meta: { branch: string; pushed: boolean }): string {
+  const more = beyondReason(reason, report?.summary)
   return [
-    `Worker stopped: ${reason}.`,
-    report?.summary ? `\n${report.summary}` : "",
-    meta.pushed ? `\nWork so far is on branch \`${meta.branch}\`.` : "\nNothing was committed.",
+    `Worker stopped: ${clause(reason)}.`,
+    more ? `\n${more}` : "",
+    meta.pushed ? `\nWork so far is on branch \`${meta.branch}\`.` : "\nNothing new was pushed.",
     "\nThe issue is On hold. A reply in its Slack thread puts it back in the queue.",
   ].join("")
 }
@@ -117,7 +126,28 @@ async function openOrReusePr(ctx: FinalizeContext, outcome: Outcome, dirty: bool
   return url
 }
 
+/** A finish that failed part way. It carries what had already happened, so the job's result still names the pushed branch and the open PR. */
+export class FinalizeFailed extends Error {
+  constructor(
+    message: string,
+    readonly pushed: boolean,
+    readonly prUrl: string | null,
+    options?: ErrorOptions,
+  ) {
+    super(message, options)
+  }
+}
+
 export async function finalize(ctx: FinalizeContext, outcome: Outcome): Promise<FinalizeResult> {
+  const progress: { pushed: boolean; prUrl: string | null } = { pushed: false, prUrl: null }
+  try {
+    return await settle(ctx, outcome, progress)
+  } catch (error) {
+    throw new FinalizeFailed(error instanceof Error ? error.message : String(error), progress.pushed, progress.prUrl, { cause: error })
+  }
+}
+
+async function settle(ctx: FinalizeContext, outcome: Outcome, progress: { pushed: boolean; prUrl: string | null }): Promise<FinalizeResult> {
   const { issue, config } = ctx
   const ahead = ctx.worktree ? await commitsAhead(ctx.exec, ctx.worktree, config.repo.base) : 0
   const dirty = ctx.worktree ? await isDirty(ctx.exec, ctx.worktree) : false
@@ -128,12 +158,16 @@ export async function finalize(ctx: FinalizeContext, outcome: Outcome): Promise<
     reason = "the worker reported done but made no commits"
   }
   const pushed = ahead > 0 && ctx.worktree !== null
-  if (pushed) await pushBranch(ctx.exec, ctx.worktree!, ctx.branch, issue.id)
+  if (pushed) {
+    await pushBranch(ctx.exec, ctx.worktree!, ctx.branch, issue.id)
+    progress.pushed = true
+  }
   const post = (text: string) => enqueueSlack(ctx.paths, { kind: "post", channel: "agents", text }, ctx.now())
   const inThread = (text: string) => enqueueSlack(ctx.paths, { kind: "issue", issue: issue.id, text, question: true }, ctx.now())
 
   if (status === "done") {
     const url = await openOrReusePr(ctx, outcome, dirty)
+    progress.prUrl = url
     recordPr(ctx.paths, { issue: issue.id, url, openedAt: ctx.now().toISOString() })
     appendLedger(ctx.paths, { type: "pr.opened", issue: issue.id, url }, ctx.now())
     if (ctx.autoMerge) await must(ctx.exec, "gh", ["pr", "merge", url, "--auto", "--squash", "--delete-branch"], { cwd: config.repo.path })
@@ -145,6 +179,9 @@ export async function finalize(ctx: FinalizeContext, outcome: Outcome): Promise<
   }
 
   if (status === "needs_input") {
+    // The question first, as a local write. Should the park then fail, the
+    // runner reports it, and the answer still reaches the issue: the bridge
+    // appends it whatever the state.
     inThread(outcome.report!.question!)
     post(`${issue.id} parked: waiting for an answer in its Slack thread`)
     await ctx.tracker.updateIssue(issue.id, { state: "On hold", addLabels: ["awaiting-answer"] })
@@ -158,8 +195,9 @@ export async function finalize(ctx: FinalizeContext, outcome: Outcome): Promise<
     return { status, reason, prUrl: null, pushed }
   }
 
-  inThread(`blocked: ${reason}. ${outcome.report?.summary ? `${outcome.report.summary} ` : ""}Reply here when it can continue.`)
-  post(`${issue.id} blocked: ${reason}`)
+  const more = beyondReason(reason, outcome.report?.summary)
+  inThread(`blocked: ${clause(reason)}. ${more ? `${more} ` : ""}Reply here when it can continue.`)
+  post(`${issue.id} blocked: ${clause(reason)}`)
   await ctx.tracker.updateIssue(issue.id, { state: "On hold" })
   await ctx.tracker.comment(issue.id, blockedReport(reason, outcome.report, { branch: ctx.branch, pushed }))
   return { status: "blocked", reason, prUrl: null, pushed }

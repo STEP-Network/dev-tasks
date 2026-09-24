@@ -41,13 +41,18 @@ describe("workerRules", () => {
     expect(rules).not.toMatch(/--admin/)
   })
 
-  it("puts ~/.config and every .env file off limits", () => {
-    expect(workerRules(input)).toMatch(/Never read or write \.env files or anything in ~\/\.config/)
+  it("puts ~/.config, every .env file but the template, and the agent configuration off limits", () => {
+    const rules = workerRules(input)
+    expect(rules).toMatch(/Never read or write \.env files \(the tracked \.env\.example template aside\) or anything in ~\/\.config/)
+    expect(rules).toMatch(/Never change \.claude\/hooks, \.claude\/settings\*\.json or \.mcp\.json/)
   })
 
-  it("mentions earlier work only when resuming", () => {
-    expect(workerRules(input)).not.toMatch(/earlier pushed work/)
-    expect(workerRules({ ...input, resumed: true })).toMatch(/earlier pushed work/)
+  it("mentions earlier work only when resuming, and then has the worker install the branch's own dependencies", () => {
+    expect(workerRules(input)).not.toMatch(/earlier work/)
+    expect(workerRules(input)).not.toMatch(/pnpm install/)
+    const rules = workerRules({ ...input, resumed: true })
+    expect(rules).toMatch(/cut from origin\/staging, with earlier work on it\./)
+    expect(rules).toMatch(/The launcher installed the dependencies of origin\/staging\. If the earlier work changed package\.json or pnpm-lock\.yaml, run pnpm install --frozen-lockfile --prefer-offline before anything else\./)
   })
 })
 

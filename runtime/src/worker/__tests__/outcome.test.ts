@@ -26,10 +26,11 @@ describe("toOutcome", () => {
     expect(toOutcome(result({ structured_output: { status: "finished", summary: "x" } }), ctx).status).toBe("blocked")
   })
 
-  it("is blocked with the worker's own first line when it reports blocked", () => {
+  it("is blocked with the worker's own first line when it reports blocked, without its full stop", () => {
     expect(toOutcome(result({ structured_output: { status: "blocked", summary: "pnpm install fails offline.\nThe lockfile names a package the store lacks." } }), ctx)).toMatchObject({
-      status: "blocked", reason: "pnpm install fails offline.", report: { status: "blocked" },
+      status: "blocked", reason: "pnpm install fails offline", report: { status: "blocked" },
     })
+    expect(toOutcome(result({ structured_output: { status: "blocked", summary: "...\nsee below" } }), ctx).reason).toBe("the worker reported blocked")
   })
 
   it("names each limit that stopped the session", () => {

@@ -43,6 +43,11 @@ export interface Outcome {
 
 const LIMIT_RE = /usage limit|rate.?limit|\b429\b|limit reached/i
 
+/** A sentence without its closing punctuation, so the caller can end it: "blocked: <reason>." never reads "..". */
+export function clause(text: string): string {
+  return text.trim().replace(/[\s.!?:;,]+$/, "")
+}
+
 /** The SDK's own list of the CLI's "a usage limit was reached" messages ("You've hit your limit · resets 5pm"), and a rate limit. */
 function isLimit(text: string, status?: number | null): boolean {
   return status === 429 || LIMIT_RE.test(text) || USAGE_LIMIT_ERROR_PREFIXES.some((prefix) => text.includes(prefix))
@@ -107,7 +112,7 @@ export function toOutcome(
           ? { status: "needs_input", reason: "a question for a product owner", report, ...base }
           : blocked("needs input but asked no question", report)
       }
-      return blocked(report.summary.split("\n")[0], report)
+      return blocked(clause(report.summary.split("\n")[0]) || "the worker reported blocked", report)
     }
     default:
       return blocked(`an unknown result subtype ${result.subtype}`)
