@@ -74,6 +74,15 @@ git config --global user.name eve
 
 PATH="$T/pnpm12:$PATH" refuses "refuses a pnpm other than 10" "pnpm@10"
 
+# The LaunchAgents' PATH puts the checked tools' directories first. One that
+# holds another node would hand agentd and the worker a node doctor never saw.
+mkdir -p "$T/nodebin"
+ln -s "$(command -v node)" "$T/nodebin/node"
+printf '#!/bin/bash\necho v0.0.0\n' > "$T/bin/node"
+chmod 755 "$T/bin/node"
+PATH="$T/nodebin:$PATH" refuses "refuses a PATH under which a tool is another binary" "node is $T/bin/node, not $T/nodebin/node"
+rm -f "$T/bin/node"
+
 # A person's own settings, which the merge must keep.
 echo '{ "model": "opus", "permissions": { "deny": ["Bash(rm -rf:*)"] } }' > "$HOME/.claude/settings.json"
 cp "$HOME/.claude/settings.json" "$T/settings.original.json"
