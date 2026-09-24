@@ -39,7 +39,7 @@ function setup(
   mkdirSync(join(repo, ".claude"), { recursive: true })
   writeFileSync(join(repo, ".claude", "project-config.json"), JSON.stringify({ git: { autoMergePolicy: { staging: "auto-after-checks-and-review" } } }))
   const paths = agentPaths(home)
-  const config = ConfigSchema.parse({ mini: "eve", repo: { path: repo }, pluginRoot: "/Users/eve/dev-tasks/plugin", slack: { allowedUsers: ["U"] } })
+  const config = ConfigSchema.parse({ mini: "eve", repo: { path: repo }, pluginRoot: "/Users/eve/dev-tasks/plugin", slack: { allowedUsers: ["UNATE"] } })
   const fake = fakeTracker([issue({ id: "STEP-7", title: "Fix the date", labels: ["polads", "agent-ready"], ...opts.issueOver })], undefined, opts.failOn)
   const f = fakeExec([
     ...(opts.exec ?? []),
@@ -151,7 +151,7 @@ describe("runJob", () => {
 })
 
 describe("modelFor, checkPlugins and checkBilling", () => {
-  const config = ConfigSchema.parse({ mini: "eve", repo: { path: "/r" }, pluginRoot: "/p", slack: { allowedUsers: ["U"] } })
+  const config = ConfigSchema.parse({ mini: "eve", repo: { path: "/r" }, pluginRoot: "/p", slack: { allowedUsers: ["UNATE"] } })
   const job = { id: "j", issue: "STEP-7", kind: "develop" as const, model: null, submittedAt: "" }
 
   it("uses Opus for complexity-high, Sonnet otherwise, and the job's own choice first", () => {
@@ -174,7 +174,7 @@ describe("modelFor, checkPlugins and checkBilling", () => {
 })
 
 describe("sdkOptions", () => {
-  const config = ConfigSchema.parse({ mini: "eve", repo: { path: "/Users/eve/polads" }, pluginRoot: "/Users/eve/dev-tasks/plugin", slack: { allowedUsers: ["U"] } })
+  const config = ConfigSchema.parse({ mini: "eve", repo: { path: "/Users/eve/polads" }, pluginRoot: "/Users/eve/dev-tasks/plugin", slack: { allowedUsers: ["UNATE"] } })
   const options = () =>
     sdkOptions({ config, cwd: "/w", model: "sonnet", abortController: new AbortController(), rules: "R", pnpmStore: "/store", env: { PATH: "/bin" }, home: "/Users/eve" }) as any
 

@@ -20,7 +20,7 @@ describe("probeVerdict", () => {
 })
 
 describe("probeHooks", () => {
-  const config = ConfigSchema.parse({ mini: "eve", repo: { path: "/Users/eve/polads" }, pluginRoot: "/Users/eve/dev-tasks/plugin", slack: { allowedUsers: ["U"] } })
+  const config = ConfigSchema.parse({ mini: "eve", repo: { path: "/Users/eve/polads" }, pluginRoot: "/Users/eve/dev-tasks/plugin", slack: { allowedUsers: ["UNATE"] } })
 
   it("runs the two forbidden commands in a throwaway repository, capped, with no report schema, and reads the verdict", async () => {
     const f = fakeExec()

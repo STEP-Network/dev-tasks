@@ -23,7 +23,7 @@ function setup(outcomeAhead = "2\n", responses: Array<[RegExp, { code?: number; 
   const f = fakeExec([...responses, [/rev-list --count/, { stdout: outcomeAhead }], [/gh pr create/, { stdout: `Creating pull request\n${PR}\n` }]])
   const ctx: FinalizeContext = {
     exec: f.exec, tracker: fake.tracker, paths,
-    config: ConfigSchema.parse({ mini: "eve", repo: { path: REPO }, pluginRoot: "/p", slack: { allowedUsers: ["U"] } }),
+    config: ConfigSchema.parse({ mini: "eve", repo: { path: REPO }, pluginRoot: "/p", slack: { allowedUsers: ["UNATE"] } }),
     issue: fake.issues.get("STEP-7")!, branch: "STEP-7-fix-the-date", worktree: WT, autoMerge: true, model: "sonnet", minutes: 37,
     now: () => new Date("2026-09-24T09:00:00.000Z"),
   }
