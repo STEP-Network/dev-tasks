@@ -112,7 +112,11 @@ const ACCESS_REFUSALS = new Set([
 /** The bot cannot use a channel. In one of its own four, every later message there would fail too. */
 const CHANNEL_REFUSALS = new Set(["not_in_channel", "channel_not_found", "is_archived"])
 /** Slack's own trouble, reported as a refusal: worth another go, like the network. */
-const SLACK_TROUBLE = new Set(["internal_error", "fatal_error", "service_unavailable", "request_timeout", "ratelimited", "rate_limited"])
+const SLACK_TROUBLE = new Set([
+  "internal_error", "fatal_error", "service_unavailable", "request_timeout", "ratelimited", "rate_limited",
+  // The workspace is moving into an Enterprise org: Slack says to try again later.
+  "team_added_to_org",
+])
 
 export function isSlackTrouble(error: unknown): boolean {
   const code = slackErrorCode(error)
@@ -215,7 +219,8 @@ export async function drainOutbox(ctx: SendContext, log: Logger): Promise<number
       if (failure === "pause") {
         const what = code !== null && CHANNEL_REFUSALS.has(code) ? `a message to the ${own} channel (${ctx.channelIds[own!]})` : "the app"
         throw new SlackAccessRefused(
-          `slack-bridge: Slack refused ${what}: ${code}. The outbox keeps every message and tries again every few minutes. ` +
+          `slack-bridge: Slack refused ${what}: ${code}, sending outbox entry ${key}. ` +
+            `The outbox keeps every message and tries again every few minutes. ` +
             `Fix the app's scopes or channels, or its token (a new token needs a restart of the bridge).`,
         )
       }
