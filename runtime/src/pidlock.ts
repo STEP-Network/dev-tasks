@@ -11,6 +11,15 @@ import { execFileSync } from "node:child_process"
 import { randomUUID } from "node:crypto"
 import { linkSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 
+/** A live process's command line, or null when there is no such process. agentd asks it of its workers too. */
+export function commandOf(pid: number): string | null {
+  try {
+    return execFileSync("ps", ["-p", String(pid), "-o", "command="], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] })
+  } catch {
+    return null // ps exits 1 when there is no such process
+  }
+}
+
 /** The pid holding `path`, or null when no live process of the marker's kind does. */
 function holderOf(path: string, marker: string, pid: number): number | null {
   let holder: number
@@ -20,13 +29,7 @@ function holderOf(path: string, marker: string, pid: number): number | null {
     return null
   }
   if (!Number.isInteger(holder) || holder <= 0 || holder === pid) return null
-  let command: string
-  try {
-    command = execFileSync("ps", ["-p", String(holder), "-o", "command="], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] })
-  } catch {
-    return null // ps exits 1 when there is no such process
-  }
-  return command.includes(marker) ? holder : null
+  return commandOf(holder)?.includes(marker) ? holder : null
 }
 
 export function takePidLock(path: string, marker: string, pid: number = process.pid): { ok: true } | { ok: false; holder: number } {
