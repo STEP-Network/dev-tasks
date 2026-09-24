@@ -458,6 +458,8 @@ npm test                   # vitest
 npm start                  # run the stdio server (stdin/stdout)
 ```
 
+A hook's `if` holds one permission rule, `Bash(git push *)` or `Edit(**/.env*)`. Claude Code never matches one that joins several with `|`, inside the parentheses or between rules, and runs that hook only on a command it cannot parse. For several patterns, register the script once per rule, as `hooks.json` does for `bash-guard` (1.2.1). `src/__tests__/hooks-json.test.ts` refuses a `|`, and `runtime/src/__tests__/sessions.test.ts` runs the guard in a real worker session.
+
 After editing MCP code, **fully restart Claude Code** — `/reload-plugins` does not kill the MCP process. Skills / hooks / rules are filesystem-rescanned by `/reload-plugins`.
 
 ## Hosted MCP

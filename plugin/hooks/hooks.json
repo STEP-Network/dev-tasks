@@ -61,7 +61,62 @@
         "hooks": [
           {
             "type": "command",
-            "if": "Edit(**/.env*)|Write(**/.env*)|Edit(**/.mcp.json)|Write(**/.mcp.json)|Edit(**/secrets/**)|Write(**/secrets/**)|Edit(**/credentials/**)|Write(**/credentials/**)|Edit(**/pnpm-lock.yaml)|Write(**/pnpm-lock.yaml)|Edit(**/package-lock.json)|Write(**/package-lock.json)",
+            "if": "Edit(**/.env*)",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/protect-sensitive-files.sh"
+          },
+          {
+            "type": "command",
+            "if": "Write(**/.env*)",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/protect-sensitive-files.sh"
+          },
+          {
+            "type": "command",
+            "if": "Edit(**/.mcp.json)",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/protect-sensitive-files.sh"
+          },
+          {
+            "type": "command",
+            "if": "Write(**/.mcp.json)",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/protect-sensitive-files.sh"
+          },
+          {
+            "type": "command",
+            "if": "Edit(**/secrets/**)",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/protect-sensitive-files.sh"
+          },
+          {
+            "type": "command",
+            "if": "Write(**/secrets/**)",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/protect-sensitive-files.sh"
+          },
+          {
+            "type": "command",
+            "if": "Edit(**/credentials/**)",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/protect-sensitive-files.sh"
+          },
+          {
+            "type": "command",
+            "if": "Write(**/credentials/**)",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/protect-sensitive-files.sh"
+          },
+          {
+            "type": "command",
+            "if": "Edit(**/pnpm-lock.yaml)",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/protect-sensitive-files.sh"
+          },
+          {
+            "type": "command",
+            "if": "Write(**/pnpm-lock.yaml)",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/protect-sensitive-files.sh"
+          },
+          {
+            "type": "command",
+            "if": "Edit(**/package-lock.json)",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/protect-sensitive-files.sh"
+          },
+          {
+            "type": "command",
+            "if": "Write(**/package-lock.json)",
             "command": "${CLAUDE_PLUGIN_ROOT}/hooks/protect-sensitive-files.sh"
           }
         ]
@@ -71,7 +126,52 @@
         "hooks": [
           {
             "type": "command",
-            "if": "Bash(* --no-verify *|*--force*|rm -rf *|git reset --hard *|git checkout .|git checkout -- *|git clean -f*|git branch -D*|git commit *|git push *)",
+            "if": "Bash(* --no-verify *)",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/bash-guard.sh"
+          },
+          {
+            "type": "command",
+            "if": "Bash(*--force*)",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/bash-guard.sh"
+          },
+          {
+            "type": "command",
+            "if": "Bash(rm -rf *)",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/bash-guard.sh"
+          },
+          {
+            "type": "command",
+            "if": "Bash(git reset --hard *)",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/bash-guard.sh"
+          },
+          {
+            "type": "command",
+            "if": "Bash(git checkout .)",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/bash-guard.sh"
+          },
+          {
+            "type": "command",
+            "if": "Bash(git checkout -- *)",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/bash-guard.sh"
+          },
+          {
+            "type": "command",
+            "if": "Bash(git clean -f*)",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/bash-guard.sh"
+          },
+          {
+            "type": "command",
+            "if": "Bash(git branch -D*)",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/bash-guard.sh"
+          },
+          {
+            "type": "command",
+            "if": "Bash(git commit *)",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/bash-guard.sh"
+          },
+          {
+            "type": "command",
+            "if": "Bash(git push *)",
             "command": "${CLAUDE_PLUGIN_ROOT}/hooks/bash-guard.sh"
           },
           {
@@ -118,12 +218,22 @@
           },
           {
             "type": "command",
-            "if": "Bash(*claude-ci-ack-*|*gh run rerun *--failed*|git revert *)",
+            "if": "Bash(*claude-ci-ack-*)",
             "command": "${CLAUDE_PLUGIN_ROOT}/hooks/auto-file-followup-nudge.sh"
           },
           {
             "type": "command",
-            "if": "Bash(pnpm build*|pnpm lint*|pnpm test*|pnpm tsc*|pnpm pre-push*|pnpm validate-schema*)",
+            "if": "Bash(*gh run rerun *--failed*)",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/auto-file-followup-nudge.sh"
+          },
+          {
+            "type": "command",
+            "if": "Bash(git revert *)",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/auto-file-followup-nudge.sh"
+          },
+          {
+            "type": "command",
+            "if": "Bash(pnpm *)",
             "command": "${CLAUDE_PLUGIN_ROOT}/hooks/build-failure-advisor.sh"
           }
         ]
