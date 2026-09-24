@@ -27,14 +27,14 @@
  * warning on stderr.
  *
  * `claim` and `heartbeat` act as this machine's mini: the `mini` field of
- * ~/.claude/dev-tasks-profile.json. Only a mini claims, so a machine without
- * one (a laptop) is refused before the tracker is touched. `--as`, if given,
- * must name that same mini.
+ * ~/.claude/dev-tasks-profile.json, as hooks/lib/profile.sh reads it. Only a
+ * mini claims, so a machine without one (a laptop) is refused before the
+ * tracker is touched. `--as`, if given, must name that same mini.
  */
 
+import { execFileSync } from "node:child_process"
 import { readFileSync } from "node:fs"
-import { homedir } from "node:os"
-import { join } from "node:path"
+import { fileURLToPath } from "node:url"
 import { resolveTracker } from "../src/tracker/index.ts"
 import { branchNameFor, type IssuePatch } from "../src/tracker/types.ts"
 
@@ -98,8 +98,20 @@ function requireArg(value: string | undefined, name: string): string {
   return value
 }
 
-/** `update`'s flags as a patch. Throws a usage error for a bad --assign, an empty description file or an empty update. */
+const UPDATE_FLAGS = ["state", "add-label", "remove-label", "description-file", "assign"]
+
+/**
+ * `update`'s flags as a patch. Throws a usage error for a flag update does
+ * not take, a flag with no value, a bad --assign, an empty description file
+ * or an empty update: dropping one flag and writing the rest is how a park
+ * built from an empty shell variable would silently do less.
+ */
 export function buildPatch(flags: ParsedArgs["flags"], readText: (path: string) => string): IssuePatch {
+  for (const [name, value] of Object.entries(flags)) {
+    if (!UPDATE_FLAGS.includes(name)) throw new Error(`${USAGE}\nupdate does not take --${name}`)
+    const values = Array.isArray(value) ? value : [value]
+    if (values.some((v) => v === true || !v.trim())) throw new Error(`${USAGE}\n--${name} needs a value`)
+  }
   const patch: IssuePatch = {}
   const state = str(flags, "state")
   if (state) patch.state = state
@@ -127,20 +139,26 @@ export function buildPatch(flags: ParsedArgs["flags"], readText: (path: string) 
   return patch
 }
 
+// The plugin's one profile reader. The phase 0 rule is exactly one, in bash,
+// the one the hooks consult, so trackerctl asks it instead of parsing
+// ~/.claude/dev-tasks-profile.json again and drifting from it.
+const PROFILE_SH = fileURLToPath(new URL("../hooks/lib/profile.sh", import.meta.url))
+
 /**
- * This machine's mini: the `mini` field of ~/.claude/dev-tasks-profile.json,
- * the file hooks/lib/profile.sh reads. null when there is none: no file, a
- * laptop's `"mini": null`, an empty name, or a file that does not parse.
+ * This machine's mini as hooks/lib/profile.sh reports it (`get mini`), taken
+ * as it is. null when it reports none: no profile, a laptop's
+ * `"mini": null`, a file that does not parse, or no jq to read it with.
  */
-export function readProfileMini(home: string = homedir()): string | null {
-  let parsed: unknown
+export function readProfileMini(env: NodeJS.ProcessEnv = process.env): string | null {
+  let out: string
   try {
-    parsed = JSON.parse(readFileSync(join(home, ".claude", "dev-tasks-profile.json"), "utf8"))
+    out = execFileSync("bash", [PROFILE_SH, "get", "mini"], { encoding: "utf8", env, stdio: ["ignore", "pipe", "ignore"] })
   } catch {
     return null
   }
-  const mini = (parsed as { mini?: unknown } | null)?.mini
-  return typeof mini === "string" && mini.trim() ? mini.trim() : null
+  // jq -r ends its answer with one newline; nothing else is trimmed.
+  const mini = out.replace(/\n$/, "")
+  return mini ? mini : null
 }
 
 // The runtime's config.json holds the same name to the same pattern. A claim
@@ -154,7 +172,8 @@ const MINI_RE = /^[a-z][a-z0-9-]*$/
 export function claimantFor(flags: ParsedArgs["flags"], mini: string | null): string {
   if (!mini) {
     throw new Error(
-      `only an agent mini claims: ~/.claude/dev-tasks-profile.json on this machine has no "mini". ` +
+      `only an agent mini claims: hooks/lib/profile.sh reports no "mini" for this machine ` +
+        `(~/.claude/dev-tasks-profile.json has none, or jq is missing). ` +
         `A mini's profile is { "profile": "agent", "devSurface": "preview", "mini": "<name>" }.`,
     )
   }

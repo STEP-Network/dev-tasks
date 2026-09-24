@@ -175,6 +175,30 @@ describe("claimIssue", () => {
     expect(comment[1].input.body).toMatch(/^claimed by eve at \d{4}-\d{2}-\d{2}T/)
     expect(sent(/users\s*\(/)).toHaveLength(0)
   })
+
+  it("writes the claim comment first, so a comment that fails leaves the issue unclaimed", async () => {
+    // Assigned and In Progress with no claim comment, the issue would be held
+    // for good: listClaims never returns it, so nothing would release it.
+    route(/commentCreate/, () => {
+      throw new Error("Linear: gave up after 6 attempts (last status 502)")
+    })
+    route(/comment\s*\(id:/, () => ({ comment: null }))
+    await expect(createLinearTracker().claimIssue("STEP-7", "eve")).rejects.toThrow(/502/)
+    expect(sent(/issueUpdate/)).toHaveLength(0)
+  })
+
+  it("refuses an issue someone else holds, before writing anything", async () => {
+    route(/issues\s*\(/, () => ({ issues: { nodes: [{ ...ISSUE, assignee: { id: "user-nate" } }], pageInfo: PAGE_END } }))
+    await expect(createLinearTracker().claimIssue("STEP-7", "eve")).rejects.toThrow(/STEP-7/)
+    expect(sent(/commentCreate|issueUpdate/)).toHaveLength(0)
+  })
+
+  it("claims an issue the key's owner already holds, as when a parked issue comes back", async () => {
+    route(/issues\s*\(/, () => ({ issues: { nodes: [{ ...ISSUE, assignee: { id: "user-eve" } }], pageInfo: PAGE_END } }))
+    await createLinearTracker().claimIssue("STEP-7", "eve")
+    expect(sent(/commentCreate/)).toHaveLength(1)
+    expect(sent(/issueUpdate/)).toHaveLength(1)
+  })
 })
 
 describe("claim comments", () => {
@@ -185,6 +209,10 @@ describe("claim comments", () => {
     expect(beaten).toBe("claimed by eve at 2026-09-24T08:00:00.000Z\nheartbeat 2026-09-24T08:30:00.000Z")
     expect(parseClaim(beaten)?.claimant).toBe("eve")
     expect(parseClaim("released: stale")).toBeNull()
+    // Claims are ranked by comparing their times as strings, which holds only
+    // for the one format claimCommentBody is given (toISOString).
+    expect(parseClaim("claimed by nate at noon")).toBeNull()
+    expect(parseClaim("claimed by eve at 2026-09-24T08:00:00Z")).toBeNull()
   })
 
   it("pick the newest claim, for one claimant when asked, with the edit time as the heartbeat", () => {
@@ -242,10 +270,10 @@ describe("listClaims", () => {
     },
   })
 
-  it("returns In Progress, assigned issues that carry a claim comment, and skips the rest", async () => {
+  it("returns the key owner's In Progress issues that carry a claim comment, and skips the rest", async () => {
     route(/startsWith/, () => ({
       issues: {
-        nodes: [held(7, "user-eve", ["claimed by eve at 2026-09-24T06:00:00.000Z"]), held(9, "user-nate", [])],
+        nodes: [held(7, "user-eve", ["claimed by eve at 2026-09-24T06:00:00.000Z"]), held(9, "user-eve", [])],
         pageInfo: PAGE_END,
       },
     }))
@@ -255,8 +283,19 @@ describe("listClaims", () => {
     expect(claims[0].issue).toMatchObject({ id: "STEP-7", assigneeId: "user-eve" })
     const [[query, variables]] = sent(/startsWith/)
     expect(query).toMatch(/"In Progress"/)
-    expect(query).toMatch(/assignee:\s*\{\s*null:\s*false\s*\}/)
     expect(variables).toMatchObject({ prefix: "claimed by " })
+  })
+
+  it("asks only for issues assigned to the key's owner, so a person's issue is never a claim to release", async () => {
+    // An agent's claim comment outlives the claim. Once a person assigns an
+    // issue to themselves, an "any assignee" filter would hand the sweeper
+    // that person's issue with a long-dead heartbeat, and the sweeper would
+    // unassign them and put it back in the agents' queue.
+    route(/startsWith/, () => ({ issues: { nodes: [], pageInfo: PAGE_END } }))
+    await createLinearTracker().listClaims()
+    const [[query]] = sent(/startsWith/)
+    expect(query).toMatch(/assignee:\s*\{\s*isMe:\s*\{\s*eq:\s*true\s*\}\s*\}/)
+    expect(query).not.toMatch(/null:\s*false/)
   })
 
   it("reads every page, so a claim past the first page is still swept", async () => {
@@ -297,5 +336,12 @@ describe("listByState", () => {
     expect(queries).toHaveLength(2)
     for (const [, variables] of queries) expect(variables).toMatchObject({ stateName: "Triage" })
     expect(issues.map((i) => i.id)).toEqual(["STEP-2", "STEP-1"])
+  })
+
+  it("refuses a state the team does not have, rather than read it as an empty queue", async () => {
+    // updateIssue refuses the same name. A typo or a wrong case here would
+    // otherwise look like a quiet queue for as long as nobody noticed.
+    await expect(createLinearTracker().listByState("triage")).rejects.toThrow(/triage/)
+    expect(sent(/stateName/)).toHaveLength(0)
   })
 })

@@ -90,6 +90,22 @@ describe("buildPatch", () => {
     const flags = parseArgs(["update", "STEP-1", "--description-file", "/tmp/brief.md"]).flags
     expect(() => buildPatch(flags, () => " \n")).toThrow(/^usage:[\s\S]*empty/)
   })
+
+  it.each([
+    [["--state", "--add-label", "awaiting-answer"]],
+    [["--state", "", "--add-label", "awaiting-answer"]],
+    [["--assign", "--state", "Ready"]],
+    [["--add-label", " ", "--state", "Ready"]],
+  ])("refuses %j, a flag with no value, rather than write the rest", (args) => {
+    // `--state "$STATE" --add-label awaiting-answer` with STATE empty would
+    // add the label and skip the move: a park that silently did less.
+    expect(() => buildPatch(parseArgs(["update", "STEP-1", ...args]).flags, read)).toThrow(/^usage:[\s\S]*needs a value/)
+  })
+
+  it("refuses a flag update does not know, rather than drop it", () => {
+    const flags = parseArgs(["update", "STEP-1", "--add-labels", "awaiting-answer", "--state", "On hold"]).flags
+    expect(() => buildPatch(flags, read)).toThrow(/^usage:[\s\S]*--add-labels/)
+  })
 })
 
 describe("the claimant is this machine's mini", () => {
@@ -106,18 +122,23 @@ describe("the claimant is this machine's mini", () => {
     rmSync(home, { recursive: true, force: true })
   })
 
-  it("reads the mini from the profile, and null wherever there is none", () => {
-    expect(readProfileMini(home)).toBeNull()
+  it("asks hooks/lib/profile.sh for the mini, and gets null wherever it reports none", () => {
+    // The phase 0 rule: exactly one profile reader, the bash one the hooks
+    // consult. trackerctl takes its answer as it is, spaces and all.
+    const env = { ...process.env, HOME: home }
+    expect(readProfileMini(env)).toBeNull()
     writeProfile('{ "profile": "human", "devSurface": "localhost", "mini": null }')
-    expect(readProfileMini(home)).toBeNull()
+    expect(readProfileMini(env)).toBeNull()
     writeProfile('{ "profile": "agent", "devSurface": "preview", "mini": "" }')
-    expect(readProfileMini(home)).toBeNull()
+    expect(readProfileMini(env)).toBeNull()
     writeProfile("{ this is not json")
-    expect(readProfileMini(home)).toBeNull()
+    expect(readProfileMini(env)).toBeNull()
     writeProfile('{ "profile": "agent", "devSurface": "preview", "mini": "eve" }')
-    expect(readProfileMini(home)).toBe("eve")
+    expect(readProfileMini(env)).toBe("eve")
     writeProfile('{ "profile": "agent", "devSurface": "preview", "mini": "bob" }')
-    expect(readProfileMini(home)).toBe("bob")
+    expect(readProfileMini(env)).toBe("bob")
+    writeProfile('{ "profile": "agent", "devSurface": "preview", "mini": " eve " }')
+    expect(readProfileMini(env)).toBe(" eve ")
   })
 
   it("claims as the profile's mini, whichever mini that is", () => {
@@ -139,6 +160,7 @@ describe("the claimant is this machine's mini", () => {
     // parseClaim reads the claimant up to the first space, so "eve mini"
     // would claim issues the heartbeat and the sweeper then never find.
     expect(() => claimantFor({}, "eve mini")).toThrow(/eve mini/)
+    expect(() => claimantFor({}, " eve ")).toThrow(/" eve "/)
     expect(() => claimantFor({}, "Eve")).toThrow(/Eve/)
   })
 

@@ -365,18 +365,25 @@ export function createLinearTracker(): Tracker {
 
     async claimIssue(ref, claimant) {
       const raw = await fetchRaw(ref)
-      const stateId = await stateIdFor("In Progress")
       // Every agent is its own Linear member account (2026-09-23, and every
       // person too since 2026-09-24), so the claim IS the assignment to the
       // key's own user. `claimant` names the mini in the comment, whose edit
       // time is the heartbeat.
-      const input: Record<string, unknown> = { assigneeId: (await viewer()).id }
+      const me = await viewer()
+      if (raw.assignee && raw.assignee.id !== me.id) {
+        throw new Error(`Linear: ${raw.identifier} is assigned to someone else; not claiming it`)
+      }
+      const stateId = await stateIdFor("In Progress")
+      const input: Record<string, unknown> = { assigneeId: me.id }
       if (stateId) input.stateId = stateId
+      // The comment first: if it fails, the issue is simply not claimed. The
+      // other way round, a failed comment would leave the issue assigned and
+      // In Progress with no claim for the sweeper to find, held for good.
+      await createComment(raw.id, claimCommentBody(claimant, new Date().toISOString()))
       await linearRequest(
         `mutation($id: String!, $input: IssueUpdateInput!) { issueUpdate(id: $id, input: $input) { success } }`,
         { id: raw.id, input },
       )
-      await createComment(raw.id, claimCommentBody(claimant, new Date().toISOString()))
       return toIssue(await fetchRaw(ref))
     },
 
@@ -441,6 +448,9 @@ export function createLinearTracker(): Tracker {
     },
 
     async listByState(state, limit = 50) {
+      // An unknown or miscased name matches nothing and would read as an
+      // empty queue. updateIssue refuses the same name, so this does too.
+      if (!(await stateIdFor(state))) throw new Error(`Linear: no state named ${state} on team ${LINEAR_TEAM_KEY}`)
       return listInState(state, limit)
     },
 
@@ -498,16 +508,18 @@ export function createLinearTracker(): Tracker {
     },
 
     async listClaims() {
-      // Every page: the sweeper releases what this returns, and a claim on a
-      // page it never read would hold its issue forever. The filter also
-      // matches issues a person holds; those carry no claim comment.
+      // Only issues the key's owner holds: an agent's claim comment outlives
+      // the claim, and an issue a person has since taken must never reach
+      // the sweeper as a stale claim to release. Every page: the sweeper
+      // releases what this returns, and a claim on an unread page would hold
+      // its issue forever.
       const page = async (after: string | null) => {
         const data = await linearRequest<{ issues: Connection<RawIssue & { comments: { nodes: ClaimComment[] } }> }>(
           `query($teamKey: String!, $prefix: String!, $first: Int!, $after: String) {
              issues(first: $first, after: $after, filter: {
                team: { key: { eq: $teamKey } },
                state: { name: { eq: "In Progress" } },
-               assignee: { null: false }
+               assignee: { isMe: { eq: true } }
              }) {
                nodes {
                  ${ISSUE_FIELDS}

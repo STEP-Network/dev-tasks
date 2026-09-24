@@ -7,7 +7,9 @@
  */
 /** Every claim comment starts with this. The heartbeat edits the same comment (spec 6.5). */
 export const CLAIM_PREFIX = "claimed by ";
-const CLAIM_RE = /^claimed by (\S+) at (\S+)/;
+// The time is exactly toISOString's shape: newestClaim ranks claims by
+// comparing these strings, which is only chronological for one fixed format.
+const CLAIM_RE = /^claimed by (\S+) at (\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z)(?:\s|$)/;
 export function claimCommentBody(claimant, at) {
     return `${CLAIM_PREFIX}${claimant} at ${at}`;
 }

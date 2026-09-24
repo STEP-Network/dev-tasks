@@ -86,7 +86,9 @@ export interface ClaimComment {
   editedAt: string | null
 }
 
-const CLAIM_RE = /^claimed by (\S+) at (\S+)/
+// The time is exactly toISOString's shape: newestClaim ranks claims by
+// comparing these strings, which is only chronological for one fixed format.
+const CLAIM_RE = /^claimed by (\S+) at (\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z)(?:\s|$)/
 
 export function claimCommentBody(claimant: string, at: string): string {
   return `${CLAIM_PREFIX}${claimant} at ${at}`
@@ -121,9 +123,11 @@ export interface Tracker {
   readIssue(ref: string): Promise<TrackerIssue>
 
   /**
-   * Assigns the issue to the key's owner (on a mini, that agent's member
-   * account), moves it to In Progress, and leaves a `claimed by <claimant>
-   * at <time>` comment. The comment's edit time is the heartbeat.
+   * Linear: leaves a `claimed by <claimant> at <time>` comment, then assigns
+   * the issue to the key's owner (on a mini, that agent's member account)
+   * and moves it to In Progress. The comment's edit time is the heartbeat.
+   * Refuses an issue someone else holds. Monday (cutover only): moves it to
+   * In Progress and leaves the same comment, assigning nobody.
    */
   claimIssue(ref: string, claimant: string): Promise<TrackerIssue>
 
@@ -151,10 +155,10 @@ export interface Tracker {
   /** Unassigns, puts the issue back in Ready, and comments why. */
   releaseIssue(ref: string, reason: string): Promise<void>
 
-  /** In Progress, assigned issues with their newest claim: what the 6-hour sweeper reads. */
+  /** In Progress issues assigned to the key's owner, with their newest claim: what the 6-hour sweeper reads. */
   listClaims(): Promise<ClaimRecord[]>
 
-  /** Every issue in a state, sorted by byPriorityThenAge, cut to `limit`. */
+  /** Every issue in a state, sorted by byPriorityThenAge, cut to `limit`. An unknown state throws. */
   listByState(state: string, limit?: number): Promise<TrackerIssue[]>
 }
 
