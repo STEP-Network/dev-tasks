@@ -21,7 +21,7 @@ a machine somebody configured must not silently disarm its own guards.
 Check it:
 
 ```bash
-bash ~/.claude/plugins/cache/dev-tasks-marketplace/dev-tasks/1.0.2/hooks/lib/profile.sh get profile
+bash ~/.claude/plugins/cache/dev-tasks-marketplace/dev-tasks/1.0.3/hooks/lib/profile.sh get profile
 ```
 
 ## 2. Refresh the plugin cache
@@ -46,7 +46,7 @@ Confirm the version:
 ```bash
 ls ~/.claude/plugins/cache/dev-tasks-marketplace/dev-tasks/
 ```
-Expected: `1.0.2`.
+Expected: `1.0.3`.
 
 ## 3. `.claude/project-config.json`
 
@@ -112,7 +112,7 @@ argument. `LINEAR_API_KEY` in the environment wins over the file.
 
 ```bash
 cd <consumer-project>
-npx tsx ~/.claude/plugins/cache/dev-tasks-marketplace/dev-tasks/1.0.2/scripts/trackerctl.ts ready --limit 3
+npx tsx ~/.claude/plugins/cache/dev-tasks-marketplace/dev-tasks/1.0.3/scripts/trackerctl.ts ready --limit 3
 ```
 
 Expected: one line of JSON, an array of up to three issues. An empty array is

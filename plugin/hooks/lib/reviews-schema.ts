@@ -2,17 +2,20 @@
  * Shared Zod schema for review-memory rows.
  *
  * Used by:
- *   - hooks/append-review-memory.ts (runtime validation before append)
+ *   - scripts/generate-reviews-schema.ts (writes the JSON Schema mirror)
  *   - src/__tests__/zod-json-schema-sync.test.ts (byte-equality sync test)
  *
- * The JSON Schema mirror lives at plugin/schemas/reviews.schema.json and is
- * generated from this Zod schema via `zod-to-json-schema`. Consumers that
- * want a JSON-Schema-compatible spec read that file; runtime callers go
- * through Zod here.
+ * Nothing in the plugin writes or reads rows at runtime any more: the writer,
+ * hooks/append-review-memory.ts, went with its only caller, post-self-review
+ * (retired in 1.0). What is left only keeps itself in step.
  *
- * When updating field shapes: update this file; the sync test regenerates
- * the JSON schema and asserts byte-equality with the committed copy. CI
- * fails if the two drift.
+ * The JSON Schema mirror lives at plugin/schemas/reviews.schema.json and is
+ * generated from this Zod schema via `zod-to-json-schema`.
+ *
+ * When updating field shapes: update this file and run `npm run
+ * generate:schema`; the sync test regenerates the JSON schema and fails when
+ * it drifts from the committed copy. The repo has no CI, so `npm test` is
+ * the only check.
  */
 
 import { z } from "zod"

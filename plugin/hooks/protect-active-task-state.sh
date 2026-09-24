@@ -5,8 +5,15 @@
 #
 # Background: every workflow-enforcement hook reads decision state from
 # .claude/active-task.json:
-#   (selfReviewPassed was removed in 1.0 — bash-guard gate (b) and post-self-review, its only reader and its only emitter, are both retired.)
-#   reviewAddressed      ← stop-task-check, pre-merge-review-gate
+#   (selfReviewPassed is no longer protected here. 1.0 retired post-self-review,
+#    the only emitter of its marker, along with bash-guard gate (b), so
+#    /self-review now writes the field directly. It is NOT dead: /ship-pr,
+#    task-state-guard, stop-goal-persistence, pipeline-reminder and
+#    user-prompt-task-context still read it.)
+#   reviewAddressed      ← pre-merge-review-gate, and the escapes of the Stop
+#                          gates (stop-ci-green-check, stop-waiting-for-uat-stage,
+#                          stop-monday-reconciled-check, stop-goal-persistence,
+#                          stop-visual-diff-check)
 #   parentStatus         ← stop-waiting-for-uat-stage
 #   mondayReconciledShas ← stop-monday-reconciled-check
 #   allowMainCheckout    ← worktree-required
@@ -20,7 +27,7 @@
 # it requires a marker /tmp/.claude-state-marker-<field>-<HEAD_SHA> emitted
 # by the legitimate write path:
 #
-#   (selfReviewPassed was removed in 1.0 — bash-guard gate (b) and post-self-review, its only reader and its only emitter, are both retired.)
+#   (selfReviewPassed has no marker path since 1.0; see above.)
 #   reviewAddressed      ← /ship-pr Phase 6.2 (handoff) or Phase 6 (structured)
 #   parentStatus         ← /ship-pr Phase 6.7 (after WfUAT transition succeeds)
 #   mondayReconciledShas ← /ship-pr Phase 10 + /babysit-prs Phase 3 (after gh pr merge)
