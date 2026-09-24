@@ -169,7 +169,7 @@ export function healthStatus(input: {
   if (!bridge || !fresh || bridge.stopped) problems.push(bridge?.error ? `the Slack bridge stopped: ${bridge.error}` : "the Slack bridge has no recent heartbeat")
   else if (bridge.error) problems.push(`the Slack bridge's outbox is paused: ${bridge.error}`)
   else if (!bridge.connected) problems.push("the Slack bridge is disconnected")
-  if (input.checkout === CHECKOUT_LEFT_ALONE) problems.push("the PolAds checkout has local changes, so it is no longer kept on origin's base")
+  if (input.checkout === CHECKOUT_LEFT_ALONE) problems.push("the main checkout has local changes, so it is no longer kept on origin's base")
   const failed = bridge?.outboxFailed ?? 0
   const before = input.outboxFailedBefore
   // A message Slack refused for good goes to outbox/failed, and nothing else says so.

@@ -125,7 +125,7 @@ describe("runDuties", () => {
   it("reports a checkout the refresh had to leave alone", async () => {
     const { d, problems } = duties({ exec: fakeExec([[/status --porcelain/, { stdout: " M lib/x.ts\n" }]]).exec })
     await runDuties(d, freshMemo())
-    expect(problems.flat()).toContain("the PolAds checkout has local changes, so it is no longer kept on origin's base")
+    expect(problems.flat()).toContain("the main checkout has local changes, so it is no longer kept on origin's base")
   })
 })
 

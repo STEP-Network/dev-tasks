@@ -36,8 +36,10 @@ export interface JobRecord {
   /** When the runner began the SDK session, after preparing the worktree: agentd's backstop counts the wall clock from here. */
   sessionStartedAt?: string
   killRequestedAt?: string
-  /** Set by agentd when the worker died within minutes of its start, or never started: two in a row hold the issue back (heldBackIssues). */
+  /** Set by agentd when the worker died within minutes of its start, or never started: two in a row on one issue hold it back (heldBackIssues). */
   lostEarly?: boolean
+  /** Set by agentd on two early losses in a row on different issues: a fault of the mini, which paused it. They hold no issue back. */
+  miniFault?: boolean
   endedAt?: string
   result?: JobResult
   /** Set once `agentctl tick` has shown the finished job to the front door. */
@@ -71,10 +73,11 @@ export function submitJob(paths: AgentPaths, issue: string, model: string | null
  * it claims leaves its issue Ready, and the next job for it would most likely
  * die the same way. The digest offers them no more until a person runs one
  * by hand (agentctl job submit), and a job that ends any other way lifts it.
+ * Losses put down to a fault of the mini (miniFault) are not the issue's.
  */
 export function heldBackIssues(paths: AgentPaths): Set<string> {
   const byIssue = new Map<string, JobRecord[]>()
-  for (const job of listJobs(paths, "done")) if (job.endedAt) byIssue.set(job.issue, [...(byIssue.get(job.issue) ?? []), job])
+  for (const job of listJobs(paths, "done")) if (job.endedAt && !job.miniFault) byIssue.set(job.issue, [...(byIssue.get(job.issue) ?? []), job])
   const held = new Set<string>()
   for (const [issue, jobs] of byIssue) {
     const lastTwo = jobs.sort((a, b) => a.endedAt!.localeCompare(b.endedAt!)).slice(-2)

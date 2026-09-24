@@ -180,7 +180,7 @@ describe("healthStatus and sentryCheckInUrl", () => {
 
   it("reports a checkout the refresh has to leave alone", () => {
     expect(healthStatus({ ...ok, checkout: "left alone: the checkout has local changes" }).problems).toEqual([
-      "the PolAds checkout has local changes, so it is no longer kept on origin's base",
+      "the main checkout has local changes, so it is no longer kept on origin's base",
     ])
     expect(healthStatus({ ...ok, checkout: "up to date at 0123456" }).ok).toBe(true)
   })

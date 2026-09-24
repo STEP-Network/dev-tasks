@@ -1,5 +1,5 @@
 import { spawn, spawnSync, type ChildProcess } from "node:child_process"
-import { existsSync, mkdtempSync, writeFileSync } from "node:fs"
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { afterEach, describe, expect, it } from "vitest"
@@ -189,7 +189,7 @@ describe("superviseJobs", () => {
   })
 })
 
-describe("two early losses in a row for one issue", () => {
+describe("two early losses in a row", () => {
   // A worker that dies before it claims leaves its issue Ready, and the front door would offer it again at every wakeup.
   const lose = (paths: JobRunnerDeps["paths"], issue: string, submitted: string, started: string) => {
     const job = submitJob(paths, issue, null, new Date(submitted))
@@ -197,7 +197,7 @@ describe("two early losses in a row for one issue", () => {
     return job
   }
 
-  it("hold the issue back, and say so once, in the second loss's own notice", () => {
+  it("on one issue hold that issue back, and say so once, in the second loss's own notice", () => {
     const { paths, deps } = setup({ isAlive: () => false })
     lose(paths, "STEP-1", "2026-09-24T11:50:00.000Z", "2026-09-24T11:55:00.000Z")
     superviseJobs(deps)
@@ -218,7 +218,59 @@ describe("two early losses in a row for one issue", () => {
     expect(heldBackIssues(paths)).toEqual(new Set())
   })
 
-  it("count a worker that could not be started", () => {
+  it("on two different issues pause the mini once, name the likely cause, and hold neither issue back", () => {
+    const { paths, deps } = setup({ isAlive: () => false })
+    const first = lose(paths, "STEP-1", "2026-09-24T11:50:00.000Z", "2026-09-24T11:55:00.000Z")
+    superviseJobs(deps)
+    const second = lose(paths, "STEP-2", "2026-09-24T11:56:00.000Z", "2026-09-24T11:57:00.000Z")
+    superviseJobs({ ...deps, now: () => new Date("2026-09-24T12:01:00.000Z") })
+    expect(JSON.parse(readFileSync(paths.pauseFile, "utf8"))).toEqual({
+      at: "2026-09-24T12:01:00.000Z",
+      reason: "early losses on two different issues in a row (STEP-1, STEP-2): a fault on this mini",
+    })
+    expect(heldBackIssues(paths)).toEqual(new Set())
+    // One notice per loss: the pause is said in the second, never in a post of its own, and no hold is.
+    const posts = outbox(paths)
+    expect(posts).toHaveLength(2)
+    expect(posts[0]).not.toMatch(/paused|held back/)
+    expect(posts[1]).toMatch(/^STEP-2: the worker process died before reporting\. .* It is the second worker in a row, after STEP-1's, to stop within 10 minutes of starting, which points at this mini rather than the issues: /)
+    expect(posts[1].endsWith(`The mini is paused. The logs are worker-${first.id}.log and worker-${second.id}.log in ~/.agentd/logs. Run agentctl resume once it is fixed.`)).toBe(true)
+    expect(posts[1]).not.toMatch(/held back/)
+
+    // Both losses were the mini's. After a resume, one more loss neither pauses again nor holds an issue back.
+    rmSync(paths.pauseFile)
+    lose(paths, "STEP-1", "2026-09-24T12:02:00.000Z", "2026-09-24T12:05:00.000Z")
+    superviseJobs({ ...deps, now: () => new Date("2026-09-24T12:06:00.000Z") })
+    expect(existsSync(paths.pauseFile)).toBe(false)
+    expect(heldBackIssues(paths)).toEqual(new Set())
+    expect(outbox(paths).at(-1)).not.toMatch(/paused|held back/)
+  })
+
+  it("need the loss before to be early too: a job of another issue that ended otherwise is no fault", () => {
+    const { paths, deps } = setup({ isAlive: () => false })
+    const ok = submitJob(paths, "STEP-5", null, new Date("2026-09-24T11:00:00.000Z"))
+    moveJob(paths, ok.id, "pending", "done", { endedAt: "2026-09-24T11:50:00.000Z", result: { status: "done", reason: "done", prUrl: null, branch: null, costUsd: null, turns: null, minutes: 45 } })
+    lose(paths, "STEP-2", "2026-09-24T11:51:00.000Z", "2026-09-24T11:55:00.000Z")
+    superviseJobs(deps)
+    expect(existsSync(paths.pauseFile)).toBe(false)
+    expect(heldBackIssues(paths)).toEqual(new Set())
+  })
+
+  it("on two different issues that could not be started pause the mini too", () => {
+    const { paths, deps } = setup({
+      spawnWorker: () => {
+        throw new Error("spawn EAGAIN")
+      },
+    })
+    submitJob(paths, "STEP-1", null, new Date("2026-09-24T11:00:00.000Z"))
+    superviseJobs(deps)
+    submitJob(paths, "STEP-2", null, new Date("2026-09-24T11:01:00.000Z"))
+    superviseJobs({ ...deps, now: () => new Date("2026-09-24T12:00:10.000Z") })
+    expect(existsSync(paths.pauseFile)).toBe(true)
+    expect(heldBackIssues(paths)).toEqual(new Set())
+  })
+
+  it("on one issue count a worker that could not be started", () => {
     const { paths, deps } = setup({
       spawnWorker: () => {
         throw new Error("spawn EAGAIN")

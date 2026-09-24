@@ -11,12 +11,13 @@
  *
  * A worker that dies within minutes of its start, or cannot be started, is
  * lost early: its issue stays Ready and would be offered again at every
- * wakeup. After two in a row for one issue the digest holds it back
- * (heldBackIssues), and the second loss's notice says so.
+ * wakeup. Two early losses in a row on one issue hold that issue back
+ * (heldBackIssues). Two in a row on different issues are a fault of the
+ * mini, and pause it. The second loss's own notice says which, once.
  */
 
 import { spawn } from "node:child_process"
-import { closeSync, existsSync, mkdirSync, openSync, rmSync } from "node:fs"
+import { closeSync, existsSync, mkdirSync, openSync, rmSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import type { AgentConfig, AgentPaths } from "../config.ts"
 import { heldBackIssues, jobPath, listJobs, moveJob, updateJob, type JobRecord } from "../jobs.ts"
@@ -68,9 +69,13 @@ function endBlocked(deps: JobRunnerDeps, job: JobRecord, reason: string, started
     rmSync(jobPath(deps.paths, "running", job.id), { force: true })
     return false
   }
+  // Decided before this loss joins the record: the job that ended just before it.
+  const previous = lostEarly ? lastFinished(deps.paths) : null
+  const miniFault = previous !== null && previous.lostEarly === true && previous.issue !== job.issue
   const moved = moveJob(deps.paths, job.id, "running", "done", {
     endedAt: now.toISOString(),
     ...(lostEarly ? { lostEarly } : {}),
+    ...(miniFault ? { miniFault } : {}),
     result: {
       status: "blocked",
       reason,
@@ -83,14 +88,47 @@ function endBlocked(deps: JobRunnerDeps, job: JobRecord, reason: string, started
   })
   if (!moved) return false
   appendLedger(deps.paths, { type: "worker.end", issue: job.issue, status: "blocked", reason }, now)
-  // The second early loss in a row holds the issue back: said once, here, in the notice of the loss itself.
-  const held = lostEarly && heldBackIssues(deps.paths).has(job.issue)
-  const hold = held
-    ? ` Its last two workers stopped within ${EARLY_DEATH_MINUTES} minutes of starting, so ${job.issue} is held back from new jobs until a person runs it by hand (agentctl job submit --issue ${job.issue}). The logs are in ~/.agentd/logs/worker-${job.issue}-*.log.`
-    : ""
-  enqueueSlack(deps.paths, { kind: "post", channel: "agents", text: `${job.issue}: ${reason}. ${notice}${hold}` }, now)
-  if (held) deps.log.error("issue held back after two early losses", { issue: job.issue })
+  // What the second early loss in a row means is said once, in the notice of that loss itself.
+  let more = ""
+  if (miniFault && previous) {
+    updateJob(deps.paths, "done", previous.id, { miniFault: true })
+    pauseForMiniFault(deps, [previous, job], now)
+    more =
+      ` It is the second worker in a row, after ${previous.issue}'s, to stop within ${EARLY_DEATH_MINUTES} minutes of starting, which points at this mini rather than the issues: ` +
+      `a broken install, a secrets file the runner refuses (~/.config/agentd/claude.env must be chmod 600), or a missing SDK. ` +
+      `The mini is paused. The logs are worker-${previous.id}.log and worker-${job.id}.log in ~/.agentd/logs. Run agentctl resume once it is fixed.`
+  } else if (lostEarly && heldBackIssues(deps.paths).has(job.issue)) {
+    more = ` Its last two workers stopped within ${EARLY_DEATH_MINUTES} minutes of starting, so ${job.issue} is held back from new jobs until a person runs it by hand (agentctl job submit --issue ${job.issue}). The logs are in ~/.agentd/logs/worker-${job.issue}-*.log.`
+    deps.log.error("issue held back after two early losses", { issue: job.issue })
+  }
+  enqueueSlack(deps.paths, { kind: "post", channel: "agents", text: `${job.issue}: ${reason}. ${notice}${more}` }, now)
   return true
+}
+
+/** The job that finished last, leaving out the losses already put down to a fault of the mini. */
+function lastFinished(paths: AgentPaths): JobRecord | null {
+  return (
+    listJobs(paths, "done")
+      .filter((j) => j.endedAt && !j.miniFault)
+      .sort((a, b) => a.endedAt!.localeCompare(b.endedAt!))
+      .at(-1) ?? null
+  )
+}
+
+/**
+ * Early losses on two different issues in a row are a fault of the mini, not
+ * of the issues: every issue would be lost the same way. PAUSE, in the shape
+ * agentctl pause writes, stops new jobs until a person resumes. The two
+ * losses are marked miniFault, so neither holds its issue back nor counts
+ * towards a later streak.
+ */
+function pauseForMiniFault(deps: JobRunnerDeps, lost: JobRecord[], now: Date): void {
+  const reason = `early losses on two different issues in a row (${lost.map((j) => j.issue).join(", ")}): a fault on this mini`
+  deps.log.error("paused: a fault on the mini", { jobs: lost.map((j) => j.id) })
+  if (existsSync(deps.paths.pauseFile)) return
+  mkdirSync(deps.paths.root, { recursive: true })
+  writeFileSync(deps.paths.pauseFile, JSON.stringify({ at: now.toISOString(), reason }))
+  appendLedger(deps.paths, { type: "paused", reason }, now)
 }
 
 export function superviseJobs(deps: JobRunnerDeps): void {
