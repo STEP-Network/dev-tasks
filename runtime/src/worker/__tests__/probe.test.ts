@@ -36,7 +36,7 @@ describe("probeHooks", () => {
     expect(await probeHooks({ query, config, exec: f.exec, claudeToken: null, home: "/Users/eve" })).toEqual({
       pluginHookFired: true, workerGuardFired: true, loadedPlugins: ["dev-tasks"], apiKeySource: "none",
     })
-    expect(f.lines()[0]).toMatch(/^git -c core\.hooksPath=\/dev\/null -c core\.fsmonitor=false init -b staging \S*hook-probe-/)
+    expect(f.lines()[0]).toMatch(/^git --no-replace-objects -c core\.hooksPath=\/dev\/null -c core\.fsmonitor=false init -b staging \S*hook-probe-/)
     expect(seen[0].prompt).toBe(PROBE_PROMPT)
     // The worker's own settings, the main checkout's project config included, capped.
     expect(seen[0].options).toMatchObject({ maxTurns: 8, maxBudgetUsd: 1, cwd: expect.stringMatching(/hook-probe-/), projectConfigRoot: "/Users/eve/polads" })

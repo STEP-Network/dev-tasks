@@ -11,8 +11,22 @@ import { execFileSync } from "node:child_process"
 import { randomUUID } from "node:crypto"
 import { linkSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 
-/** The pid holding `path`, or null when no live process of the marker's kind does. */
-function holderOf(path: string, marker: string, pid: number): number | null {
+/**
+ * A live process's command line, null when there is no such process (ps
+ * exits 1 and prints nothing), or undefined when ps itself failed and nobody
+ * can tell. /bin/ps, whatever PATH says. agentd asks it of its workers too.
+ */
+export function commandOf(pid: number, ps: string = "/bin/ps"): string | null | undefined {
+  try {
+    return execFileSync(ps, ["-p", String(pid), "-o", "command="], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] })
+  } catch (error) {
+    const failed = error as { status?: number | null; stdout?: unknown }
+    return failed.status === 1 && !String(failed.stdout ?? "").trim() ? null : undefined
+  }
+}
+
+/** The pid holding `path`, or null when no live process of the marker's kind does. A lock nobody can check stays held. */
+function holderOf(path: string, marker: string, pid: number, ps?: string): number | null {
   let holder: number
   try {
     holder = Number.parseInt(readFileSync(path, "utf8"), 10)
@@ -20,16 +34,11 @@ function holderOf(path: string, marker: string, pid: number): number | null {
     return null
   }
   if (!Number.isInteger(holder) || holder <= 0 || holder === pid) return null
-  let command: string
-  try {
-    command = execFileSync("ps", ["-p", String(holder), "-o", "command="], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] })
-  } catch {
-    return null // ps exits 1 when there is no such process
-  }
-  return command.includes(marker) ? holder : null
+  const command = commandOf(holder, ps)
+  return command === undefined || command?.includes(marker) ? holder : null
 }
 
-export function takePidLock(path: string, marker: string, pid: number = process.pid): { ok: true } | { ok: false; holder: number } {
+export function takePidLock(path: string, marker: string, pid: number = process.pid, ps?: string): { ok: true } | { ok: false; holder: number } {
   // The pid is written first and linked into place, so no reader ever sees
   // an empty lock. A stale lock is removed and the link tried again; a
   // process that wins the race to re-create it in between is a live holder.
@@ -42,7 +51,7 @@ export function takePidLock(path: string, marker: string, pid: number = process.
         return { ok: true }
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error
-        const holder = holderOf(path, marker, pid)
+        const holder = holderOf(path, marker, pid, ps)
         if (holder !== null) return { ok: false, holder }
         rmSync(path, { force: true })
       }

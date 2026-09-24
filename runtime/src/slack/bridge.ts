@@ -373,7 +373,8 @@ async function main(): Promise<void> {
     writeJsonAtomic(join(paths.state, "bridge.json"), { ...bridgeStatus(paths, state), ...extra })
   const halt = (error: unknown): never => {
     const message = redact(error instanceof Error ? error.message : String(error))
-    writeStatus({ error: message })
+    // stopped: agentd's health must not read this error as a paused outbox while the heartbeat is still fresh.
+    writeStatus({ error: message, stopped: true })
     log.error("bridge stopped", { error: message })
     process.exit(exitCodeFor(error))
   }

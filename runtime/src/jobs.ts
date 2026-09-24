@@ -6,6 +6,7 @@
  * places; agentd treats done as the truth (Task 13).
  */
 
+import { createHash } from "node:crypto"
 import { existsSync, readdirSync, rmSync } from "node:fs"
 import { join } from "node:path"
 import type { AgentPaths } from "./config.ts"
@@ -32,7 +33,15 @@ export interface JobRecord {
   submittedAt: string
   pid?: number
   startedAt?: string
+  /** When the runner began the SDK session, after preparing the worktree: agentd's backstop counts the wall clock from here. */
+  sessionStartedAt?: string
   killRequestedAt?: string
+  /** Set by agentd when the worker died within minutes of its start, or never started: two in a row on one issue hold it back (heldBackIssues). */
+  lostEarly?: boolean
+  /** Set by agentd on two early losses in a row on different issues: a fault of the mini, which paused it. They hold no issue back. */
+  miniFault?: boolean
+  /** Set by the runner when Linear failed before its claim was settled: the digest waits a while before offering the issue again (coolingIssues). */
+  linearFailed?: boolean
   endedAt?: string
   result?: JobResult
   /** Set once `agentctl tick` has shown the finished job to the front door. */
@@ -61,6 +70,48 @@ export function submitJob(paths: AgentPaths, issue: string, model: string | null
   return job
 }
 
+/**
+ * Issues whose last two jobs were both lost early: a runner that dies before
+ * it claims leaves its issue Ready, and the next job for it would most likely
+ * die the same way. The digest offers them no more until a person runs one
+ * by hand (agentctl job submit), and a job that ends any other way lifts it.
+ * A loss put down to a fault of the mini (miniFault) is not the issue's, and
+ * ends its streak: after a resume, nothing from before the pause counts.
+ */
+export function heldBackIssues(paths: AgentPaths): Set<string> {
+  const byIssue = new Map<string, JobRecord[]>()
+  for (const job of listJobs(paths, "done")) if (job.endedAt) byIssue.set(job.issue, [...(byIssue.get(job.issue) ?? []), job])
+  const held = new Set<string>()
+  for (const [issue, jobs] of byIssue) {
+    const lastTwo = jobs.sort((a, b) => a.endedAt!.localeCompare(b.endedAt!)).slice(-2)
+    if (lastTwo.length === 2 && lastTwo.every((j) => j.lostEarly && !j.miniFault)) held.add(issue)
+  }
+  return held
+}
+
+/** How long the digest waits before offering an issue again after Linear failed its last job. */
+export const LINEAR_COOLDOWN_MINUTES = 15
+
+/**
+ * Issues whose last job ended because Linear failed before the claim was
+ * settled (linearFailed), less than LINEAR_COOLDOWN_MINUTES ago. Offered at
+ * every wakeup, a lasting failure (a renamed state, a comment the agent may
+ * not write) would cost a job and a front-door turn a minute.
+ */
+export function coolingIssues(paths: AgentPaths, now: Date): Set<string> {
+  const last = new Map<string, JobRecord>()
+  for (const job of listJobs(paths, "done")) {
+    if (!job.endedAt) continue
+    const seen = last.get(job.issue)
+    if (!seen || seen.endedAt! < job.endedAt) last.set(job.issue, job)
+  }
+  const cooling = new Set<string>()
+  for (const [issue, job] of last) {
+    if (job.linearFailed && now.getTime() - Date.parse(job.endedAt!) < LINEAR_COOLDOWN_MINUTES * 60_000) cooling.add(issue)
+  }
+  return cooling
+}
+
 /** false when the job is no longer in `from` (another process moved it first). */
 export function moveJob(paths: AgentPaths, id: string, from: JobState, to: JobState, patch: Partial<JobRecord> = {}): boolean {
   const source = jobPath(paths, from, id)
@@ -86,17 +137,37 @@ export interface WatchedPr {
   notified?: string
 }
 
-const watchedPath = (paths: AgentPaths) => join(paths.state, "prs.json")
+/**
+ * One file per PR, in state/prs/, named by its URL's hash. The runner only
+ * adds files (recordPr) and agentd's watcher only changes or removes the ones
+ * it read, so neither process can drop the other's write, as two
+ * read-change-write cycles of one shared list could.
+ */
+const watchedDir = (paths: AgentPaths) => join(paths.state, "prs")
+const watchedFile = (paths: AgentPaths, url: string) => join(watchedDir(paths), `${createHash("sha256").update(url).digest("hex").slice(0, 32)}.json`)
 
 export function readWatchedPrs(paths: AgentPaths): WatchedPr[] {
-  return readJson<WatchedPr[]>(watchedPath(paths)) ?? []
+  const dir = watchedDir(paths)
+  if (!existsSync(dir)) return []
+  return readdirSync(dir)
+    .filter((f) => f.endsWith(".json"))
+    .map((f) => readJson<WatchedPr>(join(dir, f)))
+    .filter((p): p is WatchedPr => p !== null)
+    .sort((a, b) => a.openedAt.localeCompare(b.openedAt))
 }
 
-export function writeWatchedPrs(paths: AgentPaths, list: WatchedPr[]): void {
-  writeJsonAtomic(watchedPath(paths), list)
-}
-
+/** Starts watching a PR. A PR already watched keeps its record, `notified` included. */
 export function recordPr(paths: AgentPaths, pr: WatchedPr): void {
-  const list = readWatchedPrs(paths)
-  if (!list.some((p) => p.url === pr.url)) writeWatchedPrs(paths, [...list, pr])
+  const file = watchedFile(paths, pr.url)
+  if (!existsSync(file)) writeJsonAtomic(file, pr)
+}
+
+/** Rewrites a watched PR's record. One forgotten meanwhile stays forgotten. */
+export function updateWatchedPr(paths: AgentPaths, pr: WatchedPr): void {
+  const file = watchedFile(paths, pr.url)
+  if (existsSync(file)) writeJsonAtomic(file, pr)
+}
+
+export function forgetWatchedPr(paths: AgentPaths, url: string): void {
+  rmSync(watchedFile(paths, url), { force: true })
 }

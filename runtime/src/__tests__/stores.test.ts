@@ -4,7 +4,7 @@ import { join } from "node:path"
 import { describe, expect, it } from "vitest"
 import { agentPaths } from "../config.ts"
 import { listNew } from "../fsq.ts"
-import { listJobs, moveJob, submitJob, updateJob } from "../jobs.ts"
+import { forgetWatchedPr, listJobs, moveJob, readWatchedPrs, recordPr, submitJob, updateJob, updateWatchedPr } from "../jobs.ts"
 import { enqueueSlack, type OutboxMessage } from "../outbox.ts"
 import { issueForThread, saveThread, threadFor } from "../threads.ts"
 
@@ -56,5 +56,31 @@ describe("jobs", () => {
     expect(moveJob(p, a.id, "pending", "running")).toBe(false)
     updateJob(p, "running", a.id, { pid: 4242 })
     expect(listJobs(p, "running")[0]).toMatchObject({ issue: "STEP-1", pid: 4242, startedAt: "2026-09-24T08:05:00.000Z" })
+  })
+})
+
+describe("watched PRs", () => {
+  const PR1 = "https://github.com/STEP-Network/v0-politiske-annoncer/pull/1"
+  const PR2 = "https://github.com/STEP-Network/v0-politiske-annoncer/pull/2"
+
+  it("keep one record per PR, oldest first, and a second record of a PR changes nothing", () => {
+    const p = paths()
+    recordPr(p, { issue: "STEP-8", url: PR2, openedAt: "2026-09-24T09:00:00.000Z" })
+    recordPr(p, { issue: "STEP-7", url: PR1, openedAt: "2026-09-24T08:00:00.000Z" })
+    updateWatchedPr(p, { issue: "STEP-7", url: PR1, openedAt: "2026-09-24T08:00:00.000Z", notified: "abc:Lint" })
+    // A resumed job reuses the open PR and records it again: what the watcher noted stays.
+    recordPr(p, { issue: "STEP-7", url: PR1, openedAt: "2026-09-24T10:00:00.000Z" })
+    expect(readWatchedPrs(p)).toEqual([
+      { issue: "STEP-7", url: PR1, openedAt: "2026-09-24T08:00:00.000Z", notified: "abc:Lint" },
+      { issue: "STEP-8", url: PR2, openedAt: "2026-09-24T09:00:00.000Z" },
+    ])
+  })
+
+  it("forget a PR for good: a late update does not bring it back", () => {
+    const p = paths()
+    recordPr(p, { issue: "STEP-7", url: PR1, openedAt: "2026-09-24T08:00:00.000Z" })
+    forgetWatchedPr(p, PR1)
+    updateWatchedPr(p, { issue: "STEP-7", url: PR1, openedAt: "2026-09-24T08:00:00.000Z", notified: "abc:Lint" })
+    expect(readWatchedPrs(p)).toEqual([])
   })
 })
