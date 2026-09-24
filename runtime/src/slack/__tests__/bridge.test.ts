@@ -18,6 +18,7 @@ import {
   fileIntake,
   handleEnvelope,
   isIssueGone,
+  channelPages,
   resolveChannels,
   retryPending,
   wireSocket,
@@ -325,6 +326,17 @@ describe("mentions", () => {
     await handleEnvelope(deps, { team_id: "T1", event: { type: "app_mention", user: "UNATE", channel: "CAG", ts: "1900.1", text: "<@UBOT> status?" } })
     expect(listNew(paths.inbox)[0].payload).toMatchObject({ type: "mention", userName: "Nate", threadTs: "1900.1" })
   })
+
+  it("come through from a private Slack Connect channel, whoever hosts it", async () => {
+    const { deps, paths } = setup()
+    const body: SlackEnvelope = {
+      team_id: "THOST",
+      authorizations: [{ team_id: "T1" }],
+      event: { type: "message", channel_type: "group", user: "UNATE", channel: "CAG", ts: "1901.1", text: "<@UBOT> status?" },
+    }
+    expect(await handleEnvelope(deps, body)).toBe("mention")
+    expect(listNew(paths.inbox)[0].payload).toMatchObject({ type: "mention", channel: "CAG" })
+  })
 })
 
 describe("resolveChannels", () => {
@@ -337,7 +349,47 @@ describe("resolveChannels", () => {
     })
     await expect(
       resolveChannels(list, { agents: "polads-agents", questions: "polads-questions", intake: "polads-intake", releases: "polads-releases" }),
-    ).rejects.toThrow(/the bot is not in #polads-questions.*#polads-intake does not exist.*#polads-releases does not exist/)
+    ).rejects.toThrow(
+      /the bot is not in #polads-questions\. the bot cannot see #polads-intake: it does not exist, or it is private and the bot is not in it\. the bot cannot see #polads-releases.*Integrations, Add an App/,
+    )
+  })
+})
+
+describe("channelPages", () => {
+  it("lists public and private channels, a page at a time", async () => {
+    const calls: unknown[] = []
+    const pages = channelPages(async (args) => {
+      calls.push(args)
+      return args.cursor
+        ? { channels: [{ id: "C2", name: "polads-intake", is_member: true }] }
+        : { channels: [{ id: "C1", name: "polads-agents", is_member: true }], response_metadata: { next_cursor: "next" } }
+    })
+    expect(await pages()).toEqual({ channels: [{ id: "C1", name: "polads-agents", is_member: true }], next: "next" })
+    expect(await pages("next")).toEqual({ channels: [{ id: "C2", name: "polads-intake", is_member: true }], next: undefined })
+    expect(calls[0]).toMatchObject({ types: "public_channel,private_channel", exclude_archived: true })
+  })
+
+  it("stops the bridge naming the scope Slack says is missing, and leaves it stopped", async () => {
+    const refused = Object.assign(new Error("An API error occurred: missing_scope"), {
+      code: "slack_webapi_platform_error",
+      data: { ok: false, error: "missing_scope", needed: "groups:read", provided: "channels:read,chat:write" },
+    })
+    const pages = channelPages(async () => {
+      throw refused
+    })
+    const error = await pages().catch((e: unknown) => e)
+    expect(String(error)).toMatch(/lacks the scope groups:read, which listing private channels needs\. Update the app from runtime\/slack\/app-manifest\.json/)
+    expect(String(error)).not.toMatch(/does not exist/)
+    expect(exitCodeFor(error)).toBe(0)
+  })
+
+  it("passes any other failure on as it came, so an unreachable Slack still restarts the bridge", async () => {
+    const down = Object.assign(new Error("fetch failed"), { code: "slack_webapi_request_error" })
+    const error = await channelPages(async () => {
+      throw down
+    })().catch((e: unknown) => e)
+    expect(error).toBe(down)
+    expect(exitCodeFor(error)).toBe(1)
   })
 })
 

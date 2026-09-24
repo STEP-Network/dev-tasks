@@ -14,7 +14,10 @@
  * that names it is only a mention for it.
  *
  * In order:
- *  1. Another workspace (a Slack Connect channel) is ignored.
+ *  1. A delivery for another installation of the app (another workspace) is
+ *     ignored. That is the envelope's authorization, never the sender's team:
+ *     in a Slack Connect channel a sender from another workspace carries
+ *     their own team, and the allowlist of member ids (3) decides who is heard.
  *  2. Bots (ours included), edits, deletes and joins are ignored.
  *  3. People not on the allowlist are ignored. A Slack message can never
  *     grant a permission (spec 11); here it cannot even start work.
@@ -37,6 +40,8 @@ export interface SlackEvent {
   bot_id?: string
   text?: string
   channel?: string
+  /** channel (public) or group (private): the four may be either, and both read alike. */
+  channel_type?: string
   ts?: string
   thread_ts?: string
   reaction?: string
@@ -44,7 +49,10 @@ export interface SlackEvent {
 }
 
 export interface SlackEnvelope {
+  /** Slack says this mirrors authorizations[0]. */
   team_id?: string
+  /** The installation this delivery is for. Slack sends one. */
+  authorizations?: Array<{ team_id?: string | null }>
   event_id?: string
   event?: SlackEvent
 }
@@ -81,7 +89,8 @@ const PASS_SUBTYPES = new Set<string | undefined>([undefined, "thread_broadcast"
 export function classify(envelope: SlackEnvelope, ctx: ClassifyContext): Classified {
   const e = envelope.event
   if (!e) return { type: "ignore", reason: "no event" }
-  if (envelope.team_id && envelope.team_id !== ctx.teamId) return { type: "ignore", reason: "another workspace" }
+  const installedIn = envelope.authorizations?.[0]?.team_id ?? envelope.team_id
+  if (installedIn && installedIn !== ctx.teamId) return { type: "ignore", reason: "another workspace" }
   if (e.bot_id || e.user === ctx.botUserId || !PASS_SUBTYPES.has(e.subtype)) return { type: "ignore", reason: "bot or system message" }
   if (!e.user || !ctx.allowedUsers.includes(e.user)) return { type: "ignore", reason: "sender not on the allowlist" }
 

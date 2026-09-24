@@ -66,6 +66,15 @@ describe("classify", () => {
     })
   })
 
+  it("reads a private channel's messages (channel_type group) as it reads a public channel's", () => {
+    expect(classify(envelope({ type: "message", channel_type: "group", channel: "CIN", ts: "1800.1", text: "<@UBOT> fix the date" }), CTX)).toMatchObject({ type: "intake" })
+    expect(classify(envelope({ type: "message", channel_type: "group", channel: "CQ", ts: "1700.5", thread_ts: "1700.1", text: "Use the publication date" }), CTX)).toMatchObject({
+      type: "answer",
+      issue: "STEP-7",
+    })
+    expect(classify(envelope({ type: "message", channel_type: "group", channel: "CAG", ts: "1900.1", text: "<@UBOT> status?" }), CTX)).toMatchObject({ type: "mention" })
+  })
+
   it("ignores chatter that is neither a mention nor in an issue's thread", () => {
     expect(classify(envelope({ type: "message", channel: "CIN", ts: "4", text: "morning all" }), CTX).type).toBe("ignore")
   })
@@ -76,6 +85,40 @@ describe("classify", () => {
       key: "reaction:CREL:1950.1:UNATE:hand",
     })
     expect(classify(envelope({ type: "reaction_added", reaction: "hand", item: { type: "message", channel: "CX", ts: "1" } }), CTX).type).toBe("ignore")
+  })
+})
+
+// The four channels may be Slack Connect channels, hosted in STEP Network or
+// shared with it. Slack puts the installation in the envelope (authorizations,
+// which team_id mirrors) and the sender's own workspace in the event.
+describe("classify in a Slack Connect channel", () => {
+  const connect = (event: Record<string, unknown>, over: Partial<SlackEnvelope> = {}): SlackEnvelope => ({
+    team_id: "T1",
+    authorizations: [{ team_id: "T1" }],
+    ...over,
+    event: { user: "UNATE", channel_type: "group", ...event } as SlackEnvelope["event"],
+  })
+
+  it("hears a member of our workspace in a channel another workspace hosts", () => {
+    const e = { type: "message", channel: "CIN", ts: "2100.1", text: "<@UBOT> fix the date", team: "T1", user_team: "T1", source_team: "THOST" }
+    expect(classify(connect(e), CTX)).toMatchObject({ type: "intake", user: "UNATE" })
+    // Even were Slack to put the host's team in team_id, the authorization is this installation.
+    expect(classify(connect(e, { team_id: "THOST" }), CTX)).toMatchObject({ type: "intake" })
+  })
+
+  it("lets the allowlist of member ids, not the sender's workspace, decide who is heard", () => {
+    const allowed = { ...CTX, allowedUsers: ["UNATE", "UPARTNER"] }
+    const fromPartner = { type: "message", channel: "CIN", ts: "2100.2", text: "<@UBOT> the date", user: "UPARTNER", team: "TPARTNER", user_team: "TPARTNER" }
+    expect(classify(connect(fromPartner), allowed)).toMatchObject({ type: "intake", user: "UPARTNER" })
+    expect(classify(connect({ ...fromPartner, user: "USTRANGER" }), allowed)).toEqual({ type: "ignore", reason: "sender not on the allowlist" })
+  })
+
+  it("ignores a delivery for an installation of the app in another workspace", () => {
+    const e = { type: "message", channel: "CIN", ts: "2100.3", text: "<@UBOT> x", team: "T1" }
+    expect(classify(connect(e, { team_id: "T9", authorizations: [{ team_id: "T9" }] }), CTX)).toEqual({ type: "ignore", reason: "another workspace" })
+    expect(classify(connect(e, { team_id: "T1", authorizations: [{ team_id: "T9" }] }), CTX)).toEqual({ type: "ignore", reason: "another workspace" })
+    // An enterprise authorization without a team falls back to team_id.
+    expect(classify(connect(e, { team_id: "T1", authorizations: [{ team_id: null }] }), CTX)).toMatchObject({ type: "intake" })
   })
 })
 

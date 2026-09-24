@@ -106,8 +106,18 @@ async function gitIdentity(d: DoctorDeps): Promise<Check> {
   return { level: "ok", name: "git identity", detail: `${values[1]} <${values[0]}> in ~/.gitconfig` }
 }
 
+/**
+ * Over SSH the login keychain is out of reach ("User interaction is not
+ * allowed"), so gh and claude report no login there although both work in
+ * the automatic-login GUI session, where the LaunchAgents run. A failing
+ * keychain check is then a warning to run doctor from the mini's own Terminal.
+ */
+const overSsh = (d: DoctorDeps) => Boolean(d.env.SSH_CONNECTION)
+const KEYCHAIN = "not reachable over SSH, where the login keychain is locked: run doctor from the mini's own Terminal (in person or over Screen Sharing)"
+
 async function github(d: DoctorDeps, slug: string): Promise<Check> {
   const status = await d.exec("gh", ["auth", "status"])
+  if (status.code !== 0 && overSsh(d)) return { level: "warn", name: "gh", detail: KEYCHAIN }
   if (status.code !== 0) return { level: "fail", name: "gh", detail: "not logged in: gh auth login as the mini's own machine user, then gh auth setup-git" }
   const account = /account (\S+)/.exec(`${status.stdout}\n${status.stderr}`)?.[1] ?? "the logged-in user"
   const push = await d.exec("gh", ["api", `repos/${slug}`, "--jq", ".permissions.push"])
@@ -126,14 +136,32 @@ async function tool(d: DoctorDeps, name: string, command: string, args: string[]
   return { level: "ok", name, detail: version }
 }
 
-function pnpm(version: string, code: number): Check {
-  if (code === 0 && /^10\./.test(version)) return { level: "ok", name: "pnpm", detail: version }
+/**
+ * The pnpm the checkout asks for: package.json's `packageManager`
+ * (`pnpm@10.33.0`) once it has one (STEP-3156), else 10, which CI pins.
+ */
+export function wantedPnpm(repo: string | null): { major: string; version: string; from: string } {
+  if (repo) {
+    try {
+      const pm = (JSON.parse(readFileSync(join(repo, "package.json"), "utf8")) as { packageManager?: unknown }).packageManager
+      const m = typeof pm === "string" ? /^pnpm@((\d+)\.\d+\.\d+)/.exec(pm) : null
+      if (m) return { major: m[2], version: m[1], from: "the checkout's package.json" }
+    } catch {
+      // No checkout yet, or no package.json: CI's pin below.
+    }
+  }
+  return { major: "10", version: "10", from: "CI" }
+}
+
+function pnpm(version: string, code: number, want: ReturnType<typeof wantedPnpm>): Check {
+  if (code === 0 && version.startsWith(`${want.major}.`)) return { level: "ok", name: "pnpm", detail: version }
   return {
     level: "fail",
     name: "pnpm",
     detail:
-      `${code === 0 ? version : "missing"} is not pnpm 10, which CI pins: any other ignores package.json's pnpm.onlyBuiltDependencies. ` +
-      `brew install pnpm@10, and put /opt/homebrew/opt/pnpm@10/bin first on PATH in ~/.zprofile`,
+      `${code === 0 ? version : "missing"} is not pnpm ${want.major}, which ${want.from} asks for: another ignores package.json's pnpm.onlyBuiltDependencies. ` +
+      `A pnpm from pnpm's own installer (~/Library/pnpm): pnpm self-update ${want.version}. ` +
+      `From Homebrew: brew install pnpm@${want.major}, and put /opt/homebrew/opt/pnpm@${want.major}/bin first on PATH in ~/.zprofile`,
   }
 }
 
@@ -181,7 +209,7 @@ function frontDoorPlugin(d: DoctorDeps, config: AgentConfig): Check {
  * (sandbox-probe.ts): trusted only for the version agentctl probe-sandbox
  * last passed on.
  */
-function sandboxProbeCheck(d: DoctorDeps, installed: string): Check {
+function sandboxProbeCheck(d: DoctorDeps, claude: string, installed: string): Check {
   const name = "sandbox probe"
   const probe = readSandboxProbe(d.paths)
   if (!probe) return { level: "warn", name, detail: "never run: agentctl probe-sandbox, once installed (runbook, section 9)" }
@@ -189,8 +217,12 @@ function sandboxProbeCheck(d: DoctorDeps, installed: string): Check {
     const failed = probe.checks.filter((c) => !c.ok).map((c) => c.name)
     return { level: "fail", name, detail: `failed on ${probe.claudeVersion} (${failed.join(", ")}): the front door's sandbox may not hold. Keep the mini paused` }
   }
-  if (probe.claudeVersion !== installed) {
-    return { level: "warn", name, detail: `passed on ${probe.claudeVersion}, but claude is now ${installed || "unknown"}: agentctl probe-sandbox` }
+  if (probe.claudeVersion !== installed || probe.claudePath !== claude) {
+    return {
+      level: "warn",
+      name,
+      detail: `passed on ${probe.claudePath} ${probe.claudeVersion}, but the front door's claude is ${claude} ${installed || "unknown"}: agentd will not start it until agentctl probe-sandbox passes`,
+    }
   }
   return { level: "ok", name, detail: `passed on ${probe.claudeVersion}, ${probe.at}` }
 }
@@ -263,7 +295,7 @@ export async function doctorChecks(d: DoctorDeps): Promise<Check[]> {
   add(await gitIdentity(d))
   if (config) add(await github(d, config.repo.slug))
   const p = await d.exec("pnpm", ["--version"])
-  add(pnpm(p.stdout.trim(), p.code))
+  add(pnpm(p.stdout.trim(), p.code, wantedPnpm(config?.repo.path ?? null)))
   add(node(d.nodeVersion))
   const claude = d.fresh || !config ? "claude" : config.frontDoor.claudePath
   add(await tool(d, "tmux", d.fresh || !config ? "tmux" : config.frontDoor.tmuxPath, ["-V"]))
@@ -273,9 +305,12 @@ export async function doctorChecks(d: DoctorDeps): Promise<Check[]> {
   add(
     auth.code === 0
       ? { level: "ok", name: "claude login", detail: "logged in" }
-      : { level: "fail", name: "claude login", detail: "not logged in: run claude as this user and log in with the agent's own account" },
+      : overSsh(d)
+        ? { level: "warn", name: "claude login", detail: KEYCHAIN }
+        : { level: "fail", name: "claude login", detail: "not logged in: run claude as this user and log in with the agent's own account" },
   )
-  add(sandboxProbeCheck(d, (await d.exec(claude, ["--version"])).stdout.trim().split("\n")[0]))
+  // Compared with the path agentd starts the front door with, whichever claude doctor asked.
+  add(sandboxProbeCheck(d, config?.frontDoor.claudePath ?? "claude", (await d.exec(claude, ["--version"])).stdout.trim().split("\n")[0]))
   if (config) {
     const repo = await d.exec("git", ["-C", config.repo.path, "rev-parse", "--is-inside-work-tree"])
     add(

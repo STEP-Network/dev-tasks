@@ -146,6 +146,11 @@ describe("run", () => {
     expect(existsSync(agentPaths().pauseFile)).toBe(false)
   })
 
+  it("probes only the front door's own claude: the record is what agentd starts it on", async () => {
+    writeConfig()
+    await expect(run(["probe-sandbox", "--claude", "/elsewhere/claude"], out, deps())).rejects.toThrow(/front door's own claude/)
+  })
+
   it("pauses with a reason, and resume lifts any pause, agentd's own included", async () => {
     await run(["pause", "--reason", "rehearsal"], out, deps())
     expect(JSON.parse(readFileSync(agentPaths().pauseFile, "utf8"))).toEqual({ at: NOW.toISOString(), reason: "rehearsal" })

@@ -6,7 +6,7 @@
  * bridge starts each message with the mini's name.
  */
 
-import { mkdirSync } from "node:fs"
+import { existsSync, mkdirSync, writeFileSync } from "node:fs"
 import { uptime } from "node:os"
 import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
@@ -100,6 +100,14 @@ export async function runDuties(d: DutyDeps, memo: DutyMemo): Promise<void> {
       // Once per reason, not every 15 seconds.
       if (memo.frontDoorRefused !== error.message) log.error("front door not started", { reason: error.message })
       memo.frontDoorRefused = error.message
+      // And the mini stays paused meanwhile, so no job queued before starts either.
+      // In agentctl pause's shape. A pause a person or agentd set is kept.
+      if (!existsSync(paths.pauseFile)) {
+        const reason = `the front door was not started: ${error.message}`
+        mkdirSync(paths.root, { recursive: true })
+        writeFileSync(paths.pauseFile, JSON.stringify({ at: now().toISOString(), reason }))
+        appendLedger(paths, { type: "paused", reason }, now())
+      }
     }
   })
   await step("jobs", () => superviseJobs({ paths, config, now, log, bootAt: d.bootAt, liveness: d.liveness, kill: d.kill, spawnWorker: d.spawnWorker }))

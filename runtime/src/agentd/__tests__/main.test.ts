@@ -1,5 +1,5 @@
 import { spawn, spawnSync } from "node:child_process"
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs"
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { fileURLToPath } from "node:url"
@@ -137,9 +137,19 @@ describe("runDuties", () => {
     await runDuties({ ...d, log }, memo)
     expect(memo.frontDoorRefused).toMatch(/not valid JSON/)
     expect(errors.filter((m) => m === "front door not started")).toHaveLength(1)
+    // The mini stays paused meanwhile, with the reason, as agentctl pause would write it.
+    expect(JSON.parse(readFileSync(paths.pauseFile, "utf8")).reason).toMatch(/^the front door was not started: .*not valid JSON/)
     writeFileSync(frontDoorSettingsPath(paths), JSON.stringify({ sandbox: { enabled: true, allowUnsandboxedCommands: false } }))
     await runDuties({ ...d, log }, memo)
     expect(memo.frontDoorRefused).toBeNull()
+  })
+
+  it("keeps a pause a person set when it will not start the front door", async () => {
+    const { d, paths } = duties()
+    writeFileSync(paths.pauseFile, JSON.stringify({ at: NOW.toISOString(), reason: "a person" }))
+    rmSync(frontDoorSettingsPath(paths))
+    await runDuties(d, freshMemo())
+    expect(JSON.parse(readFileSync(paths.pauseFile, "utf8")).reason).toBe("a person")
   })
 
   it("reports messages Slack refused for good only when their count grows past what it first saw", async () => {

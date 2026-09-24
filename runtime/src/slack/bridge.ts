@@ -21,7 +21,7 @@ import { assertLinearKeyFile, loadSlackSecrets } from "../secrets.ts"
 import { issueForThread, saveThread } from "../threads.ts"
 import { createLinearTracker, type Tracker } from "../tracker.ts"
 import { classify, type Classified, type ClassifyContext, type SlackEnvelope } from "./classify.ts"
-import { isSlackTrouble, startOutbox, type SendContext, type SlackWeb } from "./send.ts"
+import { isSlackTrouble, slackErrorCode, startOutbox, type SendContext, type SlackWeb } from "./send.ts"
 import { answerTransition, appendAnswer, fromSlack, intakeIssue, mentionedUsers } from "./text.ts"
 
 export interface BridgeWeb extends SlackWeb {
@@ -223,6 +223,31 @@ export async function retryPending(deps: BridgeDeps): Promise<void> {
 }
 
 type ChannelPage = { channels: Array<{ id?: string; name?: string; is_member?: boolean }>; next?: string }
+type ListArgs = { types: string; exclude_archived: boolean; limit: number; cursor?: string }
+type ListResult = { channels?: ChannelPage["channels"]; response_metadata?: { next_cursor?: string } }
+
+/**
+ * conversations.list a page at a time: the public channels, and the private
+ * ones the bot is in, since the four may be private Slack Connect channels.
+ * An app whose scopes predate private channels is refused with missing_scope,
+ * and the bridge stops naming the scope, where "does not exist" would send a
+ * person looking for the channel.
+ */
+export function channelPages(list: (args: ListArgs) => Promise<ListResult>): (cursor?: string) => Promise<ChannelPage> {
+  return async (cursor) => {
+    try {
+      const page = await list({ types: "public_channel,private_channel", exclude_archived: true, limit: 1000, cursor })
+      return { channels: page.channels ?? [], next: page.response_metadata?.next_cursor || undefined }
+    } catch (error) {
+      if (slackErrorCode(error) !== "missing_scope") throw error
+      const needed = (error as { data?: { needed?: unknown } }).data?.needed
+      throw new Error(
+        `slack-bridge: the Slack app lacks the scope ${typeof needed === "string" ? needed : "groups:read"}, which listing private channels needs. ` +
+          "Update the app from runtime/slack/app-manifest.json (App Manifest), then reinstall it to the workspace",
+      )
+    }
+  }
+}
 
 /** Channel ids by name, refusing to start when one is missing or the bot is not in it. */
 export async function resolveChannels(
@@ -240,11 +265,15 @@ export async function resolveChannels(
   const problems: string[] = []
   for (const [key, name] of Object.entries(names) as Array<[ChannelKey, string]>) {
     const hit = byName.get(name)
-    if (!hit) problems.push(`#${name} does not exist or is private`)
-    else if (!hit.isMember) problems.push(`the bot is not in #${name}: /invite it there`)
+    if (!hit) problems.push(`the bot cannot see #${name}: it does not exist, or it is private and the bot is not in it`)
+    else if (!hit.isMember) problems.push(`the bot is not in #${name}`)
     else ids[key] = hit.id
   }
-  if (problems.length) throw new Error(`slack-bridge: ${problems.join(". ")}`)
+  if (problems.length) {
+    throw new Error(
+      `slack-bridge: ${problems.join(". ")}. Add the bot in the channel's settings, Integrations, Add an App (/invite by name can pick a person called the same)`,
+    )
+  }
   return ids
 }
 
@@ -318,10 +347,10 @@ async function setup(paths: AgentPaths) {
   const lookups = new WebClient(botToken, { retryConfig: { retries: 1 }, timeout: 10_000 })
   const auth = await client.auth.test()
   if (!auth.team_id || !auth.user_id) throw new Error("slack-bridge: auth.test returned no team or bot user")
-  const channelIds = await resolveChannels(async (cursor) => {
-    const page = await client.conversations.list({ types: "public_channel", exclude_archived: true, limit: 1000, cursor })
-    return { channels: page.channels ?? [], next: page.response_metadata?.next_cursor || undefined }
-  }, config.slack.channels)
+  const channelIds = await resolveChannels(
+    channelPages((args) => client.conversations.list(args)),
+    config.slack.channels,
+  )
   return { config, appToken, client, lookups, teamId: auth.team_id, botUserId: auth.user_id, channelIds }
 }
 
