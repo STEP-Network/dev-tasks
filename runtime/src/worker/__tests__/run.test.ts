@@ -140,6 +140,8 @@ describe("runJob", () => {
       const why = `the main checkout has .git/${file.join("/")}, which can hide what a branch changes`
       expect(await runJob(deps, job.id)).toMatchObject({ status: "skipped", reason: why })
       expect(JSON.parse(readFileSync(paths.pauseFile, "utf8"))).toEqual({ at: "2026-09-24T09:40:00.000Z", reason: why })
+      // Counted in the ledger, as agentd's own pause is.
+      expect(readFileSync(join(paths.logs, "ledger.jsonl"), "utf8")).toContain(JSON.stringify({ at: "2026-09-24T09:40:00.000Z", type: "paused", reason: why }))
       expect(outbox()).toEqual([`Paused: ${why}. STEP-7 was not started. A person must look at the file, remove it if nothing needs it, and run agentctl resume.`])
       expect(fake.calls).toEqual([])
       expect(q.seen).toEqual([])

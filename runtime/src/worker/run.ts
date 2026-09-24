@@ -213,7 +213,10 @@ export async function runJob(deps: RunDeps, jobId: string): Promise<JobResult> {
   const rewrite = historyRewrite(config.repo.path)
   if (rewrite) {
     const why = `the main checkout has .git/${rewrite}, which can hide what a branch changes`
-    if (!existsSync(paths.pauseFile)) writeFileSync(paths.pauseFile, JSON.stringify({ at: deps.now().toISOString(), reason: why }))
+    if (!existsSync(paths.pauseFile)) {
+      writeFileSync(paths.pauseFile, JSON.stringify({ at: deps.now().toISOString(), reason: why }))
+      appendLedger(paths, { type: "paused", reason: why }, deps.now())
+    }
     enqueueSlack(paths, { kind: "post", channel: "agents", text: `Paused: ${why}. ${job.issue} was not started. A person must look at the file, remove it if nothing needs it, and run agentctl resume.` }, deps.now())
     return finish({ ...nothing, status: "skipped", reason: why })
   }
