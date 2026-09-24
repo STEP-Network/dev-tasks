@@ -272,10 +272,12 @@ export function createLinearTracker() {
             if (raw.assignee && raw.assignee.id !== me.id) {
                 throw new Error(`Linear: ${raw.identifier} is assigned to someone else; not claiming it`);
             }
+            // Assigned but left in its old state, the issue would be invisible to
+            // listClaims (In Progress only), held and never swept. So no state, no claim.
             const stateId = await stateIdFor("In Progress");
-            const input = { assigneeId: me.id };
-            if (stateId)
-                input.stateId = stateId;
+            if (!stateId)
+                throw new Error(`Linear: no state named In Progress on team ${LINEAR_TEAM_KEY}; not claiming ${raw.identifier}`);
+            const input = { assigneeId: me.id, stateId };
             // The comment first: if it fails, the issue is simply not claimed. The
             // other way round, a failed comment would leave the issue assigned and
             // In Progress with no claim for the sweeper to find, held for good.

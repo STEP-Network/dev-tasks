@@ -42,7 +42,8 @@ import { branchNameFor, type IssuePatch } from "../src/tracker/types.ts"
 export interface ParsedArgs {
   command: string
   positional: string[]
-  flags: Record<string, string | string[] | true>
+  /** A bare `--flag` is `true`, also inside a repeated flag's array. */
+  flags: Record<string, string | true | Array<string | true>>
 }
 
 const USAGE = `usage: trackerctl <read|branch|create|comment|attach|ready|claim|whoami|update|heartbeat|release|claims|list> [args]`
@@ -53,7 +54,7 @@ export function parseArgs(argv: string[]): ParsedArgs {
   if (command.startsWith("-")) throw new Error(USAGE)
 
   const positional: string[] = []
-  const flags: Record<string, string | string[] | true> = {}
+  const flags: ParsedArgs["flags"] = {}
 
   for (let i = 0; i < rest.length; i++) {
     const token = rest[i]
@@ -69,13 +70,15 @@ export function parseArgs(argv: string[]): ParsedArgs {
     const value: string | true = hasValue ? next : true
     if (hasValue) i++
 
+    // A bare flag stays `true` when it repeats: the string "true" would pass
+    // for a label name, and a missing-value check would never see it.
     const existing = flags[name]
     if (existing === undefined) {
       flags[name] = value
     } else if (Array.isArray(existing)) {
-      existing.push(String(value))
+      existing.push(value)
     } else {
-      flags[name] = [String(existing), String(value)]
+      flags[name] = [existing, value]
     }
   }
 
@@ -84,14 +87,16 @@ export function parseArgs(argv: string[]): ParsedArgs {
 
 function str(flags: ParsedArgs["flags"], name: string): string | undefined {
   const v = flags[name]
-  if (v === undefined || v === true) return undefined
-  return Array.isArray(v) ? v[0] : v
+  const first = Array.isArray(v) ? v[0] : v
+  return first === undefined || first === true ? undefined : first
 }
 
+/** Every value given for a repeatable flag. A bare occurrence carries none. */
 function list(flags: ParsedArgs["flags"], name: string): string[] | undefined {
   const v = flags[name]
   if (v === undefined || v === true) return undefined
-  return Array.isArray(v) ? v : [v]
+  const values = (Array.isArray(v) ? v : [v]).filter((x): x is string => x !== true)
+  return values.length ? values : undefined
 }
 
 function requireArg(value: string | undefined, name: string): string {
@@ -150,16 +155,13 @@ const PROFILE_SH = fileURLToPath(new URL("../hooks/lib/profile.sh", import.meta.
 
 /**
  * This machine's mini as hooks/lib/profile.sh reports it (`get mini`), taken
- * as it is. null when it reports none: no profile, a laptop's
- * `"mini": null`, a file that does not parse, or no jq to read it with.
+ * as it is. null only for a clean exit with no answer: no profile, a
+ * laptop's `"mini": null`, a file that does not parse, or no jq to read it
+ * with (the reader's own fallbacks). Anything else (no bash, a moved or
+ * failing reader) throws: a broken reader must not pass for a laptop.
  */
-export function readProfileMini(env: NodeJS.ProcessEnv = process.env): string | null {
-  let out: string
-  try {
-    out = execFileSync("bash", [PROFILE_SH, "get", "mini"], { encoding: "utf8", env, stdio: ["ignore", "pipe", "ignore"] })
-  } catch {
-    return null
-  }
+export function readProfileMini(env: NodeJS.ProcessEnv = process.env, script: string = PROFILE_SH): string | null {
+  const out = execFileSync("bash", [script, "get", "mini"], { encoding: "utf8", env, stdio: ["ignore", "pipe", "pipe"] })
   // jq -r ends its answer with one newline; nothing else is trimmed.
   const mini = out.replace(/\n$/, "")
   return mini ? mini : null

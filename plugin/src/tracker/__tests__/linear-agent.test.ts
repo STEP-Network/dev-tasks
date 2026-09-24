@@ -187,6 +187,26 @@ describe("claimIssue", () => {
     expect(sent(/issueUpdate/)).toHaveLength(0)
   })
 
+  it("refuses when the team has no In Progress state, before writing anything", async () => {
+    // Assigned but left in its old state, the issue would be invisible to
+    // listClaims, which reads In Progress only: held, and never swept.
+    route(/teams\s*\(/, () => ({
+      teams: {
+        nodes: [
+          {
+            id: "team-uuid",
+            key: "STEP",
+            name: "STEP",
+            states: { nodes: STATES.filter((s) => s.name !== "In Progress") },
+            labels: { nodes: LABELS, pageInfo: PAGE_END },
+          },
+        ],
+      },
+    }))
+    await expect(createLinearTracker().claimIssue("STEP-7", "eve")).rejects.toThrow(/In Progress/)
+    expect(sent(/commentCreate|issueUpdate/)).toHaveLength(0)
+  })
+
   it("refuses an issue someone else holds, before writing anything", async () => {
     route(/issues\s*\(/, () => ({ issues: { nodes: [{ ...ISSUE, assignee: { id: "user-nate" } }], pageInfo: PAGE_END } }))
     await expect(createLinearTracker().claimIssue("STEP-7", "eve")).rejects.toThrow(/STEP-7/)
@@ -314,9 +334,10 @@ describe("listClaims", () => {
   it("reads every page, so a claim past the first page is still swept", async () => {
     // The sweeper releases what this returns. A claim on a page it never read
     // would hold its issue forever.
+    // Both pages hold the key owner's issues: isMe returns nothing else.
     route(/startsWith/, (variables) =>
       variables.after
-        ? { issues: { nodes: [held(2, "user-bob", ["claimed by bob at 2026-09-24T02:00:00.000Z"])], pageInfo: PAGE_END } }
+        ? { issues: { nodes: [held(2, "user-eve", ["claimed by eve at 2026-09-24T02:00:00.000Z"])], pageInfo: PAGE_END } }
         : {
             issues: {
               nodes: [held(1, "user-eve", ["claimed by eve at 2026-09-24T01:00:00.000Z"])],
@@ -325,9 +346,9 @@ describe("listClaims", () => {
           },
     )
     const claims = await createLinearTracker().listClaims()
-    expect(claims.map((c) => [c.issue.id, c.claimant])).toEqual([
-      ["STEP-1", "eve"],
-      ["STEP-2", "bob"],
+    expect(claims.map((c) => [c.issue.id, c.claimant, c.claimedAt])).toEqual([
+      ["STEP-1", "eve", "2026-09-24T01:00:00.000Z"],
+      ["STEP-2", "eve", "2026-09-24T02:00:00.000Z"],
     ])
     expect(sent(/startsWith/).map(([, variables]) => variables.after)).toEqual([null, "claims-1"])
   })

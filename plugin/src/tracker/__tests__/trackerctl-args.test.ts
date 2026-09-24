@@ -48,6 +48,13 @@ describe("parseArgs", () => {
     expect(parseArgs(["ready", "--limit", "-1"]).flags.limit).toBe("-1")
   })
 
+  it("keeps a bare flag's true when the flag repeats, rather than the string \"true\"", () => {
+    // "true" would pass for a label name, and a check for a missing value
+    // would never see it.
+    expect(parseArgs(["update", "STEP-1", "--add-label", "--add-label", "x"]).flags["add-label"]).toEqual([true, "x"])
+    expect(parseArgs(["update", "STEP-1", "--state", "A", "--state"]).flags.state).toEqual(["A", true])
+  })
+
   it("throws a usage error on no subcommand at all", () => {
     expect(() => parseArgs([])).toThrowError(/usage/i)
   })
@@ -97,6 +104,7 @@ describe("buildPatch", () => {
     [["--assign", "--state", "Ready"]],
     [["--add-label", " ", "--state", "Ready"]],
     [["--description-file", "", "--state", "Ready"]],
+    [["--add-label", "--add-label", "awaiting-answer", "--state", "Ready"]],
   ])("refuses %j, a flag with no value, rather than write the rest", (args) => {
     // `--state "$STATE" --add-label awaiting-answer` with STATE empty would
     // add the label and skip the move: a park that silently did less.
@@ -108,9 +116,13 @@ describe("buildPatch", () => {
     expect(() => buildPatch(flags, read)).toThrow(/^usage:[\s\S]*--add-labels/)
   })
 
-  it("refuses a single-valued flag given twice, rather than keep one of them", () => {
-    const flags = parseArgs(["update", "STEP-1", "--state", "On hold", "--state", "Ready"]).flags
-    expect(() => buildPatch(flags, read)).toThrow(/^usage:[\s\S]*--state/)
+  it.each([
+    ["state", ["--state", "On hold", "--state", "Ready"]],
+    ["assign", ["--assign", "me", "--assign", "none"]],
+    ["description-file", ["--description-file", "/tmp/a.md", "--description-file", "/tmp/b.md"]],
+  ])("refuses --%s given twice, rather than keep one of them", (name, args) => {
+    const flags = parseArgs(["update", "STEP-1", ...args]).flags
+    expect(() => buildPatch(flags, read)).toThrow(new RegExp(`^usage:[\\s\\S]*--${name} is given more than once`))
   })
 })
 
@@ -145,6 +157,18 @@ describe("the claimant is this machine's mini", () => {
     expect(readProfileMini(env)).toBe("bob")
     writeProfile('{ "profile": "agent", "devSurface": "preview", "mini": " eve " }')
     expect(readProfileMini(env)).toBe(" eve ")
+  })
+
+  it("throws on anything but a clean answer, rather than read a broken reader as a laptop", () => {
+    // Only a clean exit with no output means "no mini". A missing bash, a
+    // moved profile.sh or a failing one is an error to report.
+    writeProfile('{ "profile": "agent", "devSurface": "preview", "mini": "eve" }')
+    const env = { ...process.env, HOME: home }
+    expect(() => readProfileMini({ ...env, PATH: join(home, "no-such-dir") })).toThrow()
+    expect(() => readProfileMini(env, join(home, "no-such-profile.sh"))).toThrow()
+    const failing = join(home, "failing-profile.sh")
+    writeFileSync(failing, "echo eve\nexit 64\n")
+    expect(() => readProfileMini(env, failing)).toThrow()
   })
 
   it("claims as the profile's mini, whichever mini that is", () => {
