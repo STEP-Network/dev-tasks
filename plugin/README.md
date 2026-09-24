@@ -443,8 +443,8 @@ plugin/
 
 ```sh
 cd plugin
-npm install                # also runs tsc via prepare
-npm run build              # tsc
+npm install                # dependencies only: dist/ is committed, nothing builds on install
+npm run build              # tsc, then bundles dist/server.js with its packages (scripts/bundle-server.ts)
 npm run typecheck          # tsc --noEmit -p tsconfig.check.json (covers api/ too)
 npm test                   # vitest
 npm start                  # run the stdio server (stdin/stdout)
