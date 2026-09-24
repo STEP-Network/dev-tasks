@@ -10,7 +10,9 @@
  *   trackerctl read STEP-123
  *   trackerctl branch STEP-123
  *   trackerctl create --title "Fix the thing" --description "$BODY" --label chore
+ *   trackerctl create --title "Fix the thing" --description-file request.md --label polads --state Triage
  *   trackerctl comment STEP-123 --body "opened PR #42"
+ *   trackerctl comment STEP-123 --body-file note.md
  *   trackerctl attach STEP-123 --url https://github.com/... --title "PR #42"
  *   trackerctl ready --limit 10
  *   trackerctl claim STEP-123
@@ -34,11 +36,9 @@
  */
 
 import { execFileSync } from "node:child_process"
-import { readFileSync, realpathSync } from "node:fs"
-import { homedir } from "node:os"
-import { basename, join, resolve, sep } from "node:path"
 import { fileURLToPath } from "node:url"
 import { resolveTracker } from "../src/tracker/index.ts"
+import { assertNoSecretText, readTextFile } from "../src/tracker/secrets-guard.ts"
 import { branchNameFor, type IssuePatch } from "../src/tracker/types.ts"
 
 export interface ParsedArgs {
@@ -151,35 +151,25 @@ export function buildPatch(flags: ParsedArgs["flags"], readText: (path: string) 
 }
 
 /**
- * Reads a --description-file, refusing a secrets file: anything under
- * ~/.config (the Linear key, an agent mini's Slack and Claude tokens) or named
- * .env*. Checked on the path as given and as resolved through symlinks. On an
- * agent mini the front door's sandbox lets trackerctl read the Linear key, so
- * the sandbox cannot be what keeps that key out of an issue's description.
+ * A text flag, given inline (`--description "..."`) or as a file
+ * (`--description-file brief.md`), never both. An agent mini's skills pass
+ * people's words through a file, where no shell expands them. Either way,
+ * a secrets file and text that carries a key or a token are refused
+ * (src/tracker/secrets-guard.ts): on a mini trackerctl runs outside the front
+ * door's sandbox and can read the Linear key, so the sandbox cannot be what
+ * keeps that key out of an issue.
  */
-export function readDescriptionFile(path: string, home: string = homedir()): string {
-  const refuse = () => {
-    throw new Error(`${USAGE}\n--description-file ${path} looks like a secrets file (under ~/.config, or named .env*), and trackerctl never sends one to the tracker`)
-  }
-  const config = join(home, ".config")
-  const within = (p: string, dir: string) => p === dir || p.startsWith(dir + sep)
-  const given = resolve(path)
-  let real = given
-  try {
-    real = realpathSync(given)
-  } catch {
-    // Missing: readFileSync below says so.
-  }
-  let realConfig = config
-  try {
-    realConfig = realpathSync(config)
-  } catch {
-    // No ~/.config: nothing can be inside it.
-  }
-  for (const p of [given, real]) {
-    if (within(p, config) || within(p, realConfig) || basename(p).startsWith(".env")) refuse()
-  }
-  return readFileSync(real, "utf8")
+export function textFlag(
+  flags: ParsedArgs["flags"],
+  name: string,
+  readText: (path: string) => string = (path) => readTextFile(path, `--${name}-file`),
+): string | undefined {
+  const inline = str(flags, name)
+  const file = str(flags, `${name}-file`)
+  if (inline !== undefined && file !== undefined) throw new Error(`${USAGE}\n--${name} and --${name}-file are two ways to give one text: give one`)
+  const text = file !== undefined ? readText(file) : inline
+  if (text !== undefined) assertNoSecretText(text, `--${name}`)
+  return text
 }
 
 // The plugin's one profile reader. The phase 0 rule is exactly one, in bash,
@@ -253,9 +243,11 @@ async function main(): Promise<void> {
       return
     }
     case "create": {
+      const title = requireArg(str(flags, "title"), "title")
+      assertNoSecretText(title, "--title")
       const issue = await tracker.createIssue({
-        title: requireArg(str(flags, "title"), "title"),
-        description: str(flags, "description"),
+        title,
+        description: textFlag(flags, "description"),
         labels: list(flags, "label"),
         state: str(flags, "state"),
       })
@@ -265,7 +257,7 @@ async function main(): Promise<void> {
     case "comment": {
       await tracker.comment(
         requireArg(positional[0], "ref (positional)"),
-        requireArg(str(flags, "body"), "body"),
+        requireArg(textFlag(flags, "body"), "body or --body-file"),
       )
       process.stdout.write(JSON.stringify({ ok: true }) + "\n")
       return
@@ -297,7 +289,7 @@ async function main(): Promise<void> {
       return
     }
     case "update": {
-      const patch = buildPatch(flags, (path) => readDescriptionFile(path))
+      const patch = buildPatch(flags, (path) => readTextFile(path, "--description-file"))
       const issue = await tracker.updateIssue(requireArg(positional[0], "ref (positional)"), patch)
       process.stdout.write(JSON.stringify(issue) + "\n")
       return

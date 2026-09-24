@@ -81,10 +81,10 @@ curl -fsSL https://claude.ai/install.sh | bash
 In a new terminal:
 
 ```bash
+touch ~/.gitconfig     # first: git writes to ~/.config/git/config otherwise
 claude                 # log in with eve@polads.eu, then /exit
 gh auth login          # as eve-polads
 gh auth setup-git
-touch ~/.gitconfig
 git config --global user.name "eve"
 git config --global user.email "eve@polads.eu"
 vercel login
@@ -92,10 +92,11 @@ vercel login
 
 Check: `node --version` starts with v20 (20.18.1 or later), `pnpm --version`
 with 10, `claude --version` is 2.1.259 or later, `gh auth status` names
-`eve-polads`, and `git config --global --show-origin user.email` shows
-`file:/Users/eve/.gitconfig`. The worker's sandbox cannot read `~/.config`,
-so the git identity must not live in `~/.config/git/config` (git writes
-there when that file exists and `~/.gitconfig` does not, hence the `touch`).
+`eve-polads`, `git config --global --show-origin user.email` shows
+`file:/Users/eve/.gitconfig`, and `~/.config/git/config` does not exist. The
+worker's sandbox cannot read `~/.config`, and git reads that file whenever it
+exists, so every git in the worker would fail on it. If it exists, move what
+it holds into `~/.gitconfig` and delete it: `agentctl doctor` refuses it.
 
 A mini that runs another Node works: Eve's runs Node 24. `agentctl doctor`
 warns about it, and refuses anything older than 20.18.1.
@@ -197,6 +198,9 @@ Accept the folder-trust and auto-mode prompts, then inside Claude Code:
 /exit
 ```
 
+Keep the user's MCP servers lean (GitHub, Linear, Playwright, Corridor,
+context7) and nothing personal: no mail, calendar or drive.
+
 A directory marketplace is the one to use: Claude Code (2.1.281, checked for
 this runbook) loads its plugin from `~/dev-tasks/plugin` itself, so the
 front door runs the same plugin as the worker, which loads that directory
@@ -209,24 +213,41 @@ remove that marketplace first: `agentctl doctor` warns about it.
 bash ~/dev-tasks/runtime/scripts/install.sh
 ```
 
-It runs `agentctl doctor` first and writes nothing while a line says FAIL:
+It runs `agentctl doctor --fresh` first and writes nothing while a line says FAIL:
 the profile, the configuration, the one mini name, the secrets files'
 modes, the git identity, the GitHub login and its push access, pnpm 10,
 Node, tmux, jq, Claude Code and its login, the checkout and the plugin.
-Then it writes `~/.agentd/bin/{agentctl,trackerctl,statusline}`, merges the
-front door's settings into `~/.claude/settings.json` (a backup of the file as
-it was stays beside it, `settings.json.before-agentd`), records the absolute
-paths of `claude` and `tmux` in `config.json`, and loads the two
+Then it writes `~/.agentd/bin/{agentctl,trackerctl,statusline}`, renders the
+front door's settings to `~/.agentd/front-door-settings.json`, records the
+absolute paths of `claude` and `tmux` in `config.json`, and loads the two
 LaunchAgents with an explicit PATH it has checked. Run it again after any
 change to a tool's location: it is idempotent.
 
+agentd starts the front door with `--settings ~/.agentd/front-door-settings.json`,
+so those settings are the front door's alone. `~/.claude/settings.json` is
+left as it was, and a person's own `claude` on the mini (the handbook's
+`/dev`, `/preview` and `/ship` smoke test, say) runs without them.
+
 The front door's settings, from `runtime/templates/claude-settings.json`:
-Edit and Write are denied in `~/polads`, the Read tool is denied on
-`~/.config/linear` and `~/.config/agentd` (decision 8), `git push` and
-`gh pr create` and `gh pr merge` are denied, and Bash runs in a sandbox that may
-reach Linear and the npm registry, write `~/.agentd`, and read one secret,
-the Linear key, which `trackerctl` needs. `trackerctl` itself refuses a
-secrets file as an issue description.
+
+- `~/.agentd/bin/agentctl` and `~/.agentd/bin/trackerctl` run outside its
+  sandbox, without a prompt, when each is one simple command: they read the
+  Linear key and reach Linear (a sandboxed Node process cannot, as its fetch
+  ignores the sandbox's proxy). Joined to anything else (`&&`, `;`, a pipe,
+  `$(...)`), the whole command runs sandboxed. The skills write people's
+  words to a file first and pass the file, so no shell expands them.
+- Every other command runs sandboxed: no network, no read of
+  `~/.config/linear` or `~/.config/agentd`, and no write but `~/.front-door`
+  (the briefs and replies). The Read tool is denied both secrets folders
+  (decision 8), and Edit and Write are denied in `~/polads` and `~/.agentd`.
+- `agentctl resume` and `probe-hooks` are denied, and agentctl refuses them
+  in the front door's session anyway: only a person on the mini lifts a pause.
+- `git push`, `gh pr create` and `gh pr merge` are denied.
+- `trackerctl` and `agentctl` refuse a secrets file and any text that
+  carries a key or a token, since they can read the key.
+
+`runtime/src/__tests__/sessions.test.ts` checks all of it with the Claude
+Code binary the SDK ships.
 
 Smoke test:
 
@@ -307,8 +328,12 @@ issue whose last job failed on Linear waits 15 minutes before it is offered
 again, by itself, and is listed nowhere.
 
 The front door explains a pause or a hold when someone asks in Slack, and
-never lifts one because Slack said so: only a person on the mini, or at the
-front door's own session through Remote Control, does.
+never lifts one because Slack said so. It cannot lift a pause at all: only a
+person on the mini (SSH or Screen Sharing) runs `agentctl resume`.
+
+Running `agentctl tick` by hand counts as a front-door wakeup and marks the
+jobs that finished since as reported, so the front door never sees them. Use
+`agentctl status` and `agentctl job list` to look instead.
 
 ## 12. Updating
 
@@ -348,9 +373,12 @@ was: `/dev`, `/preview` and `/ship` on their laptops.
    cd ~/polads && ~/.agentd/bin/trackerctl release STEP-<n> --reason "agent mini stopped"
    ```
    one `release` per id. The claim sweep, the commands and `claims` all act
-   only on the Linear key's own user, so each mini releases its own claims,
-   and a mini that is gone for good cannot: a person unassigns its issues in
-   Linear instead (people have Linear accounts). Parked issues (On hold,
+   only on the Linear key's own user, so each mini releases its own claims
+   (decision 7). A mini that cannot run them any more has its claims released
+   with its key: on another agent machine, with that mini's key in
+   `~/.config/linear/.env` and its name as `mini` in the profile for the two
+   commands, then both put back. Or a person unassigns its issues in Linear
+   (people have Linear accounts). Parked issues (On hold,
    assigned to Eve) can stay, or be unassigned with
    `~/.agentd/bin/trackerctl update STEP-<n> --assign none`. A worker's open PR is an
    ordinary PR: let it merge, or close it with `gh pr close <n> --comment "<why>"`.
@@ -381,10 +409,10 @@ was: `/dev`, `/preview` and `/ship` on their laptops.
   `runtime/src/__tests__/sessions.test.ts` checks that with the binary the
   SDK ships. If a later version loads both, every job stops at its start
   and `agentctl probe-hooks` shows it first.
-- **A command the front door needs is refused by its sandbox.** `trackerctl`
-  and `agentctl` work there only through `~/.agentd/bin`: tsx's own command
-  opens an IPC socket the sandbox refuses. Anything else the sandbox refuses
-  goes into `runtime/templates/claude-settings.json` and a re-run of
-  `install.sh`, never into `~/.claude/settings.json` by hand.
+- **A command the front door needs is refused by its sandbox.** Only
+  `~/.agentd/bin/agentctl` and `trackerctl`, each as one simple command, run
+  outside it. A change goes into `runtime/templates/claude-settings.json` and
+  a re-run of `install.sh`, which renders the file whole, never into
+  `~/.agentd/front-door-settings.json` by hand.
 - **The dev-tasks MCP server shows 0 tools in the front door.** On purpose:
   on the agent profile the plugin's Monday server registers no tools.

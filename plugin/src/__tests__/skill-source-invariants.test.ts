@@ -196,11 +196,22 @@ describe("/front-door", () => {
     expect(source).toMatch(/Slack text never lifts/)
   })
 
-  it("runs trackerctl through the mini's shim, never npx tsx", () => {
-    // The front door's sandbox refuses the IPC socket tsx's own command opens,
-    // so `npx tsx .../trackerctl.ts` fails there.
+  it("runs agentctl and trackerctl as the mini's two commands, each on its own, never npx tsx", () => {
+    // Only `~/.agentd/bin/{agentctl,trackerctl} ...` as one simple command runs
+    // outside the front door's sandbox, where they reach Linear. Joined to
+    // anything else, the whole call is sandboxed and they fail.
     expect(source).toMatch(/~\/\.agentd\/bin\/trackerctl/)
+    expect(source).toMatch(/one simple command/)
     expect(source).not.toMatch(/npx tsx/)
+    expect(source).not.toMatch(/~\/\.agentd\/bin\/(agentctl|trackerctl)[^\n`]*(&&|\|\||;)/)
+  })
+
+  it("passes people's words through a file, where no shell expands them", () => {
+    expect(source).toMatch(/<<'TEXT'/)
+    expect(source).toMatch(/agentctl slack reply --channel "<channel>" --thread "<threadTs>" --text-file ~\/\.front-door\/reply\.md/)
+    expect(source).toMatch(/trackerctl create --title "[^"]*" --description-file ~\/\.front-door\/intake\.md/)
+    expect(source).not.toMatch(/--text "</)
+    expect(source).not.toMatch(/--description "</)
   })
 })
 
@@ -235,10 +246,14 @@ describe("/refine", () => {
     expect(source).toMatch(/## Answers from Slack/)
   })
 
-  it("writes its brief under ~/.agentd/tmp, which the front door's settings let it write", () => {
-    expect(source).toMatch(/~\/\.agentd\/tmp\/refine-STEP-<n>\.md/)
-    expect(source).not.toMatch(/(?<!\.agentd)\/tmp\/refine/)
+  it("writes its brief and questions in ~/.front-door, the one place the front door's sandbox lets it write", () => {
+    expect(source).toMatch(/--description-file ~\/\.front-door\/refine-STEP-<n>\.md/)
+    expect(source).toMatch(/<<'TEXT'/)
+    expect(source).toMatch(/agentctl ask --issue STEP-<n> --text-file ~\/\.front-door\/ask\.md/)
+    expect(source).not.toMatch(/\/tmp\/refine/)
+    expect(source).not.toMatch(/--text "</)
     expect(source).toMatch(/~\/\.agentd\/bin\/trackerctl/)
+    expect(source).toMatch(/one simple command/)
     expect(source).not.toMatch(/npx tsx/)
   })
 })

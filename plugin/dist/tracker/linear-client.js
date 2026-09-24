@@ -15,6 +15,29 @@ import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 export const LINEAR_ENDPOINT = "https://api.linear.app/graphql";
+const LOOPBACK = new Set(["127.0.0.1", "localhost", "[::1]"]);
+/**
+ * Where requests go: Linear, or, for a test that runs the real Claude Code
+ * binary end to end, a server on this machine named by
+ * DEV_TASKS_LINEAR_ENDPOINT. Any other host is refused, since the key travels
+ * with every request.
+ */
+export function linearEndpoint(env = process.env) {
+    const override = env.DEV_TASKS_LINEAR_ENDPOINT;
+    if (!override)
+        return LINEAR_ENDPOINT;
+    let url;
+    try {
+        url = new URL(override);
+    }
+    catch {
+        throw new Error("DEV_TASKS_LINEAR_ENDPOINT is not a URL");
+    }
+    if (url.protocol !== "http:" || !LOOPBACK.has(url.hostname)) {
+        throw new Error("DEV_TASKS_LINEAR_ENDPOINT may only name an http server on this machine's loopback (for tests): the Linear key travels with every request");
+    }
+    return url.toString();
+}
 const MIN_INTERVAL_MS = 1500;
 const MAX_ATTEMPTS = 6;
 const MAX_BACKOFF_MS = 60_000;
@@ -84,13 +107,14 @@ export async function linearRequest(query, variables = {}) {
         writesPerformed += 1;
     }
     const key = loadLinearKey();
+    const endpoint = linearEndpoint();
     let lastStatus;
     for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
         const wait = lastCall + MIN_INTERVAL_MS - Date.now();
         if (wait > 0)
             await sleep(wait);
         lastCall = Date.now();
-        const res = await fetch(LINEAR_ENDPOINT, {
+        const res = await fetch(endpoint, {
             method: "POST",
             headers: { "Content-Type": "application/json", Authorization: key },
             body: JSON.stringify({ query, variables }),

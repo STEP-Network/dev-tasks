@@ -6,11 +6,12 @@
 # rate_limits object needs Claude Code v2.1.251+ on a Pro or Max plan;
 # without it the fields are recorded as null.
 #
-# Every session of this user on the mini runs it, and the limits are the
-# account's, so any session's count. The session id is the one agentd
-# resumes, so only the front door's is recorded, with when it was reported:
-# agentd starts its tmux session with AGENTD_FRONT_DOOR=1, and any other
-# session keeps the id and time already there.
+# The front door's settings name it (~/.agentd/front-door-settings.json). A
+# person's own session on the mini may run it too, if they set it up: the
+# limits are the account's, so any session's count, but the session id is
+# the one agentd resumes, so only the front door's is recorded, with when it
+# was reported. agentd starts its tmux session with AGENTD_FRONT_DOOR=1, and
+# any other session keeps the id and time already there.
 input=$(cat)
 state="${AGENTD_HOME:-$HOME/.agentd}/state"
 mkdir -p "$state"

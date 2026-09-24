@@ -5,6 +5,7 @@
  */
 export { createLinearTracker } from "../../plugin/src/tracker/linear.ts"
 export { branchNameFor, byPriorityThenAge } from "../../plugin/src/tracker/types.ts"
+export { assertNoSecretText, readTextFile } from "../../plugin/src/tracker/secrets-guard.ts"
 export type {
   ClaimRecord,
   CreateIssueInput,

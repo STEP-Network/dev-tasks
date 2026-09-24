@@ -1,12 +1,13 @@
 #!/bin/bash
 # Installs this mini's agent runtime for the current macOS user: the
-# ~/.agentd layout and its commands, the front door's Claude Code settings,
-# and two LaunchAgents (agentd, slack-bridge). Idempotent: running it again
+# ~/.agentd layout and its commands, the front door's Claude Code settings
+# (~/.agentd/front-door-settings.json), and two LaunchAgents (agentd,
+# slack-bridge). Idempotent: running it again
 # re-renders everything and restarts both jobs. Run it as the agent user
 # (eve), never with sudo. docs/agent-mini-runbook.md says when.
 #
-# `agentctl doctor` runs first, and nothing is written while it reports a
-# FAIL. A LaunchAgent gets no login shell's PATH, so the plists carry an
+# `agentctl doctor --fresh` runs first, and nothing is written while it
+# reports a FAIL. A LaunchAgent gets no login shell's PATH, so the plists carry an
 # explicit one, built from the tools resolved here and checked to resolve to
 # the same binaries under it, and agentd gets absolute paths for claude and
 # tmux in config.json.
@@ -17,7 +18,6 @@ PLUGIN="$(cd "$RUNTIME/../plugin" && pwd)"
 AGENTD_HOME="${AGENTD_HOME:-$HOME/.agentd}"
 LAUNCH_DIR="${LAUNCH_AGENTS_DIR:-$HOME/Library/LaunchAgents}"
 LAUNCHCTL="${LAUNCHCTL:-launchctl}"
-SETTINGS="${CLAUDE_SETTINGS:-$HOME/.claude/settings.json}"
 export AGENTD_HOME
 
 fail() { echo "install: $*" >&2; exit 1; }
@@ -31,7 +31,8 @@ NODE="$(command -v node)" || fail "node is missing: brew install node@20, and pu
 TSX_LOADER="$RUNTIME/node_modules/tsx/dist/loader.mjs"
 [ -f "$TSX_LOADER" ] || fail "$TSX_LOADER is missing: cd $RUNTIME && npm ci"
 
-"$NODE" --import "$TSX_LOADER" "$RUNTIME/src/cli/agentctl.ts" doctor || fail "fix the FAIL lines above, then run this again"
+# --fresh: claude and tmux as PATH finds them now, which is what gets recorded below.
+"$NODE" --import "$TSX_LOADER" "$RUNTIME/src/cli/agentctl.ts" doctor --fresh || fail "fix the FAIL lines above, then run this again"
 
 resolve() { command -v "$1" || fail "$1 is missing"; }
 PNPM="$(resolve pnpm)"
@@ -62,9 +63,19 @@ for pair in "node=$NODE" "pnpm=$PNPM" "git=$GIT" "gh=$GH" "jq=$JQ"; do
   [ "$got" = "$want" ] || fail "under the LaunchAgents' PATH ($JOB_PATH), $name is ${got:-missing}, not $want"
 done
 
-mkdir -p "$AGENTD_HOME/bin" "$AGENTD_HOME/logs" "$AGENTD_HOME/state" "$AGENTD_HOME/worktrees" "$AGENTD_HOME/tmp" "$LAUNCH_DIR"
+# The paths below are written into XML and sed expressions as they are.
+for value in "$NODE" "$RUNTIME" "$AGENTD_HOME" "$JOB_PATH"; do
+  case "$value" in
+    *[\|\&\<\>\"\']*) fail "$value has a character the plists cannot hold (| & < > or a quote): move it" ;;
+  esac
+done
 
-# The two commands the skills call, with absolute paths so no PATH lookup is involved.
+# ~/.front-door is the one place the front door's sandboxed Bash may write:
+# the briefs and replies it hands to trackerctl and agentctl as files.
+mkdir -p "$AGENTD_HOME/bin" "$AGENTD_HOME/logs" "$AGENTD_HOME/state" "$AGENTD_HOME/worktrees" "$HOME/.front-door" "$LAUNCH_DIR"
+
+# The two commands the skills call, with absolute paths so no PATH lookup is
+# involved. The front door's settings run exactly these outside its sandbox.
 shim() {
   cat > "$AGENTD_HOME/bin/$1.tmp" <<EOF
 #!/bin/bash
@@ -84,26 +95,14 @@ mv "$AGENTD_HOME/bin/statusline.tmp" "$AGENTD_HOME/bin/statusline"
 jq --arg claude "$CLAUDE" --arg tmux "$TMUX_BIN" '.frontDoor.claudePath = $claude | .frontDoor.tmuxPath = $tmux' "$AGENTD_HOME/config.json" > "$AGENTD_HOME/config.json.tmp"
 mv "$AGENTD_HOME/config.json.tmp" "$AGENTD_HOME/config.json"
 
-# The front door's settings, merged over what is there. The first run keeps a
-# backup of the file as it was. Lists are joined, so a person's own rules stay.
+# The front door's own settings, which agentd passes with --settings: the
+# sandbox, the deny rules, the status line and Remote Control. A person's own
+# claude sessions on the mini keep ~/.claude/settings.json as it is.
 REPO="$(jq -r '.repo.path' "$AGENTD_HOME/config.json")"
-mkdir -p "$(dirname "$SETTINGS")"
-[ -f "$SETTINGS" ] || echo '{}' > "$SETTINGS"
-jq -e 'type == "object"' "$SETTINGS" >/dev/null 2>&1 || fail "$SETTINGS is not a JSON object"
-[ -f "$SETTINGS.before-agentd" ] || cp "$SETTINGS" "$SETTINGS.before-agentd"
-RENDERED="$AGENTD_HOME/state/claude-settings.rendered.json"
-sed -e "s|__AGENTD_HOME__|$AGENTD_HOME|g" -e "s|__REPO__|$REPO|g" "$RUNTIME/templates/claude-settings.json" > "$RENDERED"
-jq -s '
-  def join(a; b): ((a // []) + (b // [])) | unique;
-  .[0] as $old | .[1] as $new
-  | ($old * $new)
-  | .permissions.allow = join($old.permissions.allow; $new.permissions.allow)
-  | .permissions.deny = join($old.permissions.deny; $new.permissions.deny)
-  | .sandbox.network.allowedDomains = join($old.sandbox.network.allowedDomains; $new.sandbox.network.allowedDomains)
-  | .sandbox.filesystem.allowWrite = join($old.sandbox.filesystem.allowWrite; $new.sandbox.filesystem.allowWrite)
-  | .sandbox.filesystem.allowRead = join($old.sandbox.filesystem.allowRead; $new.sandbox.filesystem.allowRead)
-' "$SETTINGS" "$RENDERED" > "$SETTINGS.tmp"
-mv "$SETTINGS.tmp" "$SETTINGS"
+jq --arg home "$AGENTD_HOME" --arg repo "$REPO" \
+  'walk(if type == "string" then gsub("__AGENTD_HOME__"; $home) | gsub("__REPO__"; $repo) else . end)' \
+  "$RUNTIME/templates/claude-settings.json" > "$AGENTD_HOME/front-door-settings.json.tmp"
+mv "$AGENTD_HOME/front-door-settings.json.tmp" "$AGENTD_HOME/front-door-settings.json"
 
 UID_NOW="$(id -u)"
 for label in eu.polads.agentd eu.polads.slack-bridge; do

@@ -1,4 +1,4 @@
-import { chmodSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs"
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { beforeEach, describe, expect, it } from "vitest"
@@ -38,6 +38,7 @@ beforeEach(() => {
     JSON.stringify({ "dev-tasks-marketplace": { source: { source: "directory", path: join(home, "dev-tasks") } } }),
   )
   writeFileSync(join(home, ".claude", "plugins", "installed_plugins.json"), JSON.stringify({ version: 2, plugins: { "dev-tasks@dev-tasks-marketplace": [{ scope: "user" }] } }))
+  writeFileSync(join(paths.root, "front-door-settings.json"), "{}")
 })
 
 const READY: Responses = [
@@ -55,7 +56,7 @@ const READY: Responses = [
 
 function deps(over: Partial<DoctorDeps> = {}, responses: Responses = []): DoctorDeps {
   // The first matching pattern answers, so a test's own answers go first.
-  const withHome = [...responses, ...READY].map(([re, r]) => [re, { ...r, stdout: r.stdout?.replace("HOME", home) }] as [RegExp, typeof r])
+  const withHome = [...responses, ...READY].map(([re, r]) => [re, r.stdout === undefined ? r : { ...r, stdout: r.stdout.replace("HOME", home) }] as [RegExp, typeof r])
   return { paths, exec: fakeExec(withHome).exec, env: {}, nodeVersion: "20.20.2", profile: () => "agent", profileMini: () => "eve", ...over }
 }
 
@@ -87,6 +88,29 @@ describe("doctorChecks", () => {
     const problems = await failed(deps({}, [[/user\.email$/, { stdout: "file:HOME/.config/git/config\teve@polads.eu\n" }]]))
     expect(problems).toEqual([expect.stringMatching(/^git identity: user\.email comes from .*\.config\/git\/config.*~\/\.gitconfig/)])
     expect(await failed(deps({}, [[/user\.name$/, { code: 1, stdout: "" }]]))).toEqual([expect.stringMatching(/^git identity: user\.name is not set/)])
+  })
+
+  it("refuses a ~/.config/git/config at all, since git in the worker's sandbox dies reading it", async () => {
+    // Even with the identity in ~/.gitconfig: git reads the XDG file whenever
+    // it exists, and a read the sandbox refuses is fatal (exit 128).
+    mkdirSync(join(home, ".config", "git"), { recursive: true })
+    writeFileSync(join(home, ".config", "git", "config"), "[credential]\n\thelper = osxkeychain\n")
+    expect(await failed(deps())).toEqual([expect.stringMatching(/^git identity: .*\.config\/git\/config exists.*delete it/)])
+  })
+
+  it("checks claude and tmux as PATH finds them when install asks, so a moved binary is found again", async () => {
+    const config = JSON.parse(readFileSync(paths.config, "utf8"))
+    writeFileSync(paths.config, JSON.stringify({ ...config, frontDoor: { claudePath: "/old/claude", tmuxPath: "/old/tmux" } }))
+    const moved: Responses = [[/^\/old\//, { code: 127, stderr: "No such file or directory" }]]
+    expect((await failed(deps({}, moved))).map((f) => f.split(":")[0]).sort()).toEqual(["claude", "claude login", "tmux"])
+    expect(await failed(deps({ fresh: true }, moved))).toEqual([])
+  })
+
+  it("warns, after an install, when the front door's settings file is gone", async () => {
+    rmSync(join(paths.root, "front-door-settings.json"))
+    expect(await warned(deps())).toEqual([expect.stringMatching(/^front door settings: .*front-door-settings\.json is missing.*install\.sh/)])
+    // Before the first install (doctor --fresh), it is not there yet.
+    expect(await warned(deps({ fresh: true }))).toEqual([])
   })
 
   it("refuses a secrets file other users can read, and a missing one, without printing a value", async () => {

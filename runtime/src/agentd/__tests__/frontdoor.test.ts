@@ -91,14 +91,14 @@ describe("adoptSessionId", () => {
 
 describe("claudeCommand", () => {
   it("resumes with the model, auto mode, no prompts, and re-arms the loop", () => {
-    expect(claudeCommand({ claudePath: "/Users/eve/.local/bin/claude", resumeId: "0f3c", model: "sonnet" })).toBe(
-      "/Users/eve/.local/bin/claude --resume 0f3c --model sonnet --permission-mode auto --permission-prompts none '/loop /dev-tasks:front-door'",
+    expect(claudeCommand({ claudePath: "/Users/eve/.local/bin/claude", resumeId: "0f3c", model: "sonnet", settingsPath: "/Users/eve/.agentd/front-door-settings.json" })).toBe(
+      "/Users/eve/.local/bin/claude --resume 0f3c --settings /Users/eve/.agentd/front-door-settings.json --model sonnet --permission-mode auto --permission-prompts none '/loop /dev-tasks:front-door'",
     )
   })
 
   it("starts a new session without pinning an id", () => {
-    expect(claudeCommand({ claudePath: "claude", resumeId: null, model: "sonnet" })).toBe(
-      "claude --model sonnet --permission-mode auto --permission-prompts none '/loop /dev-tasks:front-door'",
+    expect(claudeCommand({ claudePath: "claude", resumeId: null, model: "sonnet", settingsPath: "/s.json" })).toBe(
+      "claude --settings /s.json --model sonnet --permission-mode auto --permission-prompts none '/loop /dev-tasks:front-door'",
     )
   })
 
@@ -140,10 +140,11 @@ describe("frontDoorAlive", () => {
 
 describe("applyFrontDoor", () => {
   it("starts a new session in tmux in the PolAds checkout and records it", async () => {
-    const { f, deps } = setup()
+    const { f, deps, paths } = setup()
     const next = await applyFrontDoor(deps, FRESH_FRONT_DOOR, { kind: "start", mode: "new", reason: "first start", fastExits: 0 })
+    // Its own settings file, which install.sh renders: a person's own sessions keep the user's settings.
     expect(f.lines()[0]).toBe(
-      "tmux -L agentd new-session -d -s frontdoor -e AGENTD_FRONT_DOOR=1 -x 220 -y 60 -c /Users/eve/polads /usr/local/bin/claude --model sonnet --permission-mode auto --permission-prompts none '/loop /dev-tasks:front-door'",
+      `tmux -L agentd new-session -d -s frontdoor -e AGENTD_FRONT_DOOR=1 -x 220 -y 60 -c /Users/eve/polads /usr/local/bin/claude --settings ${paths.root}/front-door-settings.json --model sonnet --permission-mode auto --permission-prompts none '/loop /dev-tasks:front-door'`,
     )
     expect(next).toMatchObject({ sessionId: null, lastStartAt: NOW.toISOString(), starts: [NOW.toISOString()], waitUntil: null, kickedAt: null })
   })

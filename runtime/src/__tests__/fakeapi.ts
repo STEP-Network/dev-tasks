@@ -30,6 +30,30 @@ function sse(res: ServerResponse, events: Array<{ type: string } & Record<string
   res.end()
 }
 
+export interface FakeLinear {
+  url: string
+  /** Every request: its Authorization header and its body. */
+  requests: Array<{ authorization: string | undefined; body: string }>
+  close(): Promise<void>
+}
+
+/** Linear's GraphQL endpoint on loopback, for DEV_TASKS_LINEAR_ENDPOINT. It answers every query as Eve's viewer. */
+export async function startFakeLinear(): Promise<FakeLinear> {
+  const requests: FakeLinear["requests"] = []
+  const server = createServer((req, res) => {
+    let body = ""
+    req.on("data", (chunk) => (body += chunk))
+    req.on("end", () => {
+      requests.push({ authorization: req.headers.authorization, body })
+      res.writeHead(200, { "content-type": "application/json" })
+      res.end(JSON.stringify({ data: { viewer: { id: "user-eve", name: "Eve", email: "eve@polads.eu" } } }))
+    })
+  })
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", () => resolve()))
+  const { port } = server.address() as { port: number }
+  return { url: `http://127.0.0.1:${port}/graphql`, requests, close: () => new Promise<void>((resolve) => server.close(() => resolve())) }
+}
+
 export async function startFakeApi(script: ToolCall[]): Promise<FakeApi> {
   const paths: string[] = []
   let n = 0

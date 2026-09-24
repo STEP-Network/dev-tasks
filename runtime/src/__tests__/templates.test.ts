@@ -31,13 +31,16 @@ describe("templates/claude-settings.json, the front door's settings", () => {
     expect([...new Set(text.match(/__[A-Z_]+__/g))].sort()).toEqual(["__AGENTD_HOME__", "__REPO__"])
   })
 
-  it("keeps the front door out of the code and out of the secrets (spec 6.1, decision 8)", () => {
+  it("keeps the front door out of the code, the secrets and ~/.agentd (spec 6.1, decision 8)", () => {
     expect(rendered.permissions.deny).toEqual(
       expect.arrayContaining([
         "Edit(//Users/eve/polads/**)",
         "Write(//Users/eve/polads/**)",
         "Read(~/.config/agentd/**)",
         "Read(~/.config/linear/**)",
+        "Edit(~/.agentd/**)",
+        "Bash(~/.agentd/bin/agentctl resume:*)",
+        "Bash(~/.agentd/bin/agentctl probe-hooks:*)",
         "Bash(git push:*)",
         "Bash(gh pr create:*)",
         "Bash(gh pr merge:*)",
@@ -45,15 +48,22 @@ describe("templates/claude-settings.json, the front door's settings", () => {
     )
   })
 
-  it("lets sandboxed commands read the Linear key file and no other secret, and write only ~/.agentd", () => {
-    // trackerctl and agentctl run through Bash and read the key themselves.
-    expect(rendered.sandbox).toMatchObject({ enabled: true, autoAllowBashIfSandboxed: true, allowUnsandboxedCommands: false })
-    expect(rendered.sandbox.filesystem).toEqual({ allowWrite: ["/Users/eve/.agentd"], allowRead: ["~/.config/linear/.env"] })
-    expect(rendered.sandbox.network.allowedDomains).toEqual(["api.linear.app", "registry.npmjs.org"])
+  it("runs agentctl and trackerctl outside the sandbox, and gives sandboxed commands no network, no secret and one place to write", () => {
+    // The two read the Linear key and reach Linear, which a sandboxed Node
+    // process cannot (its fetch ignores the sandbox's proxy). Everything else
+    // stays inside: no read of the key, no write to ~/.agentd.
+    expect(rendered.permissions.allow).toEqual(["Bash(~/.agentd/bin/agentctl:*)", "Bash(~/.agentd/bin/trackerctl:*)"])
+    expect(rendered.sandbox).toEqual({
+      enabled: true,
+      autoAllowBashIfSandboxed: true,
+      allowUnsandboxedCommands: false,
+      excludedCommands: ["~/.agentd/bin/agentctl:*", "~/.agentd/bin/trackerctl:*"],
+      network: { allowedDomains: [] },
+      filesystem: { allowWrite: ["~/.front-door"] },
+    })
   })
 
-  it("lets /refine write its brief, and turns on the status line and Remote Control", () => {
-    expect(rendered.permissions.allow).toEqual(["Edit(~/.agentd/tmp/**)"])
+  it("turns on the status line and Remote Control, and the plugin", () => {
     expect(rendered.statusLine).toEqual({ type: "command", command: "/Users/eve/.agentd/bin/statusline" })
     expect(rendered).toMatchObject({ remoteControlAtStartup: true, autoContinueAtUsageLimit: true, enabledPlugins: { "dev-tasks@dev-tasks-marketplace": true } })
   })

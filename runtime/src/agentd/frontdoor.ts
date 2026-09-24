@@ -33,6 +33,14 @@ import type { Exec } from "../worker/git.ts"
 export const LOOP_PROMPT = "/loop /dev-tasks:front-door"
 /** The front door's own tmux server: `tmux -L agentd attach -t =frontdoor`. */
 export const TMUX_SOCKET = "agentd"
+
+/**
+ * The front door's own settings (sandbox, deny rules, status line, Remote
+ * Control), rendered by install.sh from runtime/templates/claude-settings.json
+ * and passed with --settings, so a person's own claude sessions on the mini
+ * keep the user's settings as they are.
+ */
+export const frontDoorSettingsPath = (paths: AgentPaths) => join(paths.root, "front-door-settings.json")
 const KICK_AFTER_MINUTES = 5
 /** tmux answers at once. One that hangs must not hold up the job launcher behind it. */
 const TMUX_TIMEOUT_MS = 30_000
@@ -122,10 +130,12 @@ export function shellQuote(s: string): string {
 }
 
 /** The front door's command line (spec 6.1), as one shell string for tmux. */
-export function claudeCommand(o: { claudePath: string; resumeId: string | null; model: string }): string {
+export function claudeCommand(o: { claudePath: string; resumeId: string | null; model: string; settingsPath: string }): string {
   return [
     o.claudePath,
     ...(o.resumeId ? ["--resume", o.resumeId] : []),
+    "--settings",
+    o.settingsPath,
     "--model",
     o.model,
     "--permission-mode",
@@ -200,7 +210,12 @@ export async function applyFrontDoor(deps: FrontDoorDeps, state: FrontDoorState,
   }
   if (action.kind === "restart") await tmux(["kill-session", "-t", `=${session}`])
   const resumeId = action.kind === "restart" || action.mode === "resume" ? state.sessionId : null
-  const command = claudeCommand({ claudePath: deps.config.frontDoor.claudePath, resumeId, model: deps.config.frontDoor.model })
+  const command = claudeCommand({
+    claudePath: deps.config.frontDoor.claudePath,
+    resumeId,
+    model: deps.config.frontDoor.model,
+    settingsPath: frontDoorSettingsPath(deps.paths),
+  })
   const r = await tmux(["new-session", "-d", "-s", session, "-e", "AGENTD_FRONT_DOOR=1", "-x", "220", "-y", "60", "-c", deps.config.repo.path, command])
   if (r.code !== 0) throw new Error(`tmux new-session failed (${r.code}): ${r.stderr.trim()}`)
   const mode = resumeId ? "resume" : "new"

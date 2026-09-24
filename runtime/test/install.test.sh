@@ -1,8 +1,8 @@
 #!/bin/bash
 # Tests runtime/scripts/install.sh and uninstall.sh in a throwaway HOME with
 # stub tools (claude, tmux, gh, pnpm, launchctl): install refuses an unready
-# machine, then a clean run renders both plists, the commands and the merged
-# settings, bootstraps both jobs, and a second run still works. uninstall
+# machine, then a clean run renders both plists, the commands and the front
+# door's own settings, bootstraps both jobs, and a second run still works. uninstall
 # pauses, stops both jobs and the front door, and signals only a worker that
 # is still its job's. Needs jq, git, node and runtime/node_modules (npm ci),
 # as the install itself does. Nothing here reaches GitHub, Slack or Linear.
@@ -68,9 +68,13 @@ chmod 600 "$HOME/.config/linear/.env"
 mkdir -p "$HOME/.config/git"
 printf '[user]\n\temail = eve@polads.eu\n\tname = eve\n' > "$HOME/.config/git/config"
 refuses "refuses a git identity outside ~/.gitconfig" "~/.gitconfig"
+git config --file "$HOME/.gitconfig" user.email eve@polads.eu
+git config --file "$HOME/.gitconfig" user.name eve
+# Even beside ~/.gitconfig: git reads the XDG file whenever it exists, and in
+# the worker's sandbox that read is fatal.
+printf '[credential]\n\thelper = osxkeychain\n' > "$HOME/.config/git/config"
+refuses "refuses any ~/.config/git/config" "config/git/config exists"
 rm -rf "$HOME/.config/git"
-git config --global user.email eve@polads.eu
-git config --global user.name eve
 
 PATH="$T/pnpm12:$PATH" refuses "refuses a pnpm other than 10" "pnpm@10"
 
@@ -83,7 +87,8 @@ chmod 755 "$T/bin/node"
 PATH="$T/nodebin:$PATH" refuses "refuses a PATH under which a tool is another binary" "node is $T/bin/node, not $T/nodebin/node"
 rm -f "$T/bin/node"
 
-# A person's own settings, which the merge must keep.
+# A person's own settings, which the install must leave alone: the front door
+# gets its own with --settings.
 echo '{ "model": "opus", "permissions": { "deny": ["Bash(rm -rf:*)"] } }' > "$HOME/.claude/settings.json"
 cp "$HOME/.claude/settings.json" "$T/settings.original.json"
 
@@ -107,18 +112,22 @@ if "$HOME/.agentd/bin/agentctl" job list > "$T/jobs.json" 2>&1 && [ "$(jq -c .pe
 grep -q "tsx/dist/loader.mjs" "$HOME/.agentd/bin/trackerctl" && ok "trackerctl uses tsx's loader, not its IPC command" || bad "trackerctl shim"
 [ "$(jq -r .frontDoor.claudePath "$HOME/.agentd/config.json")" = "$T/bin/claude" ] && ok "records the claude path" || bad "claude path not recorded"
 [ "$(jq -r .frontDoor.tmuxPath "$HOME/.agentd/config.json")" = "$T/bin/tmux" ] && ok "records the tmux path" || bad "tmux path not recorded"
-S="$HOME/.claude/settings.json"
-[ "$(jq -r .remoteControlAtStartup "$S")" = "true" ] && ok "turns Remote Control on at startup" || bad "settings not merged"
+S="$HOME/.agentd/front-door-settings.json"
+[ "$(jq -r .remoteControlAtStartup "$S")" = "true" ] && ok "turns Remote Control on at startup for the front door" || bad "no front door settings"
 [ "$(jq -r .statusLine.command "$S")" = "$HOME/.agentd/bin/statusline" ] && ok "sets the status line" || bad "no status line setting"
 jq -e --arg rule "Edit(/$T/polads/**)" '.permissions.deny | index($rule)' "$S" >/dev/null && ok "denies edits in the checkout" || bad "no edit deny for the checkout"
 jq -e '.permissions.deny | index("Read(~/.config/linear/**)") and index("Read(~/.config/agentd/**)")' "$S" >/dev/null && ok "denies reading the secrets (decision 8)" || bad "no read deny for the secrets"
-[ "$(jq -c .sandbox.filesystem.allowRead "$S")" = '["~/.config/linear/.env"]' ] && ok "lets sandboxed commands read only the Linear key" || bad "allowRead: $(jq -c .sandbox.filesystem.allowRead "$S")"
-[ "$(jq -r .model "$S")" = "opus" ] && jq -e '.permissions.deny | index("Bash(rm -rf:*)")' "$S" >/dev/null && ok "keeps a person's own settings" || bad "lost a person's settings"
-cmp -s "$S.before-agentd" "$T/settings.original.json" && ok "keeps a backup of the settings as they were" || bad "no backup"
+[ "$(jq -c .sandbox.excludedCommands "$S")" = '["~/.agentd/bin/agentctl:*","~/.agentd/bin/trackerctl:*"]' ] && ok "runs agentctl and trackerctl, and only those, outside the sandbox" || bad "excludedCommands: $(jq -c .sandbox.excludedCommands "$S")"
+jq -e '.permissions.allow | index("Bash(~/.agentd/bin/agentctl:*)") and index("Bash(~/.agentd/bin/trackerctl:*)")' "$S" >/dev/null && ok "allows the two commands without a prompt" || bad "no allow for the two commands"
+jq -e '.permissions.deny | index("Edit(~/.agentd/**)") and index("Bash(~/.agentd/bin/agentctl resume:*)")' "$S" >/dev/null && ok "keeps the front door out of ~/.agentd and off agentctl resume" || bad "no deny for ~/.agentd or resume"
+[ "$(jq -c .sandbox.filesystem "$S")" = '{"allowWrite":["~/.front-door"]}' ] && ok "lets sandboxed commands write ~/.front-door and read no secret" || bad "sandbox filesystem: $(jq -c .sandbox.filesystem "$S")"
+[ -d "$HOME/.front-door" ] && ok "makes ~/.front-door" || bad "no ~/.front-door"
+cmp -s "$HOME/.claude/settings.json" "$T/settings.original.json" && ok "leaves a person's own settings alone" || bad "changed ~/.claude/settings.json"
 
+# A later template replaces the file whole: nothing an earlier install wrote lingers.
+jq '.permissions.deny += ["Bash(dropped-rule:*)"]' "$S" > "$S.tmp" && mv "$S.tmp" "$S"
 if run; then ok "runs a second time"; else bad "second run failed: $(cat "$T/out.log")"; fi
-[ "$(jq '.permissions.deny | length' "$S")" = "$(jq '.permissions.deny | unique | length' "$S")" ] && ok "adds no rule twice" || bad "duplicate rules"
-cmp -s "$S.before-agentd" "$T/settings.original.json" && ok "keeps the first backup" || bad "the backup was overwritten"
+if jq -e '.permissions.deny | index("Bash(dropped-rule:*)")' "$S" >/dev/null; then bad "kept a rule the template does not have"; else ok "renders the template whole again"; fi
 
 # uninstall: a worker still running its job, and a job whose pid now belongs to a stranger.
 mkdir -p "$T/fake/src/worker" "$HOME/.agentd/jobs/running"

@@ -16,7 +16,7 @@ import { heldBackIssues, listJobs, submitJob } from "../jobs.ts"
 import { enqueueSlack, type ChannelKey } from "../outbox.ts"
 import { loadClaudeOauthToken } from "../secrets.ts"
 import { buildDigest, pauseReason } from "../tick.ts"
-import { createLinearTracker, type Tracker } from "../tracker.ts"
+import { assertNoSecretText, createLinearTracker, readTextFile, type Tracker } from "../tracker.ts"
 import { readUsage } from "../usage.ts"
 import { frontDoorAlive, lastTickAt, readFrontDoorState } from "../agentd/frontdoor.ts"
 import { realExec, type Exec } from "../worker/git.ts"
@@ -36,6 +36,8 @@ const THREAD_TS_RE = /^\d+\.\d+$/
 
 export interface AgentctlDeps {
   tracker: () => Tracker
+  /** AGENTD_FRONT_DOOR=1 marks the front door's own session (agentd sets it on its tmux session). */
+  env: NodeJS.ProcessEnv
   exec: Exec
   now: () => Date
   /** The Agent SDK's query(), loaded only for probe-hooks. */
@@ -44,6 +46,7 @@ export interface AgentctlDeps {
 
 const DEFAULTS: AgentctlDeps = {
   tracker: () => createLinearTracker(),
+  env: process.env,
   exec: realExec,
   now: () => new Date(),
   query: async () => (await import("@anthropic-ai/claude-agent-sdk")).query as unknown as QueryFn,
@@ -62,10 +65,36 @@ export async function run(argv: string[], out: (line: string) => void, overrides
     if (typeof value !== "string" || !value.trim()) throw new UsageError(`--${name} is required`)
     return value
   }
+  // The message, inline or from a file (--text-file), where no shell expands
+  // people's words. agentctl runs outside the front door's sandbox, so a
+  // secrets file or a token in the text is refused here, not there.
+  const textFlag = (): string => {
+    const inline = typeof flags.text === "string" ? flags.text : undefined
+    const file = typeof flags["text-file"] === "string" ? flags["text-file"] : undefined
+    if (inline !== undefined && file !== undefined) throw new UsageError("--text and --text-file are two ways to give one text: give one")
+    if (inline === undefined && file === undefined) throw new UsageError("--text or --text-file is required")
+    let text: string
+    try {
+      text = file !== undefined ? readTextFile(file, "--text-file") : (inline as string)
+      assertNoSecretText(text, file !== undefined ? "--text-file" : "--text")
+    } catch (error) {
+      if (error instanceof UsageError) throw error
+      throw new UsageError(message(error).replace(/^usage: /, ""))
+    }
+    if (!text.trim()) throw new UsageError("the text is empty")
+    return text.replace(/\n+$/, "")
+  }
   const issueFlag = () => {
     const issue = need("issue")
     if (!ISSUE_RE.test(issue)) throw new UsageError(`--issue must look like STEP-123, got ${issue}`)
     return issue
+  }
+
+  // Only a person lifts a pause (on the mini, not through Slack), and a probe
+  // spends money: the front door's own session may do neither. Its settings
+  // deny both as well.
+  if (deps.env.AGENTD_FRONT_DOOR === "1" && (command === "resume" || command === "probe-hooks")) {
+    throw new Error(`agentctl ${command} is for a person on the mini, not for the front door`)
   }
 
   switch (command) {
@@ -91,26 +120,26 @@ export async function run(argv: string[], out: (line: string) => void, overrides
       throw new UsageError("usage: agentctl job submit --issue STEP-n [--model m] | agentctl job list")
     }
     case "ask": {
-      print({ queued: enqueueSlack(paths, { kind: "issue", issue: issueFlag(), text: need("text"), question: true }, now()) })
+      print({ queued: enqueueSlack(paths, { kind: "issue", issue: issueFlag(), text: textFlag(), question: true }, now()) })
       return 0
     }
     case "slack": {
       if (rest[0] === "post") {
         const channel = need("channel")
         if (!CHANNELS.includes(channel as ChannelKey)) throw new UsageError(`--channel must be one of ${CHANNELS.join(", ")}`)
-        print({ queued: enqueueSlack(paths, { kind: "post", channel: channel as ChannelKey, text: need("text") }, now()) })
+        print({ queued: enqueueSlack(paths, { kind: "post", channel: channel as ChannelKey, text: textFlag() }, now()) })
         return 0
       }
       if (rest[0] === "reply") {
         const channelId = need("channel")
         const threadTs = need("thread")
-        const text = need("text")
+        const text = textFlag()
         if (!CHANNEL_ID_RE.test(channelId)) throw new UsageError(`--channel must be a Slack channel id (C...), as the event carries it, got ${channelId}`)
         if (!THREAD_TS_RE.test(threadTs)) throw new UsageError(`--thread must be a Slack message ts (1790000000.000100), got ${threadTs}`)
         print({ queued: enqueueSlack(paths, { kind: "reply", channelId, threadTs, text }, now()) })
         return 0
       }
-      throw new UsageError("usage: agentctl slack post --channel <key> --text <t> | agentctl slack reply --channel <id> --thread <ts> --text <t>")
+      throw new UsageError("usage: agentctl slack post --channel <key> --text <t> | agentctl slack reply --channel <id> --thread <ts> --text <t> (or --text-file <path> for either)")
     }
     case "pause": {
       mkdirSync(paths.root, { recursive: true })
@@ -198,6 +227,7 @@ export async function run(argv: string[], out: (line: string) => void, overrides
           }
         },
         profileMini: () => readProfileMini(),
+        fresh: flags.fresh === true,
       })
       const { text, ok } = formatDoctor(checks)
       print(text)

@@ -1,9 +1,9 @@
 #!/bin/bash
 # The hard stop: both LaunchAgents out, the front door and any worker stopped,
 # and the mini paused, so a later install.sh starts nothing until a person
-# runs agentctl resume. Leaves ~/.agentd (state, logs, worktrees) and
-# ~/.claude/settings.json for whoever looks next, and touches nothing in
-# Linear, Slack or GitHub: the runbook's Rollback section covers those.
+# runs agentctl resume. Leaves ~/.agentd (state, logs, worktrees, the front
+# door's settings) for whoever looks next, and touches nothing in Linear,
+# Slack or GitHub: the runbook's Rollback section covers those.
 set -uo pipefail
 AGENTD_HOME="${AGENTD_HOME:-$HOME/.agentd}"
 LAUNCH_DIR="${LAUNCH_AGENTS_DIR:-$HOME/Library/LaunchAgents}"

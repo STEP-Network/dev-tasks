@@ -3,12 +3,15 @@
   "autoContinueAtUsageLimit": true,
   "statusLine": { "type": "command", "command": "__AGENTD_HOME__/bin/statusline" },
   "permissions": {
-    "allow": ["Edit(~/.agentd/tmp/**)"],
+    "allow": ["Bash(~/.agentd/bin/agentctl:*)", "Bash(~/.agentd/bin/trackerctl:*)"],
     "deny": [
       "Read(~/.config/agentd/**)",
       "Read(~/.config/linear/**)",
+      "Edit(~/.agentd/**)",
       "Edit(/__REPO__/**)",
       "Write(/__REPO__/**)",
+      "Bash(~/.agentd/bin/agentctl resume:*)",
+      "Bash(~/.agentd/bin/agentctl probe-hooks:*)",
       "Bash(git push:*)",
       "Bash(gh pr create:*)",
       "Bash(gh pr merge:*)"
@@ -18,8 +21,9 @@
     "enabled": true,
     "autoAllowBashIfSandboxed": true,
     "allowUnsandboxedCommands": false,
-    "network": { "allowedDomains": ["api.linear.app", "registry.npmjs.org"] },
-    "filesystem": { "allowWrite": ["__AGENTD_HOME__"], "allowRead": ["~/.config/linear/.env"] }
+    "excludedCommands": ["~/.agentd/bin/agentctl:*", "~/.agentd/bin/trackerctl:*"],
+    "network": { "allowedDomains": [] },
+    "filesystem": { "allowWrite": ["~/.front-door"] }
   },
   "enabledPlugins": { "dev-tasks@dev-tasks-marketplace": true }
 }

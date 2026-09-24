@@ -34,7 +34,7 @@ function writeConfig() {
 
 function deps(over: Partial<AgentctlDeps> = {}): Partial<AgentctlDeps> {
   const fake = fakeTracker([issue({ id: "STEP-1", labels: ["polads", "agent-ready"] })])
-  return { tracker: () => fake.tracker, exec: fakeExec().exec, now: () => NOW, ...over }
+  return { tracker: () => fake.tracker, exec: fakeExec().exec, now: () => NOW, env: {}, ...over }
 }
 
 describe("parseCli", () => {
@@ -74,6 +74,38 @@ describe("run", () => {
     await expect(run(["slack", "reply", "--channel", "C1", "--thread", "yesterday", "--text", "x"], out, deps())).rejects.toBeInstanceOf(UsageError)
     await expect(run(["nosuch"], out, deps())).rejects.toBeInstanceOf(UsageError)
     expect(listNew(agentPaths().outbox)).toEqual([])
+  })
+
+  it("takes a message from a file, as written, where no shell expands people's words", async () => {
+    const file = join(root, "reply.md")
+    writeFileSync(file, "They asked for $(touch pwned) and `this`.\nSecond line.\n")
+    await run(["slack", "reply", "--channel", "C0INTAKE", "--thread", "1790000000.000100", "--text-file", file], out, deps())
+    await run(["ask", "--issue", "STEP-7", "--text-file", file], out, deps())
+    expect(listNew<{ text: string }>(agentPaths().outbox).map((e) => e.payload.text)).toEqual([
+      "They asked for $(touch pwned) and `this`.\nSecond line.",
+      "They asked for $(touch pwned) and `this`.\nSecond line.",
+    ])
+    await expect(run(["ask", "--issue", "STEP-7", "--text", "x", "--text-file", file], out, deps())).rejects.toBeInstanceOf(UsageError)
+    await expect(run(["ask", "--issue", "STEP-7"], out, deps())).rejects.toThrow(/--text or --text-file/)
+  })
+
+  it("sends no secrets file and no token, from a file or inline", async () => {
+    // agentctl runs outside the front door's sandbox, so it keeps them out itself.
+    const tokens = join(root, "notes.md")
+    writeFileSync(tokens, "SLACK_BOT_TOKEN=xoxb-1234-5678-abcdef\n")
+    await expect(run(["slack", "post", "--channel", "agents", "--text-file", tokens], out, deps())).rejects.toThrow(/carries a key or a token/)
+    await expect(run(["slack", "post", "--channel", "agents", "--text", "see lin_api_abcdefghijkl"], out, deps())).rejects.toBeInstanceOf(UsageError)
+    await expect(run(["slack", "post", "--channel", "agents", "--text-file", join(root, ".env")], out, deps())).rejects.toThrow(/secrets file/)
+    expect(listNew(agentPaths().outbox)).toEqual([])
+  })
+
+  it("lifts no pause and runs no probe from the front door's own session", async () => {
+    writeFileSync(agentPaths().pauseFile, JSON.stringify({ at: NOW.toISOString(), reason: "a person" }))
+    await expect(run(["resume"], out, deps({ env: { AGENTD_FRONT_DOOR: "1" } }))).rejects.toThrow(/for a person on the mini/)
+    await expect(run(["probe-hooks"], out, deps({ env: { AGENTD_FRONT_DOOR: "1" } }))).rejects.toThrow(/for a person on the mini/)
+    expect(existsSync(agentPaths().pauseFile)).toBe(true)
+    await run(["resume"], out, deps({ env: {} }))
+    expect(existsSync(agentPaths().pauseFile)).toBe(false)
   })
 
   it("pauses with a reason, and resume lifts any pause, agentd's own included", async () => {

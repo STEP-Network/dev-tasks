@@ -10,6 +10,7 @@
 import { existsSync, readFileSync, statSync } from "node:fs"
 import { dirname, join } from "node:path"
 import { assertProfileMini, loadConfig, type AgentConfig, type AgentPaths } from "../config.ts"
+import { frontDoorSettingsPath } from "../agentd/frontdoor.ts"
 import { agentdSecretsPath, assertLinearKeyFile, claudeTokenPath, linearKeyPath, slackSecretsPath } from "../secrets.ts"
 import type { Exec } from "../worker/git.ts"
 
@@ -30,6 +31,12 @@ export interface DoctorDeps {
   profile: () => string
   /** hooks/lib/profile.sh get mini */
   profileMini: () => string | null
+  /**
+   * Check claude and tmux as PATH finds them, not the paths config.json
+   * recorded: install.sh asks for this, so a binary that moved since the last
+   * install is found again and recorded, not refused.
+   */
+  fresh?: boolean
 }
 
 /** runtime/package.json's engines floor. */
@@ -58,14 +65,24 @@ function secretMode(path: string): number | null {
 
 function secretCheck(name: string, path: string, required: boolean): Check | null {
   const mode = secretMode(path)
-  if (mode === null) return required ? { level: "fail", name, detail: `${path} is missing (runbook, "Secrets")` } : null
+  if (mode === null) return required ? { level: "fail", name, detail: `${path} is missing (runbook, section 5)` } : null
   if (mode & 0o077) return { level: "fail", name, detail: `${path} must be chmod 600, it is ${mode.toString(8)}: chmod 600 ${path}` }
   return { level: "ok", name, detail: path }
 }
 
 async function gitIdentity(d: DoctorDeps): Promise<Check> {
-  // The worker's sandbox refuses ~/.config, so an identity in
-  // ~/.config/git/config is invisible to its commits.
+  // The worker's sandbox refuses ~/.config. git reads ~/.config/git/config
+  // whenever it exists, and a read the sandbox refuses is fatal: every git the
+  // worker runs would exit 128. So the file must not exist at all, and the
+  // identity must be in ~/.gitconfig.
+  const xdg = join(d.paths.home, ".config", "git", "config")
+  if (existsSync(xdg)) {
+    return {
+      level: "fail",
+      name: "git identity",
+      detail: `${xdg} exists, and the worker's sandbox cannot read it, so every git command there fails. Move what it holds into ~/.gitconfig (git config --global writes there once ~/.gitconfig exists), then delete it`,
+    }
+  }
   const gitconfig = join(d.paths.home, ".gitconfig")
   const values: string[] = []
   for (const key of ["user.email", "user.name"]) {
@@ -76,7 +93,7 @@ async function gitIdentity(d: DoctorDeps): Promise<Check> {
       return {
         level: "fail",
         name: "git identity",
-        detail: `${key} comes from ${origin.replace(/^file:/, "")}, which the worker's sandbox cannot read. Put it in ~/.gitconfig: touch ~/.gitconfig, then git config --global ${key} "${value}", and remove it from the other file`,
+        detail: `${key} comes from ${origin.replace(/^file:/, "")}, not ~/.gitconfig: the worker's sandbox reads only that one. touch ~/.gitconfig, then git config --global ${key} "${value}"`,
       }
     }
     values.push(value)
@@ -141,7 +158,7 @@ function frontDoorPlugin(d: DoctorDeps, config: AgentConfig): Check {
   const checkout = dirname(config.pluginRoot)
   const market = read("known_marketplaces.json")?.["dev-tasks-marketplace"] as { source?: { source?: string; path?: string; repo?: string } } | undefined
   const installed = (read("installed_plugins.json")?.plugins as Record<string, unknown> | undefined)?.["dev-tasks@dev-tasks-marketplace"]
-  const add = `in claude, in ${config.repo.path}: /plugin marketplace add ${checkout}, then /plugin install dev-tasks@dev-tasks-marketplace (runbook, "Install")`
+  const add = `in claude, in ${config.repo.path}: /plugin marketplace add ${checkout}, then /plugin install dev-tasks@dev-tasks-marketplace (runbook, section 7)`
   if (!market || !installed) return { level: "warn", name, detail: `the dev-tasks plugin is not installed for the front door: ${add}` }
   const source = market.source ?? {}
   if (source.source !== "directory" || source.path !== checkout) {
@@ -163,7 +180,7 @@ export async function doctorChecks(d: DoctorDeps): Promise<Check[]> {
   add(
     profile === "agent"
       ? { level: "ok", name: "profile", detail: "agent" }
-      : { level: "fail", name: "profile", detail: `${profile}: ~/.claude/dev-tasks-profile.json must say "profile": "agent" (runbook, "Mark the machine")` },
+      : { level: "fail", name: "profile", detail: `${profile}: ~/.claude/dev-tasks-profile.json must say "profile": "agent" (runbook, section 3)` },
   )
   let config: AgentConfig | null = null
   try {
@@ -199,10 +216,11 @@ export async function doctorChecks(d: DoctorDeps): Promise<Check[]> {
   const p = await d.exec("pnpm", ["--version"])
   add(pnpm(p.stdout.trim(), p.code))
   add(node(d.nodeVersion))
-  add(await tool(d, "tmux", config?.frontDoor.tmuxPath ?? "tmux", ["-V"]))
+  const claude = d.fresh || !config ? "claude" : config.frontDoor.claudePath
+  add(await tool(d, "tmux", d.fresh || !config ? "tmux" : config.frontDoor.tmuxPath, ["-V"]))
   add(await tool(d, "jq", "jq", ["--version"]))
-  add(await tool(d, "claude", config?.frontDoor.claudePath ?? "claude", ["--version"], CLAUDE_FLOOR))
-  const auth = await d.exec(config?.frontDoor.claudePath ?? "claude", ["auth", "status"])
+  add(await tool(d, "claude", claude, ["--version"], CLAUDE_FLOOR))
+  const auth = await d.exec(claude, ["auth", "status"])
   add(
     auth.code === 0
       ? { level: "ok", name: "claude login", detail: "logged in" }
@@ -222,6 +240,10 @@ export async function doctorChecks(d: DoctorDeps): Promise<Check[]> {
         : { level: "fail", name: "plugin", detail: `${manifest} is missing: pluginRoot must be the plugin/ directory of the dev-tasks checkout` },
     )
     add(frontDoorPlugin(d, config))
+    // install.sh writes it after doctor --fresh passes, so only a later doctor looks for it.
+    if (!d.fresh && !existsSync(frontDoorSettingsPath(d.paths))) {
+      add({ level: "warn", name: "front door settings", detail: `${frontDoorSettingsPath(d.paths)} is missing, and the front door cannot start without it: run install.sh` })
+    }
   }
   if (d.env.MONDAY_API_KEY) {
     add({ level: "warn", name: "monday", detail: "MONDAY_API_KEY is set in this environment. Monday is read-only for agents: remove it from the shell profile" })

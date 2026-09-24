@@ -18,6 +18,7 @@ import {
   loadLinearKey,
   resetLinearClientForTests,
   LINEAR_ENDPOINT,
+  linearEndpoint,
 } from "../linear-client.ts"
 import { createLinearTracker } from "../linear.ts"
 
@@ -351,5 +352,31 @@ describe("a create that landed is never reported as failed (adapter and transpor
     )
     expect(await create()).toBe("rejected: Linear: Argument Validation Error: title must not be empty")
     expect(fake.stored.size).toBe(0)
+  })
+})
+
+describe("linearEndpoint", () => {
+  it("is Linear unless a test names a loopback server", () => {
+    expect(linearEndpoint({})).toBe(LINEAR_ENDPOINT)
+    expect(linearEndpoint({ DEV_TASKS_LINEAR_ENDPOINT: "http://127.0.0.1:4567/graphql" })).toBe("http://127.0.0.1:4567/graphql")
+    expect(linearEndpoint({ DEV_TASKS_LINEAR_ENDPOINT: "http://localhost:4567/graphql" })).toBe("http://localhost:4567/graphql")
+  })
+
+  it("refuses any other host, since the key travels with every request", () => {
+    for (const url of ["https://attacker.example/graphql", "http://127.0.0.1.attacker.example/", "https://127.0.0.1/graphql", "not a url"]) {
+      expect(() => linearEndpoint({ DEV_TASKS_LINEAR_ENDPOINT: url }), url).toThrow(/DEV_TASKS_LINEAR_ENDPOINT/)
+    }
+  })
+
+  it("is where requests go", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ data: { ok: true } }))
+    vi.stubGlobal("fetch", fetchMock)
+    process.env.DEV_TASKS_LINEAR_ENDPOINT = "http://127.0.0.1:4567/graphql"
+    try {
+      await linearRequest("query { ok }")
+    } finally {
+      delete process.env.DEV_TASKS_LINEAR_ENDPOINT
+    }
+    expect(fetchMock.mock.calls[0][0]).toBe("http://127.0.0.1:4567/graphql")
   })
 })
