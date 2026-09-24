@@ -288,7 +288,9 @@ export async function run(argv: string[], out: (line: string) => void, overrides
     case "probe-sandbox": {
       // Free: fakes of the Messages API and Linear on loopback. With the front
       // door's own binary, so the record is about what the front door runs.
-      const claudePath = typeof flags.claude === "string" ? flags.claude : loadConfig(paths).frontDoor.claudePath
+      // Only the binary the front door runs: the record is what agentd starts it on.
+      if (flags.claude !== undefined) throw new UsageError("probe-sandbox probes the front door's own claude (config.json's frontDoor.claudePath), never another")
+      const claudePath = loadConfig(paths).frontDoor.claudePath
       const version = await deps.exec(claudePath, ["--version"])
       if (version.code !== 0) throw new Error(`${claudePath} --version failed: ${version.stderr.trim() || `exit ${version.code}`}`)
       const probe = await probeFrontDoorSandbox({ query: await deps.query(), claudePath, runtime: RUNTIME_DIR, plugin: join(RUNTIME_DIR, "..", "plugin"), now })

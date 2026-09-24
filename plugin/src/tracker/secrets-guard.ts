@@ -83,5 +83,11 @@ export function readTextFile(path: string, what: string, home: string = homedir(
   }
   const text = readFileSync(resolved, "utf8")
   assertNoSecretText(text, `${what} ${path}`)
+  // The skills write these files with a heredoc: one whose last line is its
+  // own delimiter did not close where it was meant to, and holds the wrong text.
+  const last = text.trimEnd().split("\n").at(-1)?.trim() ?? ""
+  if (/^TEXT_[A-Za-z0-9<>_-]*$/.test(last)) {
+    throw new Error(`usage: ${what} ${path} ends with a line like a heredoc delimiter (${last}), so the heredoc did not end where it was meant to: write it again with a new delimiter`)
+  }
   return text
 }

@@ -86,9 +86,9 @@ export async function frontDoorRefusal(deps: { paths: AgentPaths; config: AgentC
   const version = r.code === 0 ? r.stdout.trim().split("\n")[0] : ""
   if (!version) return `${claude} --version failed (${r.code}): ${r.stderr.trim()}`
   const probe = readSandboxProbe(deps.paths)
-  if (!probe?.ok || probe.claudeVersion !== version) {
-    const last = probe ? ` (the last probe ${probe.ok ? "passed" : "failed"} on ${probe.claudeVersion})` : ""
-    return `the sandbox probe has not passed on ${version}${last}: a person runs agentctl probe-sandbox`
+  if (!probe?.ok || probe.claudeVersion !== version || probe.claudePath !== claude) {
+    const last = probe ? ` (the last probe ${probe.ok ? "passed" : "failed"} on ${probe.claudeVersion}, ${probe.claudePath ?? "the SDK's own binary"})` : ""
+    return `the sandbox probe has not passed on ${claude}, ${version}${last}: a person runs agentctl probe-sandbox`
   }
   return null
 }

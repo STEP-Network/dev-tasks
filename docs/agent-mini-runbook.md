@@ -49,7 +49,8 @@ brew install node@20 pnpm@10 gh jq tmux vercel-cli
 
 `pnpm@10`, not plain `pnpm`: that one is pnpm 12, which ignores
 `pnpm.onlyBuiltDependencies` in PolAds's package.json, and the install
-refuses any pnpm but 10. `node@20` and `pnpm@10` are keg-only, so they are
+refuses any pnpm but 10. A pnpm from pnpm's own installer (in
+`~/Library/pnpm`) goes back to 10 with `pnpm self-update 10`. `node@20` and `pnpm@10` are keg-only, so they are
 not on anyone's PATH yet. Homebrew stops installing `node@20` on 28 October
 2026. A copy already installed keeps working, and STEP-3156 tracks the move.
 
@@ -70,11 +71,14 @@ Nate creates the mailbox `eve@polads.eu` first. Every account below uses it.
 
 Then, logged in as `eve`, in a terminal. A standard user does not get
 Homebrew on its PATH, so add it with the two pinned versions and Claude's
-install folder:
+install folder, and keep Claude Code from updating itself: the front door
+starts only on a Claude Code the sandbox probe passed on (section 9), and a
+person's own `claude` on the mini would otherwise update the one it runs.
 
 ```bash
 echo 'eval "$(/opt/homebrew/bin/brew shellenv)"' >> ~/.zprofile
 echo 'export PATH="/opt/homebrew/opt/node@20/bin:/opt/homebrew/opt/pnpm@10/bin:$HOME/.local/bin:$PATH"' >> ~/.zprofile
+echo 'export DISABLE_AUTOUPDATER=1' >> ~/.zprofile
 curl -fsSL https://claude.ai/install.sh | bash
 ```
 
@@ -208,6 +212,16 @@ too. If the plugin was installed from GitHub before (the 1.0 install doc),
 remove that marketplace first: `agentctl doctor` warns about it.
 
 ## 8. Install
+
+From the mini's own Terminal, in person or over Screen Sharing, not over
+SSH: the login keychain, which holds the Claude Code and gh logins, is
+locked in an SSH session ("User interaction is not allowed"), so `claude
+auth status` and `gh auth status` fail there although both work in the
+automatic-login session. Over SSH, `agentctl doctor` reports those two as
+"run from the mini's own Terminal" instead of failing. The LaunchAgents run
+in that GUI session, so agentd, the bridge, the front door and the workers
+reach the keychain. Everything after the install and the first doctor can
+run over SSH (`ssh -t` where a command needs a terminal).
 
 ```bash
 bash ~/dev-tasks/runtime/scripts/install.sh
@@ -379,12 +393,14 @@ tmux -L agentd kill-session -t =frontdoor        # agentd resumes it within 15 s
 ~/.agentd/bin/agentctl resume
 ```
 
-The front door's Claude Code does not update itself (agentd's LaunchAgent
-sets `DISABLE_AUTOUPDATER`), and agentd starts the front door only on a
-`claude` the sandbox probe passed on. To update it: pause, `claude update`,
-`agentctl probe-sandbox`, restart the front door as above, resume. The same after a runtime update that moves the
-SDK's version, and `cd ~/dev-tasks/runtime && npm test` runs the probe with
-the SDK's own binary.
+Claude Code does not update itself on the mini (`DISABLE_AUTOUPDATER` in
+agentd's LaunchAgent and in `~/.zprofile`), and agentd starts the front door
+only on the `claude` the sandbox probe last passed on, at the path and the
+version it recorded: until then it keeps the mini paused, and `agentctl
+status` says why. To update it: pause, `claude update`, `agentctl
+probe-sandbox`, restart the front door as above, resume. `cd
+~/dev-tasks/runtime && npm test` runs the same probe with the SDK's own
+binary.
 
 The front door's plugin comes straight from `~/dev-tasks/plugin` (section
 7), so the pull updates it and the restart loads it. If `/plugin` in the
