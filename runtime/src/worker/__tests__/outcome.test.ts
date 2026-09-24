@@ -66,6 +66,8 @@ describe("toOutcome", () => {
     expect(toOutcome(null, { ...ctx, thrown: "spawn claude ENOENT" })).toMatchObject({ status: "blocked", reason: "the worker process failed: spawn claude ENOENT" })
     expect(toOutcome(null, ctx)).toMatchObject({ status: "blocked", reason: "the worker process failed: no result message" })
     expect(toOutcome(result({ subtype: "error_during_execution", errors: ["tool crashed"] }), ctx).reason).toBe("an error during execution: tool crashed")
+    // The reason reaches Slack: no semicolons.
+    expect(toOutcome(result({ subtype: "error_during_execution", errors: ["tool crashed", "the hook failed"] }), ctx).reason).toBe("an error during execution: tool crashed. the hook failed")
   })
 })
 

@@ -48,6 +48,8 @@ const PATH_FIELDS: Record<string, string[]> = {
 }
 
 const WRITES = new Set(["Write", "Edit", "MultiEdit", "NotebookEdit"])
+/** Tools that walk a directory. Grep runs ripgrep with --hidden, so a search of home reads ~/.config. */
+const SEARCHES = new Set(["Grep", "Glob", "LS"])
 
 /** Where a path really leads: symlinks resolved as far as the path exists. */
 function real(path: string): string {
@@ -67,7 +69,8 @@ function within(path: string, dir: string): boolean {
 /**
  * Why a file tool's call is refused, or null. Every path is checked as
  * written and as it resolves, so a symlink in the worktree reaches neither
- * ~/.config nor anywhere outside the worktree.
+ * ~/.config nor anywhere outside the worktree. A search is refused when
+ * ~/.config lies inside what it would walk.
  */
 export function workerPathDenial(toolName: string, input: unknown, scope: WorkerScope): string | null {
   const fields = PATH_FIELDS[toolName]
@@ -81,7 +84,7 @@ export function workerPathDenial(toolName: string, input: unknown, scope: Worker
     const written = resolve(scope.worktree, expanded)
     const resolved = real(written)
     for (const path of [written, resolved]) {
-      if (configs.some((dir) => within(path, dir))) return SECRETS
+      if (configs.some((dir) => within(path, dir) || (SEARCHES.has(toolName) && within(dir, path)))) return SECRETS
       if (path.split(sep).some((segment) => segment.startsWith(".env"))) return SECRETS
     }
     if (!WRITES.has(toolName)) continue

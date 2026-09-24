@@ -85,7 +85,8 @@ export function toOutcome(
     case "error_max_structured_output_retries":
       return blocked("no valid final report")
     case "error_during_execution": {
-      const text = (result.errors ?? []).join("; ")
+      // The reason reaches Slack, where the copy rules allow no semicolons.
+      const text = (result.errors ?? []).join(". ")
       if (isLimit(text, result.api_error_status)) return limited
       return blocked(`an error during execution: ${text || "unknown"}`)
     }

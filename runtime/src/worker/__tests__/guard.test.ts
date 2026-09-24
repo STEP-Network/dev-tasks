@@ -93,6 +93,10 @@ describe("workerPathDenial", () => {
       ["Grep", { pattern: "KEY", path: worktree, glob: ".env*" }],
       ["Glob", { pattern: "**/.env*", path: worktree }],
       ["LS", { path: join(worktree, "out", ".config") }],
+      // Grep runs ripgrep with --hidden: a search of home, or of any folder above it, reads ~/.config.
+      ["Grep", { pattern: "lin_api", path: home }],
+      ["Grep", { pattern: "lin_api", path: "/" }],
+      ["Glob", { pattern: "**/*", path: "~" }],
     ] as const) {
       expect(workerPathDenial(tool, input, scope), `${tool} ${JSON.stringify(input)}`).toMatch(SECRETS)
     }
@@ -115,6 +119,7 @@ describe("workerPathDenial", () => {
     expect(workerPathDenial("Edit", { file_path: join(worktree, ".github", "workflows", "ci.yml") }, scope)).toBeNull()
     expect(workerPathDenial("Read", { file_path: join(home, "dev-tasks", "plugin", "README.md") }, scope)).toBeNull()
     expect(workerPathDenial("Grep", { pattern: "process.env", path: worktree }, scope)).toBeNull()
+    expect(workerPathDenial("Grep", { pattern: "claimIssue", path: join(home, "dev-tasks") }, scope)).toBeNull()
     expect(workerPathDenial("Glob", { pattern: "**/*.config.ts" }, scope)).toBeNull()
     expect(workerPathDenial("TodoWrite", { todos: [] }, scope)).toBeNull()
   })
