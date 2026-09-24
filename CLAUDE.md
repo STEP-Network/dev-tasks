@@ -14,7 +14,7 @@ This repo is a Claude Code plugin marketplace + plugin source. The plugin (`dev-
 │   ├── .mcp.json                     # registers the stdio MCP server
 │   ├── package.json + tsconfig.json  # plugin deps (@modelcontextprotocol/sdk + zod) + TS build
 │   ├── src/                          # MCP TypeScript source (44 tools)
-│   ├── dist/                         # tsc output (committed: marketplace installs run no build)
+│   ├── dist/                         # tsc output, server.js bundled with its packages (committed: a marketplace install runs no npm step)
 │   ├── rules/                        # 17 rules, read on demand (11 Monday provider only)
 │   ├── rules-routing.json
 │   ├── skills/                       # 24 skills: /dev, /preview, /ship, plus the Monday pipeline's and the posture skills
@@ -34,8 +34,8 @@ This repo is a Claude Code plugin marketplace + plugin source. The plugin (`dev-
 
 ```bash
 cd plugin
-npm install          # also runs `tsc` via prepare hook → produces dist/
-npm run build        # rebuild dist/
+npm install          # dependencies only: dist/ is committed, nothing builds on install
+npm run build        # rebuild dist/: tsc, then scripts/bundle-server.ts bundles dist/server.js
 npm run typecheck    # tsc --noEmit
 npm start            # run the stdio MCP server (responds on stdin/stdout)
 ```

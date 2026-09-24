@@ -1,0 +1,5 @@
+# plugin/dist/ is build output, committed because a marketplace install runs
+# no npm step. GitHub collapses its diffs: review src/ and scripts/ instead,
+# and the sync test in plugin/src/__tests__/server-bundle.test.ts keeps the
+# bundle honest.
+plugin/dist/** linguist-generated=true

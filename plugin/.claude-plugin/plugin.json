@@ -1,5 +1,5 @@
 {
   "name": "dev-tasks",
-  "version": "1.1.1",
+  "version": "1.1.2",
   "description": "STEP dev-tasks plugin, two-flow edition: a machine profile decides which hooks run (human laptop vs agent mini), /dev + /preview + /ship replace the ten-phase ship ceremony, and a tracker adapter reads and writes Linear (team STEP) or Monday behind one `tracker.provider` key. CI owns everything after PR open. 45 Monday MCP tools unchanged. Internal STEP only — not a generic plugin."
 }
