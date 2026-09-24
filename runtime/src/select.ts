@@ -23,12 +23,17 @@ export interface QueuePolicy {
 
 const HANDS_OFF = ["human-todo", "awaiting-answer"]
 
+/** Whether this mini may refine or develop an issue at all: in allowlist mode, only the ids on the list. */
+export function onQueue(id: string, policy: Pick<QueuePolicy, "mode" | "allow">): boolean {
+  return policy.mode === "open" || policy.allow.includes(id)
+}
+
 export function developEligible(issue: TrackerIssue, meId: string, policy: QueuePolicy): boolean {
   if (issue.state !== "Ready") return false
   if (!issue.labels.includes("agent-ready") || !issue.labels.includes(policy.product)) return false
   if (HANDS_OFF.some((l) => issue.labels.includes(l))) return false
   if (issue.assigneeId !== null && issue.assigneeId !== meId) return false
-  return policy.mode === "open" || policy.allow.includes(issue.id)
+  return onQueue(issue.id, policy)
 }
 
 export function refineEligible(issue: TrackerIssue, policy: QueuePolicy): boolean {
@@ -39,7 +44,7 @@ export function refineEligible(issue: TrackerIssue, policy: QueuePolicy): boolea
   if (issue.labels.includes("human-todo") && issue.state !== "Refining") return false
   // Triage comes from Slack and the bug receivers; refine decides its product.
   if (issue.state !== "Triage" && !issue.labels.includes(policy.product)) return false
-  return policy.mode === "open" || policy.allow.includes(issue.id)
+  return onQueue(issue.id, policy)
 }
 
 export interface SelectionInput {

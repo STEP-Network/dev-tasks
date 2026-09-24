@@ -1,0 +1,62 @@
+/**
+ * Claude Code's hook `if` takes one permission rule (code.claude.com, hooks
+ * guide: "To match multiple tool names, use separate handlers each with its
+ * own if value"). A `|` in it, `Bash(a|b)` or `Edit(x)|Write(y)`, never
+ * matches, and the hook then runs only on a command Claude Code cannot parse.
+ * bash-guard, protect-sensitive-files and two nudges sat dead that way until
+ * agentctl probe-hooks failed on Eve's mini (2026-09-24). runtime's
+ * sessions.test.ts proves the split handlers fire in a real session.
+ */
+
+import { readFileSync } from "node:fs"
+import { dirname, resolve } from "node:path"
+import { fileURLToPath } from "node:url"
+import { describe, expect, it } from "vitest"
+
+const PLUGIN_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..")
+
+type Handler = { type: string; command: string; if?: string }
+type Group = { matcher?: string; hooks: Handler[] }
+const hooks = (JSON.parse(readFileSync(resolve(PLUGIN_ROOT, "hooks", "hooks.json"), "utf-8")) as { hooks: Record<string, Group[]> }).hooks
+
+const handlers = Object.entries(hooks).flatMap(([event, groups]) => groups.flatMap((g) => g.hooks.map((h) => ({ event, matcher: g.matcher, ...h }))))
+const conditionsFor = (script: string) => handlers.filter((h) => h.command.endsWith(`/hooks/${script}`)).map((h) => h.if)
+
+describe("hooks.json conditions", () => {
+  it("gives every `if` exactly one permission rule, and only on tool events", () => {
+    const conditioned = handlers.filter((h) => h.if !== undefined)
+    expect(conditioned.length).toBeGreaterThan(0)
+    for (const h of conditioned) {
+      expect(h.if, h.command).toMatch(/^[A-Z][A-Za-z]*\([^|]*\)$/)
+      expect(["PreToolUse", "PostToolUse", "PostToolUseFailure", "PermissionRequest", "PermissionDenied"], h.command).toContain(h.event)
+    }
+  })
+
+  it("runs bash-guard on every command form its gates cover", () => {
+    expect(conditionsFor("bash-guard.sh")).toEqual([
+      "Bash(* --no-verify *)",
+      "Bash(*--force*)",
+      "Bash(rm -rf *)",
+      "Bash(git reset --hard *)",
+      "Bash(git checkout .)",
+      "Bash(git checkout -- *)",
+      "Bash(git clean -f*)",
+      "Bash(git branch -D*)",
+      "Bash(git commit *)",
+      "Bash(git push *)",
+    ])
+  })
+
+  it("guards every sensitive file for both Edit and Write", () => {
+    const conditions = conditionsFor("protect-sensitive-files.sh")
+    for (const path of ["**/.env*", "**/.mcp.json", "**/secrets/**", "**/credentials/**", "**/pnpm-lock.yaml", "**/package-lock.json"]) {
+      expect(conditions).toContain(`Edit(${path})`)
+      expect(conditions).toContain(`Write(${path})`)
+    }
+    expect(conditions).toHaveLength(12)
+  })
+
+  it("runs build-failure-advisor once per command: it counts failures, and filters the command itself", () => {
+    expect(conditionsFor("build-failure-advisor.sh")).toEqual(["Bash(pnpm *)"])
+  })
+})

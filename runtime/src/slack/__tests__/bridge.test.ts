@@ -87,7 +87,21 @@ describe("intake", () => {
     const [entry] = listNew<{ type: string; issue: string }>(paths.inbox)
     expect(entry.payload).toMatchObject({ type: "intake", issue: "STEP-901", userName: "Nate" })
     expect(threadFor(paths, "STEP-901")).toMatchObject({ channelId: "CIN", ts: "1800.1" })
-    expect(outboxTexts(paths)).toEqual(["filed STEP-901 https://linear.app/step/issue/STEP-901. I will refine it and answer here."])
+    expect(outboxTexts(paths)).toEqual(["filed STEP-901 https://linear.app/step/issue/STEP-901. A person decides when I work on it."])
+  })
+
+  it("promises to refine an intake only when this mini will: open mode, or the new id on the allowlist", async () => {
+    const cases: Array<[Record<string, unknown>, string]> = [
+      [{ mode: "open" }, "I will refine it and answer here."],
+      [{ mode: "allowlist", allow: ["STEP-901"] }, "I will refine it and answer here."],
+      [{ mode: "allowlist", allow: ["STEP-7"] }, "A person decides when I work on it."],
+    ]
+    for (const [queue, next] of cases) {
+      const { deps, paths } = setup()
+      deps.config = ConfigSchema.parse({ ...CONFIG, queue })
+      await handleEnvelope(deps, mention("app_mention", "<@UBOT> The date is wrong on notices"))
+      expect(outboxTexts(paths)).toEqual([`filed STEP-901 https://linear.app/step/issue/STEP-901. ${next}`])
+    }
   })
 
   it("puts an acknowledged delivery on disk before it asks Slack who sent it", async () => {
@@ -185,7 +199,7 @@ describe("intake", () => {
     fake.tracker.attachLink = () => new Promise(() => {})
     void handleEnvelope(deps, mention("app_mention", "<@UBOT> The date is wrong on notices"))
     await new Promise((resolve) => setTimeout(resolve, 20))
-    expect(outboxTexts(paths)).toEqual(["filed STEP-901 https://linear.app/step/issue/STEP-901. I will refine it and answer here."])
+    expect(outboxTexts(paths)).toEqual(["filed STEP-901 https://linear.app/step/issue/STEP-901. A person decides when I work on it."])
   })
 
   it("does not file twice after a crash between Linear creating the issue and the bridge recording it", async () => {

@@ -15,6 +15,9 @@
  *     plugin's server still connects
  *   - a worker loads the dev-tasks plugin exactly once, from pluginRoot, with
  *     the marketplace copy the front door uses installed beside it
+ *   - the plugin's own guard fires in a worker, on every command form it
+ *     covers (agentctl probe-hooks failed on the mini while hooks.json joined
+ *     several rules in one `if` with `|`, which never matches)
  * macOS only: the sandbox is macOS's, and the binary is the darwin package's.
  */
 
@@ -30,6 +33,7 @@ import { ConfigSchema } from "../config.ts"
 import { sdkOptions, type QueryFn } from "../worker/run.ts"
 import { startFakeApi, type ToolCall } from "../cli/probe-fakes.ts"
 import { probeFrontDoorSandbox } from "../cli/sandbox-probe.ts"
+import { probeVerdict } from "../worker/probe.ts"
 
 const RUNTIME = fileURLToPath(new URL("../..", import.meta.url))
 const CHECKOUT = dirname(RUNTIME)
@@ -72,12 +76,12 @@ function gitRepo(dir: string): string {
 function installMarketplace(home: string): void {
   const now = new Date().toISOString()
   const plugins = join(home, ".claude", "plugins")
-  const cache = join(plugins, "cache", "dev-tasks-marketplace", "dev-tasks", "1.2.0")
+  const cache = join(plugins, "cache", "dev-tasks-marketplace", "dev-tasks", "1.2.1")
   cpSync(PLUGIN, cache, { recursive: true, filter: (src) => !src.includes("node_modules") })
   writeFileSync(join(plugins, "known_marketplaces.json"), JSON.stringify({ "dev-tasks-marketplace": { source: { source: "directory", path: CHECKOUT }, installLocation: CHECKOUT, lastUpdated: now } }))
   writeFileSync(
     join(plugins, "installed_plugins.json"),
-    JSON.stringify({ version: 2, plugins: { "dev-tasks@dev-tasks-marketplace": [{ scope: "user", installPath: cache, version: "1.2.0", installedAt: now, lastUpdated: now }] } }),
+    JSON.stringify({ version: 2, plugins: { "dev-tasks@dev-tasks-marketplace": [{ scope: "user", installPath: cache, version: "1.2.1", installedAt: now, lastUpdated: now }] } }),
   )
 }
 
@@ -114,12 +118,14 @@ interface Session {
   init: { plugins?: Array<{ name: string; path: string; source?: string }>; mcp_servers?: Array<{ name: string; status: string }>; tools?: string[] } | null
   results: string[]
   prompted: string[]
+  /** Every message, as agentctl probe-hooks reads them. */
+  messages: unknown[]
 }
 
 async function session(script: ToolCall[], options: (api: string) => Options): Promise<Session> {
   const { query } = await import("@anthropic-ai/claude-agent-sdk")
   const api = await startFakeApi(script)
-  const out: Session = { init: null, results: [], prompted: [] }
+  const out: Session = { init: null, results: [], prompted: [], messages: [] }
   const o = options(api.url)
   // Nobody is there to answer a prompt: record it and refuse, as the front door's --permission-prompts none would.
   o.canUseTool ??= async (name, input) => {
@@ -128,6 +134,7 @@ async function session(script: ToolCall[], options: (api: string) => Options): P
   }
   try {
     for await (const m of query({ prompt: "go", options: o })) {
+      out.messages.push(m)
       if (m.type === "system" && m.subtype === "init") out.init = m as unknown as Session["init"]
       if (m.type === "user" && Array.isArray(m.message.content)) {
         for (const c of m.message.content as Array<{ type: string; content?: unknown }>) {
@@ -197,4 +204,35 @@ describe.skipIf(!binaryAvailable())("sessions, as the Claude Code binary runs th
     // skipMcpDiscovery: the worker starts no plugin server at all.
     expect(s.init?.mcp_servers ?? []).toEqual([])
   }, 90_000)
+
+  it("fires the plugin's own guard in a worker, on every command form it covers, as agentctl probe-hooks checks", async () => {
+    const home = miniHome("guard")
+    const repo = gitRepo(join(home, "polads"))
+    const worktree = gitRepo(join(home, "worktree"))
+    const config = ConfigSchema.parse({ mini: "eve", repo: { path: repo }, pluginRoot: PLUGIN, slack: { allowedUsers: ["UNATE"] } })
+    // One per `if` rule gate (a) acts on, a compound command, and a push, which
+    // gate (c) refuses first here: this throwaway repository has no pre-push marker.
+    const commands: Array<[string, string]> = [
+      ["git reset --hard HEAD", "Destructive command detected: 'git reset --hard'"],
+      ["rm -rf build", "Destructive command detected: 'rm -rf'"],
+      ["git clean -fd", "Destructive command detected: 'git clean -f'"],
+      ["git branch -D old", "Destructive command detected: 'git branch -D'"],
+      ["git checkout .", "Destructive command detected: 'git checkout \\.'"],
+      ["git status && git reset --hard HEAD", "Destructive command detected: 'git reset --hard'"],
+      ["git push --force origin feature", "Destructive command detected: 'git push --force'"],
+      ["git push origin staging", "hooks/bash-guard.sh]: BLOCKED: "],
+    ]
+    const s = await session(
+      commands.map(([command]) => ({ name: "Bash", input: { command, description: "guard" } })),
+      (api) => {
+        const o = sdkOptions({ config, cwd: worktree, model: "sonnet", abortController: new AbortController(), rules: "test", pnpmStore: null, env: {}, home })
+        o.env = { ...env(home, api), DEV_TASKS_PROFILE: "agent" }
+        delete o.outputFormat
+        return o
+      },
+    )
+    expect(s.results).toHaveLength(commands.length)
+    commands.forEach(([command, block], i) => expect(s.results[i], command).toContain(block))
+    expect(probeVerdict(s.messages)).toMatchObject({ pluginHookFired: true, loadedPlugins: expect.arrayContaining(["dev-tasks"]) })
+  }, 120_000)
 })
