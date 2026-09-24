@@ -1,5 +1,5 @@
 import { spawn, spawnSync, type ChildProcess } from "node:child_process"
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { afterEach, describe, expect, it } from "vitest"
@@ -216,13 +216,13 @@ describe("two early losses in a row", () => {
     lose(paths, "STEP-1", "2026-09-24T11:50:00.000Z", "2026-09-24T11:55:00.000Z")
     superviseJobs(deps)
     expect(heldBackIssues(paths)).toEqual(new Set())
-    expect(outbox(paths)[0]).not.toMatch(/held back/)
+    expect(outbox(paths)[0]).not.toMatch(/held back from new jobs/)
     lose(paths, "STEP-1", "2026-09-24T11:56:00.000Z", "2026-09-24T11:57:00.000Z")
     superviseJobs({ ...deps, now: () => new Date("2026-09-24T12:01:00.000Z") })
     expect(heldBackIssues(paths)).toEqual(new Set(["STEP-1"]))
     expect(outbox(paths)).toHaveLength(2)
     expect(outbox(paths)[1]).toMatch(
-      /Its last two workers died within 10 minutes of starting or never started, so STEP-1 is held back from new jobs until a person runs it by hand \(agentctl job submit --issue STEP-1\)\. Look for STEP-1 in ~\/\.agentd\/logs\/worker\.log and agentd\.log\.$/,
+      /Its last two workers died within 10 minutes of starting or never started, so STEP-1 is held back from new jobs until a person runs it by hand \(agentctl job submit --issue STEP-1\)\. Look for STEP-1 in ~\/\.agentd\/logs\/worker\.log and agentd\.log, and in its worker-STEP-1-\*\.log files for a crash before the worker's own log started\.$/,
     )
     // The mini is not paused: other issues go on.
     expect(existsSync(paths.pauseFile)).toBe(false)
@@ -246,10 +246,15 @@ describe("two early losses in a row", () => {
     // One notice per loss: the pause is said in the second, never in a post of its own, and no hold is.
     const posts = outbox(paths)
     expect(posts).toHaveLength(2)
-    expect(posts[0]).not.toMatch(/paused|held back/)
-    expect(posts[1]).toMatch(/^STEP-2: the worker process died before reporting\. .* It is the second worker in a row, after STEP-1's, to die within 10 minutes of starting or never start, which points at this mini rather than the issues: /)
-    expect(posts[1].endsWith(`The mini is paused. Look for ${first.id} and ${second.id} in ~/.agentd/logs/worker.log and agentd.log, and run agentctl resume once it is fixed.`)).toBe(true)
-    expect(posts[1]).not.toMatch(/held back/)
+    expect(posts[0]).not.toMatch(/paused|held back from new jobs/)
+    expect(posts[1]).toMatch(/^STEP-2: the worker process died before reporting\. .* It follows an early loss on STEP-1, and two issues lost the same way point at this mini rather than the issues: /)
+    expect(
+      posts[1].endsWith(
+        `The mini is paused, and no issue stays held back for these losses. Look for ${first.id} and ${second.id} in ~/.agentd/logs/worker.log and agentd.log, ` +
+          `and in worker-${first.id}.log and worker-${second.id}.log for a crash before the worker's own log started. Run agentctl resume once it is fixed.`,
+      ),
+    ).toBe(true)
+    expect(posts[1]).not.toMatch(/held back from new jobs/)
 
     // Both losses were the mini's. After a resume, one more loss neither pauses again nor holds an issue back.
     rmSync(paths.pauseFile)
@@ -257,7 +262,49 @@ describe("two early losses in a row", () => {
     superviseJobs({ ...deps, now: () => new Date("2026-09-24T12:06:00.000Z") })
     expect(existsSync(paths.pauseFile)).toBe(false)
     expect(heldBackIssues(paths)).toEqual(new Set())
-    expect(outbox(paths).at(-1)).not.toMatch(/paused|held back/)
+    expect(outbox(paths).at(-1)).not.toMatch(/paused|held back from new jobs/)
+  })
+
+  it("after a hold that a fault of the mini follows, count nothing from before the pause", () => {
+    // The usual run on a broken mini: the digest offers the top issue twice (held), then the next (paused).
+    const brokenMini = () => {
+      const s = setup({ liveness: () => "gone" })
+      lose(s.paths, "STEP-1", "2026-09-24T11:40:00.000Z", "2026-09-24T11:45:00.000Z")
+      superviseJobs({ ...s.deps, now: () => new Date("2026-09-24T11:50:00.000Z") })
+      lose(s.paths, "STEP-1", "2026-09-24T11:51:00.000Z", "2026-09-24T11:52:00.000Z")
+      superviseJobs({ ...s.deps, now: () => new Date("2026-09-24T11:55:00.000Z") })
+      expect(heldBackIssues(s.paths)).toEqual(new Set(["STEP-1"]))
+      lose(s.paths, "STEP-2", "2026-09-24T11:56:00.000Z", "2026-09-24T11:57:00.000Z")
+      superviseJobs(s.deps)
+      expect(existsSync(s.paths.pauseFile)).toBe(true)
+      // The pause lifts STEP-1's hold: its second loss was the mini's.
+      expect(heldBackIssues(s.paths)).toEqual(new Set())
+      rmSync(s.paths.pauseFile) // resumed
+      return s
+    }
+    // One early loss on another issue after the resume does not pause again: STEP-1's first loss is behind the mini's two.
+    const other = brokenMini()
+    lose(other.paths, "STEP-3", "2026-09-24T12:01:00.000Z", "2026-09-24T12:02:00.000Z")
+    superviseJobs({ ...other.deps, now: () => new Date("2026-09-24T12:05:00.000Z") })
+    expect(existsSync(other.paths.pauseFile)).toBe(false)
+    expect(outbox(other.paths).at(-1)).not.toMatch(/paused|held back from new jobs/)
+    // One early loss on STEP-1 after the resume does not hold it again with its first loss from before.
+    const same = brokenMini()
+    lose(same.paths, "STEP-1", "2026-09-24T12:01:00.000Z", "2026-09-24T12:02:00.000Z")
+    superviseJobs({ ...same.deps, now: () => new Date("2026-09-24T12:05:00.000Z") })
+    expect(heldBackIssues(same.paths)).toEqual(new Set())
+    expect(existsSync(same.paths.pauseFile)).toBe(false)
+  })
+
+  it("keep a pause a person set, reason and all", () => {
+    const { paths, deps } = setup({ liveness: () => "gone" })
+    mkdirSync(paths.root, { recursive: true })
+    writeFileSync(paths.pauseFile, JSON.stringify({ at: "2026-09-24T11:00:00.000Z", reason: "Nate is updating the mini" }))
+    lose(paths, "STEP-1", "2026-09-24T11:50:00.000Z", "2026-09-24T11:55:00.000Z")
+    superviseJobs(deps)
+    lose(paths, "STEP-2", "2026-09-24T11:56:00.000Z", "2026-09-24T11:57:00.000Z")
+    superviseJobs({ ...deps, now: () => new Date("2026-09-24T12:01:00.000Z") })
+    expect(JSON.parse(readFileSync(paths.pauseFile, "utf8"))).toEqual({ at: "2026-09-24T11:00:00.000Z", reason: "Nate is updating the mini" })
   })
 
   it("need the loss before to be early too: a job of another issue that ended otherwise is no fault", () => {

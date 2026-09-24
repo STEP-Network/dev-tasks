@@ -10,7 +10,7 @@
  */
 
 import type { Options } from "@anthropic-ai/claude-agent-sdk"
-import { readFileSync } from "node:fs"
+import { existsSync, readFileSync, writeFileSync } from "node:fs"
 import { basename, join } from "node:path"
 import { agentPaths, assertProfileMini, loadConfig, readProfileMini, type AgentConfig, type AgentPaths } from "../config.ts"
 import { readJson } from "../fsq.ts"
@@ -21,7 +21,7 @@ import { loadClaudeOauthToken } from "../secrets.ts"
 import { branchNameFor, createLinearTracker, type Tracker, type TrackerIssue } from "../tracker.ts"
 import { buildBrief, WORKER_RESULT_SCHEMA, workerRules, type BriefInput } from "./brief.ts"
 import { finalize, FinalizeFailed } from "./finalize.ts"
-import { prepareWorktree, realExec, WorktreeRefused, type Exec } from "./git.ts"
+import { historyRewrite, prepareWorktree, realExec, WorktreeRefused, type Exec } from "./git.ts"
 import { denyBannedBash, denyWorkerPaths, ENV_TEMPLATE, workerEnv, workerToolDenial } from "./guard.ts"
 import { toOutcome, type Outcome, type ResultMessageLike } from "./outcome.ts"
 
@@ -155,6 +155,10 @@ export function sdkOptions(o: SdkOptionsInput): Options {
           // worktree's own are named outright as well as by wildcard.
           join(o.cwd, ".git"),
           join(repoGit, "commondir"),
+          // Files that rewrite history as git reads it, which no option turns
+          // off: a graft could hide what a branch changes from the resume check.
+          join(repoGit, "info", "grafts"),
+          join(repoGit, "shallow"),
           ...GIT_POINTERS.map((file) => join(repoGit, "worktrees", basename(o.cwd), file)),
           ...GIT_POINTERS.map((file) => join(repoGit, "worktrees", "*", file)),
           // The project's agent configuration: Claude Code runs these hooks, and
@@ -196,20 +200,37 @@ export async function runJob(deps: RunDeps, jobId: string): Promise<JobResult> {
   if (!job) throw new Error(`job ${jobId} is not in jobs/running`)
   const started = deps.now()
   const minutes = () => Math.round((deps.now().getTime() - started.getTime()) / 60_000)
-  const finish = (result: JobResult): JobResult => {
-    moveJob(paths, jobId, "running", "done", { endedAt: deps.now().toISOString(), result })
+  const finish = (result: JobResult, extra: Partial<JobRecord> = {}): JobResult => {
+    moveJob(paths, jobId, "running", "done", { endedAt: deps.now().toISOString(), result, ...extra })
     appendLedger(paths, { type: "worker.end", issue: job.issue, ...result }, deps.now())
     return result
   }
   const nothing = { prUrl: null, branch: null, costUsd: null, turns: null, minutes: 0 }
 
+  // 0. A graft or a shallow list in the repository can hide what a branch
+  // changes (prepareWorktree refuses it too). It is the mini's to fix, not the
+  // issue's: pause before anything is claimed, rather than park issue after issue.
+  const rewrite = historyRewrite(config.repo.path)
+  if (rewrite) {
+    const why = `the main checkout has .git/${rewrite}, which can hide what a branch changes`
+    if (!existsSync(paths.pauseFile)) writeFileSync(paths.pauseFile, JSON.stringify({ at: deps.now().toISOString(), reason: why }))
+    enqueueSlack(paths, { kind: "post", channel: "agents", text: `Paused: ${why}. ${job.issue} was not started. A person must look at the file, remove it if nothing needs it, and run agentctl resume.` }, deps.now())
+    return finish({ ...nothing, status: "skipped", reason: why })
+  }
+
   // 1. read, skip or claim. Linear failing here ends the job the ordinary way,
-  // as skipped: a short outage is no fault of the issue or the mini, and a
-  // crash here would count as a worker lost early (agentd, heldBackIssues).
-  let issue: TrackerIssue
+  // as skipped and marked linearFailed (the digest waits before offering the
+  // issue again): an outage is no fault of the issue or the mini, and a crash
+  // here would count as a worker lost early (agentd, heldBackIssues).
+  const linearFailed = (what: string, error: unknown): JobResult => {
+    const message = error instanceof Error ? error.message : String(error)
+    log.warn(what, { issue: job.issue, error: message })
+    return finish({ ...nothing, status: "skipped", reason: `${what}: ${message}` }, { linearFailed: true })
+  }
+  let current: TrackerIssue
   let branch: string
   try {
-    const current = await tracker.readIssue(job.issue)
+    current = await tracker.readIssue(job.issue)
     const me = await tracker.whoami()
     if (current.state !== "Ready") return finish({ ...nothing, status: "skipped", reason: `the issue is ${current.state}, not Ready` })
     if (current.assigneeId && current.assigneeId !== me.id) return finish({ ...nothing, status: "skipped", reason: "someone else holds the issue" })
@@ -219,11 +240,20 @@ export async function runJob(deps: RunDeps, jobId: string): Promise<JobResult> {
       await tracker.updateIssue(current.id, { state: "In Review" })
       return finish({ ...nothing, status: "skipped", reason: "a PR for this branch is already open", prUrl: open.stdout.trim(), branch })
     }
+  } catch (error) {
+    return linearFailed("Linear failed before the claim", error)
+  }
+  let issue: TrackerIssue
+  try {
     issue = await tracker.claimIssue(current.id, config.mini)
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error)
-    log.warn("Linear failed before the claim", { issue: job.issue, error: message })
-    return finish({ ...nothing, status: "skipped", reason: `Linear failed before the claim: ${message}` })
+    // The claim comment and the assignment come before the read-back, so the claim may have gone through.
+    enqueueSlack(
+      paths,
+      { kind: "post", channel: "agents", text: `${job.issue}: Linear failed while claiming it. If the claim went through, it is released after ${config.claims.ttlHours} hours unless someone takes the issue first.` },
+      deps.now(),
+    )
+    return linearFailed("Linear failed while claiming", error)
   }
   appendLedger(paths, { type: "claimed", issue: issue.id }, deps.now())
   enqueueSlack(paths, { kind: "post", channel: "agents", text: `claimed ${issue.id} ${issue.title}` }, deps.now())

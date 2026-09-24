@@ -114,6 +114,18 @@ describe("buildDigest", () => {
     expect(await buildDigest(deps)).toMatchObject({ develop: { id: "STEP-2" }, heldBack: ["STEP-1"], readyEligible: 1 })
   })
 
+  it("waits 15 minutes before offering again an issue whose last job Linear failed", async () => {
+    const at = (minutesAgo: number) => new Date(NOW.getTime() - minutesAgo * 60_000).toISOString()
+    const failed = (minutesAgo: number) => {
+      const s = setup([issue({ id: "STEP-1", labels: ["polads", "agent-ready"] }), issue({ id: "STEP-2", labels: ["polads", "agent-ready"] })])
+      const job = submitJob(s.paths, "STEP-1", null, new Date(at(minutesAgo + 1)))
+      moveJob(s.paths, job.id, "pending", "done", { endedAt: at(minutesAgo), linearFailed: true, reported: true, result: { status: "skipped", reason: "Linear failed before the claim: 503", prUrl: null, branch: null, costUsd: null, turns: null, minutes: 0 } })
+      return s
+    }
+    expect((await buildDigest(failed(5).deps)).develop).toMatchObject({ id: "STEP-2" })
+    expect((await buildDigest(failed(20).deps)).develop).toMatchObject({ id: "STEP-1" })
+  })
+
   it("still offers the develop job when only the refine lists fail", async () => {
     const { deps } = setup(undefined, ["listByState"])
     expect(await buildDigest(deps)).toMatchObject({ develop: { id: "STEP-1" }, readyEligible: 1, refine: null, linearError: expect.stringMatching(/listByState failed/) })

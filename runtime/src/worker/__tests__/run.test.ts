@@ -1,5 +1,5 @@
 import type { Options } from "@anthropic-ai/claude-agent-sdk"
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs"
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { describe, expect, it } from "vitest"
@@ -97,12 +97,51 @@ describe("runJob", () => {
   })
 
   it("ends as skipped, not crashed, when Linear fails before the claim, so a short outage never holds an issue back", async () => {
-    for (const method of ["readIssue", "whoami", "claimIssue"]) {
-      const { deps, job, paths, q } = setup({ failOn: [method] })
-      expect(await runJob(deps, job.id)).toMatchObject({ status: "skipped", reason: `Linear failed before the claim: Linear: ${method} failed (fake)` })
+    const cases: Array<{ failOn: string[]; gh?: string; reason: string }> = [
+      { failOn: ["readIssue"], reason: "Linear failed before the claim: Linear: readIssue failed (fake)" },
+      { failOn: ["whoami"], reason: "Linear failed before the claim: Linear: whoami failed (fake)" },
+      // A PR is already open, and moving the issue to In Review fails.
+      { failOn: ["updateIssue"], gh: `${PR}\n`, reason: "Linear failed before the claim: Linear: updateIssue failed (fake)" },
+    ]
+    for (const c of cases) {
+      const { deps, job, paths, q, outbox } = setup({ failOn: c.failOn, gh: c.gh })
+      expect(await runJob(deps, job.id)).toMatchObject({ status: "skipped", reason: c.reason })
       expect(listJobs(paths, "running")).toEqual([])
-      expect(listJobs(paths, "done")[0]).toMatchObject({ result: { status: "skipped" } })
+      // Marked for the digest's wait, and not a loss agentd would count.
+      expect(listJobs(paths, "done")[0]).toMatchObject({ result: { status: "skipped" }, linearFailed: true })
       expect(listJobs(paths, "done")[0].lostEarly).toBeUndefined()
+      expect(q.seen).toEqual([])
+      expect(outbox()).toEqual([])
+    }
+  })
+
+  it("says the claim may have gone through when Linear fails while claiming", async () => {
+    const { deps, job, paths, q, outbox } = setup({ failOn: ["claimIssue"] })
+    expect(await runJob(deps, job.id)).toMatchObject({ status: "skipped", reason: "Linear failed while claiming: Linear: claimIssue failed (fake)" })
+    expect(listJobs(paths, "done")[0].linearFailed).toBe(true)
+    expect(outbox()).toEqual(["STEP-7: Linear failed while claiming it. If the claim went through, it is released after 6 hours unless someone takes the issue first."])
+    expect(q.seen).toEqual([])
+  })
+
+  it("keeps a pause a person set when it finds a graft", async () => {
+    const { deps, job, paths } = setup()
+    mkdirSync(join(deps.config.repo.path, ".git", "info"), { recursive: true })
+    writeFileSync(join(deps.config.repo.path, ".git", "info", "grafts"), "")
+    writeFileSync(paths.pauseFile, JSON.stringify({ at: "2026-09-24T09:00:00.000Z", reason: "Nate is updating the mini" }))
+    expect(await runJob(deps, job.id)).toMatchObject({ status: "skipped" })
+    expect(JSON.parse(readFileSync(paths.pauseFile, "utf8"))).toEqual({ at: "2026-09-24T09:00:00.000Z", reason: "Nate is updating the mini" })
+  })
+
+  it("pauses the mini, before any claim, when the main checkout has a graft or a shallow list", async () => {
+    for (const file of [["info", "grafts"], ["shallow"]]) {
+      const { deps, job, paths, fake, q, outbox } = setup()
+      mkdirSync(join(deps.config.repo.path, ".git", "info"), { recursive: true })
+      writeFileSync(join(deps.config.repo.path, ".git", ...file), "")
+      const why = `the main checkout has .git/${file.join("/")}, which can hide what a branch changes`
+      expect(await runJob(deps, job.id)).toMatchObject({ status: "skipped", reason: why })
+      expect(JSON.parse(readFileSync(paths.pauseFile, "utf8"))).toEqual({ at: "2026-09-24T09:40:00.000Z", reason: why })
+      expect(outbox()).toEqual([`Paused: ${why}. STEP-7 was not started. A person must look at the file, remove it if nothing needs it, and run agentctl resume.`])
+      expect(fake.calls).toEqual([])
       expect(q.seen).toEqual([])
     }
   })
@@ -291,6 +330,8 @@ describe("sdkOptions", () => {
     expect(options().sandbox.filesystem.denyWrite).toEqual([
       `${WT}/.git`,
       "/Users/eve/polads/.git/commondir",
+      "/Users/eve/polads/.git/info/grafts",
+      "/Users/eve/polads/.git/shallow",
       "/Users/eve/polads/.git/worktrees/STEP-7-fix-the-date/commondir",
       "/Users/eve/polads/.git/worktrees/STEP-7-fix-the-date/gitdir",
       "/Users/eve/polads/.git/worktrees/STEP-7-fix-the-date/config.worktree",

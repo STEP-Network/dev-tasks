@@ -119,8 +119,13 @@ async function startPoint(exec: Exec, o: WorktreeOptions): Promise<string> {
  */
 const HISTORY_REWRITES = [join("info", "grafts"), "shallow"]
 
+/** The first history-rewriting file the repository has, as a path under .git, or null. */
+export function historyRewrite(repo: string): string | null {
+  return HISTORY_REWRITES.find((file) => existsSync(join(repo, ".git", file))) ?? null
+}
+
 export async function prepareWorktree(exec: Exec, o: WorktreeOptions): Promise<{ path: string; resumed: boolean }> {
-  const found = HISTORY_REWRITES.find((file) => existsSync(join(o.repo, ".git", file)))
+  const found = historyRewrite(o.repo)
   if (found) {
     throw new WorktreeRefused(`the repository has .git/${found}, which can hide what a branch changes, so a person must look at it before a worker runs here`)
   }

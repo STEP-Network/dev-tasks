@@ -72,9 +72,11 @@ function endBlocked(deps: JobRunnerDeps, job: JobRecord, reason: string, started
     rmSync(jobPath(deps.paths, "running", job.id), { force: true })
     return false
   }
-  // Decided before this loss joins the record: the job that ended just before it.
+  // Decided before this loss joins the record: the job that ended just before
+  // it. A loss already put down to the mini ends every streak, so after a
+  // resume nothing from before the pause counts.
   const previous = lostEarly ? lastFinished(deps.paths) : null
-  const miniFault = previous !== null && previous.lostEarly === true && previous.issue !== job.issue
+  const miniFault = previous !== null && previous.lostEarly === true && !previous.miniFault && previous.issue !== job.issue
   const moved = moveJob(deps.paths, job.id, "running", "done", {
     endedAt: now.toISOString(),
     ...(lostEarly ? { lostEarly } : {}),
@@ -97,24 +99,25 @@ function endBlocked(deps: JobRunnerDeps, job: JobRecord, reason: string, started
     updateJob(deps.paths, "done", previous.id, { miniFault: true })
     pauseForMiniFault(deps, [previous, job], now)
     more =
-      ` It is the second worker in a row, after ${previous.issue}'s, to die within ${EARLY_DEATH_MINUTES} minutes of starting or never start, which points at this mini rather than the issues: ` +
+      ` It follows an early loss on ${previous.issue}, and two issues lost the same way point at this mini rather than the issues: ` +
       `a broken install, a secrets file the runner refuses (~/.config/agentd/claude.env must be chmod 600), or a missing SDK. ` +
-      `The mini is paused. Look for ${previous.id} and ${job.id} in ~/.agentd/logs/worker.log and agentd.log, and run agentctl resume once it is fixed.`
+      `The mini is paused, and no issue stays held back for these losses. Look for ${previous.id} and ${job.id} in ~/.agentd/logs/worker.log and agentd.log, ` +
+      `and in worker-${previous.id}.log and worker-${job.id}.log for a crash before the worker's own log started. Run agentctl resume once it is fixed.`
   } else if (lostEarly && heldBackIssues(deps.paths).has(job.issue)) {
     more =
       ` Its last two workers died within ${EARLY_DEATH_MINUTES} minutes of starting or never started, so ${job.issue} is held back from new jobs until a person runs it by hand (agentctl job submit --issue ${job.issue}). ` +
-      `Look for ${job.issue} in ~/.agentd/logs/worker.log and agentd.log.`
-    deps.log.error("issue held back after two early losses", { issue: job.issue })
+      `Look for ${job.issue} in ~/.agentd/logs/worker.log and agentd.log, and in its worker-${job.issue}-*.log files for a crash before the worker's own log started.`
+    deps.log.error("issue held back after two early losses", { issue: job.issue, jobId: job.id })
   }
   enqueueSlack(deps.paths, { kind: "post", channel: "agents", text: `${job.issue}: ${reason}. ${notice}${more}` }, now)
   return true
 }
 
-/** The job that finished last, leaving out the losses already put down to a fault of the mini. */
+/** The job that finished last. */
 function lastFinished(paths: AgentPaths): JobRecord | null {
   return (
     listJobs(paths, "done")
-      .filter((j) => j.endedAt && !j.miniFault)
+      .filter((j) => j.endedAt)
       .sort((a, b) => a.endedAt!.localeCompare(b.endedAt!))
       .at(-1) ?? null
   )
@@ -124,8 +127,8 @@ function lastFinished(paths: AgentPaths): JobRecord | null {
  * Early losses on two different issues in a row are a fault of the mini, not
  * of the issues: every issue would be lost the same way. PAUSE, in the shape
  * agentctl pause writes, stops new jobs until a person resumes. The two
- * losses are marked miniFault, so neither holds its issue back nor counts
- * towards a later streak.
+ * losses are marked miniFault, so neither holds its issue back, and each
+ * ends any streak it is part of: after a resume, nothing before it counts.
  */
 function pauseForMiniFault(deps: JobRunnerDeps, lost: JobRecord[], now: Date): void {
   const reason = `early losses on two different issues in a row (${lost.map((j) => j.issue).join(", ")}): a fault on this mini`
@@ -177,7 +180,7 @@ export function superviseJobs(deps: JobRunnerDeps): void {
     // Only a group known to be the worker's is signalled: when ps cannot tell,
     // the pid may belong to a stranger by now.
     if (liveness === "unknown") {
-      deps.log.warn("worker past its deadline, but ps cannot tell whose pid it is: not signalled", { issue: job.issue, pid: job.pid })
+      deps.log.warn("worker past its deadline, but ps cannot tell whose pid it is: not signalled", { issue: job.issue, jobId: job.id, pid: job.pid })
       continue
     }
     if (!job.killRequestedAt) {

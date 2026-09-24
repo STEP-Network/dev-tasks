@@ -40,6 +40,8 @@ export interface JobRecord {
   lostEarly?: boolean
   /** Set by agentd on two early losses in a row on different issues: a fault of the mini, which paused it. They hold no issue back. */
   miniFault?: boolean
+  /** Set by the runner when Linear failed before its claim was settled: the digest waits a while before offering the issue again (coolingIssues). */
+  linearFailed?: boolean
   endedAt?: string
   result?: JobResult
   /** Set once `agentctl tick` has shown the finished job to the front door. */
@@ -73,17 +75,41 @@ export function submitJob(paths: AgentPaths, issue: string, model: string | null
  * it claims leaves its issue Ready, and the next job for it would most likely
  * die the same way. The digest offers them no more until a person runs one
  * by hand (agentctl job submit), and a job that ends any other way lifts it.
- * Losses put down to a fault of the mini (miniFault) are not the issue's.
+ * A loss put down to a fault of the mini (miniFault) is not the issue's, and
+ * ends its streak: after a resume, nothing from before the pause counts.
  */
 export function heldBackIssues(paths: AgentPaths): Set<string> {
   const byIssue = new Map<string, JobRecord[]>()
-  for (const job of listJobs(paths, "done")) if (job.endedAt && !job.miniFault) byIssue.set(job.issue, [...(byIssue.get(job.issue) ?? []), job])
+  for (const job of listJobs(paths, "done")) if (job.endedAt) byIssue.set(job.issue, [...(byIssue.get(job.issue) ?? []), job])
   const held = new Set<string>()
   for (const [issue, jobs] of byIssue) {
     const lastTwo = jobs.sort((a, b) => a.endedAt!.localeCompare(b.endedAt!)).slice(-2)
-    if (lastTwo.length === 2 && lastTwo.every((j) => j.lostEarly)) held.add(issue)
+    if (lastTwo.length === 2 && lastTwo.every((j) => j.lostEarly && !j.miniFault)) held.add(issue)
   }
   return held
+}
+
+/** How long the digest waits before offering an issue again after Linear failed its last job. */
+export const LINEAR_COOLDOWN_MINUTES = 15
+
+/**
+ * Issues whose last job ended because Linear failed before the claim was
+ * settled (linearFailed), less than LINEAR_COOLDOWN_MINUTES ago. Offered at
+ * every wakeup, a lasting failure (a renamed state, a comment the agent may
+ * not write) would cost a job and a front-door turn a minute.
+ */
+export function coolingIssues(paths: AgentPaths, now: Date): Set<string> {
+  const last = new Map<string, JobRecord>()
+  for (const job of listJobs(paths, "done")) {
+    if (!job.endedAt) continue
+    const seen = last.get(job.issue)
+    if (!seen || seen.endedAt! < job.endedAt) last.set(job.issue, job)
+  }
+  const cooling = new Set<string>()
+  for (const [issue, job] of last) {
+    if (job.linearFailed && now.getTime() - Date.parse(job.endedAt!) < LINEAR_COOLDOWN_MINUTES * 60_000) cooling.add(issue)
+  }
+  return cooling
 }
 
 /** false when the job is no longer in `from` (another process moved it first). */

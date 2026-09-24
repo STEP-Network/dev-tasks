@@ -10,7 +10,7 @@ import { existsSync } from "node:fs"
 import { join } from "node:path"
 import type { AgentConfig, AgentPaths } from "./config.ts"
 import { listNew, writeJsonAtomic } from "./fsq.ts"
-import { heldBackIssues, listJobs, updateJob } from "./jobs.ts"
+import { coolingIssues, heldBackIssues, listJobs, updateJob } from "./jobs.ts"
 import { nextWakeupSeconds, selectNext, type QueuePolicy } from "./select.ts"
 import type { Tracker, TrackerIssue } from "./tracker.ts"
 import { developBlockedByUsage, readUsage } from "./usage.ts"
@@ -136,7 +136,9 @@ export async function buildDigest(deps: DigestDeps): Promise<Digest> {
     // An issue whose last two workers were lost early would most likely lose a third.
     const held = heldBackIssues(paths)
     heldBack = listed.filter((i) => held.has(i.id)).map((i) => i.id)
-    const ready = listed.filter((i) => !held.has(i.id))
+    // One whose last job Linear failed waits a while, and is offered again on its own.
+    const cooling = coolingIssues(paths, now)
+    const ready = listed.filter((i) => !held.has(i.id) && !cooling.has(i.id))
     const firstPass = selectNext({ ready, triage: [], refining: [], meId: me.id, policy, developBlockedBy, refineBlockedBy })
     readyEligible = firstPass.readyEligible
     // Develop needs only the Ready list: a failure below loses the refine, not this.
