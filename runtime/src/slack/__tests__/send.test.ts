@@ -154,7 +154,7 @@ describe("drainOutbox", () => {
     expect(posts.map((p) => p.text)).toEqual(["eve: claimed STEP-7"])
   })
 
-  it.each(["internal_error", "rate_limited"])("waits, as for the network, when Slack reports trouble of its own (%s)", async (code) => {
+  it.each(["internal_error", "rate_limited", "team_added_to_org"])("waits, as for the network, when Slack reports trouble of its own (%s)", async (code) => {
     const trouble = Object.assign(new Error(`An API error occurred: ${code}`), { data: { error: code } })
     const { ctx } = context({}, [trouble])
     enqueueSlack(ctx.paths, { kind: "post", channel: "agents", text: "one" }, new Date(1))
@@ -179,8 +179,9 @@ describe("drainOutbox", () => {
     // Every later message for that channel would fail too: a person must invite it back.
     const outOf = Object.assign(new Error("An API error occurred: not_in_channel"), { data: { error: "not_in_channel" } })
     const { ctx } = context({}, [outOf])
-    enqueueSlack(ctx.paths, { kind: "post", channel: "agents", text: "claimed STEP-7" }, new Date(1))
-    await expect(drainOutbox(ctx, quiet)).rejects.toThrow(/agents channel \(CAG\).*not_in_channel/)
+    const key = enqueueSlack(ctx.paths, { kind: "post", channel: "agents", text: "claimed STEP-7" }, new Date(1))
+    // The reason names the entry that met the refusal, for the person who reads bridge.json.
+    await expect(drainOutbox(ctx, quiet)).rejects.toThrow(new RegExp(`agents channel \\(CAG\\).*not_in_channel.*outbox entry ${key}`))
     expect(countIn(ctx.paths.outbox, "new")).toBe(1)
     expect(countIn(ctx.paths.outbox, "failed")).toBe(0)
   })
