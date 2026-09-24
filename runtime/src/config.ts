@@ -100,8 +100,10 @@ export const ConfigSchema = z.object({
       tmuxSession: z.string().default("frontdoor"),
       /** Longer than /loop's longest self-paced wait (60 minutes), so a quiet night is not a hang. */
       staleTickMinutes: z.number().int().positive().default(75),
-      /** install.sh writes the absolute path. */
+      /** install.sh writes the absolute path: a LaunchAgent gets no login shell's PATH. */
       claudePath: z.string().default("claude"),
+      /** install.sh writes the absolute path, as for claudePath. */
+      tmuxPath: z.string().default("tmux"),
     })
     .prefault({}),
   worker: z
@@ -180,6 +182,11 @@ export function readProfileMini(env: NodeJS.ProcessEnv = process.env, script: st
   // jq -r ends its answer with one newline; nothing else is trimmed.
   const mini = out.replace(/\n$/, "")
   return mini ? mini : null
+}
+
+/** This machine's profile as hooks/lib/profile.sh reports it (`get profile`): agent or human. Throws when the reader cannot run. */
+export function readProfile(env: NodeJS.ProcessEnv = process.env, script: string = PROFILE_SH): string {
+  return execFileSync("bash", [script, "get", "profile"], { encoding: "utf8", env, stdio: ["ignore", "pipe", "pipe"] }).trim()
 }
 
 /**

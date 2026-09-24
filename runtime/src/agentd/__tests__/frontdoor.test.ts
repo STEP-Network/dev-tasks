@@ -114,9 +114,19 @@ describe("frontDoorAlive", () => {
   it("asks tmux for the session by its exact name, since a bare name also matches frontdoor-old", async () => {
     const alive = setup()
     expect(await frontDoorAlive(alive.deps)).toBe(true)
-    expect(alive.f.lines()).toEqual(["tmux has-session -t =frontdoor"])
+    expect(alive.f.lines()).toEqual(["tmux -L agentd has-session -t =frontdoor"])
     const gone = setup([[/has-session/, { code: 1, stderr: "can't find session: =frontdoor" }]])
     expect(await frontDoorAlive(gone.deps)).toBe(false)
+  })
+
+  it("runs the tmux that install.sh recorded, on the front door's own server", async () => {
+    // A LaunchAgent gets no login shell's PATH, and a server a person started
+    // would hand the front door that person's shell environment.
+    const { f, deps } = setup()
+    const config = { ...deps.config, frontDoor: { ...deps.config.frontDoor, tmuxPath: "/opt/homebrew/bin/tmux" } }
+    await frontDoorAlive({ ...deps, config })
+    await applyFrontDoor({ ...deps, config }, FRESH_FRONT_DOOR, { kind: "start", mode: "new", reason: "first start", fastExits: 0 })
+    expect(f.lines().map((l) => l.split(" ").slice(0, 3).join(" "))).toEqual(["/opt/homebrew/bin/tmux -L agentd", "/opt/homebrew/bin/tmux -L agentd"])
   })
 })
 
@@ -125,7 +135,7 @@ describe("applyFrontDoor", () => {
     const { f, deps } = setup()
     const next = await applyFrontDoor(deps, FRESH_FRONT_DOOR, { kind: "start", mode: "new", reason: "first start", fastExits: 0 })
     expect(f.lines()[0]).toBe(
-      "tmux new-session -d -s frontdoor -x 220 -y 60 -c /Users/eve/polads /usr/local/bin/claude --model sonnet --permission-mode auto --permission-prompts none '/loop /dev-tasks:front-door'",
+      "tmux -L agentd new-session -d -s frontdoor -e AGENTD_FRONT_DOOR=1 -x 220 -y 60 -c /Users/eve/polads /usr/local/bin/claude --model sonnet --permission-mode auto --permission-prompts none '/loop /dev-tasks:front-door'",
     )
     expect(next).toMatchObject({ sessionId: null, lastStartAt: NOW.toISOString(), starts: [NOW.toISOString()], waitUntil: null, kickedAt: null })
   })
@@ -133,14 +143,14 @@ describe("applyFrontDoor", () => {
   it("kills the stuck session before resuming it", async () => {
     const { f, deps } = setup()
     await applyFrontDoor(deps, state(), { kind: "restart", reason: "no wakeup for 50 minutes" })
-    expect(f.lines()[0]).toBe("tmux kill-session -t =frontdoor")
+    expect(f.lines()[0]).toBe("tmux -L agentd kill-session -t =frontdoor")
     expect(f.lines()[1]).toContain("--resume s-1")
   })
 
   it("types the loop prompt, then Enter, into the session for a kick", async () => {
     const { f, deps } = setup()
     const next = await applyFrontDoor(deps, state(), { kind: "kick", reason: "no wakeup in the 5 minutes since the start" })
-    expect(f.lines()).toEqual(["tmux send-keys -t =frontdoor: -l /loop /dev-tasks:front-door", "tmux send-keys -t =frontdoor: Enter"])
+    expect(f.lines()).toEqual(["tmux -L agentd send-keys -t =frontdoor: -l /loop /dev-tasks:front-door", "tmux -L agentd send-keys -t =frontdoor: Enter"])
     expect(next.kickedAt).toBe(NOW.toISOString())
   })
 

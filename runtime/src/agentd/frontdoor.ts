@@ -12,7 +12,13 @@
  * not submitted.
  *
  * tmux targets name the session exactly (`=frontdoor`): a bare name also
- * matches any session it begins, such as a person's `frontdoor-old`.
+ * matches any session it begins, such as a person's `frontdoor-old`. And the
+ * front door has a tmux server of its own (`tmux -L agentd`): a session takes
+ * its server's global environment, and a server a person started from their
+ * own shell would hand the front door whatever that shell exported (an
+ * ANTHROPIC_API_KEY would bill the API). agentd starts this one with its own
+ * scrubbed environment. The session is marked AGENTD_FRONT_DOOR=1, so the
+ * status line records its session id and no other session's.
  */
 
 import { join } from "node:path"
@@ -25,6 +31,8 @@ import { limitedUntil, type UsageSnapshot } from "../usage.ts"
 import type { Exec } from "../worker/git.ts"
 
 export const LOOP_PROMPT = "/loop /dev-tasks:front-door"
+/** The front door's own tmux server: `tmux -L agentd attach -t =frontdoor`. */
+export const TMUX_SOCKET = "agentd"
 const KICK_AFTER_MINUTES = 5
 /** tmux answers at once. One that hangs must not hold up the job launcher behind it. */
 const TMUX_TIMEOUT_MS = 30_000
@@ -138,8 +146,13 @@ export function lastTickAt(paths: AgentPaths): Date | null {
   return tick ? new Date(tick.at) : null
 }
 
+/** tmux on the front door's own server, by the absolute path install.sh recorded. */
+function tmuxOn(deps: { exec: Exec; config: AgentConfig }, args: string[]) {
+  return deps.exec(deps.config.frontDoor.tmuxPath, ["-L", TMUX_SOCKET, ...args], { timeoutMs: TMUX_TIMEOUT_MS })
+}
+
 export async function frontDoorAlive(deps: { exec: Exec; config: AgentConfig }): Promise<boolean> {
-  return (await deps.exec("tmux", ["has-session", "-t", `=${deps.config.frontDoor.tmuxSession}`], { timeoutMs: TMUX_TIMEOUT_MS })).code === 0
+  return (await tmuxOn(deps, ["has-session", "-t", `=${deps.config.frontDoor.tmuxSession}`])).code === 0
 }
 
 export interface FrontDoorDeps {
@@ -153,7 +166,7 @@ export interface FrontDoorDeps {
 export async function applyFrontDoor(deps: FrontDoorDeps, state: FrontDoorState, action: FrontDoorAction): Promise<FrontDoorState> {
   const now = deps.now()
   const session = deps.config.frontDoor.tmuxSession
-  const tmux = (args: string[]) => deps.exec("tmux", args, { timeoutMs: TMUX_TIMEOUT_MS })
+  const tmux = (args: string[]) => tmuxOn(deps, args)
   if (action.kind === "none") return state
   if (action.kind === "wait") {
     const alertDue = action.alert && (!state.lastAlertAt || now.getTime() - Date.parse(state.lastAlertAt) > 3_600_000)
@@ -184,7 +197,7 @@ export async function applyFrontDoor(deps: FrontDoorDeps, state: FrontDoorState,
   if (action.kind === "restart") await tmux(["kill-session", "-t", `=${session}`])
   const resumeId = action.kind === "restart" || action.mode === "resume" ? state.sessionId : null
   const command = claudeCommand({ claudePath: deps.config.frontDoor.claudePath, resumeId, model: deps.config.frontDoor.model })
-  const r = await tmux(["new-session", "-d", "-s", session, "-x", "220", "-y", "60", "-c", deps.config.repo.path, command])
+  const r = await tmux(["new-session", "-d", "-s", session, "-e", "AGENTD_FRONT_DOOR=1", "-x", "220", "-y", "60", "-c", deps.config.repo.path, command])
   if (r.code !== 0) throw new Error(`tmux new-session failed (${r.code}): ${r.stderr.trim()}`)
   const mode = resumeId ? "resume" : "new"
   appendLedger(deps.paths, { type: "frontdoor.start", mode, reason: action.reason }, now)

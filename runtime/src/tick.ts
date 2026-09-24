@@ -9,7 +9,7 @@
 import { existsSync } from "node:fs"
 import { join } from "node:path"
 import type { AgentConfig, AgentPaths } from "./config.ts"
-import { listNew, writeJsonAtomic } from "./fsq.ts"
+import { listNew, readJson, writeJsonAtomic } from "./fsq.ts"
 import { coolingIssues, heldBackIssues, listJobs, updateJob } from "./jobs.ts"
 import { nextWakeupSeconds, selectNext, type QueuePolicy } from "./select.ts"
 import type { Tracker, TrackerIssue } from "./tracker.ts"
@@ -36,6 +36,8 @@ export interface Digest {
   now: string
   mini: string
   paused: boolean
+  /** Why, while paused: what agentctl pause, agentd (early losses) or the runner (a graft) wrote. "" when none was given. */
+  pauseReason: string | null
   events: InboxEvent[]
   finishedJobs: Array<{ issue: string; status: string; reason: string; prUrl: string | null }>
   worker: { issue: string; startedAt: string; minutes: number } | null
@@ -74,6 +76,17 @@ type StoredEntry = {
 }
 
 export const tickPath = (paths: AgentPaths) => join(paths.state, "frontdoor-tick.json")
+
+/**
+ * null while the mini runs. Paused: the reason agentctl pause, agentd (early
+ * losses) or the runner (a graft) wrote, or "" when there is none, as after a
+ * bare `touch ~/.agentd/PAUSE`.
+ */
+export function pauseReason(paths: AgentPaths): string | null {
+  if (!existsSync(paths.pauseFile)) return null
+  const reason = readJson<{ reason?: unknown }>(paths.pauseFile)?.reason
+  return typeof reason === "string" ? reason : ""
+}
 
 /** What the front door acts on, and nothing of the bridge's own bookkeeping (linearId, retry marks): every wakeup reads it. */
 function toEvent(p: StoredEntry): InboxEvent {
@@ -159,6 +172,7 @@ export async function buildDigest(deps: DigestDeps): Promise<Digest> {
     now: now.toISOString(),
     mini: config.mini,
     paused,
+    pauseReason: pauseReason(paths),
     events,
     finishedJobs: finished.map((j) => ({
       issue: j.issue,
