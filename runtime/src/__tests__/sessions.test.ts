@@ -18,6 +18,8 @@
  *   - the plugin's own guard fires in a worker, on every command form it
  *     covers (agentctl probe-hooks failed on the mini while hooks.json joined
  *     several rules in one `if` with `|`, which never matches)
+ *   - agentctl probe-hooks --scripted, the free proof of that on a mini,
+ *     passes on the SDK's binary and fails on hooks that do not fire
  * macOS only: the sandbox is macOS's, and the binary is the darwin package's.
  */
 
@@ -34,6 +36,7 @@ import { sdkOptions, type QueryFn } from "../worker/run.ts"
 import { startFakeApi, type ToolCall } from "../cli/probe-fakes.ts"
 import { probeFrontDoorSandbox } from "../cli/sandbox-probe.ts"
 import { probeVerdict } from "../worker/probe.ts"
+import { probeWorkerHooks, workerClaudePath } from "../cli/hooks-probe.ts"
 
 const RUNTIME = fileURLToPath(new URL("../..", import.meta.url))
 const CHECKOUT = dirname(RUNTIME)
@@ -234,5 +237,33 @@ describe.skipIf(!binaryAvailable())("sessions, as the Claude Code binary runs th
     expect(s.results).toHaveLength(commands.length)
     commands.forEach(([command, block], i) => expect(s.results[i], command).toContain(block))
     expect(probeVerdict(s.messages)).toMatchObject({ pluginHookFired: true, loadedPlugins: expect.arrayContaining(["dev-tasks"]) })
+  }, 120_000)
+
+  it("proves the worker's hooks for free: agentctl probe-hooks --scripted passes on the binary workers run", async () => {
+    const { query } = await import("@anthropic-ai/claude-agent-sdk")
+    const binary = workerClaudePath()
+    expect(binary).toMatch(/claude-agent-sdk-darwin-[a-z0-9]+\/claude$/)
+    const config = ConfigSchema.parse({ mini: "eve", repo: { path: "/unused" }, pluginRoot: PLUGIN, slack: { allowedUsers: ["UNATE"] } })
+    const probe = await probeWorkerHooks({ query: query as unknown as QueryFn, config, claudePath: binary!, now: () => new Date() })
+    expect(probe.checks.filter((c) => !c.ok)).toEqual([])
+    expect(probe).toMatchObject({ kind: "scripted", ok: true, pluginHookFired: true, workerGuardFired: true, claudePath: binary })
+  }, 120_000)
+
+  it("fails agentctl probe-hooks --scripted on the hooks.json Eve's mini had, whose guard never fired", async () => {
+    // The plugin as it was before 1.2.1: bash-guard's rules joined with `|` in one `if`.
+    const old = realpathSync(mkdtempSync(join(tmpdir(), "old-plugin-")))
+    for (const part of [".claude-plugin", "hooks"]) cpSync(join(PLUGIN, part), join(old, part), { recursive: true })
+    const hooksJson = join(old, "hooks", "hooks.json")
+    const hooks = JSON.parse(readFileSync(hooksJson, "utf8")) as { hooks: Record<string, Array<{ hooks: Array<{ command: string; if?: string }> }>> }
+    for (const group of hooks.hooks.PreToolUse) {
+      const guard = group.hooks.filter((h) => h.command.endsWith("/bash-guard.sh"))
+      if (!guard.length) continue
+      group.hooks = [...group.hooks.filter((h) => !guard.includes(h)), { ...guard[0], if: `Bash(${guard.map((h) => h.if!.slice(5, -1)).join("|")})` }]
+    }
+    writeFileSync(hooksJson, JSON.stringify(hooks))
+    const { query } = await import("@anthropic-ai/claude-agent-sdk")
+    const config = ConfigSchema.parse({ mini: "eve", repo: { path: "/unused" }, pluginRoot: old, slack: { allowedUsers: ["UNATE"] } })
+    const probe = await probeWorkerHooks({ query: query as unknown as QueryFn, config, claudePath: workerClaudePath()!, now: () => new Date() })
+    expect(probe).toMatchObject({ ok: false, pluginHookFired: false, workerGuardFired: true })
   }, 120_000)
 })

@@ -6,6 +6,7 @@ import { agentPaths, type AgentPaths } from "../../config.ts"
 import { fakeExec } from "../../__tests__/fakes.ts"
 import type { ExecResult } from "../../worker/git.ts"
 import { doctorChecks, formatDoctor, type DoctorDeps } from "../doctor.ts"
+import { recordHooksProbe, type HooksProbe } from "../hooks-probe.ts"
 import { recordSandboxProbe } from "../sandbox-probe.ts"
 
 type Responses = Array<[RegExp, Partial<ExecResult>]>
@@ -41,7 +42,17 @@ beforeEach(() => {
   writeFileSync(join(home, ".claude", "plugins", "installed_plugins.json"), JSON.stringify({ version: 2, plugins: { "dev-tasks@dev-tasks-marketplace": [{ scope: "user" }] } }))
   writeFileSync(join(paths.root, "front-door-settings.json"), JSON.stringify({ sandbox: { enabled: true, allowUnsandboxedCommands: false } }))
   recordSandboxProbe(paths, { at: "2026-09-24T12:00:00.000Z", claudePath: "claude", claudeVersion: "2.1.281 (Claude Code)", ok: true, checks: [] })
+  recordHooksProbe(paths, hooksProbe({}))
 })
+
+/** A hooks probe that passed on the SDK's binary, which workers run (SDK below). */
+function hooksProbe(over: Partial<HooksProbe>): HooksProbe {
+  return {
+    at: "2026-09-24T12:00:00.000Z", kind: "scripted", claudePath: SDK, claudeVersion: "2.1.281 (Claude Code)",
+    ok: true, pluginHookFired: true, workerGuardFired: true, loadedPlugins: ["dev-tasks"], checks: [], ...over,
+  }
+}
+const SDK = "/Users/eve/dev-tasks/runtime/node_modules/@anthropic-ai/claude-agent-sdk-darwin-arm64/claude"
 
 const READY: Responses = [
   [/^git config --global --show-origin user\.email$/, { stdout: "file:HOME/.gitconfig\teve@polads.eu\n" }],
@@ -54,12 +65,13 @@ const READY: Responses = [
   [/^claude --version$/, { stdout: "2.1.281 (Claude Code)\n" }],
   [/^claude auth status$/, { stdout: "{}" }],
   [/^jq --version$/, { stdout: "jq-1.7.1\n" }],
+  [/claude-agent-sdk-darwin-arm64\/claude --version$/, { stdout: "2.1.281 (Claude Code)\n" }],
 ]
 
 function deps(over: Partial<DoctorDeps> = {}, responses: Responses = []): DoctorDeps {
   // The first matching pattern answers, so a test's own answers go first.
   const withHome = [...responses, ...READY].map(([re, r]) => [re, r.stdout === undefined ? r : { ...r, stdout: r.stdout.replace("HOME", home) }] as [RegExp, typeof r])
-  return { paths, exec: fakeExec(withHome).exec, env: {}, nodeVersion: "20.20.2", profile: () => "agent", profileMini: () => "eve", ...over }
+  return { paths, exec: fakeExec(withHome).exec, env: {}, nodeVersion: "20.20.2", profile: () => "agent", profileMini: () => "eve", workerClaude: () => SDK, ...over }
 }
 
 const failed = async (d: DoctorDeps) => (await doctorChecks(d)).filter((c) => c.level === "fail").map((c) => `${c.name}: ${c.detail}`)
@@ -132,6 +144,34 @@ describe("doctorChecks", () => {
       checks: [{ name: "a substitution runs sandboxed", ok: false, detail: "[]" }],
     })
     expect(await failed(deps())).toEqual([expect.stringMatching(/^sandbox probe: failed on 2\.1\.281 .*a substitution runs sandboxed.*paused/)])
+  })
+
+  it("trusts the worker's hooks only on the binary workers run, at the version a probe passed on", async () => {
+    rmSync(join(paths.state, "hooks-probe.json"))
+    expect(await warned(deps())).toEqual([expect.stringMatching(/^hooks probe: never run: agentctl probe-hooks --scripted/)])
+    // An SDK update since: a probe of the old binary proves nothing about the new one.
+    recordHooksProbe(paths, hooksProbe({ claudeVersion: "2.1.270 (Claude Code)" }))
+    expect(await warned(deps())).toEqual([expect.stringMatching(/^hooks probe: agentctl probe-hooks --scripted passed on \S+ 2\.1\.270 .*workers run \S+claude 2\.1\.281.*agentctl probe-hooks --scripted$/)])
+    // Nor does one of another binary, the front door's say.
+    recordHooksProbe(paths, hooksProbe({ claudePath: "/opt/homebrew/bin/claude" }))
+    expect(await warned(deps())).toEqual([expect.stringMatching(/^hooks probe: .*passed on \/opt\/homebrew\/bin\/claude .*but workers run/)])
+    recordHooksProbe(paths, hooksProbe({ ok: false, pluginHookFired: false, checks: [{ name: "the plugin's guard refuses git reset --hard", ok: false, detail: "Exit code 128" }] }))
+    expect(await failed(deps())).toEqual([expect.stringMatching(/^hooks probe: agentctl probe-hooks --scripted failed on 2\.1\.281 \(Claude Code\) \(the plugin's guard refuses git reset --hard\): keep the mini paused$/)])
+  })
+
+  it("accepts the real-model probe as proof too, even beside a failed scripted one", async () => {
+    recordHooksProbe(paths, hooksProbe({ ok: false, pluginHookFired: false }))
+    recordHooksProbe(paths, hooksProbe({ kind: "model", at: "2026-09-24T13:00:00.000Z" }))
+    const hooks = (await doctorChecks(deps())).find((c) => c.name === "hooks probe")
+    expect(hooks).toEqual({ level: "ok", name: "hooks probe", detail: "agentctl probe-hooks passed on 2.1.281 (Claude Code), 2026-09-24T13:00:00.000Z" })
+    // A failed model probe alone, with no fired hooks named check by check.
+    rmSync(join(paths.state, "hooks-probe.json"))
+    recordHooksProbe(paths, hooksProbe({ kind: "model", ok: false, workerGuardFired: false }))
+    expect(await failed(deps())).toEqual([expect.stringMatching(/^hooks probe: agentctl probe-hooks failed on 2\.1\.281 \(Claude Code\) \(plugin hooks fired, the worker's guard did NOT fire\)/)])
+  })
+
+  it("fails without the Agent SDK's claude, which no worker starts without", async () => {
+    expect(await failed(deps({ workerClaude: () => null }))).toEqual([expect.stringMatching(/^hooks probe: the Agent SDK's claude is missing.*npm ci$/)])
   })
 
   it("fails, after an install, on front door settings that are gone, unparseable or without the sandbox", async () => {
