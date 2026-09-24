@@ -215,6 +215,19 @@ describe("claim comments", () => {
     expect(parseClaim("claimed by eve at 2026-09-24T08:00:00Z")).toBeNull()
   })
 
+  it.each([
+    ["a backslash break", "claimed by eve at 2026-09-24T08:00:00.000Z\\\nheartbeat 2026-09-24T08:15:00.000Z"],
+    ["a space", "claimed by eve at 2026-09-24T08:00:00.000Z heartbeat 2026-09-24T08:15:00.000Z"],
+  ])("still parse when Linear gives the heartbeat break back as %s, and the next beat rebuilds a clean body", (_, body) => {
+    // Linear derives `body` from its own document model, so the break we
+    // wrote may not be the break we read back. The claim must still parse,
+    // and the next heartbeat must not carry the old one along with it.
+    expect(parseClaim(body)).toEqual({ claimant: "eve", claimedAt: "2026-09-24T08:00:00.000Z" })
+    expect(withHeartbeat(body, "2026-09-24T08:30:00.000Z")).toBe(
+      "claimed by eve at 2026-09-24T08:00:00.000Z\nheartbeat 2026-09-24T08:30:00.000Z",
+    )
+  })
+
   it("pick the newest claim, for one claimant when asked, with the edit time as the heartbeat", () => {
     const comments = [
       { id: "c1", body: "claimed by eve at 2026-09-24T06:00:00.000Z", createdAt: "2026-09-24T06:00:00.000Z", editedAt: null },

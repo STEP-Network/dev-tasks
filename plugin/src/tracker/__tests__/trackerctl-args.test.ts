@@ -107,6 +107,11 @@ describe("buildPatch", () => {
     const flags = parseArgs(["update", "STEP-1", "--add-labels", "awaiting-answer", "--state", "On hold"]).flags
     expect(() => buildPatch(flags, read)).toThrow(/^usage:[\s\S]*--add-labels/)
   })
+
+  it("refuses a single-valued flag given twice, rather than keep one of them", () => {
+    const flags = parseArgs(["update", "STEP-1", "--state", "On hold", "--state", "Ready"]).flags
+    expect(() => buildPatch(flags, read)).toThrow(/^usage:[\s\S]*--state/)
+  })
 })
 
 describe("the claimant is this machine's mini", () => {
@@ -165,10 +170,12 @@ describe("the claimant is this machine's mini", () => {
     expect(() => claimantFor({}, "Eve")).toThrow(/Eve/)
   })
 
-  it.each(["claim", "heartbeat"])("%s on the command line stops on a laptop before it reaches the tracker", (command) => {
+  it.each([[["claim", "STEP-1"]], [["heartbeat", "STEP-1"]], [["claims"]]])("%j on the command line stops on a laptop before it reaches the tracker", (args) => {
     // The whole CLI, as a skill runs it, with no profile and no Linear key
     // in reach: a run that got past the refusal would fail on the key instead.
-    const run = spawnSync(join(PLUGIN_ROOT, "node_modules", ".bin", "tsx"), [join(PLUGIN_ROOT, "scripts", "trackerctl.ts"), command, "STEP-1"], {
+    // `claims` too: on a person's key it would list that person's own issues
+    // that carry an old agent claim comment, one `release` from unassigning them.
+    const run = spawnSync(join(PLUGIN_ROOT, "node_modules", ".bin", "tsx"), [join(PLUGIN_ROOT, "scripts", "trackerctl.ts"), ...args], {
       cwd: home,
       env: { PATH: process.env.PATH ?? "", HOME: home, DEV_TASKS_TRACKER: "linear", TRACKERCTL_MAX_WRITES: "0" },
       encoding: "utf8",

@@ -9,7 +9,10 @@
 export const CLAIM_PREFIX = "claimed by ";
 // The time is exactly toISOString's shape: newestClaim ranks claims by
 // comparing these strings, which is only chronological for one fixed format.
-const CLAIM_RE = /^claimed by (\S+) at (\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z)(?:\s|$)/;
+// Fixed width, so nothing after it is checked: Linear derives `body` from its
+// own document model and may give the break before a heartbeat back as a
+// backslash break or a space.
+const CLAIM_RE = /^claimed by (\S+) at (\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z)/;
 export function claimCommentBody(claimant, at) {
     return `${CLAIM_PREFIX}${claimant} at ${at}`;
 }
@@ -17,9 +20,16 @@ export function parseClaim(body) {
     const m = CLAIM_RE.exec(body);
     return m ? { claimant: m[1], claimedAt: m[2] } : null;
 }
-/** Keeps the claim line and replaces any earlier heartbeat line. */
+/**
+ * Keeps the claim line and replaces any earlier heartbeat line. The claim line
+ * is rebuilt from its parts, not copied: if Linear gave the earlier break back
+ * as a space, the first line would still hold the old beat and each heartbeat
+ * would grow the comment.
+ */
 export function withHeartbeat(body, at) {
-    return `${body.split("\n")[0]}\nheartbeat ${at}`;
+    const claim = parseClaim(body);
+    const line = claim ? claimCommentBody(claim.claimant, claim.claimedAt) : body.split("\n")[0];
+    return `${line}\nheartbeat ${at}`;
 }
 /** The newest claim among `comments`, optionally only `claimant`'s. */
 export function newestClaim(comments, claimant) {
