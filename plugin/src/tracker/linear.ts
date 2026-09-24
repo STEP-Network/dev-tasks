@@ -16,9 +16,11 @@ import {
   extractAcceptanceCriteria,
   LINEAR_TEAM_KEY,
   type CreateIssueInput,
+  type IssuePatch,
   type IssuePriority,
   type Tracker,
   type TrackerIssue,
+  type TrackerUser,
 } from "./types.ts"
 
 const ISSUE_FIELDS = `
@@ -31,6 +33,7 @@ const ISSUE_FIELDS = `
   updatedAt
   state { name }
   labels { nodes { name } }
+  assignee { id }
 `
 
 interface RawIssue {
@@ -43,6 +46,7 @@ interface RawIssue {
   updatedAt: string
   state: { name: string } | null
   labels: { nodes: Array<{ name: string }> }
+  assignee: { id: string } | null
 }
 
 /** A Relay connection page, as Linear returns one. */
@@ -79,9 +83,9 @@ const IDENTIFIER_RE = /^([A-Za-z]+)-(\d+)$/
  * polling every minute spends quickly.
  * - A label is ~1.2 points, so 250 labels is ~300.
  * - A ranking node (id, priority, updatedAt) is ~1.3, so 250 is ~330.
- * - An ISSUE_FIELDS issue is ~58, most of it the nested labels connection
- *   at its default 50, so 100 full issues is ~5,800 and 250 would be
- *   ~14,500 and refused outright.
+ * - An ISSUE_FIELDS issue is ~59, most of it the nested labels connection
+ *   at its default 50 (the assignee adds ~1.1), so 100 full issues is
+ *   ~5,900 and 250 would be ~14,750 and refused outright.
  */
 const LABEL_PAGE_SIZE = 250
 const READY_PAGE_SIZE = 250
@@ -121,8 +125,9 @@ async function allNodes<N>(
 /**
  * Settles a create that threw, whatever the error said: a 5xx that outlasted
  * the retries, a refused retry in any wording, a dropped connection. The id
- * is a fresh UUID minted by this very call, so if it reads back, this call's
- * write landed and that entity IS the result. If it does not, the create
+ * is a fresh UUID minted by this very call, or a caller's clientId that
+ * names the same entity on every attempt (createIssue), so if it reads back,
+ * a write for it landed and that entity IS the result. If it does not, the create
  * really failed and its own error stands. (Linear also reports phantom
  * insert conflicts for ids nothing holds, so no wording alone is proof.)
  */
@@ -145,6 +150,7 @@ function toIssue(raw: RawIssue): TrackerIssue {
     url: raw.url,
     priority: (raw.priority ?? 0) as IssuePriority,
     updatedAt: raw.updatedAt,
+    assigneeId: raw.assignee?.id ?? null,
   }
 }
 
@@ -206,6 +212,29 @@ export function createLinearTracker(): Tracker {
       .map((n) => t.labels.find((l) => l.name === n)?.id)
       .filter((id): id is string => Boolean(id))
     return ids.length ? ids : undefined
+  }
+
+  let viewerCache: TrackerUser | null = null
+
+  async function viewer(): Promise<TrackerUser> {
+    if (viewerCache) return viewerCache
+    const data = await linearRequest<{ viewer: TrackerUser }>(`query { viewer { id name email } }`)
+    viewerCache = data.viewer
+    return data.viewer
+  }
+
+  /**
+   * Label ids for an update. Unlike labelIdsFor (createIssue's lenient
+   * lookup), an unknown name throws: parking an issue without its
+   * `awaiting-answer` label would put it straight back in the queue.
+   */
+  async function strictLabelIds(names: string[]): Promise<string[]> {
+    const t = await team()
+    return names.map((name) => {
+      const hit = t.labels.find((l) => l.name === name)
+      if (!hit) throw new Error(`Linear: no label named ${name}`)
+      return hit.id
+    })
   }
 
   async function fetchRaw(ref: string): Promise<RawIssue> {
@@ -305,13 +334,18 @@ export function createLinearTracker(): Tracker {
     },
 
     async createIssue(input: CreateIssueInput) {
+      // The read-back below resolves whatever id was sent, and it also takes
+      // an identifier: a clientId of "STEP-5" would come back as STEP-5.
+      if (input.clientId !== undefined && !UUID_RE.test(input.clientId)) {
+        throw new Error(`Linear: clientId must be a UUID, got ${JSON.stringify(input.clientId)}`)
+      }
       const t = await team()
       const stateId = await stateIdFor(input.state)
       const labelIds = await labelIdsFor(input.labels)
 
-      // Our own id, so a retry after a lost answer names this issue rather
-      // than opening a second one.
-      const id = randomUUID()
+      // Our own id, or the caller's, so a retry after a lost answer names
+      // this issue rather than opening a second one.
+      const id = input.clientId ?? randomUUID()
       const payload: Record<string, unknown> = { id, teamId: t.id, title: input.title }
       if (input.description) payload.description = input.description
       if (stateId) payload.stateId = stateId
@@ -406,6 +440,35 @@ export function createLinearTracker(): Tracker {
         const raw = full.get(node.id)
         return raw ? [toIssue(raw)] : []
       })
+    },
+
+    async whoami() {
+      return viewer()
+    },
+
+    async updateIssue(ref, patch: IssuePatch) {
+      // Resolve every name first, so a bad one throws before anything is written.
+      const input: Record<string, unknown> = {}
+      if (patch.description !== undefined) input.description = patch.description
+      if (patch.state !== undefined) {
+        const stateId = await stateIdFor(patch.state)
+        if (!stateId) throw new Error(`Linear: no state named ${patch.state} on team ${LINEAR_TEAM_KEY}`)
+        input.stateId = stateId
+      }
+      if (patch.addLabels?.length) input.addedLabelIds = await strictLabelIds(patch.addLabels)
+      if (patch.removeLabels?.length) input.removedLabelIds = await strictLabelIds(patch.removeLabels)
+      if (patch.assignee === "me") input.assigneeId = (await viewer()).id
+      if (patch.assignee === null) input.assigneeId = null
+
+      const raw = await fetchRaw(ref)
+      if (Object.keys(input).length === 0) return toIssue(raw)
+      const data = await linearRequest<{ issueUpdate: { issue: RawIssue } }>(
+        `mutation($id: String!, $input: IssueUpdateInput!) {
+           issueUpdate(id: $id, input: $input) { issue { ${ISSUE_FIELDS} } }
+         }`,
+        { id: raw.id, input },
+      )
+      return toIssue(data.issueUpdate.issue)
     },
   }
 }

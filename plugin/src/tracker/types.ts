@@ -26,6 +26,8 @@ export interface TrackerIssue {
   priority: IssuePriority
   /** ISO 8601. Used only for ordering. */
   updatedAt: string
+  /** The Linear user holding the issue: on a mini, that agent's member account. null when unassigned. */
+  assigneeId: string | null
 }
 
 export interface CreateIssueInput {
@@ -37,6 +39,31 @@ export interface CreateIssueInput {
   labels?: string[]
   /** Target state name. Defaults to the provider's own default when omitted. */
   state?: string
+  /** A UUID the caller chose, sent as the new issue's id. A caller that can crash between
+   *  "created" and "recorded" (the Slack bridge filing intake) sends the same id again:
+   *  a create whose id is already taken reads that issue back and returns it, so the
+   *  retry opens no second issue. Anything but a UUID is refused before the write. */
+  clientId?: string
+}
+
+/** The Linear user an API key belongs to. Every person and every agent has their own
+ *  account (2026-09-24), so on a mini this is that agent's member account. */
+export interface TrackerUser {
+  id: string
+  name: string
+  email: string
+}
+
+/** A partial update applied in one write. Absent fields are left alone. */
+export interface IssuePatch {
+  description?: string
+  /** A state NAME. An unknown name throws: a park that silently did less would re-queue the issue. */
+  state?: string
+  /** Bare label names, as in CreateIssueInput.labels. Unknown names throw, for the same reason. */
+  addLabels?: string[]
+  removeLabels?: string[]
+  /** "me" assigns the key's owner. null unassigns. */
+  assignee?: "me" | null
 }
 
 export interface Tracker {
@@ -63,6 +90,12 @@ export interface Tracker {
    * across the whole queue rather than one fetched page.
    */
   listReady(limit?: number): Promise<TrackerIssue[]>
+
+  /** The user the API key belongs to. */
+  whoami(): Promise<TrackerUser>
+
+  /** Applies `patch` in one write and returns the issue as it now is. */
+  updateIssue(ref: string, patch: IssuePatch): Promise<TrackerIssue>
 }
 
 /**

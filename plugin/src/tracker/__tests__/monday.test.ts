@@ -122,3 +122,12 @@ describe("createMondayTracker", () => {
     expect(updateVars).toMatchObject({ item: "999", body: "Do the thing" })
   })
 })
+
+describe("Linear-only methods", () => {
+  it("refuse with a message that names the provider to switch to", async () => {
+    const tracker = createMondayTracker()
+    await expect(tracker.whoami()).rejects.toThrow(/tracker\.provider "linear"/)
+    await expect(tracker.updateIssue("123", { state: "Ready" })).rejects.toThrow(/tracker\.provider "linear"/)
+    expect(executeMondayQuery).not.toHaveBeenCalled()
+  })
+})

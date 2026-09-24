@@ -211,6 +211,7 @@ describe("byPriorityThenAge", () => {
     url: "",
     priority,
     updatedAt,
+    assigneeId: null,
   })
 
   it("puts Urgent before Low", () => {
