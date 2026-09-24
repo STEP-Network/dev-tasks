@@ -136,14 +136,32 @@ async function tool(d: DoctorDeps, name: string, command: string, args: string[]
   return { level: "ok", name, detail: version }
 }
 
-function pnpm(version: string, code: number): Check {
-  if (code === 0 && /^10\./.test(version)) return { level: "ok", name: "pnpm", detail: version }
+/**
+ * The pnpm the checkout asks for: package.json's `packageManager`
+ * (`pnpm@10.33.0`) once it has one (STEP-3156), else 10, which CI pins.
+ */
+export function wantedPnpm(repo: string | null): { major: string; version: string; from: string } {
+  if (repo) {
+    try {
+      const pm = (JSON.parse(readFileSync(join(repo, "package.json"), "utf8")) as { packageManager?: unknown }).packageManager
+      const m = typeof pm === "string" ? /^pnpm@((\d+)\.\d+\.\d+)/.exec(pm) : null
+      if (m) return { major: m[2], version: m[1], from: "the checkout's package.json" }
+    } catch {
+      // No checkout yet, or no package.json: CI's pin below.
+    }
+  }
+  return { major: "10", version: "10", from: "CI" }
+}
+
+function pnpm(version: string, code: number, want: ReturnType<typeof wantedPnpm>): Check {
+  if (code === 0 && version.startsWith(`${want.major}.`)) return { level: "ok", name: "pnpm", detail: version }
   return {
     level: "fail",
     name: "pnpm",
     detail:
-      `${code === 0 ? version : "missing"} is not pnpm 10, which CI pins: any other ignores package.json's pnpm.onlyBuiltDependencies. ` +
-      `A pnpm from pnpm's own installer (~/Library/pnpm): pnpm self-update 10. From Homebrew: brew install pnpm@10, and put /opt/homebrew/opt/pnpm@10/bin first on PATH in ~/.zprofile`,
+      `${code === 0 ? version : "missing"} is not pnpm ${want.major}, which ${want.from} asks for: another ignores package.json's pnpm.onlyBuiltDependencies. ` +
+      `A pnpm from pnpm's own installer (~/Library/pnpm): pnpm self-update ${want.version}. ` +
+      `From Homebrew: brew install pnpm@${want.major}, and put /opt/homebrew/opt/pnpm@${want.major}/bin first on PATH in ~/.zprofile`,
   }
 }
 
@@ -277,7 +295,7 @@ export async function doctorChecks(d: DoctorDeps): Promise<Check[]> {
   add(await gitIdentity(d))
   if (config) add(await github(d, config.repo.slug))
   const p = await d.exec("pnpm", ["--version"])
-  add(pnpm(p.stdout.trim(), p.code))
+  add(pnpm(p.stdout.trim(), p.code, wantedPnpm(config?.repo.path ?? null)))
   add(node(d.nodeVersion))
   const claude = d.fresh || !config ? "claude" : config.frontDoor.claudePath
   add(await tool(d, "tmux", d.fresh || !config ? "tmux" : config.frontDoor.tmuxPath, ["-V"]))

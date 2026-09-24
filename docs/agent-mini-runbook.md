@@ -217,11 +217,15 @@ From the mini's own Terminal, in person or over Screen Sharing, not over
 SSH: the login keychain, which holds the Claude Code and gh logins, is
 locked in an SSH session ("User interaction is not allowed"), so `claude
 auth status` and `gh auth status` fail there although both work in the
-automatic-login session. Over SSH, `agentctl doctor` reports those two as
-"run from the mini's own Terminal" instead of failing. The LaunchAgents run
-in that GUI session, so agentd, the bridge, the front door and the workers
-reach the keychain. Everything after the install and the first doctor can
-run over SSH (`ssh -t` where a command needs a terminal).
+automatic-login session. The first install and any check of those logins
+(`claude auth status`, `gh auth status`, `agentctl doctor`'s `claude login`
+and `gh` lines) belong in the mini's own Terminal. Over SSH, doctor reports
+those two as "run from the mini's own Terminal" instead of failing, and
+install.sh says the same when it finishes. The LaunchAgents run in the GUI
+session and use its keychain, so agentd, the bridge, the front door and the
+workers are not affected. Everything else works over SSH. `agentctl
+probe-sandbox`, `resume` and `probe-hooks` need no login from there, only a
+terminal: `ssh -t`.
 
 ```bash
 bash ~/dev-tasks/runtime/scripts/install.sh

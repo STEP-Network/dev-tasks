@@ -128,3 +128,8 @@ done
 
 echo "installed. Check it with: $AGENTD_HOME/bin/agentctl status"
 if [ -e "$AGENTD_HOME/PAUSE" ]; then echo "paused: nothing is developed or refined until $AGENTD_HOME/bin/agentctl resume"; fi
+# The login keychain is locked in an SSH session, so doctor could not check
+# the claude and gh logins from here. The LaunchAgents use the GUI session's.
+if [ -n "${SSH_CONNECTION:-}" ]; then
+  echo "over SSH: the claude and gh logins live in the login keychain, which SSH cannot reach. Run $AGENTD_HOME/bin/agentctl doctor from the mini's own Terminal (in person or over Screen Sharing) before agentctl resume"
+fi

@@ -142,6 +142,20 @@ jq '.permissions.deny += ["Bash(dropped-rule:*)"]' "$S" > "$S.tmp" && mv "$S.tmp
 if run; then ok "runs a second time"; else bad "second run failed: $(cat "$T/out.log")"; fi
 if jq -e '.permissions.deny | index("Bash(dropped-rule:*)")' "$S" >/dev/null; then bad "kept a rule the template does not have"; else ok "renders the template whole again"; fi
 
+# Over SSH the login keychain is locked: the logins cannot be checked, and install says where to check them.
+cp "$T/bin/claude" "$T/claude.ok"; cp "$T/bin/gh" "$T/gh.ok"
+stub claude 'case "$*" in "--version") echo "2.1.281 (Claude Code)" ;; "auth status") echo "{\"loggedIn\":false}"; exit 1 ;; *) exit 0 ;; esac'
+stub gh 'case "$*" in "auth status") echo "User interaction is not allowed." >&2; exit 1 ;; api*) exit 1 ;; esac'
+if SSH_CONNECTION="100.64.0.2 51234 100.64.0.9 22" run; then
+  grep -q "WARN  claude login: not reachable over SSH" "$T/out.log" && grep -q "WARN  gh: not reachable over SSH" "$T/out.log" && ok "over SSH, doctor defers the keychain logins" || bad "doctor over SSH: $(grep -E 'claude login|gh:' "$T/out.log")"
+  grep -q "Run .*agentctl doctor from the mini's own Terminal" "$T/out.log" && ok "over SSH, install says where to check the logins" || bad "no SSH note: $(tail -3 "$T/out.log")"
+else
+  bad "install over SSH failed on the keychain logins: $(tail -5 "$T/out.log")"
+fi
+refuses "refuses the same logins outside SSH" "FAIL  claude login"
+mv "$T/claude.ok" "$T/bin/claude"; mv "$T/gh.ok" "$T/bin/gh"
+run && ! grep -q "over SSH" "$T/out.log" && ok "no SSH note outside SSH" || bad "outside SSH: $(tail -3 "$T/out.log")"
+
 # uninstall: a worker still running its job, and a job whose pid now belongs to a stranger.
 mkdir -p "$T/fake/src/worker" "$HOME/.agentd/jobs/running"
 printf '#!/bin/bash\nsleep 30\n' > "$T/fake/src/worker/run.ts"
