@@ -58,7 +58,10 @@ export interface Tracker {
 
   attachLink(ref: string, url: string, title: string): Promise<void>
 
-  /** Ready issues, already sorted by `byPriorityThenAge`. */
+  /**
+   * The first `limit` Ready issues in `byPriorityThenAge` order, ranked
+   * across the whole queue rather than one fetched page.
+   */
   listReady(limit?: number): Promise<TrackerIssue[]>
 }
 
@@ -78,6 +81,31 @@ export const LINEAR_REF_RE = /\bSTEP-(\d+)\b/
 
 const AC_HEADING_RE = /^(#{1,6})\s*acceptance\s+criteria\s*:?\s*$/i
 const ANY_HEADING_RE = /^(#{1,6})\s/
+// Any indentation, not CommonMark's 0-3 spaces: a fence inside a checklist
+// item is indented, and missing one costs the rest of the criteria.
+const FENCE_RE = /^\s*(`{3,}|~{3,})(.*)$/
+
+interface Fence {
+  char: string
+  length: number
+}
+
+/** The fence open AFTER `line`: `open` carried on, a new one, or null. */
+function stepFence(open: Fence | null, line: string): Fence | null {
+  const m = FENCE_RE.exec(line)
+  if (!m) return open
+  const run = m[1]
+  if (open) {
+    // Only a run of the SAME character, at least as long, alone on its line
+    // closes a fence. Anything else is the fence's content.
+    const closes = run[0] === open.char && run.length >= open.length && !m[2].trim()
+    return closes ? null : open
+  }
+  // A backtick fence's info string cannot itself contain a backtick; such a
+  // line is inline code, not a fence.
+  if (run[0] === "`" && m[2].includes("`")) return null
+  return { char: run[0], length: run.length }
+}
 
 /**
  * Lifts the acceptance-criteria block out of an issue description.
@@ -85,29 +113,31 @@ const ANY_HEADING_RE = /^(#{1,6})\s/
  * `scripts/linear/transform.ts` writes the heading as `## Acceptance
  * criteria`, so that is the shape this matches — at any level, in any case,
  * with or without a trailing colon. The block ends at the next heading of the
- * SAME OR SHALLOWER level; a deeper heading is part of the criteria.
+ * SAME OR SHALLOWER level; a deeper heading is part of the criteria. Lines in
+ * a fenced code block are never headings: a shell comment or a Markdown
+ * sample inside one neither starts the block nor ends it.
  */
 export function extractAcceptanceCriteria(markdown: string): string {
   if (!markdown) return ""
-  const lines = markdown.split("\n")
 
+  let fence: Fence | null = null
   let level = 0
-  let start = -1
-  for (let i = 0; i < lines.length; i++) {
-    const m = AC_HEADING_RE.exec(lines[i].trim())
-    if (m) {
-      level = m[1].length
-      start = i + 1
-      break
-    }
-  }
-  if (start === -1) return ""
-
   const body: string[] = []
-  for (let i = start; i < lines.length; i++) {
-    const h = ANY_HEADING_RE.exec(lines[i].trim())
+  // \r?\n: FENCE_RE's `.` stops at a \r, so a CRLF line never matched it.
+  for (const line of markdown.split(/\r?\n/)) {
+    const wasInFence = fence !== null
+    fence = stepFence(fence, line)
+    // The opening and closing fence lines count as code too.
+    const isCode = wasInFence || fence !== null
+
+    if (level === 0) {
+      const m = isCode ? null : AC_HEADING_RE.exec(line.trim())
+      if (m) level = m[1].length
+      continue
+    }
+    const h = isCode ? null : ANY_HEADING_RE.exec(line.trim())
     if (h && h[1].length <= level) break
-    body.push(lines[i])
+    body.push(line)
   }
   return body.join("\n").trim()
 }
@@ -166,12 +196,15 @@ export function branchNameFor(issueId: string, title: string): string {
 /** 0 ("No priority") sorts LAST; every real priority sorts ahead of it. */
 const priorityRank = (p: number): number => (p === 0 ? 5 : p)
 
+/** The two fields the queue order reads, so a lean ranking node sorts too. */
+type Rankable = { priority: number; updatedAt: string }
+
 /**
  * Queue order for the front door: most urgent first, and within one priority
  * the OLDEST first, so a low-priority issue cannot starve behind a stream of
  * newer ones at the same level.
  */
-export function byPriorityThenAge(a: TrackerIssue, b: TrackerIssue): number {
+export function byPriorityThenAge(a: Rankable, b: Rankable): number {
   const d = priorityRank(a.priority) - priorityRank(b.priority)
   if (d !== 0) return d
   return a.updatedAt.localeCompare(b.updatedAt)

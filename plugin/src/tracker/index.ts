@@ -9,8 +9,15 @@
  *
  * DEV_TASKS_TRACKER overrides it, for the Task 16 rehearsal and for a mini
  * that is testing the Linear path before its project config moves.
+ *
+ * The config is the one at the git toplevel of the working directory, so a
+ * skill run from a subdirectory still finds it. Every fallback that is not
+ * the documented default (a missing or unparseable file, an unrecognised
+ * value) still answers `monday` but says so on stderr: silently writing to
+ * the wrong tracker is the failure this guards against.
  */
 
+import { execFileSync } from "node:child_process"
 import { readFileSync } from "node:fs"
 import { join } from "node:path"
 import { createLinearTracker } from "./linear.ts"
@@ -25,25 +32,70 @@ function isProvider(value: unknown): value is TrackerProvider {
   return value === "linear" || value === "monday"
 }
 
-export function readTrackerProvider(projectRoot: string = process.cwd()): TrackerProvider {
+/** stderr, never stdout: trackerctl's stdout is exactly one line of JSON. */
+function warn(message: string): void {
+  process.stderr.write(`dev-tasks: ${message}\n`)
+}
+
+/**
+ * The git toplevel of `cwd` (a worktree's own root: the config is committed,
+ * so every worktree carries it), else `cwd` itself. The same order as
+ * hooks/lib/resolve-project-root.sh, minus that script's file-path probe and
+ * its CLAUDE_PROJECT_DIR step.
+ */
+function resolveProjectRoot(cwd: string): string {
+  try {
+    const toplevel = execFileSync("git", ["rev-parse", "--show-toplevel"], {
+      cwd,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim()
+    if (toplevel) return toplevel
+  } catch {
+    // Not inside a git checkout, or no git at all: cwd is all there is.
+  }
+  return cwd
+}
+
+export function readTrackerProvider(cwd: string = process.cwd()): TrackerProvider {
   const fromEnv = process.env.DEV_TASKS_TRACKER
   if (isProvider(fromEnv)) return fromEnv
-
-  try {
-    const raw = readFileSync(join(projectRoot, ".claude", "project-config.json"), "utf8")
-    const parsed = JSON.parse(raw) as { tracker?: { provider?: unknown } }
-    const provider = parsed.tracker?.provider
-    // An unrecognised value falls back rather than throwing: a typo must not
-    // take /dev, /preview and /ship down, and Monday still works.
-    if (isProvider(provider)) return provider
-  } catch {
-    // No config, or unreadable. Monday is the pre-cutover default.
+  if (fromEnv) {
+    warn(`ignoring DEV_TASKS_TRACKER=${JSON.stringify(fromEnv)}: it must be "linear" or "monday".`)
   }
+
+  const path = join(resolveProjectRoot(cwd), ".claude", "project-config.json")
+  let raw: string
+  try {
+    raw = readFileSync(path, "utf8")
+  } catch {
+    warn(`could not read ${path}; using the ${DEFAULT_PROVIDER} tracker. Set tracker.provider there, or DEV_TASKS_TRACKER.`)
+    return DEFAULT_PROVIDER
+  }
+
+  let provider: unknown
+  try {
+    const parsed = JSON.parse(raw) as { tracker?: { provider?: unknown } } | null
+    provider = parsed?.tracker?.provider
+  } catch {
+    warn(`${path} is not valid JSON; using the ${DEFAULT_PROVIDER} tracker.`)
+    return DEFAULT_PROVIDER
+  }
+
+  // No tracker block is the documented pre-cutover default, not a fallback.
+  if (provider === undefined) return DEFAULT_PROVIDER
+  if (isProvider(provider)) return provider
+  // An unrecognised value falls back rather than throwing: a typo must not
+  // take /dev, /preview and /ship down, and Monday still works.
+  warn(
+    `tracker.provider ${JSON.stringify(provider)} in ${path} is not "linear" or "monday"; ` +
+      `using the ${DEFAULT_PROVIDER} tracker.`,
+  )
   return DEFAULT_PROVIDER
 }
 
-export function resolveTracker(projectRoot: string = process.cwd()): Tracker {
-  return readTrackerProvider(projectRoot) === "linear"
+export function resolveTracker(cwd: string = process.cwd()): Tracker {
+  return readTrackerProvider(cwd) === "linear"
     ? createLinearTracker()
     : createMondayTracker()
 }
