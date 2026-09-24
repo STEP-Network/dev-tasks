@@ -9,7 +9,7 @@ import { listJobs, moveJob, submitJob } from "../../jobs.ts"
 import type { Logger } from "../../log.ts"
 import { fakeExec, fakeTracker, issue } from "../../__tests__/fakes.ts"
 import type { ExecResult } from "../git.ts"
-import { checkBilling, checkPlugins, modelFor, runJob, sdkOptions, type QueryFn, type RunDeps, type SdkMessage } from "../run.ts"
+import { checkBilling, checkPlugins, mergeMode, modelFor, runJob, sdkOptions, type QueryFn, type RunDeps, type SdkMessage } from "../run.ts"
 
 const quiet: Logger = { info() {}, warn() {}, error() {} }
 const PR = "https://github.com/STEP-Network/v0-politiske-annoncer/pull/1701"
@@ -32,14 +32,22 @@ function queryOf(messages: SdkMessage[], thrown?: string): { query: QueryFn; see
 }
 
 function setup(
-  opts: { issueOver?: Record<string, unknown>; messages?: SdkMessage[]; thrown?: string; gh?: string; failOn?: string[]; exec?: Array<[RegExp, Partial<ExecResult>]> } = {},
+  opts: {
+    issueOver?: Record<string, unknown>
+    messages?: SdkMessage[]
+    thrown?: string
+    gh?: string
+    failOn?: string[]
+    exec?: Array<[RegExp, Partial<ExecResult>]>
+    worker?: Record<string, unknown>
+  } = {},
 ) {
   const home = mkdtempSync(join(tmpdir(), "agentd-run-"))
   const repo = join(home, "polads")
   mkdirSync(join(repo, ".claude"), { recursive: true })
   writeFileSync(join(repo, ".claude", "project-config.json"), JSON.stringify({ git: { autoMergePolicy: { staging: "auto-after-checks-and-review" } } }))
   const paths = agentPaths(home)
-  const config = ConfigSchema.parse({ mini: "eve", repo: { path: repo }, pluginRoot: "/Users/eve/dev-tasks/plugin", slack: { allowedUsers: ["UNATE"] } })
+  const config = ConfigSchema.parse({ mini: "eve", repo: { path: repo }, pluginRoot: "/Users/eve/dev-tasks/plugin", slack: { allowedUsers: ["UNATE"] }, worker: opts.worker })
   const fake = fakeTracker([issue({ id: "STEP-7", title: "Fix the date", labels: ["polads", "agent-ready"], ...opts.issueOver })], undefined, opts.failOn)
   const f = fakeExec([
     ...(opts.exec ?? []),
@@ -61,6 +69,25 @@ function setup(
   return { deps, job, fake, f, q, paths, outbox }
 }
 
+describe("mergeMode", () => {
+  const config = (worker?: Record<string, unknown>) =>
+    ConfigSchema.parse({ mini: "eve", repo: { path: "/r" }, pluginRoot: "/p", slack: { allowedUsers: ["UNATE"] }, worker })
+
+  it("arms auto-merge only when the project's policy allows it and this mini has not turned it off", () => {
+    expect(mergeMode("auto-after-checks-and-review", config())).toBe("auto")
+    expect(mergeMode("auto-after-checks-and-review", config({ autoMerge: true }))).toBe("auto")
+    expect(mergeMode("auto-after-checks-and-review", config({ autoMerge: false }))).toBe("mini-off")
+    for (const policy of [null, "manual", "auto-after-checks"]) {
+      expect(mergeMode(policy, config())).toBe("person")
+      expect(mergeMode(policy, config({ autoMerge: false }))).toBe("person")
+    }
+  })
+
+  it("refuses a worker.autoMerge that is not a boolean", () => {
+    expect(() => config({ autoMerge: "false" })).toThrow()
+  })
+})
+
 describe("runJob", () => {
   it("claims, prepares the worktree, runs the session and opens the PR", async () => {
     const { deps, job, fake, f, q, paths, outbox } = setup()
@@ -73,6 +100,14 @@ describe("runJob", () => {
     expect(listJobs(paths, "running")).toEqual([])
     expect(listJobs(paths, "done")[0].result).toMatchObject({ status: "done", prUrl: PR })
     expect(outbox()).toEqual(["claimed STEP-7 Fix the date", `STEP-7 PR opened: ${PR} (auto-merge armed)`])
+  })
+
+  it("opens the PR without arming auto-merge when worker.autoMerge is off on this mini, though the policy allows it", async () => {
+    const { deps, job, f, outbox } = setup({ worker: { autoMerge: false } })
+    expect(await runJob(deps, job.id)).toMatchObject({ status: "done", prUrl: PR })
+    expect(f.lines().some((l) => l.startsWith("gh pr create"))).toBe(true)
+    expect(f.lines().some((l) => l.startsWith("gh pr merge"))).toBe(false)
+    expect(outbox()).toEqual(["claimed STEP-7 Fix the date", `STEP-7 PR opened: ${PR} (auto-merge off on this mini: a person merges)`])
   })
 
   it("marks when the session starts, after the worktree, for agentd's wall-clock backstop", async () => {

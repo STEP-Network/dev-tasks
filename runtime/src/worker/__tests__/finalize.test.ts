@@ -26,7 +26,7 @@ function setup(outcomeAhead = "2\n", responses: Array<[RegExp, { code?: number; 
   const ctx: FinalizeContext = {
     exec: f.exec, tracker: fake.tracker, paths,
     config: ConfigSchema.parse({ mini: "eve", repo: { path: REPO }, pluginRoot: "/p", slack: { allowedUsers: ["UNATE"] } }),
-    issue: fake.issues.get("STEP-7")!, branch: "STEP-7-fix-the-date", worktree: WT, autoMerge: true, model: "sonnet", minutes: 37,
+    issue: fake.issues.get("STEP-7")!, branch: "STEP-7-fix-the-date", worktree: WT, merge: "auto", model: "sonnet", minutes: 37,
     now: () => new Date("2026-09-24T09:00:00.000Z"),
   }
   const outbox = () => listNew<{ kind: string; text: string; question?: boolean }>(paths.outbox).map((e) => e.payload)
@@ -57,6 +57,7 @@ describe("finalize: done", () => {
     expect(body.split("\n")[0]).toBe("STEP-7")
     expect(body).toContain("Worker: eve, model sonnet, 42 turns, estimated USD 3.10, 37 min.")
     expect(body.trimEnd().endsWith("🤖 Generated with [Claude Code](https://claude.com/claude-code)")).toBe(true)
+    expect(body).not.toMatch(/auto-merge/i)
     expect(fake.called("attachLink")[0]).toEqual(["STEP-7", PR, "PR 1700"])
     expect(fake.issues.get("STEP-7")!.state).toBe("In Review")
     expect(outbox()).toEqual([expect.objectContaining({ kind: "post", text: `STEP-7 PR opened: ${PR} (auto-merge armed)` })])
@@ -81,9 +82,18 @@ describe("finalize: done", () => {
 
   it("leaves the merge to a person when the policy says so", async () => {
     const { ctx, f, outbox } = setup()
-    await finalize({ ...ctx, autoMerge: false }, done)
+    await finalize({ ...ctx, merge: "person" }, done)
     expect(f.lines().some((l) => l.startsWith("gh pr merge"))).toBe(false)
     expect(outbox()[0].text).toBe(`STEP-7 PR opened: ${PR} (a person merges this one)`)
+  })
+
+  it("opens the PR but leaves the merge to a person when auto-merge is off on this mini, and says so in the PR and in Slack", async () => {
+    const { ctx, f, paths, outbox } = setup()
+    expect(await finalize({ ...ctx, merge: "mini-off" }, done)).toMatchObject({ status: "done", prUrl: PR })
+    expect(f.lines().some((l) => l.startsWith("gh pr create"))).toBe(true)
+    expect(f.lines().some((l) => l.startsWith("gh pr merge"))).toBe(false)
+    expect(readFileSync(join(paths.state, "pr-body-STEP-7.md"), "utf8")).toContain("37 min.\nAuto-merge off on this mini: a person merges.\n")
+    expect(outbox()[0].text).toBe(`STEP-7 PR opened: ${PR} (auto-merge off on this mini: a person merges)`)
   })
 
   it("keeps a worktree with uncommitted changes for a person, and says so in the PR", async () => {
@@ -191,7 +201,7 @@ describe("prTitle and prBody", () => {
     expect(prTitle("STEP-7", { status: "done", summary: "x", prTitle: "fix:   the  date" }, "Fix the date")).toBe("STEP-7: fix: the date")
     expect(prTitle("STEP-7", { status: "done", summary: "x" }, "Fix the date")).toBe("STEP-7: Fix the date")
     expect(prTitle("STEP-7", { status: "done", summary: "x", prTitle: "fix: " + "a".repeat(200) }, "t")).toHaveLength(120)
-    const body = prBody("STEP-7", { status: "done", summary: "Did it.", verification: [] }, { mini: "eve", model: "opus", turns: null, costUsd: null, minutes: 5, dirty: true })
+    const body = prBody("STEP-7", { status: "done", summary: "Did it.", verification: [] }, { mini: "eve", model: "opus", turns: null, costUsd: null, minutes: 5, dirty: true, merge: "person" })
     expect(body).toMatch(/^STEP-7\n/)
     expect(body).toContain("- (the worker listed none)")
     expect(body).toContain("The worker left uncommitted changes, which are not in this PR.")

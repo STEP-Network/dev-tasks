@@ -20,7 +20,7 @@ import { enqueueSlack } from "../outbox.ts"
 import { loadClaudeOauthToken } from "../secrets.ts"
 import { branchNameFor, createLinearTracker, type Tracker, type TrackerIssue } from "../tracker.ts"
 import { buildBrief, WORKER_RESULT_SCHEMA, workerRules, type BriefInput } from "./brief.ts"
-import { finalize, FinalizeFailed } from "./finalize.ts"
+import { finalize, FinalizeFailed, type MergeMode } from "./finalize.ts"
 import { historyRewrite, prepareWorktree, realExec, WorktreeRefused, type Exec } from "./git.ts"
 import { denyBannedBash, denyWorkerPaths, ENV_TEMPLATE, workerEnv, workerToolDenial } from "./guard.ts"
 import { toOutcome, type Outcome, type ResultMessageLike } from "./outcome.ts"
@@ -43,6 +43,12 @@ export function readAutoMergePolicy(repo: string, base: string): string | null {
   } catch {
     return null
   }
+}
+
+/** Auto-merge takes both: the project's policy for the base branch, and this mini's worker.autoMerge. */
+export function mergeMode(policy: string | null, config: AgentConfig): MergeMode {
+  if (policy !== "auto-after-checks-and-review") return "person"
+  return config.worker.autoMerge === false ? "mini-off" : "auto"
 }
 
 /** The init message's plugin list must hold dev-tasks exactly once, or its hooks cannot be trusted. */
@@ -263,11 +269,11 @@ export async function runJob(deps: RunDeps, jobId: string): Promise<JobResult> {
 
   const model = modelFor(issue, job, config)
   const limits = { maxTurns: config.worker.maxTurns, maxBudgetUsd: config.worker.maxBudgetUsd, wallClockMinutes: config.worker.wallClockMinutes }
-  const autoMerge = readAutoMergePolicy(config.repo.path, config.repo.base) === "auto-after-checks-and-review"
+  const merge = mergeMode(readAutoMergePolicy(config.repo.path, config.repo.base), config)
   const finishWith = async (worktree: string | null, outcome: Outcome): Promise<JobResult> => {
     let result: JobResult
     try {
-      const fin = await finalize({ exec, tracker, paths, config, issue, branch, worktree, autoMerge, model, minutes: minutes(), now: deps.now }, outcome)
+      const fin = await finalize({ exec, tracker, paths, config, issue, branch, worktree, merge, model, minutes: minutes(), now: deps.now }, outcome)
       result = { status: fin.status, reason: fin.reason, prUrl: fin.prUrl, branch, costUsd: outcome.costUsd, turns: outcome.turns, minutes: minutes() }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
