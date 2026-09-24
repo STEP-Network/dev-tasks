@@ -10,11 +10,11 @@
 
 import { describe, it, expect, beforeEach, afterEach } from "vitest"
 import { spawnSync } from "node:child_process"
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { dirname, join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
-import { buildPatch, claimantFor, parseArgs, readProfileMini } from "../../../scripts/trackerctl.ts"
+import { buildPatch, claimantFor, parseArgs, readDescriptionFile, readProfileMini } from "../../../scripts/trackerctl.ts"
 
 const PLUGIN_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../../..")
 
@@ -57,6 +57,40 @@ describe("parseArgs", () => {
 
   it("throws a usage error on no subcommand at all", () => {
     expect(() => parseArgs([])).toThrowError(/usage/i)
+  })
+})
+
+describe("readDescriptionFile", () => {
+  // On an agent mini the front door's sandbox lets trackerctl read the Linear
+  // key, so trackerctl itself keeps secrets out of an issue's description.
+  let dir = ""
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "trackerctl-brief-"))
+    mkdirSync(join(dir, "home", ".config", "linear"), { recursive: true })
+    writeFileSync(join(dir, "home", ".config", "linear", ".env"), "LINEAR_API_KEY=lin_api_test\n")
+    writeFileSync(join(dir, "brief.md"), "## Goal\nA brief.\n")
+  })
+  afterEach(() => rmSync(dir, { recursive: true, force: true }))
+
+  it("reads a brief", () => {
+    expect(readDescriptionFile(join(dir, "brief.md"), join(dir, "home"))).toBe("## Goal\nA brief.\n")
+  })
+
+  it("refuses anything under ~/.config, however it is spelt", () => {
+    const home = join(dir, "home")
+    symlinkSync(join(home, ".config", "linear", ".env"), join(dir, "innocent.md"))
+    for (const path of [
+      join(home, ".config", "linear", ".env"),
+      join(home, "x", "..", ".config", "linear", ".env"),
+      join(dir, "innocent.md"),
+    ]) {
+      expect(() => readDescriptionFile(path, home), path).toThrow(/^usage:[\s\S]*secrets file/)
+    }
+  })
+
+  it("refuses a file named .env anything, anywhere", () => {
+    writeFileSync(join(dir, ".env.local"), "X=1\n")
+    expect(() => readDescriptionFile(join(dir, ".env.local"), join(dir, "home"))).toThrow(/secrets file/)
   })
 })
 

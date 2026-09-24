@@ -16,7 +16,7 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest"
 import { spawn } from "node:child_process"
 import { once } from "node:events"
-import { cpSync, existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs"
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { basename, dirname, join } from "node:path"
 import { bundleServer, LICENSE_PATH, PLUGIN_ROOT, SERVER_PATH } from "../../scripts/bundle-server.ts"
@@ -46,10 +46,10 @@ afterAll(() => {
 // it a package (NODE_PATH, a NODE_OPTIONS loader) or a tracker key
 // (MONDAY_API_KEY, or a key file under the real HOME): no call it makes can
 // reach Monday.
-function startServer() {
+function startServer(home: string = root) {
   const child = spawn(process.execPath, [join(plugin, "dist", "server.js")], {
     cwd: root,
-    env: { PATH: process.env.PATH ?? "", HOME: root },
+    env: { PATH: process.env.PATH ?? "", HOME: home },
   })
   const timer = setTimeout(() => child.kill("SIGKILL"), KILL_AFTER_MS)
   let stdout = ""
@@ -114,6 +114,36 @@ describe("the bundled MCP server, installed without node_modules", () => {
     expect(new Set(names).size).toBe(REGISTERED)
     // getTask reports its own failure as text: "# Error ... Failed to fetch task: No Monday auth: ...".
     expect(replies.get(3)?.result?.content?.[0]?.text).toMatch(/Failed to fetch task: No Monday auth/)
+  }, 10_000)
+
+  it("offers no tools on an agent mini, and still connects", async () => {
+    // Monday is read-only for agents and a mini has no Monday key, so the
+    // front door must see no Monday tools, and no failed server either.
+    const home = join(root, "agent-home")
+    mkdirSync(join(home, ".claude"), { recursive: true })
+    writeFileSync(join(home, ".claude", "dev-tasks-profile.json"), '{ "profile": "agent", "devSurface": "preview", "mini": "eve" }\n')
+    const { child, exited } = startServer(home)
+    const send = (message: object) => child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", ...message })}\n`)
+    send({
+      id: 1,
+      method: "initialize",
+      params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "server-bundle.test", version: "0" } },
+    })
+    send({ method: "notifications/initialized" })
+    send({ id: 2, method: "tools/list" })
+    let pending = ""
+    child.stdout.on("data", (chunk: string) => {
+      const lines = (pending + chunk).split("\n")
+      pending = lines.pop() ?? ""
+      if (lines.some((line) => JSON.parse(line).id === 2)) child.stdin.end()
+    })
+
+    const { code, signal, stdout, stderr } = await exited
+    expect({ code, signal, stderr }).toEqual({ code: 0, signal: null, stderr: "[dev-tasks] connected (stdio), 0 tools registered (agent profile)\n" })
+    const replies = new Map(stdout.trim().split("\n").map((line) => JSON.parse(line)).map((reply) => [reply.id, reply]))
+    expect(replies.get(1)?.result?.capabilities?.tools).toBeDefined()
+    expect(replies.get(2)).toMatchObject({ result: { tools: [] } })
+    expect(replies.get(2)?.error).toBeUndefined()
   }, 10_000)
 
   it("has no npm script an install would run, should someone run one in it", () => {

@@ -34,7 +34,9 @@
  */
 
 import { execFileSync } from "node:child_process"
-import { readFileSync } from "node:fs"
+import { readFileSync, realpathSync } from "node:fs"
+import { homedir } from "node:os"
+import { basename, join, resolve, sep } from "node:path"
 import { fileURLToPath } from "node:url"
 import { resolveTracker } from "../src/tracker/index.ts"
 import { branchNameFor, type IssuePatch } from "../src/tracker/types.ts"
@@ -146,6 +148,38 @@ export function buildPatch(flags: ParsedArgs["flags"], readText: (path: string) 
     throw new Error(`${USAGE}\nupdate needs one of --state --add-label --remove-label --description-file --assign`)
   }
   return patch
+}
+
+/**
+ * Reads a --description-file, refusing a secrets file: anything under
+ * ~/.config (the Linear key, an agent mini's Slack and Claude tokens) or named
+ * .env*. Checked on the path as given and as resolved through symlinks. On an
+ * agent mini the front door's sandbox lets trackerctl read the Linear key, so
+ * the sandbox cannot be what keeps that key out of an issue's description.
+ */
+export function readDescriptionFile(path: string, home: string = homedir()): string {
+  const refuse = () => {
+    throw new Error(`${USAGE}\n--description-file ${path} looks like a secrets file (under ~/.config, or named .env*), and trackerctl never sends one to the tracker`)
+  }
+  const config = join(home, ".config")
+  const within = (p: string, dir: string) => p === dir || p.startsWith(dir + sep)
+  const given = resolve(path)
+  let real = given
+  try {
+    real = realpathSync(given)
+  } catch {
+    // Missing: readFileSync below says so.
+  }
+  let realConfig = config
+  try {
+    realConfig = realpathSync(config)
+  } catch {
+    // No ~/.config: nothing can be inside it.
+  }
+  for (const p of [given, real]) {
+    if (within(p, config) || within(p, realConfig) || basename(p).startsWith(".env")) refuse()
+  }
+  return readFileSync(real, "utf8")
 }
 
 // The plugin's one profile reader. The phase 0 rule is exactly one, in bash,
@@ -263,7 +297,7 @@ async function main(): Promise<void> {
       return
     }
     case "update": {
-      const patch = buildPatch(flags, (path) => readFileSync(path, "utf8"))
+      const patch = buildPatch(flags, (path) => readDescriptionFile(path))
       const issue = await tracker.updateIssue(requireArg(positional[0], "ref (positional)"), patch)
       process.stdout.write(JSON.stringify(issue) + "\n")
       return
