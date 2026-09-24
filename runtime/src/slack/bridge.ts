@@ -19,7 +19,7 @@ import { assertLinearKeyFile, loadSlackSecrets } from "../secrets.ts"
 import { issueForThread, saveThread } from "../threads.ts"
 import { createLinearTracker, type Tracker } from "../tracker.ts"
 import { classify, type Classified, type ClassifyContext, type SlackEnvelope } from "./classify.ts"
-import { drainOutbox, type SendContext, type SlackWeb } from "./send.ts"
+import { drainOutbox, SlackTokenRefused, type SendContext, type SlackWeb } from "./send.ts"
 import { answerTransition, appendAnswer, intakeIssue } from "./text.ts"
 
 export interface BridgeWeb extends SlackWeb {
@@ -57,19 +57,20 @@ export async function handleEnvelope(deps: BridgeDeps, envelope: SlackEnvelope):
     if (putOnce(deps.paths.inbox, c.key, { ...c, receivedAt })) ack(deps.paths.inbox, c.key)
     return c.type
   }
+  // Slack has its acknowledgement and will not send this again, so it goes to
+  // disk before any call that can wait on the network. The put is the dedupe:
+  // a redelivery never files a second issue or applies an answer twice.
+  const intake = c.type === "intake" ? { linearId: randomUUID(), issue: null } : {}
+  if (!putOnce(deps.paths.inbox, c.key, { ...c, userName: c.user, receivedAt, ...intake })) return c.type
+  // The sender's name, for the front door, the issue and the answer. Their user id when Slack cannot say.
   const userName = await deps.web.userName(c.user).catch(() => c.user)
-  if (c.type === "mention") {
-    putOnce(deps.paths.inbox, c.key, { ...c, userName, receivedAt })
-    return c.type
+  if (userName !== c.user) {
+    const path = entryPath(deps.paths.inbox, c.key)
+    const entry = readJson<Record<string, unknown>>(path)
+    if (entry) writeJsonAtomic(path, { ...entry, userName })
   }
-  if (c.type === "answer") {
-    if (putOnce(deps.paths.inbox, c.key, { ...c, userName, receivedAt })) await applyAnswer(deps, c.key)
-    return c.type
-  }
-  // intake: the put is the dedupe, so a redelivery never files a second issue
-  if (putOnce(deps.paths.inbox, c.key, { ...c, userName, receivedAt, linearId: randomUUID(), issue: null })) {
-    await fileIntake(deps, c.key)
-  }
+  if (c.type === "answer") await applyAnswer(deps, c.key)
+  if (c.type === "intake") await fileIntake(deps, c.key)
   return c.type
 }
 
@@ -136,19 +137,25 @@ export async function applyAnswer(deps: BridgeDeps, key: string): Promise<void> 
   await once(deps, key, async () => {
     const entry = readJson<AnswerEntry>(entryPath(deps.paths.inbox, key))
     if (!entry) return
-    try {
-      const current = await deps.tracker.readIssue(entry.issue)
-      const permalink = await deps.web.permalink(entry.channel, entry.ts).catch(() => null)
-      const description = appendAnswer(current.description, { ts: entry.ts, userName: entry.userName, text: entry.text, permalink })
-      const move = answerTransition(current)
-      await deps.tracker.updateIssue(entry.issue, { ...(description !== current.description ? { description } : {}), ...move })
-      ack(deps.paths.inbox, key)
-      enqueueSlack(deps.paths, { kind: "react", channelId: entry.channel, ts: entry.ts, name: "white_check_mark" }, deps.now())
-      appendLedger(deps.paths, { type: "answer.applied", issue: entry.issue, movedTo: move.state ?? null }, deps.now())
-    } catch (error) {
-      // Left in the inbox: retryPending tries again every minute.
-      deps.log.warn("answer not applied yet", { issue: entry.issue, error: String(error) })
-    }
+    // One answer per issue at a time: an apply reads the description and
+    // writes it back, so two at once would both read the same text and the
+    // second write would drop the first answer. The one that finds the issue
+    // busy stays in the inbox for the next retry.
+    await once(deps, `issue:${entry.issue}`, async () => {
+      try {
+        const current = await deps.tracker.readIssue(entry.issue)
+        const permalink = await deps.web.permalink(entry.channel, entry.ts).catch(() => null)
+        const description = appendAnswer(current.description, { ts: entry.ts, userName: entry.userName, text: entry.text, permalink })
+        const move = answerTransition(current)
+        await deps.tracker.updateIssue(entry.issue, { ...(description !== current.description ? { description } : {}), ...move })
+        ack(deps.paths.inbox, key)
+        enqueueSlack(deps.paths, { kind: "react", channelId: entry.channel, ts: entry.ts, name: "white_check_mark" }, deps.now())
+        appendLedger(deps.paths, { type: "answer.applied", issue: entry.issue, movedTo: move.state ?? null }, deps.now())
+      } catch (error) {
+        // Left in the inbox: retryPending tries again every minute.
+        deps.log.warn("answer not applied yet", { issue: entry.issue, error: String(error) })
+      }
+    })
   })
 }
 
@@ -201,14 +208,14 @@ export function checkLocal(paths: AgentPaths, profileMini: string | null): { con
 const TRANSIENT_SLACK_CODES = new Set(["slack_webapi_request_error", "slack_webapi_http_error", "slack_webapi_rate_limited_error"])
 
 /**
- * How the bridge exits when it cannot start. Slack out of reach (the network
+ * How the bridge exits when it cannot run. Slack out of reach (the network
  * not up yet after a power cut, say) passes: 1, and launchd starts it again.
  * Anything else, a bad config, another mini's name, a revoked token, a
  * missing channel, waits for a person: 0, and launchd leaves it stopped
  * (KeepAlive restarts only a failed exit, Task 17). agentctl status and the
  * Sentry check-in show why.
  */
-export function startupExitCode(error: unknown): 0 | 1 {
+export function exitCodeFor(error: unknown): 0 | 1 {
   const code = (error as { code?: unknown } | null)?.code
   return typeof code === "string" && TRANSIENT_SLACK_CODES.has(code) ? 1 : 0
 }
@@ -240,14 +247,14 @@ async function main(): Promise<void> {
       outboxFailed: countIn(paths.outbox, "failed"),
       ...extra,
     })
-  const cannotStart = (error: unknown): never => {
+  const halt = (error: unknown): never => {
     const message = error instanceof Error ? error.message : String(error)
     writeStatus({ error: message })
-    log.error("bridge cannot start", { error: message })
-    process.exit(startupExitCode(error))
+    log.error("bridge stopped", { error: message })
+    process.exit(exitCodeFor(error))
   }
 
-  const s = await setup(paths).catch(cannotStart)
+  const s = await setup(paths).catch(halt)
 
   const tracker = createLinearTracker()
   const names = new Map<string, string>()
@@ -333,6 +340,7 @@ async function main(): Promise<void> {
     try {
       await drainOutbox(sendContext, log)
     } catch (error) {
+      if (error instanceof SlackTokenRefused) halt(error)
       log.error("outbox drain failed", { error: String(error) })
     } finally {
       draining = false
@@ -344,7 +352,7 @@ async function main(): Promise<void> {
   setInterval(() => writeStatus(), 30_000)
   writeStatus()
 
-  await socket.start().catch(cannotStart)
+  await socket.start().catch(halt)
   log.info("bridge connected", { team: s.teamId, channels: s.channelIds })
 }
 

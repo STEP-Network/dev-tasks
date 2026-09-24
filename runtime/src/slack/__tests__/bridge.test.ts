@@ -9,8 +9,9 @@ import { listNew, putOnce } from "../../fsq.ts"
 import type { Logger } from "../../log.ts"
 import { threadFor } from "../../threads.ts"
 import { fakeTracker, issue } from "../../__tests__/fakes.ts"
-import { checkLocal, handleEnvelope, fileIntake, resolveChannels, retryPending, startupExitCode, type BridgeDeps, type BridgeWeb } from "../bridge.ts"
+import { checkLocal, exitCodeFor, handleEnvelope, fileIntake, resolveChannels, retryPending, type BridgeDeps, type BridgeWeb } from "../bridge.ts"
 import type { SlackEnvelope } from "../classify.ts"
+import { SlackTokenRefused } from "../send.ts"
 
 const quiet: Logger = { info() {}, warn() {}, error() {} }
 
@@ -70,6 +71,15 @@ describe("intake", () => {
     expect(entry.payload).toMatchObject({ type: "intake", issue: "STEP-901", userName: "Nate" })
     expect(threadFor(paths, "STEP-901")).toMatchObject({ channelId: "CIN", ts: "1800.1" })
     expect(outboxTexts(paths)).toEqual(["filed STEP-901 https://linear.app/step/issue/STEP-901. I will refine it and answer here."])
+  })
+
+  it("puts an acknowledged delivery on disk before it asks Slack who sent it", async () => {
+    // Slack will not send an acknowledged event again: while users.info waits, only the inbox holds it.
+    const { deps, paths } = setup()
+    deps.web.userName = () => new Promise(() => {})
+    void handleEnvelope(deps, mention("app_mention", "<@UBOT> The date is wrong on notices"))
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    expect(listNew(paths.inbox)[0].payload).toMatchObject({ type: "intake", user: "UNATE", userName: "UNATE", issue: null })
   })
 
   it("files nothing for a bare mention and asks for the request instead, naming this mini's bot", async () => {
@@ -152,6 +162,20 @@ describe("answers", () => {
     expect(listNew<{ kind: string; name?: string }>(paths.outbox)[0].payload).toMatchObject({ kind: "react", name: "white_check_mark" })
   })
 
+  it("keep both of two replies that arrive together, applying one at a time", async () => {
+    // Each apply reads the description and writes it back: two at once would
+    // both read the same text, and the second write would drop the first answer.
+    const { deps, fake, paths } = setup([issue({ id: "STEP-7", state: "On hold", labels: ["agent-ready", "awaiting-answer"], description: "## Goal\n\nFix it." })])
+    const permalink = deps.web.permalink
+    deps.web.permalink = (channel, ts) => new Promise((resolve) => setTimeout(() => resolve(permalink(channel, ts)), 20))
+    await Promise.all([handleEnvelope(deps, reply("1700.5", "Use the publication date")), handleEnvelope(deps, reply("1700.6", "And the Danish label"))])
+    await retryPending(deps)
+    const description = fake.issues.get("STEP-7")!.description
+    expect(description).toContain("Use the publication date")
+    expect(description).toContain("And the Danish label")
+    expect(listNew(paths.inbox)).toEqual([])
+  })
+
   it("stay in the inbox when Linear is down and apply on a later retry", async () => {
     const { deps, paths } = setup([issue({ id: "STEP-7", state: "On hold", labels: ["agent-ready", "awaiting-answer"] })], ["updateIssue"])
     await handleEnvelope(deps, reply("1700.5", "Yes"))
@@ -222,10 +246,11 @@ describe("starting", () => {
   }, 30_000)
 
   it("exits 1, for launchd to try again, only when Slack could not be reached", () => {
-    expect(startupExitCode(Object.assign(new Error("fetch failed"), { code: "slack_webapi_request_error" }))).toBe(1)
-    expect(startupExitCode(Object.assign(new Error("HTTP 503"), { code: "slack_webapi_http_error" }))).toBe(1)
-    expect(startupExitCode(Object.assign(new Error("rate limited"), { code: "slack_webapi_rate_limited_error" }))).toBe(1)
-    expect(startupExitCode(Object.assign(new Error("An API error occurred: invalid_auth"), { code: "slack_webapi_platform_error", data: { error: "invalid_auth" } }))).toBe(0)
-    expect(startupExitCode(new Error("slack-bridge: #polads-intake does not exist or is private"))).toBe(0)
+    expect(exitCodeFor(Object.assign(new Error("fetch failed"), { code: "slack_webapi_request_error" }))).toBe(1)
+    expect(exitCodeFor(Object.assign(new Error("HTTP 503"), { code: "slack_webapi_http_error" }))).toBe(1)
+    expect(exitCodeFor(Object.assign(new Error("rate limited"), { code: "slack_webapi_rate_limited_error" }))).toBe(1)
+    expect(exitCodeFor(Object.assign(new Error("An API error occurred: invalid_auth"), { code: "slack_webapi_platform_error", data: { error: "invalid_auth" } }))).toBe(0)
+    expect(exitCodeFor(new Error("slack-bridge: #polads-intake does not exist or is private"))).toBe(0)
+    expect(exitCodeFor(new SlackTokenRefused("slack-bridge: Slack refused the bot token (token_revoked)."))).toBe(0)
   })
 })

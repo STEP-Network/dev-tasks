@@ -7,7 +7,7 @@ import { countIn, listNew } from "../../fsq.ts"
 import type { Logger } from "../../log.ts"
 import { enqueueSlack } from "../../outbox.ts"
 import { threadFor } from "../../threads.ts"
-import { drainOutbox, sendOutboxMessage, type SendContext, type SlackWeb } from "../send.ts"
+import { drainOutbox, sendOutboxMessage, SlackTokenRefused, type SendContext, type SlackWeb } from "../send.ts"
 
 const quiet: Logger = { info() {}, warn() {}, error() {} }
 
@@ -64,6 +64,25 @@ describe("sendOutboxMessage", () => {
     expect(posts[0].text).toBe("eve: STEP-7\n\nblocked")
   })
 
+  it("records a new thread as soon as it is posted, so a restart replies in it rather than open a second", async () => {
+    const { ctx, posts } = context()
+    let calls = 0
+    ctx.web = {
+      async postMessage(args) {
+        posts.push(args)
+        return { ts: `900${++calls}.1` }
+      },
+      // Slack posted the message, then never says where it is: the drain dies here.
+      permalink: () => new Promise(() => {}),
+      async react() {},
+    }
+    void sendOutboxMessage(ctx, { kind: "issue", issue: "STEP-7", text: "Which date?", question: true })
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    expect(threadFor(ctx.paths, "STEP-7")).toMatchObject({ channelId: "CQ", ts: "9001.1", permalink: null })
+    await Promise.race([sendOutboxMessage(ctx, { kind: "issue", issue: "STEP-7", text: "Which date?", question: true }), new Promise((resolve) => setTimeout(resolve, 20))])
+    expect(posts.map((p) => p.thread_ts ?? "new thread")).toEqual(["new thread", "9001.1"])
+  })
+
   it("returns a warning, not an error, when the link cannot be stored, so the message is not posted twice", async () => {
     const { ctx } = context({
       attachThread: async () => {
@@ -97,6 +116,46 @@ describe("drainOutbox", () => {
     expect(await drainOutbox(ctx, quiet)).toBe(1)
     expect(countIn(ctx.paths.outbox, "failed")).toBe(1)
     expect(posts.map((p) => p.text)).toEqual(["eve: kept"])
+  })
+
+  it("moves a message refused for a reason it does not know to failed, rather than let it hold up the queue", async () => {
+    const refused = Object.assign(new Error("An API error occurred: restricted_action_read_only_channel"), { data: { error: "restricted_action_read_only_channel" } })
+    const { ctx, posts } = context({}, [refused])
+    enqueueSlack(ctx.paths, { kind: "post", channel: "releases", text: "released" }, new Date(1))
+    enqueueSlack(ctx.paths, { kind: "post", channel: "agents", text: "claimed STEP-7" }, new Date(2))
+    expect(await drainOutbox(ctx, quiet)).toBe(1)
+    expect(countIn(ctx.paths.outbox, "failed")).toBe(1)
+    expect(posts.map((p) => p.text)).toEqual(["eve: claimed STEP-7"])
+  })
+
+  it("waits, as for the network, when Slack reports trouble of its own", async () => {
+    const trouble = Object.assign(new Error("An API error occurred: internal_error"), { data: { error: "internal_error" } })
+    const { ctx } = context({}, [trouble])
+    enqueueSlack(ctx.paths, { kind: "post", channel: "agents", text: "one" }, new Date(1))
+    expect(await drainOutbox(ctx, quiet)).toBe(0)
+    expect(countIn(ctx.paths.outbox, "new")).toBe(1)
+    expect(countIn(ctx.paths.outbox, "failed")).toBe(0)
+  })
+
+  it("stops with every message kept, in order, when Slack refuses the token itself", async () => {
+    // A revoked token is not this message's fault: moving each to failed would empty the queue.
+    const revoked = Object.assign(new Error("An API error occurred: token_revoked"), { data: { error: "token_revoked" } })
+    const { ctx } = context({}, [revoked])
+    enqueueSlack(ctx.paths, { kind: "post", channel: "agents", text: "one" }, new Date(1))
+    enqueueSlack(ctx.paths, { kind: "post", channel: "agents", text: "two" }, new Date(2))
+    await expect(drainOutbox(ctx, quiet)).rejects.toThrow(SlackTokenRefused)
+    await expect(drainOutbox(ctx, quiet)).resolves.toBe(2)
+    expect(countIn(ctx.paths.outbox, "failed")).toBe(0)
+  })
+
+  it("counts a reaction that is already there as sent", async () => {
+    const { ctx } = context()
+    ctx.web.react = async () => {
+      throw Object.assign(new Error("An API error occurred: already_reacted"), { data: { error: "already_reacted" } })
+    }
+    enqueueSlack(ctx.paths, { kind: "react", channelId: "CQ", ts: "1700.5", name: "white_check_mark" })
+    expect(await drainOutbox(ctx, quiet)).toBe(1)
+    expect(countIn(ctx.paths.outbox, "failed")).toBe(0)
   })
 
   it("records each posted question in the ledger", async () => {

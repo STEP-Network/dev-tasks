@@ -40,7 +40,10 @@ export async function sendOutboxMessage(ctx: SendContext, msg: OutboxMessage): P
       await ctx.web.postMessage({ channel: msg.channelId, thread_ts: msg.threadTs, text: prefixed(ctx.mini, msg.text) })
       return {}
     case "react":
-      await ctx.web.react(msg.channelId, msg.ts, msg.name)
+      await ctx.web.react(msg.channelId, msg.ts, msg.name).catch((error: unknown) => {
+        // Already there is what the message asked for.
+        if (slackErrorCode(error) !== "already_reacted") throw error
+      })
       return {}
     case "issue": {
       const nowIso = ctx.now().toISOString()
@@ -54,10 +57,15 @@ export async function sendOutboxMessage(ctx: SendContext, msg: OutboxMessage): P
       const head = about ? `${msg.issue} ${about.title}\n${about.url}` : msg.issue
       const channel = ctx.channelIds.questions
       const { ts } = await ctx.web.postMessage({ channel, text: prefixed(ctx.mini, `${head}\n\n${msg.text}`) })
-      // The message is out. Nothing below may throw, or the drain would post it again.
+      // The message is out. Nothing below may throw, or the drain would post
+      // it again. The thread is recorded first, before any call that can wait:
+      // a restart then replies in it, where a second thread would leave
+      // answers in the first one unread.
+      const thread = { issue: msg.issue, channelId: channel, ts, permalink: null, createdAt: nowIso, lastQuestionAt: msg.question ? nowIso : null }
+      saveThread(ctx.paths, thread)
       const permalink = await ctx.web.permalink(channel, ts).catch(() => null)
-      saveThread(ctx.paths, { issue: msg.issue, channelId: channel, ts, permalink, createdAt: nowIso, lastQuestionAt: msg.question ? nowIso : null })
       if (!permalink) return { warning: `no permalink for the new thread of ${msg.issue}` }
+      saveThread(ctx.paths, { ...thread, permalink })
       try {
         await ctx.attachThread(msg.issue, permalink)
         return {}
@@ -68,18 +76,35 @@ export async function sendOutboxMessage(ctx: SendContext, msg: OutboxMessage): P
   }
 }
 
-const PERMANENT = new Set([
-  "channel_not_found", "not_in_channel", "is_archived", "invalid_auth", "account_inactive", "token_revoked",
-  "msg_too_long", "no_text", "restricted_action", "thread_not_found", "message_not_found", "already_reacted", "invalid_name",
-])
-
-/** A refusal that retrying cannot fix. Anything else (network, rate limit, 5xx) is worth another go. */
-export function isPermanentSlackError(error: unknown): boolean {
-  const code = (error as { data?: { error?: string } } | null)?.data?.error
-  return typeof code === "string" && PERMANENT.has(code)
+/** The refusal Slack gave (`ok: false`), e.g. channel_not_found. null for the network, HTTP errors and rate limits. */
+function slackErrorCode(error: unknown): string | null {
+  const code = (error as { data?: { error?: unknown } } | null)?.data?.error
+  return typeof code === "string" ? code : null
 }
 
-/** Posts what is waiting, oldest first, and stops at the first transient failure so the order holds. */
+/** Refusals of the token, not of the message: nothing can go out until a person fixes it. */
+const TOKEN_REFUSALS = new Set(["invalid_auth", "not_authed", "account_inactive", "token_revoked", "token_expired", "team_access_not_granted"])
+/** Slack's own trouble, reported as a refusal: worth another go, like the network. */
+const SLACK_TROUBLE = new Set(["internal_error", "fatal_error", "service_unavailable", "request_timeout", "ratelimited"])
+
+/** What a failed send means for the queue. */
+export function sendFailure(error: unknown): "retry" | "drop" | "stop" {
+  const code = slackErrorCode(error)
+  if (code === null || SLACK_TROUBLE.has(code)) return "retry"
+  // Any other refusal is about this message (a channel archived, a thread
+  // deleted, a text too long): kept waiting, it would hold up every one after it.
+  return TOKEN_REFUSALS.has(code) ? "stop" : "drop"
+}
+
+/** Slack refused the bot token: the bridge stops, and every message waits for a person to fix it. */
+export class SlackTokenRefused extends Error {}
+
+/**
+ * Posts what is waiting, oldest first. Stops at the first failure worth
+ * retrying so the order holds, moves a message Slack refuses to failed, and
+ * throws SlackTokenRefused, with every message still queued, when Slack
+ * refuses the token itself.
+ */
 export async function drainOutbox(ctx: SendContext, log: Logger): Promise<number> {
   let sent = 0
   for (const { key, payload } of listNew<OutboxMessage>(ctx.paths.outbox)) {
@@ -90,11 +115,13 @@ export async function drainOutbox(ctx: SendContext, log: Logger): Promise<number
       if (payload.kind === "issue" && payload.question) appendLedger(ctx.paths, { type: "question.asked", issue: payload.issue }, ctx.now())
       sent++
     } catch (error) {
-      if (isPermanentSlackError(error)) {
+      const failure = sendFailure(error)
+      if (failure === "drop") {
         log.error("outbox message refused by Slack, moved to failed", { key, error: String(error) })
         fail(ctx.paths.outbox, key)
         continue
       }
+      if (failure === "stop") throw new SlackTokenRefused(`slack-bridge: Slack refused the bot token (${slackErrorCode(error)}). Fix SLACK_BOT_TOKEN, then restart the bridge.`)
       log.warn("outbox waiting: Slack unreachable", { key, error: String(error) })
       break
     }
