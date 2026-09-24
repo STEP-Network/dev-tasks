@@ -18,15 +18,18 @@ describe("agentManifest", () => {
     expect(JSON.stringify(eve)).not.toContain("{{")
   })
 
-  it("keeps the plan's scopes and events, over Socket Mode", () => {
+  it("keeps the plan's scopes and events, private channels included, over Socket Mode", () => {
     const eve = agentManifest("eve")
     expect(eve.oauth_config).toEqual({
       scopes: {
-        bot: ["app_mentions:read", "channels:history", "channels:read", "chat:write", "reactions:read", "reactions:write", "users:read", "files:read", "files:write"],
+        bot: [
+          "app_mentions:read", "channels:history", "channels:read", "chat:write", "groups:history", "groups:read",
+          "reactions:read", "reactions:write", "users:read", "files:read", "files:write",
+        ],
       },
     })
     expect(eve.settings).toMatchObject({
-      event_subscriptions: { bot_events: ["app_mention", "message.channels", "reaction_added"] },
+      event_subscriptions: { bot_events: ["app_mention", "message.channels", "message.groups", "reaction_added"] },
       socket_mode_enabled: true,
     })
   })

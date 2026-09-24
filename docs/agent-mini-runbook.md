@@ -127,9 +127,12 @@ the bridge refuse to start while the two differ.
 Follow `runtime/slack/README.md`: it generates this agent's manifest
 (`npx tsx src/slack/manifest.ts eve`, the app "PolAds Eve" with the bot
 `@eve`), creates and installs the app, makes the app-level token with
-`connections:write`, and invites the bot into `#polads-agents`,
-`#polads-questions`, `#polads-intake` and `#polads-releases`. The bridge
-refuses to start while the bot is missing from any of them. Note the Bot
+`connections:write`, and adds the bot to `#polads-agents`,
+`#polads-questions`, `#polads-intake` and `#polads-releases`. The channels
+may be private, and may be Slack Connect channels: add the bot in each
+channel's settings, Integrations, Add an App, never with `/invite @eve`,
+which can pick a person called the same. The bridge refuses to start while
+the bot is missing from any of them. Note the Bot
 User OAuth Token (`xoxb-...`) and the app-level token (`xapp-...`) for the
 next section, and the Slack member ids of the people who may talk to the
 agent (profile, More, Copy member ID).
@@ -466,6 +469,12 @@ was: `/dev`, `/preview` and `/ship` on their laptops.
   `launchctl kickstart -k gui/$(id -u)/eu.polads.slack-bridge`. Outbox
   paused: Slack refused the app (a token or a channel it is not in). Nothing
   is lost, and the outbox retries every 5 minutes once it is fixed.
+- **`the bot cannot see #polads-...` or `the bot is not in #polads-...`.**
+  Add the bot in that channel's settings, Integrations, Add an App. A private
+  channel stays invisible to the bot until then.
+- **`the Slack app lacks the scope groups:read`.** The app predates private
+  channels: update it from the manifest and reinstall it
+  (`runtime/slack/README.md`, Updating an existing app).
 - **"the dev-tasks plugin loaded 2 times in the worker".** With Claude Code
   2.1.281 the worker's own copy (`pluginRoot`) shadows the marketplace copy
   that PolAds's project settings enable, so it loads once, and

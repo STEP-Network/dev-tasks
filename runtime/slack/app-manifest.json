@@ -14,6 +14,8 @@
         "channels:history",
         "channels:read",
         "chat:write",
+        "groups:history",
+        "groups:read",
         "reactions:read",
         "reactions:write",
         "users:read",
@@ -23,7 +25,7 @@
     }
   },
   "settings": {
-    "event_subscriptions": { "bot_events": ["app_mention", "message.channels", "reaction_added"] },
+    "event_subscriptions": { "bot_events": ["app_mention", "message.channels", "message.groups", "reaction_added"] },
     "interactivity": { "is_enabled": false },
     "org_deploy_enabled": false,
     "socket_mode_enabled": true,

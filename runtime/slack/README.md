@@ -17,8 +17,23 @@ Then, once per agent (step N2):
 2. Install the app to the workspace. The Bot User OAuth Token (`xoxb-...`) is `SLACK_BOT_TOKEN`.
 3. Basic Information, App-Level Tokens: make one with the scope `connections:write`. That token (`xapp-...`) is `SLACK_APP_TOKEN`.
 4. Both tokens go in that mini's `~/.config/agentd/slack.env`, chmod 600 (step N3). Each mini holds only its own app's tokens.
-5. `/invite @eve` in `#polads-agents`, `#polads-questions`, `#polads-intake` and `#polads-releases`. The bridge refuses to start while the bot is missing from any of them.
+5. Add the bot to `#polads-agents`, `#polads-questions`, `#polads-intake` and `#polads-releases`: in each channel's settings, Integrations, Add an App, pick `PolAds Eve`. Not `/invite @eve`, which can pick a person called the same. The bridge refuses to start while the bot is missing from any of them.
 6. Once a second agent exists, tell each mini about the other's bot: its member ID (the bot's profile in Slack, More, Copy member ID) goes in `slack.otherAgentBots` in the other mini's `~/.agentd/config.json`, and that mini's bridge is restarted.
+
+## Private and Slack Connect channels
+
+The four channels may be private, and may be Slack Connect channels hosted in STEP Network or shared with it. The bridge lists public channels and the private ones its bot is in, which takes `groups:read`, and hears private channels' messages through `groups:history` and the `message.groups` event. A private channel is invisible to the bot until someone adds it, so the bridge reports it as one the bot cannot see.
+
+In a Slack Connect channel a sender from another workspace carries their own team. The bridge ignores a delivery only when it is for another installation of the app. Who is heard is decided by `slack.allowedUsers`, the member ids.
+
+## Updating an existing app
+
+When `app-manifest.json` gains a scope or an event (the private-channel ones did on 2026-09-24), an app made from the older one needs both:
+
+1. On api.slack.com/apps, the app, App Manifest: paste the manifest `src/slack/manifest.ts` generates now, and Save.
+2. Install App, Reinstall to Workspace, and allow the new scopes. The bot token normally stays the same. If Slack shows a new one, it replaces `SLACK_BOT_TOKEN` in `~/.config/agentd/slack.env`.
+
+Then restart the bridge: `launchctl kickstart -k gui/$(id -u)/eu.polads.slack-bridge`. Until then it stops with "the Slack app lacks the scope groups:read".
 
 ## Who answers what
 
