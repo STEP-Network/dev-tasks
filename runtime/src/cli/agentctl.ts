@@ -1,15 +1,16 @@
 /**
  * agentctl: the agent mini's local control, for the front door (tick, ack,
  * job submit, ask, slack post and reply), a person on the machine (status,
- * report, pause, resume, doctor) and the rehearsal (probe-hooks). One line of
- * output per call: JSON, or text for status, report and doctor. Usage errors
- * exit 64, anything else 1. Installed as ~/.agentd/bin/agentctl, which runs it
- * with `node --import <tsx's loader>`: tsx's own command opens an IPC socket,
- * and the front door's sandbox refuses that.
+ * report, pause, resume, doctor, probe-sandbox) and the rehearsal
+ * (probe-hooks). One line of output per call: JSON, or text for status,
+ * report, doctor and probe-sandbox. Usage errors exit 64, anything else 1.
+ * Installed as ~/.agentd/bin/agentctl (runtime/templates/shim.sh), which runs
+ * it with a clean environment and `node --import <tsx's loader>`.
  */
 
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
+import { fileURLToPath } from "node:url"
 import { agentPaths, loadConfig, readProfile, readProfileMini } from "../config.ts"
 import { ack, readJson } from "../fsq.ts"
 import { heldBackIssues, listJobs, submitJob } from "../jobs.ts"
@@ -25,6 +26,7 @@ import { checkBilling, checkPlugins, type QueryFn } from "../worker/run.ts"
 import { parseCli, UsageError } from "./args.ts"
 import { doctorChecks, formatDoctor } from "./doctor.ts"
 import { statusReport, summariseLedger, type StatusInput } from "./report.ts"
+import { probeFrontDoorSandbox, recordSandboxProbe } from "./sandbox-probe.ts"
 
 export { parseCli, UsageError }
 
@@ -33,20 +35,25 @@ const CHANNELS: ChannelKey[] = ["agents", "questions", "intake", "releases"]
 /** A Slack channel id, as the digest's events carry it: a reply names the channel by id, never by name. */
 const CHANNEL_ID_RE = /^[CGD][A-Z0-9]+$/
 const THREAD_TS_RE = /^\d+\.\d+$/
+const PERSON_ONLY = new Set(["resume", "probe-hooks", "probe-sandbox"])
+const RUNTIME_DIR = fileURLToPath(new URL("../..", import.meta.url))
 
 export interface AgentctlDeps {
   tracker: () => Tracker
   /** AGENTD_FRONT_DOOR=1 marks the front door's own session (agentd sets it on its tmux session). */
   env: NodeJS.ProcessEnv
+  /** Whether a person's terminal is attached: stdin is a TTY over ssh -t or in Terminal, never in the front door's Bash. */
+  isTTY: () => boolean
   exec: Exec
   now: () => Date
-  /** The Agent SDK's query(), loaded only for probe-hooks. */
+  /** The Agent SDK's query(), loaded only for the probes. */
   query: () => Promise<QueryFn>
 }
 
 const DEFAULTS: AgentctlDeps = {
   tracker: () => createLinearTracker(),
   env: process.env,
+  isTTY: () => Boolean(process.stdin.isTTY),
   exec: realExec,
   now: () => new Date(),
   query: async () => (await import("@anthropic-ai/claude-agent-sdk")).query as unknown as QueryFn,
@@ -90,11 +97,13 @@ export async function run(argv: string[], out: (line: string) => void, overrides
     return issue
   }
 
-  // Only a person lifts a pause (on the mini, not through Slack), and a probe
-  // spends money: the front door's own session may do neither. Its settings
-  // deny both as well.
-  if (deps.env.AGENTD_FRONT_DOOR === "1" && (command === "resume" || command === "probe-hooks")) {
-    throw new Error(`agentctl ${command} is for a person on the mini, not for the front door`)
+  // Only a person lifts a pause (on the mini, not through Slack), a hooks
+  // probe spends money, and the sandbox probe records what doctor trusts: the
+  // front door may do none of them. Its settings deny them, it carries
+  // AGENTD_FRONT_DOOR=1, and its Bash has no terminal, which a variable set in
+  // front of the command cannot fake.
+  if (PERSON_ONLY.has(command) && (deps.env.AGENTD_FRONT_DOOR === "1" || !deps.isTTY())) {
+    throw new Error(`agentctl ${command} is for a person at a terminal on the mini (ssh -t, or Screen Sharing), not for the front door`)
   }
 
   switch (command) {
@@ -110,7 +119,18 @@ export async function run(argv: string[], out: (line: string) => void, overrides
     case "job": {
       if (rest[0] === "submit") {
         // Also how a person lifts a held-back issue: the digest no longer offers it, this runs one by hand.
-        print(submitJob(paths, issueFlag(), typeof flags.model === "string" ? flags.model : null, now()))
+        const issue = issueFlag()
+        let model: string | null = null
+        if (flags.model !== undefined) {
+          // Only the two models the config names: the worker passes this straight to the SDK.
+          const { worker } = loadConfig(paths)
+          const allowed = [...new Set([worker.defaultModel, worker.complexModel])]
+          if (typeof flags.model !== "string" || !allowed.includes(flags.model)) {
+            throw new UsageError(`--model must be one of ${allowed.join(", ")} (config.json's worker models)`)
+          }
+          model = flags.model
+        }
+        print(submitJob(paths, issue, model, now()))
         return 0
       }
       if (rest[0] === "list") {
@@ -241,8 +261,27 @@ export async function run(argv: string[], out: (line: string) => void, overrides
       const once = checkPlugins(verdict.loadedPlugins.map((name) => ({ name }))) === null
       return verdict.pluginHookFired && verdict.workerGuardFired && once && checkBilling(verdict.apiKeySource) === null ? 0 : 1
     }
+    case "probe-sandbox": {
+      // Free: fakes of the Messages API and Linear on loopback. With the front
+      // door's own binary, so the record is about what the front door runs.
+      const claudePath = typeof flags.claude === "string" ? flags.claude : loadConfig(paths).frontDoor.claudePath
+      const version = await deps.exec(claudePath, ["--version"])
+      if (version.code !== 0) throw new Error(`${claudePath} --version failed: ${version.stderr.trim() || `exit ${version.code}`}`)
+      const probe = await probeFrontDoorSandbox({ query: await deps.query(), claudePath, runtime: RUNTIME_DIR, plugin: join(RUNTIME_DIR, "..", "plugin"), now })
+      probe.claudeVersion = version.stdout.trim().split("\n")[0]
+      recordSandboxProbe(paths, probe)
+      print(
+        [
+          ...probe.checks.map((c) => `${c.ok ? "ok  " : "FAIL"} ${c.name}${c.ok ? "" : `: ${c.detail}`}`),
+          probe.ok ? `the front door's sandbox holds on ${probe.claudeVersion}` : `the front door's sandbox does NOT hold on ${probe.claudeVersion}: keep the mini paused`,
+        ].join("\n"),
+      )
+      return probe.ok ? 0 : 1
+    }
     default:
-      throw new UsageError("usage: agentctl <tick|ack|job|ask|slack|pause|resume|status|report|doctor|probe-hooks> (see runtime/src/cli/agentctl.ts)")
+      throw new UsageError(
+        "usage: agentctl <tick|ack|job|ask|slack|pause|resume|status|report|doctor|probe-hooks|probe-sandbox> (see runtime/src/cli/agentctl.ts)",
+      )
   }
 }
 

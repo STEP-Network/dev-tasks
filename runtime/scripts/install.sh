@@ -63,10 +63,10 @@ for pair in "node=$NODE" "pnpm=$PNPM" "git=$GIT" "gh=$GH" "jq=$JQ"; do
   [ "$got" = "$want" ] || fail "under the LaunchAgents' PATH ($JOB_PATH), $name is ${got:-missing}, not $want"
 done
 
-# The paths below are written into XML and sed expressions as they are.
-for value in "$NODE" "$RUNTIME" "$AGENTD_HOME" "$JOB_PATH"; do
+# The paths below are written into XML, the shims and sed expressions as they are.
+for value in "$NODE" "$RUNTIME" "$AGENTD_HOME" "$JOB_PATH" "$HOME"; do
   case "$value" in
-    *[\|\&\<\>\"\']*) fail "$value has a character the plists cannot hold (| & < > or a quote): move it" ;;
+    *[\|\&\<\>\"\'\$\`\\]*) fail "$value has a character the plists and shims cannot hold (| & < > \$ a backtick, a backslash or a quote): move it" ;;
   esac
 done
 
@@ -74,14 +74,16 @@ done
 # the briefs and replies it hands to trackerctl and agentctl as files.
 mkdir -p "$AGENTD_HOME/bin" "$AGENTD_HOME/logs" "$AGENTD_HOME/state" "$AGENTD_HOME/worktrees" "$HOME/.front-door" "$LAUNCH_DIR"
 
-# The two commands the skills call, with absolute paths so no PATH lookup is
-# involved. The front door's settings run exactly these outside its sandbox.
+# The two commands the skills call, which the front door's settings run
+# outside its sandbox, rendered from runtime/templates/shim.sh: absolute
+# paths, and node with a clean environment, so nothing set in front of a shim
+# reaches it. Run install again after a node or checkout move.
+USER_NAME="$(id -un)"
 shim() {
-  cat > "$AGENTD_HOME/bin/$1.tmp" <<EOF
-#!/bin/bash
-# Written by $RUNTIME/scripts/install.sh. Run again after a node or checkout move.
-exec "$NODE" --import "$TSX_LOADER" "$2" "\$@"
-EOF
+  sed -e "s|__NAME__|$1|g" -e "s|__HOME__|$HOME|g" -e "s|__USER__|$USER_NAME|g" -e "s|__PATH__|$JOB_PATH|g" \
+    -e "s|__AGENTD_HOME__|$AGENTD_HOME|g" -e "s|__NODE__|$NODE|g" -e "s|__LOADER__|$TSX_LOADER|g" -e "s|__SCRIPT__|$2|g" \
+    "$RUNTIME/templates/shim.sh" > "$AGENTD_HOME/bin/$1.tmp"
+  if grep -q "__[A-Z_]*__" "$AGENTD_HOME/bin/$1.tmp"; then fail "$1 still has a placeholder"; fi
   chmod 755 "$AGENTD_HOME/bin/$1.tmp"
   mv "$AGENTD_HOME/bin/$1.tmp" "$AGENTD_HOME/bin/$1"
 }

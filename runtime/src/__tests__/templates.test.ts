@@ -31,16 +31,22 @@ describe("templates/claude-settings.json, the front door's settings", () => {
     expect([...new Set(text.match(/__[A-Z_]+__/g))].sort()).toEqual(["__AGENTD_HOME__", "__REPO__"])
   })
 
-  it("keeps the front door out of the code, the secrets and ~/.agentd (spec 6.1, decision 8)", () => {
+  it("keeps the front door out of the code, every credential store and ~/.agentd (spec 6.1, decision 8)", () => {
     expect(rendered.permissions.deny).toEqual(
       expect.arrayContaining([
         "Edit(//Users/eve/polads/**)",
         "Write(//Users/eve/polads/**)",
-        "Read(~/.config/agentd/**)",
-        "Read(~/.config/linear/**)",
+        "Read(~/.config/**)",
+        "Read(~/.ssh/**)",
+        "Read(~/.npmrc)",
+        "Read(~/.netrc)",
+        "Read(~/.git-credentials)",
+        "Read(~/.vercel/**)",
+        "Read(~/Library/Application Support/com.vercel.cli/**)",
         "Edit(~/.agentd/**)",
         "Bash(~/.agentd/bin/agentctl resume:*)",
         "Bash(~/.agentd/bin/agentctl probe-hooks:*)",
+        "Bash(~/.agentd/bin/agentctl probe-sandbox:*)",
         "Bash(git push:*)",
         "Bash(gh pr create:*)",
         "Bash(gh pr merge:*)",
@@ -66,6 +72,14 @@ describe("templates/claude-settings.json, the front door's settings", () => {
   it("turns on the status line and Remote Control, and the plugin", () => {
     expect(rendered.statusLine).toEqual({ type: "command", command: "/Users/eve/.agentd/bin/statusline" })
     expect(rendered).toMatchObject({ remoteControlAtStartup: true, autoContinueAtUsageLimit: true, enabledPlugins: { "dev-tasks@dev-tasks-marketplace": true } })
+  })
+})
+
+describe("launchd/eu.polads.agentd.plist", () => {
+  it("keeps the front door's Claude Code from updating itself under the sandbox probe's feet", () => {
+    // agentctl probe-sandbox records the version its checks passed on, and a
+    // person updates Claude Code, then probes again (runbook, section 12).
+    expect(read("launchd/eu.polads.agentd.plist")).toMatch(/<key>DISABLE_AUTOUPDATER<\/key>\s*<string>1<\/string>/)
   })
 })
 

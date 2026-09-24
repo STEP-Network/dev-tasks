@@ -33,6 +33,15 @@ describe("readTextFile", () => {
     }
   })
 
+  it("refuses the other places credentials live under the home directory", () => {
+    for (const rel of [".ssh/id_ed25519", ".npmrc", ".netrc", ".git-credentials", ".vercel/auth.json", "Library/Application Support/com.vercel.cli/auth.json", ".config/gh/hosts.yml"]) {
+      const file = join(home, rel)
+      mkdirSync(join(file, ".."), { recursive: true })
+      writeFileSync(file, "harmless-looking\n")
+      expect(() => readTextFile(file, "--text-file", home), rel).toThrow(/looks like a secrets file/)
+    }
+  })
+
   it("refuses a file named .env anything, anywhere", () => {
     writeFileSync(join(dir, ".env.local"), "X=1\n")
     expect(() => readTextFile(join(dir, ".env.local"), "--text-file", home)).toThrow(/secrets file/)
@@ -57,6 +66,11 @@ describe("assertNoSecretText", () => {
       "ghp_abcdefghijklmnopqrstuvwxyz0123",
       "SLACK_BOT_TOKEN=anything",
       "SENTRY_CRON_URL = https://example",
+      "npm_abcdefghijklmnopqrstuvwxyz0123456789",
+      "//registry.npmjs.org/:_authToken=abc",
+      "-----BEGIN OPENSSH PRIVATE KEY-----",
+      '{"token": "AbCdEfGhIjKlMnOpQrStUvWx"}',
+      "machine github.com login eve password hunter2hunter2",
     ]) {
       let message = ""
       try {

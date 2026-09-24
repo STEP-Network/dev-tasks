@@ -1,9 +1,10 @@
 /**
- * A local stand-in for the Messages API, so the real Claude Code binary can
- * run a session with no network and no spend (ANTHROPIC_BASE_URL points here).
- * The main loop (a request that offers the Bash tool) gets the scripted tool
- * calls, one per turn, then a text reply. Any other request gets text. Not a
- * test file (no .test.ts).
+ * Local stand-ins for the Messages API and Linear, so the real Claude Code
+ * binary can run a session with no network and no spend (ANTHROPIC_BASE_URL
+ * and DEV_TASKS_LINEAR_ENDPOINT point here), for agentctl probe-sandbox and
+ * the tests. The main loop (a request that offers the Bash tool) gets the
+ * scripted tool calls, one per turn, then a text reply. Any other request
+ * gets text. Both listen on loopback only.
  */
 
 import { createServer, type ServerResponse } from "node:http"

@@ -234,20 +234,29 @@ The front door's settings, from `runtime/templates/claude-settings.json`:
   sandbox, without a prompt, when each is one simple command: they read the
   Linear key and reach Linear (a sandboxed Node process cannot, as its fetch
   ignores the sandbox's proxy). Joined to anything else (`&&`, `;`, a pipe,
-  `$(...)`), the whole command runs sandboxed. The skills write people's
-  words to a file first and pass the file, so no shell expands them.
-- Every other command runs sandboxed: no network, no read of
-  `~/.config/linear` or `~/.config/agentd`, and no write but `~/.front-door`
-  (the briefs and replies). The Read tool is denied both secrets folders
-  (decision 8), and Edit and Write are denied in `~/polads` and `~/.agentd`.
-- `agentctl resume` and `probe-hooks` are denied, and agentctl refuses them
-  in the front door's session anyway: only a person on the mini lifts a pause.
+  a second line, `$(...)`, a redirect) or with a variable set in front, the
+  whole command runs sandboxed. Both start node with a clean environment
+  (`runtime/templates/shim.sh`), so nothing set in front of them reaches it.
+  The skills write people's words to a file first, with a new heredoc
+  delimiter each time, and pass the file, so no shell expands them.
+- Every other command runs sandboxed: no network, no write but
+  `~/.front-door` (the briefs and replies), and no read of where credentials
+  live: `~/.config` (the Linear key, the Slack tokens, gh's login), `~/.ssh`,
+  `~/.npmrc`, `~/.netrc`, `~/.git-credentials` and the Vercel CLI's login. The
+  Read tool is denied the same (decision 8), and Edit and Write are denied in
+  `~/polads` and `~/.agentd`.
+- `agentctl resume`, `probe-hooks` and `probe-sandbox` are denied, and
+  agentctl refuses them anywhere but at a person's terminal: only a person on
+  the mini lifts a pause.
 - `git push`, `gh pr create` and `gh pr merge` are denied.
 - `trackerctl` and `agentctl` refuse a secrets file and any text that
   carries a key or a token, since they can read the key.
 
-`runtime/src/__tests__/sessions.test.ts` checks all of it with the Claude
-Code binary the SDK ships.
+How Claude Code treats these settings is Claude Code's, so it is checked, not
+assumed: `agentctl probe-sandbox` (section 9) runs one front-door session
+with them against local fakes of the Messages API and Linear, and
+`runtime/src/__tests__/sessions.test.ts` runs the same probe with the binary
+the SDK ships.
 
 Smoke test:
 
@@ -275,13 +284,22 @@ with a wakeup 0 or 1 min ago, `worker: idle`, `bridge: connected`, a
 - On the phone or claude.ai, signed in as Eve, the front door appears under
   Remote Control. If it does not, attach, run `/remote-control` once, and
   detach.
+- `~/.agentd/bin/agentctl probe-sandbox` (free, a few seconds, at a
+  terminal): one front-door session with the front door's own `claude`, its
+  settings and the two commands, in a throwaway home with fake secrets,
+  against local fakes of the Messages API and Linear. Every line must say
+  `ok`. It records the Claude Code version it passed on, and `agentctl
+  doctor` warns while the installed `claude` is another version. If a line
+  says FAIL, the sandbox does not hold on this Claude Code: keep the mini
+  paused and report it.
 - `~/.agentd/bin/agentctl probe-hooks` (a few cents): a real SDK session in
   a throwaway repository proves the plugin's hooks and the worker's own
   guard fire. Expected: `"pluginHookFired":true`, `"workerGuardFired":true`,
   `"loadedPlugins":["dev-tasks"]` (with Claude Code's own built-in plugins
   beside it, if any), `"apiKeySource":"none"`, and exit 0.
 
-Then `~/.agentd/bin/agentctl resume` when someone is watching.
+Then `~/.agentd/bin/agentctl resume` when someone is watching. It, and
+both probes, run only at a person's terminal: over SSH use `ssh -t`.
 
 ## 10. Watching it
 
@@ -342,9 +360,17 @@ jobs that finished since as reported, so the front door never sees them. Use
 cd ~/dev-tasks && git pull --ff-only
 (cd plugin && npm ci) && (cd runtime && npm ci)
 bash ~/dev-tasks/runtime/scripts/install.sh      # re-renders, restarts agentd and the bridge
+~/.agentd/bin/agentctl probe-sandbox             # every line ok, or stay paused
 tmux -L agentd kill-session -t =frontdoor        # agentd resumes it within 15 seconds, on the new plugin
 ~/.agentd/bin/agentctl resume
 ```
+
+The front door's Claude Code does not update itself (agentd's LaunchAgent
+sets `DISABLE_AUTOUPDATER`), so its sandbox is always the one last probed.
+To update it: pause, `claude update`, `agentctl probe-sandbox`, restart the
+front door as above, resume. The same after a runtime update that moves the
+SDK's version, and `cd ~/dev-tasks/runtime && npm test` runs the probe with
+the SDK's own binary.
 
 The front door's plugin comes straight from `~/dev-tasks/plugin` (section
 7), so the pull updates it and the restart loads it. If `/plugin` in the
@@ -409,6 +435,11 @@ was: `/dev`, `/preview` and `/ship` on their laptops.
   `runtime/src/__tests__/sessions.test.ts` checks that with the binary the
   SDK ships. If a later version loads both, every job stops at its start
   and `agentctl probe-hooks` shows it first.
+- **`agentctl probe-sandbox` says FAIL.** The installed Claude Code treats
+  the front door's settings differently from the one they were built on.
+  Keep the mini paused, note the failing lines and the version in the
+  rehearsal record, and go back to the last Claude Code that passed
+  (`agentctl doctor` names it) until the template is fixed.
 - **A command the front door needs is refused by its sandbox.** Only
   `~/.agentd/bin/agentctl` and `trackerctl`, each as one simple command, run
   outside it. A change goes into `runtime/templates/claude-settings.json` and

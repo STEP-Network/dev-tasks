@@ -5,13 +5,19 @@
   "permissions": {
     "allow": ["Bash(~/.agentd/bin/agentctl:*)", "Bash(~/.agentd/bin/trackerctl:*)"],
     "deny": [
-      "Read(~/.config/agentd/**)",
-      "Read(~/.config/linear/**)",
+      "Read(~/.config/**)",
+      "Read(~/.ssh/**)",
+      "Read(~/.npmrc)",
+      "Read(~/.netrc)",
+      "Read(~/.git-credentials)",
+      "Read(~/.vercel/**)",
+      "Read(~/Library/Application Support/com.vercel.cli/**)",
       "Edit(~/.agentd/**)",
       "Edit(/__REPO__/**)",
       "Write(/__REPO__/**)",
       "Bash(~/.agentd/bin/agentctl resume:*)",
       "Bash(~/.agentd/bin/agentctl probe-hooks:*)",
+      "Bash(~/.agentd/bin/agentctl probe-sandbox:*)",
       "Bash(git push:*)",
       "Bash(gh pr create:*)",
       "Bash(gh pr merge:*)"

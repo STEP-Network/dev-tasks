@@ -6,6 +6,7 @@ import { agentPaths, type AgentPaths } from "../../config.ts"
 import { fakeExec } from "../../__tests__/fakes.ts"
 import type { ExecResult } from "../../worker/git.ts"
 import { doctorChecks, formatDoctor, type DoctorDeps } from "../doctor.ts"
+import { recordSandboxProbe } from "../sandbox-probe.ts"
 
 type Responses = Array<[RegExp, Partial<ExecResult>]>
 
@@ -39,6 +40,7 @@ beforeEach(() => {
   )
   writeFileSync(join(home, ".claude", "plugins", "installed_plugins.json"), JSON.stringify({ version: 2, plugins: { "dev-tasks@dev-tasks-marketplace": [{ scope: "user" }] } }))
   writeFileSync(join(paths.root, "front-door-settings.json"), "{}")
+  recordSandboxProbe(paths, { at: "2026-09-24T12:00:00.000Z", claudePath: "claude", claudeVersion: "2.1.281 (Claude Code)", ok: true, checks: [] })
 })
 
 const READY: Responses = [
@@ -104,6 +106,21 @@ describe("doctorChecks", () => {
     const moved: Responses = [[/^\/old\//, { code: 127, stderr: "No such file or directory" }]]
     expect((await failed(deps({}, moved))).map((f) => f.split(":")[0]).sort()).toEqual(["claude", "claude login", "tmux"])
     expect(await failed(deps({ fresh: true }, moved))).toEqual([])
+  })
+
+  it("trusts the front door's sandbox only on the Claude Code version the probe last passed on", async () => {
+    rmSync(join(paths.state, "sandbox-probe.json"))
+    expect(await warned(deps())).toEqual([expect.stringMatching(/^sandbox probe: never run: agentctl probe-sandbox/)])
+    recordSandboxProbe(paths, { at: "2026-09-24T12:00:00.000Z", claudePath: "claude", claudeVersion: "2.1.270 (Claude Code)", ok: true, checks: [] })
+    expect(await warned(deps())).toEqual([expect.stringMatching(/^sandbox probe: passed on 2\.1\.270 .*claude is now 2\.1\.281.*agentctl probe-sandbox/)])
+    recordSandboxProbe(paths, {
+      at: "2026-09-24T12:00:00.000Z",
+      claudePath: "claude",
+      claudeVersion: "2.1.281 (Claude Code)",
+      ok: false,
+      checks: [{ name: "a substitution runs sandboxed", ok: false, detail: "[]" }],
+    })
+    expect(await failed(deps())).toEqual([expect.stringMatching(/^sandbox probe: failed on 2\.1\.281 .*a substitution runs sandboxed.*paused/)])
   })
 
   it("warns, after an install, when the front door's settings file is gone", async () => {

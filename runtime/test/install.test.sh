@@ -110,13 +110,25 @@ if "$HOME/.agentd/bin/agentctl" job list > "$T/jobs.json" 2>&1 && [ "$(jq -c .pe
 "$HOME/.agentd/bin/trackerctl" nosuch > /dev/null 2>&1
 [ "$?" = 64 ] && ok "trackerctl runs" || bad "trackerctl does not run"
 grep -q "tsx/dist/loader.mjs" "$HOME/.agentd/bin/trackerctl" && ok "trackerctl uses tsx's loader, not its IPC command" || bad "trackerctl shim"
+# The front door runs the shims outside its sandbox, so they take nothing from their caller.
+printf 'require("fs").writeFileSync("%s/injected", "node")\n' "$T" > "$T/evil.cjs"
+printf 'touch "%s/injected"\n' "$T" > "$T/evil.sh"
+NODE_OPTIONS="--require=$T/evil.cjs" BASH_ENV="$T/evil.sh" "$HOME/.agentd/bin/agentctl" job list > /dev/null 2>&1
+[ ! -e "$T/injected" ] && ok "NODE_OPTIONS and BASH_ENV in front of a shim run nothing" || bad "an injected variable ran code"
+AGENTD_HOME="$T/elsewhere" "$HOME/.agentd/bin/agentctl" job submit --issue STEP-77 > /dev/null 2>&1
+[ -n "$(ls "$HOME/.agentd/jobs/pending" 2>/dev/null)" ] && [ ! -e "$T/elsewhere" ] && ok "AGENTD_HOME in front of a shim changes nothing" || bad "a shim took AGENTD_HOME from its caller"
+# HOME decides whose profile and key a shim reads: another one here would be a laptop's profile.
+mkdir -p "$T/otherhome/.claude"
+echo '{ "profile": "human" }' > "$T/otherhome/.claude/dev-tasks-profile.json"
+HOME="$T/otherhome" "$HOME/.agentd/bin/agentctl" doctor > "$T/doctor.out" 2>&1
+grep -q "^ok    profile: agent" "$T/doctor.out" && ok "HOME in front of a shim changes nothing" || bad "a shim took HOME from its caller: $(grep profile "$T/doctor.out")"
 [ "$(jq -r .frontDoor.claudePath "$HOME/.agentd/config.json")" = "$T/bin/claude" ] && ok "records the claude path" || bad "claude path not recorded"
 [ "$(jq -r .frontDoor.tmuxPath "$HOME/.agentd/config.json")" = "$T/bin/tmux" ] && ok "records the tmux path" || bad "tmux path not recorded"
 S="$HOME/.agentd/front-door-settings.json"
 [ "$(jq -r .remoteControlAtStartup "$S")" = "true" ] && ok "turns Remote Control on at startup for the front door" || bad "no front door settings"
 [ "$(jq -r .statusLine.command "$S")" = "$HOME/.agentd/bin/statusline" ] && ok "sets the status line" || bad "no status line setting"
 jq -e --arg rule "Edit(/$T/polads/**)" '.permissions.deny | index($rule)' "$S" >/dev/null && ok "denies edits in the checkout" || bad "no edit deny for the checkout"
-jq -e '.permissions.deny | index("Read(~/.config/linear/**)") and index("Read(~/.config/agentd/**)")' "$S" >/dev/null && ok "denies reading the secrets (decision 8)" || bad "no read deny for the secrets"
+jq -e '.permissions.deny | index("Read(~/.config/**)") and index("Read(~/.ssh/**)")' "$S" >/dev/null && ok "denies reading the secrets and other credentials (decision 8)" || bad "no read deny for the secrets"
 [ "$(jq -c .sandbox.excludedCommands "$S")" = '["~/.agentd/bin/agentctl:*","~/.agentd/bin/trackerctl:*"]' ] && ok "runs agentctl and trackerctl, and only those, outside the sandbox" || bad "excludedCommands: $(jq -c .sandbox.excludedCommands "$S")"
 jq -e '.permissions.allow | index("Bash(~/.agentd/bin/agentctl:*)") and index("Bash(~/.agentd/bin/trackerctl:*)")' "$S" >/dev/null && ok "allows the two commands without a prompt" || bad "no allow for the two commands"
 jq -e '.permissions.deny | index("Edit(~/.agentd/**)") and index("Bash(~/.agentd/bin/agentctl resume:*)")' "$S" >/dev/null && ok "keeps the front door out of ~/.agentd and off agentctl resume" || bad "no deny for ~/.agentd or resume"

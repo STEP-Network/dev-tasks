@@ -34,7 +34,7 @@ function writeConfig() {
 
 function deps(over: Partial<AgentctlDeps> = {}): Partial<AgentctlDeps> {
   const fake = fakeTracker([issue({ id: "STEP-1", labels: ["polads", "agent-ready"] })])
-  return { tracker: () => fake.tracker, exec: fakeExec().exec, now: () => NOW, env: {}, ...over }
+  return { tracker: () => fake.tracker, exec: fakeExec().exec, now: () => NOW, env: {}, isTTY: () => true, ...over }
 }
 
 describe("parseCli", () => {
@@ -50,6 +50,17 @@ describe("run", () => {
     await expect(run(["job", "submit", "--issue", "STEP-7"], out, deps())).rejects.toThrow(/already pending/)
     await run(["job", "list"], out, deps())
     expect(JSON.parse(printed.at(-1)!)).toMatchObject({ pending: [{ issue: "STEP-7" }], running: [], done: [] })
+  })
+
+  it("takes only the config's worker models for a job", async () => {
+    writeConfig()
+    await run(["job", "submit", "--issue", "STEP-8", "--model", "opus"], out, deps())
+    expect(listJobs(agentPaths(), "pending").find((j) => j.issue === "STEP-8")).toMatchObject({ model: "opus" })
+    for (const model of ["claude-anything", "--dangerously", "true"]) {
+      await expect(run(["job", "submit", "--issue", "STEP-9", "--model", model], out, deps()), model).rejects.toThrow(/--model must be one of sonnet, opus/)
+    }
+    await expect(run(["job", "submit", "--issue", "STEP-9", "--model"], out, deps())).rejects.toBeInstanceOf(UsageError)
+    expect(listJobs(agentPaths(), "pending").map((j) => j.issue)).toEqual(["STEP-8"])
   })
 
   it("queues a question in the issue's thread", async () => {
@@ -101,8 +112,11 @@ describe("run", () => {
 
   it("lifts no pause and runs no probe from the front door's own session", async () => {
     writeFileSync(agentPaths().pauseFile, JSON.stringify({ at: NOW.toISOString(), reason: "a person" }))
-    await expect(run(["resume"], out, deps({ env: { AGENTD_FRONT_DOOR: "1" } }))).rejects.toThrow(/for a person on the mini/)
-    await expect(run(["probe-hooks"], out, deps({ env: { AGENTD_FRONT_DOOR: "1" } }))).rejects.toThrow(/for a person on the mini/)
+    await expect(run(["resume"], out, deps({ env: { AGENTD_FRONT_DOOR: "1" } }))).rejects.toThrow(/for a person at a terminal/)
+    await expect(run(["probe-hooks"], out, deps({ env: { AGENTD_FRONT_DOOR: "1" } }))).rejects.toThrow(/for a person at a terminal/)
+    // A variable set in front of the command can clear the mark, but not give the front door's Bash a terminal.
+    await expect(run(["resume"], out, deps({ env: {}, isTTY: () => false }))).rejects.toThrow(/for a person at a terminal/)
+    await expect(run(["probe-sandbox"], out, deps({ env: {}, isTTY: () => false }))).rejects.toThrow(/for a person at a terminal/)
     expect(existsSync(agentPaths().pauseFile)).toBe(true)
     await run(["resume"], out, deps({ env: {} }))
     expect(existsSync(agentPaths().pauseFile)).toBe(false)

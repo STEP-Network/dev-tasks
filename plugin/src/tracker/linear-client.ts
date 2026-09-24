@@ -23,12 +23,16 @@ const LOOPBACK = new Set(["127.0.0.1", "localhost", "[::1]"])
 /**
  * Where requests go: Linear, or, for a test that runs the real Claude Code
  * binary end to end, a server on this machine named by
- * DEV_TASKS_LINEAR_ENDPOINT. Any other host is refused, since the key travels
- * with every request.
+ * DEV_TASKS_LINEAR_ENDPOINT. The key travels with every request, so the
+ * override needs the test's own key in LINEAR_API_KEY (never the key file's)
+ * and names a loopback http server, or it is refused.
  */
 export function linearEndpoint(env: NodeJS.ProcessEnv = process.env): string {
   const override = env.DEV_TASKS_LINEAR_ENDPOINT
   if (!override) return LINEAR_ENDPOINT
+  if (!env.LINEAR_API_KEY?.trim()) {
+    throw new Error("DEV_TASKS_LINEAR_ENDPOINT is for tests, with their own LINEAR_API_KEY in the environment: never with the key file")
+  }
   let url: URL
   try {
     url = new URL(override)

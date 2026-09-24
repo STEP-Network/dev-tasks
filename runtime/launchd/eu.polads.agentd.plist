@@ -19,6 +19,8 @@
     <string>__PATH__</string>
     <key>AGENTD_HOME</key>
     <string>__AGENTD_HOME__</string>
+    <key>DISABLE_AUTOUPDATER</key>
+    <string>1</string>
   </dict>
   <key>RunAtLoad</key>
   <true/>

@@ -1,15 +1,16 @@
 /**
  * What a front-door session and a worker session really load and may do,
  * asked of the Claude Code binary the SDK ships (not a model): each session
- * runs in a throwaway HOME against a local fake of the Messages API
- * (fakeapi.ts), so nothing leaves the machine and nothing is billed. Linear
- * is a fake on loopback too (DEV_TASKS_LINEAR_ENDPOINT). The
- * checks a setup on Eve's mini needed (2026-09-24):
- *   - the front door's agentctl and trackerctl run outside its sandbox, so
- *     they read the Linear key and reach Linear (a sandboxed Node fetch cannot:
- *     it ignores the sandbox's proxy), while every other command, a compound
- *     one with them included, stays inside: no secret, no write to ~/.agentd,
- *     no network, and the Read tool is denied the secrets too (decision 8)
+ * runs in a throwaway HOME against local fakes of the Messages API and
+ * Linear (cli/probe-fakes.ts), so nothing leaves the machine and nothing is
+ * billed. A Claude Code or SDK upgrade that changes any of it turns this red.
+ * The checks a setup on Eve's mini needed (2026-09-24):
+ *   - the front door's sandbox holds (cli/sandbox-probe.ts, which a person
+ *     also runs on the mini as agentctl probe-sandbox): agentctl and
+ *     trackerctl run outside it and reach Linear (a sandboxed Node fetch
+ *     cannot: it ignores the sandbox's proxy), and every other command, one
+ *     joined to them or with variables set in front of them included, gets
+ *     no secret, no network, no ~/.agentd and no checkout (decision 8)
  *   - the front door on the agent profile is offered no Monday tools, and its
  *     plugin's server still connects
  *   - a worker loads the dev-tasks plugin exactly once, from pluginRoot, with
@@ -18,7 +19,7 @@
  */
 
 import type { Options } from "@anthropic-ai/claude-agent-sdk"
-import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs"
+import { chmodSync, cpSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs"
 import { createRequire } from "node:module"
 import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
@@ -26,13 +27,13 @@ import { execFileSync } from "node:child_process"
 import { fileURLToPath } from "node:url"
 import { describe, expect, it } from "vitest"
 import { ConfigSchema } from "../config.ts"
-import { sdkOptions } from "../worker/run.ts"
-import { startFakeApi, startFakeLinear, type ToolCall } from "./fakeapi.ts"
+import { sdkOptions, type QueryFn } from "../worker/run.ts"
+import { startFakeApi, type ToolCall } from "../cli/probe-fakes.ts"
+import { probeFrontDoorSandbox } from "../cli/sandbox-probe.ts"
 
 const RUNTIME = fileURLToPath(new URL("../..", import.meta.url))
 const CHECKOUT = dirname(RUNTIME)
 const PLUGIN = join(CHECKOUT, "plugin")
-const LOADER = join(RUNTIME, "node_modules", "tsx", "dist", "loader.mjs")
 
 function binaryAvailable(): boolean {
   if (process.platform !== "darwin") return false
@@ -141,101 +142,29 @@ async function session(script: ToolCall[], options: (api: string) => Options): P
 }
 
 describe.skipIf(!binaryAvailable())("sessions, as the Claude Code binary runs them", () => {
-  it("runs the front door's agentctl and trackerctl outside its sandbox and against Linear, and keeps everything else from the secrets and ~/.agentd", async () => {
-    const home = miniHome("frontdoor")
-    const repo = gitRepo(join(home, "polads"))
-    writeFileSync(join(repo, "brief.md"), "## Goal\nA brief.\n")
-    mkdirSync(join(repo, ".claude"), { recursive: true })
-    writeFileSync(join(repo, ".claude", "project-config.json"), JSON.stringify({ tracker: { provider: "linear" } }))
-    const agentd = join(home, ".agentd")
-    // The two commands as install.sh writes them.
-    mkdirSync(join(agentd, "bin"), { recursive: true })
-    for (const [name, script] of [
-      ["agentctl", join(RUNTIME, "src", "cli", "agentctl.ts")],
-      ["trackerctl", join(PLUGIN, "scripts", "trackerctl.ts")],
-    ]) {
-      writeFileSync(join(agentd, "bin", name), `#!/bin/bash\nexec "${process.execPath}" --import "${LOADER}" "${script}" "$@"\n`)
-      chmodSync(join(agentd, "bin", name), 0o755)
-    }
-    writeFileSync(join(agentd, "config.json"), JSON.stringify({ mini: "eve", repo: { path: repo }, pluginRoot: PLUGIN, slack: { allowedUsers: ["UNATE"] } }))
-    writeFileSync(join(agentd, "PAUSE"), JSON.stringify({ at: "2026-09-24T12:00:00.000Z", reason: "a person" }))
-    mkdirSync(join(home, ".front-door"), { recursive: true })
-    // The template exactly as install.sh renders it, passed as agentd passes it.
-    const settings = frontDoorSettings(home, repo)
-    const linear = await startFakeLinear()
-    try {
-      const s = await session(
-        [
-          { name: "Bash", input: { command: "~/.agentd/bin/trackerctl ready --limit 3", description: "the queue" } },
-          { name: "Bash", input: { command: "~/.agentd/bin/agentctl job submit --issue STEP-5", description: "queue a job" } },
-          { name: "Bash", input: { command: "cat > ~/.front-door/reply.md <<'REPLY'\nThey wrote $(touch ~/pwned) here.\nREPLY", description: "a reply, as a file" } },
-          // Quoted words, as the skills write them, keep it one simple command.
-          { name: "Bash", input: { command: '~/.agentd/bin/agentctl slack post --channel "agents" --text-file ~/.front-door/reply.md', description: "post it" } },
-          { name: "Read", input: { file_path: join(home, ".config", "linear", ".env") } },
-          { name: "Read", input: { file_path: join(home, ".config", "agentd", "slack.env") } },
-          { name: "Bash", input: { command: "cat ~/.config/linear/.env | wc -c", description: "the key" } },
-          { name: "Bash", input: { command: "~/.agentd/bin/agentctl tick && cat ~/.config/linear/.env", description: "the key, after agentctl" } },
-          { name: "Bash", input: { command: "~/.agentd/bin/trackerctl ready; cat ~/.config/linear/.env", description: "the key, after trackerctl" } },
-          { name: "Bash", input: { command: '~/.agentd/bin/trackerctl create --title "$(cat ~/.config/linear/.env)"', description: "the key, as a title" } },
-          { name: "Bash", input: { command: "~/.agentd/bin/trackerctl update STEP-1 --description-file ~/.config/linear/.env", description: "the key, as a brief" } },
-          { name: "Bash", input: { command: `echo '{}' > ${join(agentd, "config.json")}`, description: "agentd's config" } },
-          { name: "Bash", input: { command: "rm ~/.agentd/PAUSE", description: "a person's pause" } },
-          { name: "Bash", input: { command: "~/.agentd/bin/agentctl resume", description: "lift the pause" } },
-          { name: "Bash", input: { command: `curl -s -m 5 -o /dev/null -w '%{http_code}' ${linear.url}`, description: "the network" } },
-          { name: "Bash", input: { command: `echo x > ${join(repo, "brief.md")}`, description: "the checkout" } },
-        ],
-        (api) => ({
-          cwd: repo,
-          env: { ...env(home, api), DEV_TASKS_LINEAR_ENDPOINT: linear.url, AGENTD_FRONT_DOOR: "1" },
-          settings,
-          settingSources: ["user", "project"],
-          permissionMode: "default",
-          maxTurns: 20,
-        }),
-      )
-      const [ready, submit, , post, readKey, readSlack, catKey, afterAgentctl, afterTrackerctl, subst, secretBrief, config, pause, resume, network, checkout] =
-        s.results
-      // Outside the sandbox: the key read, a real round trip to Linear (here a fake on loopback), ~/.agentd written.
-      expect(ready).toBe("[]")
-      expect(submit).toMatch(/"issue":"STEP-5"/)
-      expect(existsSync(join(agentd, "jobs", "pending"))).toBe(true)
-      // People's words go through a file, as written: no shell expanded them.
-      expect(post).toMatch(/"queued"/)
-      expect(existsSync(join(home, "pwned"))).toBe(false)
-      expect(readdirSync(join(agentd, "outbox", "new")).map((f) => JSON.parse(readFileSync(join(agentd, "outbox", "new", f), "utf8")).text)).toEqual([
-        "They wrote $(touch ~/pwned) here.",
-      ])
-      // Inside it: no secret, no ~/.agentd, no checkout, no network.
-      expect(readKey).toMatch(/denied by your permission settings/)
-      expect(readSlack).toMatch(/denied by your permission settings/)
-      expect(catKey).toMatch(/not permitted/i)
-      // A compound command or a substitution is not one of the two commands: all of it runs sandboxed.
-      // agentctl tick fails on its first write to ~/.agentd, so the cat never runs.
-      expect(afterAgentctl).toMatch(/operation not permitted/i)
-      expect(afterTrackerctl).toMatch(/could not be read/)
-      expect(afterTrackerctl).toMatch(/cat: .*Operation not permitted/)
-      expect(subst).toMatch(/Operation not permitted/)
-      expect(subst).not.toMatch(/"id":/)
-      expect(secretBrief).toMatch(/looks like a secrets file/)
-      expect(config).toMatch(/not permitted|denied/i)
-      expect(readFileSync(join(agentd, "config.json"), "utf8")).toContain('"mini":"eve"')
-      expect(pause).toMatch(/not permitted|denied/i)
-      expect(existsSync(join(agentd, "PAUSE"))).toBe(true)
-      expect(resume).toMatch(/denied|for a person on the mini/)
-      expect(network).toMatch(/\b000$/)
-      expect(checkout).toMatch(/not permitted|denied/i)
-      expect(readFileSync(join(repo, "brief.md"), "utf8")).toBe("## Goal\nA brief.\n")
-      // Linear heard from the one ready that ran outside, with the key, and never saw the key in a body.
-      expect(linear.requests).toHaveLength(1)
-      expect(linear.requests[0].body).toContain("issues(")
-      expect(linear.requests[0]).toMatchObject({ authorization: "lin_api_SESSIONTEST" })
-      expect(linear.requests.map((r) => r.body).join("\n")).not.toMatch(/SESSIONTEST/)
-      expect(s.results.join("\n")).not.toMatch(/SESSIONTEST/)
-      expect(s.prompted).toEqual([])
-    } finally {
-      await linear.close()
-    }
-  }, 90_000)
+  it("holds the front door's sandbox: agentctl probe-sandbox passes on the SDK's own binary", async () => {
+    // The same probe a person runs on the mini with the front door's binary
+    // (sandbox-probe.ts): the two commands reach Linear and ~/.agentd outside
+    // the sandbox, and nothing joined to them, set in front of them or run
+    // beside them reaches a secret, the network, ~/.agentd or the checkout.
+    const { query } = await import("@anthropic-ai/claude-agent-sdk")
+    const probe = await probeFrontDoorSandbox({ query: query as unknown as QueryFn, runtime: RUNTIME, plugin: PLUGIN, now: () => new Date() })
+    expect(probe.checks.filter((c) => !c.ok)).toEqual([])
+    expect(probe.checks.map((c) => c.name)).toEqual(
+      expect.arrayContaining([
+        "trackerctl reaches Linear, outside the sandbox",
+        "agentctl joined with && runs sandboxed",
+        "trackerctl joined with ; runs sandboxed",
+        "trackerctl piped runs sandboxed",
+        "a substitution runs sandboxed",
+        "NODE_OPTIONS in front of agentctl reaches nothing",
+        "a Linear endpoint and key in front of agentctl reach nothing",
+        "no injected code ran outside the sandbox",
+        "no secret reached the session",
+      ]),
+    )
+    expect(probe.ok).toBe(true)
+  }, 120_000)
 
   it("offers the front door no Monday tools on the agent profile, and still connects the plugin's server", async () => {
     const home = miniHome("mcp")

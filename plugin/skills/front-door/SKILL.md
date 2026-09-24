@@ -31,12 +31,14 @@ per Bash call, spelt exactly `~/.agentd/bin/agentctl ...` or
 Anything a person or an issue wrote, and anything longer than a line, goes
 through a file in `~/.front-door`, the one place your Bash may write. Write
 it in its own Bash call with a quoted heredoc, so no shell expands a word of
-it:
+it. Make up a new delimiter every time, `TEXT_` and six random letters and
+digits that appear nowhere in the text, so no line of a person's text can end
+it early:
 
 ```bash
-cat > ~/.front-door/reply.md <<'TEXT'
+cat > ~/.front-door/reply.md <<'TEXT_q7m2kd'
 <the text>
-TEXT
+TEXT_q7m2kd
 ```
 
 Then, in the next Bash call, pass the file: `--text-file` to agentctl,

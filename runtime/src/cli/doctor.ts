@@ -11,6 +11,7 @@ import { existsSync, readFileSync, statSync } from "node:fs"
 import { dirname, join } from "node:path"
 import { assertProfileMini, loadConfig, type AgentConfig, type AgentPaths } from "../config.ts"
 import { frontDoorSettingsPath } from "../agentd/frontdoor.ts"
+import { readSandboxProbe } from "./sandbox-probe.ts"
 import { agentdSecretsPath, assertLinearKeyFile, claudeTokenPath, linearKeyPath, slackSecretsPath } from "../secrets.ts"
 import type { Exec } from "../worker/git.ts"
 
@@ -171,6 +172,25 @@ function frontDoorPlugin(d: DoctorDeps, config: AgentConfig): Check {
   return { level: "ok", name, detail: `dev-tasks from ${checkout}, as the worker's` }
 }
 
+/**
+ * The front door's sandbox leans on how this Claude Code treats its settings
+ * (sandbox-probe.ts): trusted only for the version agentctl probe-sandbox
+ * last passed on.
+ */
+function sandboxProbeCheck(d: DoctorDeps, installed: string): Check {
+  const name = "sandbox probe"
+  const probe = readSandboxProbe(d.paths)
+  if (!probe) return { level: "warn", name, detail: "never run: agentctl probe-sandbox, once installed (runbook, section 9)" }
+  if (!probe.ok) {
+    const failed = probe.checks.filter((c) => !c.ok).map((c) => c.name)
+    return { level: "fail", name, detail: `failed on ${probe.claudeVersion} (${failed.join(", ")}): the front door's sandbox may not hold. Keep the mini paused` }
+  }
+  if (probe.claudeVersion !== installed) {
+    return { level: "warn", name, detail: `passed on ${probe.claudeVersion}, but claude is now ${installed || "unknown"}: agentctl probe-sandbox` }
+  }
+  return { level: "ok", name, detail: `passed on ${probe.claudeVersion}, ${probe.at}` }
+}
+
 export async function doctorChecks(d: DoctorDeps): Promise<Check[]> {
   const checks: Check[] = []
   const add = (c: Check | null) => {
@@ -226,6 +246,7 @@ export async function doctorChecks(d: DoctorDeps): Promise<Check[]> {
       ? { level: "ok", name: "claude login", detail: "logged in" }
       : { level: "fail", name: "claude login", detail: "not logged in: run claude as this user and log in with the agent's own account" },
   )
+  add(sandboxProbeCheck(d, (await d.exec(claude, ["--version"])).stdout.trim().split("\n")[0]))
   if (config) {
     const repo = await d.exec("git", ["-C", config.repo.path, "rev-parse", "--is-inside-work-tree"])
     add(
