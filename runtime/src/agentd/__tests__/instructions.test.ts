@@ -184,6 +184,14 @@ describe("actOnInstructions (STEP-3285)", () => {
     none.say("retry")
     await actOnInstructions(none.deps)
     expect(none.outbox()[0].text).toBe("My last try at STEP-7 did not stop on a problem, so there is nothing to try again.\nNothing needed from you.")
+    // A blocked revise round comes back as that round, never as a develop job (STEP-3348).
+    const merge = setup()
+    const revise = { url: PR, number: 1679, branch: "STEP-7-fix-the-date", round: 1, since: "2026-09-25T07:00:00.000Z", reasons: ["merge conflict with staging"] }
+    const round = submitJob(merge.paths, "STEP-7", null, new Date("2026-09-25T07:00:00.000Z"), { kind: "revise", revise })
+    moveJob(merge.paths, round.id, "pending", "done", { endedAt: "2026-09-25T07:30:00.000Z", result: { status: "blocked", reason: "x", prUrl: PR, branch: null, costUsd: null, turns: null, minutes: 5 } })
+    merge.say("retry")
+    await actOnInstructions(merge.deps)
+    expect(listJobs(merge.paths, "pending")).toEqual([expect.objectContaining({ kind: "revise", retryOf: round.id, revise })])
   })
 
   it("pauses the mini, and never lifts a pause", async () => {

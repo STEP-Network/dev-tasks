@@ -126,8 +126,10 @@ An intake event also has `issue`, the Triage issue the bridge already filed.
   issue (`~/.agentd/bin/trackerctl read <issue>`) and the last question you
   asked in the thread (`question`), then:
   - **On an issue waiting for a person to try it or look at it** (it is in
-    Waiting for UAT: a Test day or a Looks good? item): words that start with
-    PASS or FAIL, or on a Look "looks good" or "change", are a verdict. Run
+    Waiting for UAT: a Test day or a Looks good? item): PASS or FAIL, alone
+    or followed by punctuation and what they saw ("FAIL: the date is wrong"),
+    or on a Look "looks good" or "change:" and what should change, are a
+    verdict. "pass me the link again?" is not one. Run
     `~/.agentd/bin/agentctl verdict --key <key>`. It records the verdict as
     review-uat does, answers in the thread and acks. Never write a verdict
     they did not give: anything else, answer in the thread, and ack.
