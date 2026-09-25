@@ -2,7 +2,7 @@ import { chmodSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
-import { assertLinearKeyFile, claudeTokenPath, linearKeyPath, loadClaudeOauthToken, loadSentryCronUrl, loadSlackSecrets, readSecretsFile, slackSecretsPath } from "../secrets.ts"
+import { assertLinearKeyFile, claudeTokenPath, linearKeyPath, loadClaudeOauthToken, loadMondayToken, loadSentryCronUrl, loadSlackSecrets, mondaySecretsPath, readSecretsFile, slackSecretsPath } from "../secrets.ts"
 
 const BOT = "xoxb-1111-2222-abcdefghijkl"
 const APP = "xapp-1-A1-3333-mnopqrstuv"
@@ -101,5 +101,33 @@ describe("the optional and the checked files", () => {
     expect(loadClaudeOauthToken(h)).toBe("sk-ant-oat01-test")
     chmodSync(claudeTokenPath(h), 0o644)
     expect(() => loadClaudeOauthToken(h)).toThrow(/chmod 600/)
+  })
+})
+
+describe("loadMondayToken (STEP-3289)", () => {
+  // Built at run time, so no secret scanner mistakes the fixture for a real token.
+  const TOKEN = ["eyJhbGciOiJIUzI1NiJ9", "eyJ0aWQiOjEyMzQ1Njc4OX0", "c2lnbmF0dXJlLXRlc3Q"].join(".")
+
+  it("reads the agent's Monday token from its own file, refused when other users can read it", () => {
+    const h = home()
+    expect(mondaySecretsPath(h)).toBe(join(h, ".config", "agentd", "monday.env"))
+    expect(() => loadMondayToken(h)).toThrow(/monday\.env is missing/)
+    write(mondaySecretsPath(h), `MONDAY_API_TOKEN=${TOKEN}\n`, 0o644)
+    expect(() => loadMondayToken(h)).toThrow(/chmod 600/)
+    chmodSync(mondaySecretsPath(h), 0o600)
+    expect(loadMondayToken(h)).toBe(TOKEN)
+  })
+
+  it("refuses a value that is not a Monday API token, and never prints it", () => {
+    const h = home()
+    write(mondaySecretsPath(h), "MONDAY_API_TOKEN=xoxb-not-monday\n", 0o600)
+    expect(() => loadMondayToken(h)).toThrow(/MONDAY_API_TOKEN .* is not a eyJ token/)
+    try {
+      loadMondayToken(h)
+    } catch (error) {
+      expect((error as Error).message).not.toContain("xoxb-not-monday")
+    }
+    write(mondaySecretsPath(h), "MONDAY_API_KEY=whatever\n", 0o600)
+    expect(() => loadMondayToken(h)).toThrow(/MONDAY_API_TOKEN is missing/)
   })
 })

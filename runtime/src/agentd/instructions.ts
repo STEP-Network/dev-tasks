@@ -13,6 +13,10 @@
  *           project's policy for the PR's base allow it, else why not
  *   leave   nothing: the PR is left to a person
  * Any of them answers the issue's open question (agentd/decisions.ts).
+ *
+ * The Monday bridge files the same instructions from a person's words on the
+ * board (STEP-3289), and they are answered on the board's item, with a like
+ * on the person's update where Slack gets the ✅.
  */
 
 import { existsSync, mkdirSync, writeFileSync } from "node:fs"
@@ -20,6 +24,7 @@ import type { AgentConfig, AgentPaths } from "../config.ts"
 import { ack, listNew } from "../fsq.ts"
 import { listJobs, readWatchedPrs, submitJob, updateWatchedPr, type JobRecord, type WatchedPr } from "../jobs.ts"
 import { appendLedger, type Logger } from "../log.ts"
+import { enqueueMonday } from "../monday/store.ts"
 import { enqueueSlack } from "../outbox.ts"
 import type { Action, InstructionEntry } from "../slack/instruction.ts"
 import type { Exec } from "../worker/git.ts"
@@ -54,9 +59,15 @@ export async function actOnInstructions(deps: InstructionDeps): Promise<void> {
       deps.log.warn("instruction failed", { key, error: String(error) })
     }
     const now = deps.now()
-    enqueueSlack(deps.paths, { kind: "reply", channelId: payload.channel, threadTs: payload.threadTs, text: lines.join("\n") }, now)
-    // A ✅ beside the words, never instead of them.
-    enqueueSlack(deps.paths, { kind: "react", channelId: payload.channel, ts: payload.ts, name: "white_check_mark" }, now)
+    if (payload.monday) {
+      // Words from the Monday board are answered there (STEP-3289), with a like beside them.
+      const { itemId, updateId, threadId } = payload.monday
+      enqueueMonday(deps.paths, { itemId, threadId, text: lines.join("\n"), like: updateId }, now)
+    } else {
+      enqueueSlack(deps.paths, { kind: "reply", channelId: payload.channel, threadTs: payload.threadTs, text: lines.join("\n") }, now)
+      // A ✅ beside the words, never instead of them.
+      enqueueSlack(deps.paths, { kind: "react", channelId: payload.channel, ts: payload.ts, name: "white_check_mark" }, now)
+    }
     ack(deps.paths.inbox, key)
     const issue = payload.issue ?? payload.target.issue
     appendLedger(deps.paths, { type: "instruction", ...(issue ? { issue } : {}), actions: payload.actions, by: payload.userName }, now)
@@ -93,6 +104,7 @@ async function act(deps: InstructionDeps, entry: InstructionEntry): Promise<stri
   const { paths, config } = deps
   const now = deps.now()
   const who = entry.userName || entry.user
+  const where = entry.monday ? "on the Monday board" : "in Slack"
   const { issue, pr } = findPr(paths, entry)
   if (!issue) {
     return [`I could not tell which PR you mean. Name it (STEP-<n>, #<number> or its link): I act only on PRs this mini opened.`]
@@ -112,7 +124,7 @@ async function act(deps: InstructionDeps, entry: InstructionEntry): Promise<stri
       if (existsSync(paths.pauseFile)) {
         lines.push("This mini is paused already. A person lifts it on the mini with agentctl resume.")
       } else {
-        const reason = `asked by ${who} in Slack`
+        const reason = `asked by ${who} ${where}`
         mkdirSync(paths.root, { recursive: true })
         writeFileSync(paths.pauseFile, JSON.stringify({ at: now.toISOString(), reason }))
         appendLedger(paths, { type: "paused", reason }, now)
@@ -134,7 +146,7 @@ async function act(deps: InstructionDeps, entry: InstructionEntry): Promise<stri
           kind: "revise",
           revise: {
             url: v.url, number: v.number, branch: v.headRefName, round, since: pr.revise?.lastRoundAt ?? pr.openedAt,
-            reasons: [`asked by ${who} in Slack`], instruction: entry.text,
+            reasons: [`asked by ${who} ${where}`], instruction: entry.text,
           },
         })
         updateWatchedPr(paths, { ...pr, revise: { rounds: round, handled: pr.revise?.handled ?? [], lastRoundAt: now.toISOString(), asked: pr.revise?.asked } })

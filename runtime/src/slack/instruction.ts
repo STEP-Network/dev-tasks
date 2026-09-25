@@ -33,22 +33,50 @@ const PATTERNS: Array<[Action, RegExp]> = [
 /** "don't merge", "no need to re-run", "never fix": a negation just before the words. */
 const NEGATED = /\b(don'?t|do not|never|not|no need to|no)\s+(\w+\s+){0,2}$/i
 
-/** An instruction as the bridge files it in the inbox, for agentd (agentd/instructions.ts). */
-export interface InstructionEntry {
+interface InstructionBase {
   type: "instruction"
   key: string
   /** The thread's issue, or null for a mention that names its target. */
   issue: string | null
-  channel: string
-  ts: string
-  /** Where agentd answers: the reply's thread, or the mention itself. */
-  threadTs: string
   user: string
   userName: string
   text: string
   actions: Action[]
   target: Instruction["target"]
   receivedAt: string
+}
+
+/** An instruction as the Slack bridge files it in the inbox, for agentd (agentd/instructions.ts). */
+export interface SlackInstructionEntry extends InstructionBase {
+  channel: string
+  ts: string
+  /** Where agentd answers: the reply's thread, or the mention itself. */
+  threadTs: string
+  monday?: undefined
+}
+
+/**
+ * One the Monday bridge files (STEP-3289): a person's update on an item, or
+ * their Answer column. agentd answers on the item: under the update's thread,
+ * with a like on the update itself. Both are null for the Answer column,
+ * which has neither.
+ */
+export interface MondayInstructionEntry extends InstructionBase {
+  monday: { itemId: string; updateId: string | null; threadId: string | null }
+}
+
+export type InstructionEntry = SlackInstructionEntry | MondayInstructionEntry
+
+/**
+ * What a person's words on an issue are: an instruction when they name an
+ * action, or null for an answer. A reply to a question the issue waits on
+ * (awaiting-answer), or to a person's to-do (human-todo), stays an answer
+ * whatever words it uses. Slack replies and Monday updates both go this way.
+ */
+export function instructionFor(text: string, issue: { labels: readonly string[] }): Instruction | null {
+  const said = parseInstruction(text)
+  const waits = issue.labels.includes("awaiting-answer") || issue.labels.includes("human-todo")
+  return said.actions.length && !waits ? said : null
 }
 
 export function parseInstruction(text: string): Instruction {

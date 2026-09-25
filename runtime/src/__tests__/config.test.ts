@@ -60,6 +60,34 @@ describe("loadConfig", () => {
     expect(loadConfig(withConfig({ ...MINIMAL, slack: { ...MINIMAL.slack, otherAgentBots: ["U0BOBBOT1"] } })).slack.otherAgentBots).toEqual(["U0BOBBOT1"])
   })
 
+  it("leaves the Monday bridge off unless config.json turns it on (STEP-3289)", () => {
+    expect(loadConfig(withConfig(MINIMAL)).bridges.monday).toBeUndefined()
+    const people = [{ id: 111, name: "Nate", linearEmail: "nate@polads.eu" }, { id: "222", name: "Kristoffer" }]
+    const monday = loadConfig(withConfig({ ...MINIMAL, bridges: { monday: { enabled: true, people, defaultPerson: 111 } } })).bridges.monday
+    expect(monday).toMatchObject({
+      enabled: true,
+      boardId: "5104953028",
+      pollMinutes: 2,
+      people: [{ id: "111", name: "Nate", linearEmail: "nate@polads.eu" }, { id: "222", name: "Kristoffer" }],
+      defaultPerson: "111",
+      requestLabel: "intake/monday",
+      archiveAfterDays: 14,
+    })
+    expect(monday!.columns).toEqual({
+      person: "multiple_person_mm7hcr31", kind: "color_mm7hx8zq", state: "color_mm7hvyyt", agent: "dropdown_mm7hmyqg",
+      linear: "link_mm7hz1nj", pr: "link_mm7h42x", due: "date_mm7hfrdv", answer: "long_text_mm7hzj39",
+    })
+    expect(monday!.groups).toEqual({ needsYou: "Needs you", testDay: "Test day", requests: "Requests", working: "Agents working on", done: "Done" })
+  })
+
+  it("takes only Monday user ids for the people, and a default person who is one of them", () => {
+    const bridge = (monday: Record<string, unknown>) => withConfig({ ...MINIMAL, bridges: { monday: { enabled: true, ...monday } } })
+    expect(() => loadConfig(bridge({ people: [], defaultPerson: 1 }))).toThrow(/bridges\.monday\.people/)
+    expect(() => loadConfig(bridge({ people: [{ id: "nate", name: "Nate" }], defaultPerson: 1 }))).toThrow(/bridges\.monday\.people\.0\.id/)
+    expect(() => loadConfig(bridge({ people: [{ id: 1, name: "Nate" }], defaultPerson: 2 }))).toThrow(/bridges\.monday\.defaultPerson .*one of bridges\.monday\.people/)
+    expect(() => loadConfig(bridge({ people: [{ id: 1, name: "Nate" }], defaultPerson: 1, columns: { answer: "long text" } }))).toThrow(/bridges\.monday\.columns\.answer/)
+  })
+
   it("says where to start when there is no file", () => {
     expect(() => loadConfig(agentPaths(mkdtempSync(join(tmpdir(), "agentd-empty-"))))).toThrow(/templates\/config\.example\.json/)
   })
