@@ -66,7 +66,7 @@ export async function heartbeatAndSweep(deps: {
   for (const r of decision.release) {
     await deps.tracker.releaseIssue(r.issue, r.reason)
     appendLedger(deps.paths, { type: "released", issue: r.issue, reason: r.reason }, deps.now())
-    enqueueSlack(deps.paths, { kind: "post", channel: "agents", text: `released ${r.issue}: ${r.reason}` }, deps.now())
+    enqueueSlack(deps.paths, { kind: "post", channel: "agents", text: `${r.issue}: I let go of this issue, so anyone can take it now (${r.reason}). Nothing needed from you.` }, deps.now())
   }
   return { refreshed, released: decision.release.length }
 }

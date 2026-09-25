@@ -203,6 +203,25 @@ export const ConfigSchema = z.object({
       ttlHours: z.number().positive().default(6),
     })
     .prefault({}),
+  /**
+   * The weekly retro (STEP-3290, retro/retro.ts): on the coordinator mini
+   * only, so it is off unless turned on. Local time, in queue.timeZone.
+   */
+  retro: z
+    .object({
+      enabled: z.boolean().default(false),
+      /** 1 Monday ... 7 Sunday. */
+      weekday: z.number().int().min(1).max(7).default(5),
+      hour: z.number().int().min(0).max(23).default(14),
+      /** The repository the retro's PR goes to: this runtime's own. */
+      slug: z.string().default("STEP-Network/dev-tasks"),
+      base: z.string().default("main"),
+      model: z.string().default("opus"),
+      maxTurns: z.number().int().positive().default(120),
+      maxBudgetUsd: z.number().positive().default(10),
+      wallClockMinutes: z.number().int().positive().default(60),
+    })
+    .prefault({}),
   bridges: z.object({ monday: MondayBridgeSchema.optional() }).prefault({}),
 })
 

@@ -5,6 +5,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { fileURLToPath } from "node:url"
 import { describe, expect, it, vi } from "vitest"
+import { readLessons } from "../../retro/lessons.ts"
 import { agentPaths, ConfigSchema } from "../../config.ts"
 import { countIn, listNew, putOnce } from "../../fsq.ts"
 import type { Logger } from "../../log.ts"
@@ -272,6 +273,24 @@ describe("answers", () => {
     ])
     // agentd acts, and replies in words: the bridge sends nothing, least of all a bare ✅.
     expect(listNew(paths.outbox)).toEqual([])
+  })
+
+  it("that say the mini got it wrong are kept as lessons for the weekly retro, whether answer or instruction (STEP-3290)", async () => {
+    const parked = setup([issue({ id: "STEP-7", state: "On hold", labels: ["polads", "agent-ready", "awaiting-answer"], description: "## Goal\n\nFix it." })])
+    await handleEnvelope(parked.deps, reply("1700.5", "no, use the publication date, not the creation date"))
+    await handleEnvelope(parked.deps, reply("1700.6", "Use the publication date"))
+    const inReview = setup([issue({ id: "STEP-7", state: "In Review", labels: ["polads", "agent-ready"] })])
+    await handleEnvelope(inReview.deps, reply("1700.7", "don't merge it, fix the test first"))
+    await handleEnvelope(inReview.deps, reply("1700.8", "fix it and merge"))
+    expect(readLessons(parked.paths)).toEqual([
+      expect.objectContaining({ category: "correction", source: "slack", issue: "STEP-7", who: "Nate", text: "no, use the publication date, not the creation date", key: "correction:CQ:1700.5" }),
+    ])
+    expect(readLessons(inReview.paths)).toEqual([
+      expect.objectContaining({ category: "correction", source: "slack", issue: "STEP-7", who: "Nate", text: "don't merge it, fix the test first", key: "correction:CQ:1700.7" }),
+    ])
+    // Once, however often Slack delivers it.
+    await handleEnvelope(inReview.deps, reply("1700.7", "don't merge it, fix the test first"))
+    expect(readLessons(inReview.paths)).toHaveLength(1)
   })
 
   it("stay answers when the issue waits on one, or on a person's to-do, whatever words they use", async () => {

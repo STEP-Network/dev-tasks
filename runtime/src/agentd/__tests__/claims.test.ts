@@ -58,7 +58,7 @@ describe("heartbeatAndSweep", () => {
     expect(await heartbeatAndSweep(deps)).toEqual({ refreshed: 1, released: 1 })
     expect(fake.called("touchClaim")).toEqual([["STEP-1", "eve"]])
     expect(fake.called("releaseIssue")[0][0]).toBe("STEP-3")
-    expect(listNew<{ text: string }>(paths.outbox)[0].payload.text).toBe("released STEP-3: claim by eve has had no heartbeat for 11 hours")
+    expect(listNew<{ text: string }>(paths.outbox)[0].payload.text).toBe("STEP-3: I let go of this issue, so anyone can take it now (claim by eve has had no heartbeat for 11 hours). Nothing needed from you.")
   })
 
   it("asks about each running job by its pid and id, and a dead one protects nothing", async () => {

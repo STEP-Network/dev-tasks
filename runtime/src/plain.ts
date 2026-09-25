@@ -34,7 +34,10 @@ const PLAIN: Array<[RegExp, (m: RegExpExecArray) => string]> = [
   [/self-check is incomplete|lists no mutation check/, () => "I did not finish my own double-checks"],
   [/no valid final report|without a valid report|has no PR title/, () => "I finished without writing down what I did"],
   [/made no commits/, () => "I finished without changing any code"],
-  [/^the worker process failed/, () => "my run stopped unexpectedly"],
+  [/^the worker process (failed|died)/, () => "my run stopped unexpectedly"],
+  [/^the worker overran its wall clock of (\d+) minutes/, (m) => `I ran out of time (${m[1]} minutes)`],
+  [/^the worker was still preparing its worktree/, () => "setting up my copy of the code took too long"],
+  [/^the worker could not be started/, () => "my run could not start"],
   [/^an API error|^an error during execution/, () => "the AI service returned an error"],
   [/^origin has no branch/, () => "the PR's branch is gone from GitHub"],
   [/^the worktree could not be prepared|^the main checkout/, () => "I could not get a clean copy of the code to work on"],
@@ -65,4 +68,9 @@ export function feedbackFor(reasons: readonly string[]): string {
 export function prLink(url: string): string {
   const ref = prRef(url)
   return ref === url ? url : `<${url}|${ref}>`
+}
+
+/** Slack's `<url|label>` links as "label (url)", for a reply that goes somewhere else: the Monday board. */
+export function plainLinks(text: string): string {
+  return text.replace(/<(https?:\/\/[^|>\s]+)\|([^>]+)>/g, "$2 ($1)")
 }

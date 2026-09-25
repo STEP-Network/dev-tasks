@@ -62,7 +62,7 @@ describe("actOnInstructions (STEP-3285)", () => {
     expect(outbox()).toEqual([
       expect.objectContaining({
         kind: "reply", channelId: "CQ", threadTs: "1700.1",
-        text: `Revising ${PR} now: job ${job.id} (round 1).\nAuto-merge armed on ${PR}: it merges into staging after the revision, once the required checks and the review are green.`,
+        text: `I am fixing <${PR}|PR #1679> now, as you asked.\n<${PR}|PR #1679> will go into staging by itself after my fixes, once the checks and the review pass.\nNothing needed from you.`,
       }),
       expect.objectContaining({ kind: "react", ts, name: "white_check_mark" }),
     ])
@@ -88,12 +88,12 @@ describe("actOnInstructions (STEP-3285)", () => {
     off.say("merge")
     await actOnInstructions(off.deps)
     expect(off.f.lines().some((l) => l.startsWith("gh pr merge"))).toBe(false)
-    expect(off.outbox()[0].text).toBe(`I cannot merge ${PR}: auto-merge is off on this mini (worker.autoMerge in its config.json), so a person merges it.`)
+    expect(off.outbox()[0].text).toBe(`I cannot merge <${PR}|PR #1679> myself, because merging by myself is turned off on this mini. A person needs to merge it once the checks pass.`)
     const manual = setup({ policy: "manual" })
     manual.say("merge")
     await actOnInstructions(manual.deps)
     expect(manual.f.lines().some((l) => l.startsWith("gh pr merge"))).toBe(false)
-    expect(manual.outbox()[0].text).toBe(`I cannot merge ${PR}: the project's policy for staging leaves merging to a person.`)
+    expect(manual.outbox()[0].text).toBe(`I cannot merge <${PR}|PR #1679> myself, because a person merges into staging. A person needs to merge it once the checks pass.`)
   })
 
   it("re-runs each failing required run in full, never --failed", async () => {
@@ -102,7 +102,7 @@ describe("actOnInstructions (STEP-3285)", () => {
     await actOnInstructions(deps)
     expect(f.lines().filter((l) => l.startsWith("gh run rerun"))).toEqual([`gh run rerun 111 --repo ${SLUG}`])
     expect(f.lines().some((l) => /\s--failed\b/.test(l))).toBe(false)
-    expect(outbox()[0].text).toBe(`Re-running CI on ${PR} in full: run 111.`)
+    expect(outbox()[0].text).toBe(`I started the automatic checks on <${PR}|PR #1679> again.\nNothing needed from you.`)
     expect(readWatchedPrs(paths)[0].reruns).toEqual(["abc1234def:111"])
   })
 
@@ -113,11 +113,11 @@ describe("actOnInstructions (STEP-3285)", () => {
     say("retry")
     await actOnInstructions(deps)
     expect(listJobs(paths, "pending")).toEqual([expect.objectContaining({ issue: "STEP-7", model: "opus", retryOf: blocked.id })])
-    expect(outbox()[0].text).toMatch(new RegExp(`^Retrying STEP-7 on its branch: job STEP-7-\\d+, after ${blocked.id} ended blocked \\(the report has no PR title\\)\\.$`))
+    expect(outbox()[0].text).toBe("I am trying STEP-7 again from where I stopped (last time: I finished without writing down what I did).\nNothing needed from you.")
     const none = setup()
     none.say("retry")
     await actOnInstructions(none.deps)
-    expect(none.outbox()[0].text).toBe("STEP-7's last job did not end blocked, so there is nothing to retry.")
+    expect(none.outbox()[0].text).toBe("My last try at STEP-7 did not stop on a problem, so there is nothing to try again.\nNothing needed from you.")
   })
 
   it("pauses the mini, and never lifts a pause", async () => {
@@ -125,11 +125,11 @@ describe("actOnInstructions (STEP-3285)", () => {
     say("pause for now")
     await actOnInstructions(deps)
     expect(JSON.parse(readFileSync(paths.pauseFile, "utf8"))).toEqual({ at: NOW.toISOString(), reason: "asked by Nate in Slack" })
-    expect(outbox()[0].text).toMatch(/^Paused: no new job starts.*agentctl resume\.$/)
+    expect(outbox()[0].text).toBe("Paused, as you asked. I start nothing new and finish what I am doing now. To carry on, a person lifts the pause on the mini.\nNothing needed from you.")
     say("pause")
     await actOnInstructions(deps)
     expect(existsSync(paths.pauseFile)).toBe(true)
-    expect(outbox().filter((m) => m.kind === "reply").at(-1)?.text).toBe("This mini is paused already. A person lifts it on the mini with agentctl resume.")
+    expect(outbox().filter((m) => m.kind === "reply").at(-1)?.text).toBe("I am paused already, so nothing changed. To carry on, a person lifts the pause on the mini.\nNothing needed from you.")
   })
 
   it("revises past the round cap because a person asked, and not twice at once", async () => {
@@ -139,11 +139,11 @@ describe("actOnInstructions (STEP-3285)", () => {
     await actOnInstructions(deps)
     const [job] = listJobs(paths, "pending")
     expect(job.revise?.round).toBe(4)
-    expect(outbox()[0].text).toBe(`Revising ${PR} now: job ${job.id} (round 4, past the 3-round cap since you asked).`)
+    expect(outbox()[0].text).toBe(`I am fixing <${PR}|PR #1679> now, as you asked. This is try 4, past my usual 3, because you asked.\nNothing needed from you.`)
     say("fix it")
     await actOnInstructions(deps)
     expect(listJobs(paths, "pending")).toHaveLength(1)
-    expect(outbox().filter((m) => m.kind === "reply").at(-1)?.text).toBe(`Already on it: job ${job.id} is queued.`)
+    expect(outbox().filter((m) => m.kind === "reply").at(-1)?.text).toBe(`I am already about to work on it, as it is next in line.\nNothing needed from you.`)
   })
 
   it("finds a mentioned PR of this mini's by number, and asks which PR when it cannot tell", async () => {
@@ -153,7 +153,7 @@ describe("actOnInstructions (STEP-3285)", () => {
     await actOnInstructions(deps)
     expect(listJobs(paths, "pending")).toEqual([expect.objectContaining({ issue: "STEP-7", kind: "revise" })])
     expect(outbox().filter((m) => m.kind === "reply").map((m) => m.text)).toContain(
-      "I could not tell which PR you mean. Name it (STEP-<n>, #<number> or its link): I act only on PRs this mini opened.",
+      "I could not tell which PR you mean, so I did nothing. Please name it: STEP-<n>, #<number> or its link. I only act on PRs I opened.",
     )
   })
 
@@ -182,11 +182,12 @@ describe("actOnInstructions (STEP-3285)", () => {
     expect(job.revise?.reasons).toEqual(["asked by Nate on the Monday board"])
     expect(outbox()).toEqual([])
     const replies = () => listNew<{ itemId: string; threadId: string | null; text: string; like: string | null }>(mondayOutbox(paths)).map((e) => e.payload)
-    expect(replies()).toEqual([expect.objectContaining({ itemId: "555", threadId: "9001", like: "9002", text: `Revising ${PR} now: job ${job.id} (round 1).` })])
+    // In plain words (STEP-3290), with the PR link as Monday shows it, not Slack's <url|label>.
+    expect(replies()).toEqual([expect.objectContaining({ itemId: "555", threadId: "9001", like: "9002", text: `I am fixing PR #1679 (${PR}) now, as you asked.\nNothing needed from you.` })])
     // The Answer column has no update to reply under or to like: a new update on the item.
     monday("instr_monday_log_77", "pause", { itemId: "555", updateId: null, threadId: null })
     await actOnInstructions(deps)
-    expect(replies()[1]).toMatchObject({ itemId: "555", threadId: null, like: null, text: expect.stringMatching(/^Paused: no new job starts/) })
+    expect(replies()[1]).toMatchObject({ itemId: "555", threadId: null, like: null, text: expect.stringMatching(/^Paused, as you asked\. I start nothing new/) })
     expect(JSON.parse(readFileSync(paths.pauseFile, "utf8")).reason).toBe("asked by Nate on the Monday board")
     expect(outbox()).toEqual([])
   })

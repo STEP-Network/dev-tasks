@@ -26,6 +26,8 @@ import { readJson } from "../fsq.ts"
 import { jobPath, moveJob, updateJob, type JobRecord, type JobResult } from "../jobs.ts"
 import { appendLedger, createLogger, type Logger } from "../log.ts"
 import { enqueueSlack } from "../outbox.ts"
+import { NOTHING_NEEDED } from "../plain.ts"
+import { lessonsFromFeedback, recordLessons, type Lesson } from "../retro/lessons.ts"
 import { loadClaudeOauthToken } from "../secrets.ts"
 import { branchNameFor, createLinearTracker, type Tracker, type TrackerIssue } from "../tracker.ts"
 import { buildBrief, WORKER_RESULT_SCHEMA, workerRules, type BriefInput } from "./brief.ts"
@@ -61,11 +63,18 @@ export function mergeMode(policy: string | null, config: AgentConfig): MergeMode
   return config.worker.autoMerge === false ? "mini-off" : "auto"
 }
 
-/** The init message's plugin list must hold dev-tasks exactly once, or its hooks cannot be trusted. */
-export function checkPlugins(plugins: unknown): string | null {
+/**
+ * The init message's plugin list must hold dev-tasks exactly once, or its
+ * hooks cannot be trusted. The weekly retro's session runs without it
+ * (retro/retro.ts), so there it must not load at all.
+ */
+export function checkPlugins(plugins: unknown, expected: 0 | 1 = 1): string | null {
   const list = Array.isArray(plugins) ? plugins : []
   const count = list.filter((p) => (p as { name?: unknown } | null)?.name === "dev-tasks").length
-  return count === 1 ? null : `the dev-tasks plugin loaded ${count} times in the worker (expected once), so its hooks cannot be trusted`
+  if (count === expected) return null
+  return expected === 1
+    ? `the dev-tasks plugin loaded ${count} times in the worker (expected once), so its hooks cannot be trusted`
+    : `the dev-tasks plugin loaded ${count} times in the retro (expected none), and its task hooks would block every edit`
 }
 
 /**
@@ -211,7 +220,7 @@ export interface RunDeps {
 }
 
 /** What one SDK session ended with. */
-interface SessionEnd {
+export interface SessionEnd {
   result: ResultMessageLike | null
   thrown: string | null
   initProblem: string | null
@@ -222,7 +231,7 @@ interface SessionEnd {
  * One SDK session, read to its end. The plugin and billing checks come from
  * its init message, and a session that breaks them is stopped at once.
  */
-async function runSession(query: QueryFn, prompt: string, options: Options, minutes: number): Promise<SessionEnd> {
+export async function runSession(query: QueryFn, prompt: string, options: Options, minutes: number, expectedPlugins: 0 | 1 = 1): Promise<SessionEnd> {
   const abortController = options.abortController ?? new AbortController()
   options.abortController = abortController
   const end: SessionEnd = { result: null, thrown: null, initProblem: null, abortedByClock: false }
@@ -235,7 +244,7 @@ async function runSession(query: QueryFn, prompt: string, options: Options, minu
     for await (const message of query({ prompt, options })) {
       if (message.type === "system" && message.subtype === "init") {
         sawInit = true
-        end.initProblem = checkPlugins(message.plugins) ?? checkBilling(message.apiKeySource)
+        end.initProblem = checkPlugins(message.plugins, expectedPlugins) ?? checkBilling(message.apiKeySource)
       } else if (!sawInit && ["assistant", "user", "result"].includes(message.type)) {
         // The conversation began, or ended, without the checks (hook events may
         // come first). A session that failed to start says why in its result.
@@ -369,9 +378,20 @@ export async function runJob(deps: RunDeps, jobId: string): Promise<JobResult> {
   if (!job) throw new Error(`job ${jobId} is not in jobs/running`)
   const started = deps.now()
   const minutes = () => Math.round((deps.now().getTime() - started.getTime()) / 60_000)
+  // What the weekly retro learns from (STEP-3290). A lesson that cannot be written never stops the job.
+  const learn = (lessons: Array<Omit<Lesson, "at">>) => {
+    try {
+      recordLessons(paths, lessons, deps.now())
+    } catch (error) {
+      log.warn("lessons not recorded", { issue: job.issue, error: String(error) })
+    }
+  }
   const finish = (result: JobResult, extra: Partial<JobRecord> = {}): JobResult => {
     moveJob(paths, jobId, "running", "done", { endedAt: deps.now().toISOString(), result, ...extra })
     appendLedger(paths, { type: "worker.end", issue: job.issue, ...result }, deps.now())
+    if (result.status === "blocked") {
+      learn([{ mini: config.mini, issue: job.issue, pr: result.prUrl, category: "blocked", source: "runner", text: result.reason, key: `blocked:${jobId}` }])
+    }
     return result
   }
   const nothing = { prUrl: null, branch: null, costUsd: null, turns: null, minutes: 0 }
@@ -386,7 +406,11 @@ export async function runJob(deps: RunDeps, jobId: string): Promise<JobResult> {
       writeFileSync(paths.pauseFile, JSON.stringify({ at: deps.now().toISOString(), reason: why }))
       appendLedger(paths, { type: "paused", reason: why }, deps.now())
     }
-    enqueueSlack(paths, { kind: "post", channel: "agents", text: `Paused: ${why}. ${job.issue} was not started. A person must look at the file, remove it if nothing needs it, and run agentctl resume.` }, deps.now())
+    enqueueSlack(
+      paths,
+      { kind: "post", channel: "agents", text: `I paused myself and did not start ${job.issue}: my copy of the code has a file that can hide changes (.git/${rewrite}). A person needs to look at the mini, remove the file if nothing needs it, then resume me.` },
+      deps.now(),
+    )
     return finish({ ...nothing, status: "skipped", reason: why })
   }
 
@@ -450,7 +474,7 @@ export async function runJob(deps: RunDeps, jobId: string): Promise<JobResult> {
       // The claim comment and the assignment come before the read-back, so the claim may have gone through.
       enqueueSlack(
         paths,
-        { kind: "post", channel: "agents", text: `${job.issue}: Linear failed while claiming it. If the claim went through, it is released after ${config.claims.ttlHours} hours unless someone takes the issue first.` },
+        { kind: "post", channel: "agents", text: `${job.issue}: Linear did not answer when I tried to take this issue, so I did not start it. If Linear took it for me anyway, I let it go after ${config.claims.ttlHours} hours unless someone takes it first. ${NOTHING_NEEDED}` },
         deps.now(),
       )
       return linearFailed("Linear failed while claiming", error)
@@ -458,7 +482,7 @@ export async function runJob(deps: RunDeps, jobId: string): Promise<JobResult> {
   }
   if (!revise) {
     appendLedger(paths, { type: "claimed", issue: issue.id }, deps.now())
-    enqueueSlack(paths, { kind: "post", channel: "agents", text: `claimed ${issue.id} ${issue.title}` }, deps.now())
+    enqueueSlack(paths, { kind: "post", channel: "agents", text: `${issue.id}: I started on "${issue.title}". ${NOTHING_NEEDED}` }, deps.now())
   }
 
   const model = modelFor(issue, job, config)
@@ -510,7 +534,9 @@ export async function runJob(deps: RunDeps, jobId: string): Promise<JobResult> {
   const sessionStart = deps.now()
   updateJob(paths, "running", jobId, { sessionStartedAt: sessionStart.toISOString() })
   log.info("worker session starting", { issue: issue.id, model, worktree: worktree.path, resumed: worktree.resumed, retryOf: job.retryOf ?? null, revise: revise?.url ?? null })
-  const prompt = revise ? buildReviseBrief(brief, revise, await gatherFeedback(exec, config.repo.slug, revise, requiredChecks(config.repo.path))) : buildBrief(brief)
+  const feedback = revise ? await gatherFeedback(exec, config.repo.slug, revise, requiredChecks(config.repo.path)) : null
+  if (revise && feedback) learn(lessonsFromFeedback(feedback, { mini: config.mini, issue: issue.id, pr: revise.url, round: revise.round }))
+  const prompt = revise && feedback ? buildReviseBrief(brief, revise, feedback) : buildBrief(brief)
   // A revise job's PR has its title: its report needs none.
   const requireTitle = !revise
   const first = await runSession(deps.query, prompt, options(), config.worker.wallClockMinutes)
@@ -558,6 +584,7 @@ export async function runJob(deps: RunDeps, jobId: string): Promise<JobResult> {
     if (!repaired && closest) {
       repaired = acceptWithGaps(closest)
       appendLedger(paths, { type: "report.selfCheckGaps", issue: issue.id, problem: closest.reportProblem }, deps.now())
+      learn([{ mini: config.mini, issue: issue.id, pr: revise?.url ?? null, category: "self-check", source: "runner", text: closest.reason, key: `self-check:${jobId}` }])
     }
     if (!repaired) {
       repaired = await outcomeFromCommits(exec, worktree.path, since, issue.id, outcome).catch((error: unknown) => {

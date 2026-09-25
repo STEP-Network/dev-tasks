@@ -285,3 +285,25 @@ describe("run", () => {
     await expect(run(["report", "--days", "0"], out, deps())).rejects.toBeInstanceOf(UsageError)
   })
 })
+
+describe("agentctl retro (STEP-3290)", () => {
+  it("prints the PR body the weekly retro would open, and its Slack summary, and runs nothing", async () => {
+    writeConfig()
+    const f = fakeExec([[/^gh pr list /, { stdout: "[]" }]])
+    expect(await run(["retro"], out, deps({ exec: f.exec }))).toBe(0)
+    const text = printed.join("\n")
+    expect(text).toContain("Weekly retro by eve, the week to 2026-09-24 (STEP-3290).")
+    expect(text).toContain("| First-pass merges | none | none |")
+    expect(text).toContain("## Slack, once it has run")
+    expect(f.lines().every((l) => l.startsWith("gh pr list "))).toBe(true)
+    expect(listNew(agentPaths().outbox)).toEqual([])
+    expect(existsSync(join(root, "state", "retro.json"))).toBe(false)
+  })
+
+  it("starts the real one only for a person at a terminal, never for the front door", async () => {
+    writeConfig()
+    await expect(run(["retro", "--run"], out, deps({ isTTY: () => false }))).rejects.toThrow(/for a person at a terminal/)
+    await expect(run(["retro", "--run"], out, deps({ env: { AGENTD_FRONT_DOOR: "1" } }))).rejects.toThrow(/for a person at a terminal/)
+    expect(existsSync(join(root, "state", "retro.json"))).toBe(false)
+  })
+})

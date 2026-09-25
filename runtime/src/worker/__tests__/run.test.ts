@@ -9,6 +9,7 @@ import { listJobs, moveJob, submitJob } from "../../jobs.ts"
 import type { Logger } from "../../log.ts"
 import { fakeExec, fakeTracker, issue, SWEEP } from "../../__tests__/fakes.ts"
 import { JARGON } from "../../plain.ts"
+import { readLessons } from "../../retro/lessons.ts"
 import type { ExecResult } from "../git.ts"
 import { acceptWithGaps, checkBilling, checkPlugins, correctionMinutes, correctionPrompt, mergeMode, requireMutations, modelFor, runJob, sdkOptions, type QueryFn, type RunDeps, type SdkMessage } from "../run.ts"
 
@@ -106,7 +107,7 @@ describe("runJob", () => {
     expect(f.lines()).toContain(`gh pr merge ${PR} --auto --squash --delete-branch`)
     expect(listJobs(paths, "running")).toEqual([])
     expect(listJobs(paths, "done")[0].result).toMatchObject({ status: "done", prUrl: PR })
-    expect(outbox()).toEqual(["claimed STEP-7 Fix the date", `STEP-7: I opened <${PR}|PR #1701> for "Fix the date". It goes in by itself once the checks and the review pass. Nothing needed from you.`])
+    expect(outbox()).toEqual(["STEP-7: I started on \"Fix the date\". Nothing needed from you.", `STEP-7: I opened <${PR}|PR #1701> for "Fix the date". It goes in by itself once the checks and the review pass. Nothing needed from you.`])
   })
 
   it("opens the PR without arming auto-merge when worker.autoMerge is off on this mini, though the policy allows it", async () => {
@@ -114,7 +115,7 @@ describe("runJob", () => {
     expect(await runJob(deps, job.id)).toMatchObject({ status: "done", prUrl: PR })
     expect(f.lines().some((l) => l.startsWith("gh pr create"))).toBe(true)
     expect(f.lines().some((l) => l.startsWith("gh pr merge"))).toBe(false)
-    expect(outbox()).toEqual(["claimed STEP-7 Fix the date", `STEP-7: I opened <${PR}|PR #1701> for "Fix the date". Auto-merge is off on this mini, so a person needs to merge it once the checks pass.`])
+    expect(outbox()).toEqual(["STEP-7: I started on \"Fix the date\". Nothing needed from you.", `STEP-7: I opened <${PR}|PR #1701> for "Fix the date". Auto-merge is off on this mini, so a person needs to merge it once the checks pass.`])
   })
 
   it("marks when the session starts, after the worktree, for agentd's wall-clock backstop", async () => {
@@ -161,7 +162,7 @@ describe("runJob", () => {
     const { deps, job, paths, q, outbox } = setup({ failOn: ["claimIssue"] })
     expect(await runJob(deps, job.id)).toMatchObject({ status: "skipped", reason: "Linear failed while claiming: Linear: claimIssue failed (fake)" })
     expect(listJobs(paths, "done")[0].linearFailed).toBe(true)
-    expect(outbox()).toEqual(["STEP-7: Linear failed while claiming it. If the claim went through, it is released after 6 hours unless someone takes the issue first."])
+    expect(outbox()).toEqual(["STEP-7: Linear did not answer when I tried to take this issue, so I did not start it. If Linear took it for me anyway, I let it go after 6 hours unless someone takes it first. Nothing needed from you."])
     expect(q.seen).toEqual([])
   })
 
@@ -184,7 +185,9 @@ describe("runJob", () => {
       expect(JSON.parse(readFileSync(paths.pauseFile, "utf8"))).toEqual({ at: "2026-09-24T09:40:00.000Z", reason: why })
       // Counted in the ledger, as agentd's own pause is.
       expect(readFileSync(join(paths.logs, "ledger.jsonl"), "utf8")).toContain(JSON.stringify({ at: "2026-09-24T09:40:00.000Z", type: "paused", reason: why }))
-      expect(outbox()).toEqual([`Paused: ${why}. STEP-7 was not started. A person must look at the file, remove it if nothing needs it, and run agentctl resume.`])
+      expect(outbox()).toEqual([
+        `I paused myself and did not start STEP-7: my copy of the code has a file that can hide changes (.git/${file.join("/")}). A person needs to look at the mini, remove the file if nothing needs it, then resume me.`,
+      ])
       expect(fake.calls).toEqual([])
       expect(q.seen).toEqual([])
     }
@@ -347,6 +350,10 @@ describe("runJob", () => {
       expect(body(paths)).toContain("Not answered by the worker: siblings, publicOutputs, caches, coupled, docs, translations. A reviewer should check these.")
       expect(body(paths)).toContain("The worker's self-check was incomplete (the report's self-check is incomplete: siblings")
       expect(fake.issues.get("STEP-7")!.state).toBe("In Review")
+      // What went out unanswered is a lesson for the weekly retro (STEP-3290).
+      expect(readLessons(paths)).toEqual([
+        expect.objectContaining({ category: "self-check", source: "runner", text: "the report's self-check is incomplete: siblings, publicOutputs, caches, coupled, docs, translations" }),
+      ])
     })
 
     it("asks for mutation checks when the branch changes tests and the report lists none, and shows them in the PR", async () => {
@@ -469,6 +476,20 @@ describe("runJob", () => {
       // Older than the round, or the PR author's own: not feedback.
       for (const text of ["An older point.", "Eve's own earlier reply.", "Eve on her own code.", "Eve's own review note."]) expect(brief).not.toContain(text)
       expect(outbox()).toEqual([`STEP-7: I fixed the review comments and the failing checks on <${PR_URL}|PR #1674> and pushed the fixes. Nothing needed from you.`])
+    })
+
+    it("keeps what the round's feedback said, its must-fix findings and its failing checks, for the weekly retro (STEP-3290)", async () => {
+      const view = JSON.parse(VIEW)
+      view.comments.push({ id: "C2", author: { login: "claude" }, body: "Review\n**BLOCKER** lib/notice.ts:12 reads createdAt\nPOLISH naming", createdAt: "2026-09-24T11:06:00.000Z" })
+      const { deps, job, paths } = revising({ exec: answers([[/^gh pr view \S+ --json author,reviews/, { stdout: JSON.stringify(view) }]]) })
+      await runJob(deps, job.id)
+      expect(readLessons(paths).map((l) => [l.category, l.who ?? null, l.text, l.pr, l.source])).toEqual([
+        ["review", "nate", "review, changes requested: Use the publication date.", PR_URL, "github"],
+        ["review", "nate", "lib/notice.ts:12: This reads the wrong field.", PR_URL, "github"],
+        ["review", "claude", "PR comment: Review\n**BLOCKER** lib/notice.ts:12 reads createdAt\nPOLISH naming", PR_URL, "github"],
+        ["fix", "claude", "**BLOCKER** lib/notice.ts:12 reads createdAt", PR_URL, "github"],
+        ["check", null, "Test failed", PR_URL, "github"],
+      ])
     })
 
     it("skips a revise job whose PR has closed meanwhile", async () => {
@@ -634,6 +655,10 @@ describe("runJob", () => {
     expect(f.lines().some((l) => l.startsWith("gh pr create"))).toBe(false)
     expect(fake.issues.get("STEP-7")!.state).toBe("On hold")
     expect(outbox().at(-1)).toBe("STEP-7: I had to stop: my run stopped unexpectedly. I asked in the issue's thread what to do.")
+    // And a lesson for the weekly retro (STEP-3290), once.
+    expect(readLessons(deps.paths)).toEqual([
+      expect.objectContaining({ category: "blocked", source: "runner", issue: "STEP-7", text: "the worker process failed: Claude Code process exited with code 1", key: `blocked:${job.id}` }),
+    ])
   })
 
   it("refuses to resume a branch that changes the agent configuration, before any session, and says why", async () => {
@@ -683,7 +708,7 @@ describe("runJob", () => {
       status: "blocked", prUrl: null, reason: expect.stringMatching(/^finishing the job failed: git -C .* push -u origin HEAD:refs\/heads\/STEP-7-fix-the-date failed \(1\): remote: Repository not found\.$/),
     })
     expect(listJobs(paths, "done")).toHaveLength(1)
-    expect(outbox()).toEqual(["claimed STEP-7 Fix the date", expect.stringMatching(/^STEP-7: finishing the job failed/)])
+    expect(outbox()).toEqual(["STEP-7: I started on \"Fix the date\". Nothing needed from you.", expect.stringMatching(/^STEP-7: finishing the job failed/)])
   })
 })
 

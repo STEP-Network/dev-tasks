@@ -17,6 +17,7 @@ import { ack, countIn, entryPath, fail, listNew, putOnce, readJson, safeKey, wri
 import { appendLedger, createLogger, redact, type Logger } from "../log.ts"
 import { enqueueSlack, type ChannelKey } from "../outbox.ts"
 import { releasePidLock, takePidLock } from "../pidlock.ts"
+import { isCorrection, recordLessons } from "../retro/lessons.ts"
 import { assertLinearKeyFile, loadSlackSecrets } from "../secrets.ts"
 import { onQueue } from "../select.ts"
 import { issueForThread, saveThread } from "../threads.ts"
@@ -96,7 +97,28 @@ export async function handleEnvelope(deps: BridgeDeps, envelope: SlackEnvelope):
 function fileInstruction(deps: BridgeDeps, entry: Omit<InstructionEntry, "type" | "key" | "receivedAt">): void {
   const key = `instr:${entry.channel}:${entry.ts}`
   const filed: InstructionEntry = { type: "instruction", key, ...entry, receivedAt: deps.now().toISOString() }
-  if (putOnce(deps.paths.inbox, key, filed)) appendLedger(deps.paths, { type: "instruction.received", issue: entry.issue ?? entry.target.issue ?? undefined, actions: entry.actions }, deps.now())
+  if (putOnce(deps.paths.inbox, key, filed)) {
+    appendLedger(deps.paths, { type: "instruction.received", issue: entry.issue ?? entry.target.issue ?? undefined, actions: entry.actions }, deps.now())
+    learnCorrection(deps, { issue: entry.issue ?? entry.target.issue ?? null, channel: entry.channel, ts: entry.ts, who: entry.userName || entry.user, text: entry.text })
+  }
+}
+
+/**
+ * A person's reply that says the mini got something wrong ("no, do X"): a
+ * lesson for the weekly retro (STEP-3290). Its words are data. A lesson that
+ * cannot be written never stops the reply's own handling.
+ */
+function learnCorrection(deps: BridgeDeps, said: { issue: string | null; channel: string; ts: string; who: string; text: string }): void {
+  if (!isCorrection(said.text)) return
+  try {
+    recordLessons(
+      deps.paths,
+      [{ mini: deps.config.mini, issue: said.issue, pr: null, category: "correction", source: "slack", who: said.who, text: said.text, key: `correction:${said.channel}:${said.ts}` }],
+      deps.now(),
+    )
+  } catch (error) {
+    deps.log.warn("lesson not recorded", { issue: said.issue, error: String(error) })
+  }
 }
 
 /** How long an intake or an answer Linear keeps refusing waits in the inbox before the bridge gives up and says so. */
@@ -235,6 +257,7 @@ export async function applyAnswer(deps: BridgeDeps, key: string): Promise<void> 
         enqueueSlack(deps.paths, { kind: "reply", channelId: entry.channel, threadTs: entry.threadTs, text: `Added your answer to ${entry.issue}${moved}.` }, deps.now())
         enqueueSlack(deps.paths, { kind: "react", channelId: entry.channel, ts: entry.ts, name: "white_check_mark" }, deps.now())
         appendLedger(deps.paths, { type: "answer.applied", issue: entry.issue, movedTo: move.state ?? null }, deps.now())
+        learnCorrection(deps, { issue: entry.issue, channel: entry.channel, ts: entry.ts, who: entry.userName, text: entry.text })
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error)
         const gone = isIssueGone(error)

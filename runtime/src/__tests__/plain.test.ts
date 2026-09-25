@@ -20,6 +20,10 @@ describe("plain words for people (plain.ts)", () => {
       "the worktree could not be prepared: fatal: bad object",
       "finishing the job failed: gh pr comment failed",
       "needs input but asked no question",
+      "the worker process died before reporting",
+      "the worker overran its wall clock of 90 minutes and was stopped",
+      "the worker was still preparing its worktree after 45 minutes and was stopped",
+      "the worker could not be started: spawn failed",
     ]
     for (const reason of reasons) {
       expect(plainReason(reason), reason).not.toMatch(JARGON)
