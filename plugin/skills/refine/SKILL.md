@@ -62,16 +62,16 @@ CI can verify, and that needs no console, credential, payment, legal or
 product decision beyond what the issue and its answers already say.
 
 If it is not, hand it to a person. Write "Needs a person: <what exactly,
-where, and how I will know it is done>. Reply here when it is done." to
-`~/.front-door/ask-STEP-<n>.md`, and what you recommend they do, in a few
-plain words, to `~/.front-door/rec-STEP-<n>.md`, then, one Bash call each:
+where, and how I will know it is done>." to `~/.front-door/ask-STEP-<n>.md`,
+then, one Bash call each (agentctl adds "Reply done when it is done.", and no
+recommendation, so a "yes" agrees to nothing):
 
 ```bash
 ~/.agentd/bin/trackerctl update STEP-<n> --state "On hold" --add-label human-todo
 ```
 
 ```bash
-~/.agentd/bin/agentctl ask --issue STEP-<n> --text-file ~/.front-door/ask-STEP-<n>.md --recommendation-file ~/.front-door/rec-STEP-<n>.md
+~/.agentd/bin/agentctl ask --issue STEP-<n> --text-file ~/.front-door/ask-STEP-<n>.md --handoff
 ```
 
 and stop.

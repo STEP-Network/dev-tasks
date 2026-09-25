@@ -1,13 +1,14 @@
 /**
  * The Slack channel's own record (STEP-3293), state/slack-channel.json: which
  * inbox entries it pushed into the front door's session and when, and its
- * heartbeat. Only the channel server (channel/server.ts) writes it. The digest
- * reads it so a message the channel delivered minutes ago is not offered
- * twice, and the bridge reads it to know whether the front door is there.
+ * heartbeat. Only the channel server (channel/server.ts) writes it, and it
+ * reads it back to push a message again. agentctl status shows the heartbeat.
+ * Nothing else trusts it: Claude Code never says whether it registered the
+ * channel, so a push is no proof of delivery.
  */
 
 import { join } from "node:path"
-import type { AgentConfig, AgentPaths } from "../config.ts"
+import type { AgentPaths } from "../config.ts"
 import { readJson, writeJsonAtomic } from "../fsq.ts"
 
 export interface ChannelState {
@@ -35,20 +36,3 @@ export function writeChannelState(paths: AgentPaths, state: ChannelState): void 
 }
 
 export const channelFresh = (state: ChannelState | null, now: Date) => state !== null && now.getTime() - Date.parse(state.at) < CHANNEL_STALE_MS
-
-/** Whether the channel pushed this entry into a live session recently enough that the front door is on it. */
-export function inFlight(state: ChannelState | null, key: string, now: Date): boolean {
-  const at = state?.delivered[key]
-  return channelFresh(state, now) && at !== undefined && now.getTime() - Date.parse(at) < REDELIVER_MS
-}
-
-/**
- * Whether the front door will read a message soon. With the channel ever
- * started, its heartbeat decides: the channel lives in the front door's own
- * session and dies with it. Before that, the front door's last wakeup does.
- */
-export function frontDoorUp(paths: AgentPaths, config: Pick<AgentConfig, "frontDoor">, now: Date, lastTickAt: Date | null): boolean {
-  const state = readChannelState(paths)
-  if (state) return channelFresh(state, now)
-  return lastTickAt !== null && now.getTime() - lastTickAt.getTime() < config.frontDoor.staleTickMinutes * 60_000
-}

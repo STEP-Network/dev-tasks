@@ -76,7 +76,7 @@ export function questionText(d: Decision, timeZone: string, via: "slack" | "mond
   const byDefault = d.options.find((o) => o.reply === d.defaultReply)
   const others = d.options.filter((o) => o.reply !== d.defaultReply).map((o) => `"${o.reply}" to ${o.does}`)
   const recommended = withRecommendation(d.question, byDefault ? byDefault.does : d.defaultReply)
-  return `${recommended}${others.length ? ` You can also reply ${others.join(", or ")}.` : ""} If nobody answers, I do it at ${at}.`
+  return `${recommended}${others.length ? ` You can also reply ${others.join(", or ")}.` : ""} I go with my recommendation at ${at}.`
 }
 
 /** Asks once: a question for this id already asked is not asked again. */

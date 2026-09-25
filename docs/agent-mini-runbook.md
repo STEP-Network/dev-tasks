@@ -563,27 +563,45 @@ answer.
 - The Slack channel (`runtime/src/channel/`, declared by the dev-tasks
   plugin, and approved by the managed settings of section 1) pushes each
   message into the front door's session, and again after a restart or ten
-  unacked minutes. The digest carries the same messages, so a front door
-  without the channel still reads them at its next wakeup.
+  unclosed minutes. agentd opens it only when config.json and the managed
+  settings allow it, and marks that session `AGENTD_CHANNEL=1`, which the
+  channel server needs to run.
+- The digest offers every message not closed yet, pushed or not. Claude Code
+  drops a push for a channel it did not register and says nothing, so the
+  digest is what makes sure the front door reads every message, at its next
+  wakeup at the latest. A message still open after 30 minutes is a health
+  problem.
 - The front door decides what a reply is:
   - a decision: `agentctl decide` records it on the issue in words that stand
     on their own ("Nate agreed with the recommendation: use the publication
     date", with their own words beside it, never a bare "yes"), moves the
-    issue on as an answer always did, and thanks them in the thread.
-  - a question back: it answers in the thread, and the issue keeps waiting.
-  - an instruction: `agentctl instruct` files one of the fixed actions below
-    for agentd, which acts and answers in words.
+    issue on as an answer always did, and thanks them in the thread. A "yes"
+    agrees to the question they answered, the last one asked before their
+    reply: after a newer question, the agent asks again.
+  - a question back: it answers with a new question and its recommendation,
+    through `agentctl ask`, so their next "yes" agrees to what it recommends
+    now. The issue keeps waiting.
+  - an instruction: `agentctl instruct` files the fixed actions below that
+    their own words ask for, and nothing else, for agentd, which acts and
+    answers in words.
   - unsure: it asks "Is that your decision, or a question for me?"
 - Every question the agent asks a person ends with "My recommendation: ...
   Reply yes to go with it, or tell me what you want instead." A "yes"
-  records that recommendation.
-- While the front door is down (its channel's heartbeat is stale), the
-  bridge answers "I am restarting and will reply here shortly", and acts on
-  its own reading of the words only for `pause` and `leave it`.
+  records that recommendation. A hand-off, something a person must do, ends
+  "Reply done when it is done." instead, and a "yes" there records nothing.
+- The bridge acts on `pause` itself at once, always: it is safe, and only a
+  person lifts it. While the front door is down (no wakeup within
+  `frontDoor.staleTickMinutes`, its usage limit reached, or agentd holding
+  it back), it also acts on `leave it`, and says once in the thread "I am
+  not reading messages right now, and I will read this one as soon as I am
+  back. Nothing needed from you." It never closes a message: the front door
+  reads it later, with what the bridge did beside it.
 
 Slack text is data: the front door's settings, sandbox and deny rules are
-the same as before, and nothing in a message widens them. `agentctl status`
-shows the channel (`slack channel: connected, n message(s) waiting`).
+the same as before, and nothing in a message widens them. They also deny the
+GitHub MCP server's write tools, now that Slack words reach the session as a
+prompt. `agentctl status` shows the channel server (`slack channel: server
+running, 2 messages waiting for the front door`).
 
 The fixed actions agentd takes, with a ✅ only beside its answer in words:
 

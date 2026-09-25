@@ -22,6 +22,7 @@ import { listNew } from "../../fsq.ts"
 import { run } from "../../cli/agentctl.ts"
 import { handleEnvelope, type BridgeDeps } from "../../slack/bridge.ts"
 import { saveThread } from "../../threads.ts"
+import { tickPath } from "../../tick.ts"
 import { fakeExec, fakeTracker, issue } from "../../__tests__/fakes.ts"
 import { readChannelState } from "../state.ts"
 
@@ -40,17 +41,25 @@ beforeEach(() => {
   writeFileSync(paths.config, JSON.stringify(CONFIG))
   // The thread Eve asked her question in, as the outbox saved it.
   saveThread(paths, { issue: "STEP-7", channelId: "CQ", ts: "1700.1", permalink: null, createdAt: "2026-09-25T09:00:00.000Z", lastQuestionAt: "2026-09-25T09:00:00.000Z", lastQuestion: QUESTION })
+  // The front door woke up a minute ago: it is up, so the bridge leaves the words to it.
+  writeFileSync(tickPath(paths), JSON.stringify({ at: new Date(Date.now() - 60_000).toISOString() }))
 })
 afterEach(async () => {
   for (const c of clients.splice(0)) await c.close().catch(() => {})
   delete process.env.AGENTD_HOME
 })
 
-/** The front door's session: the launcher as Claude Code starts it, with agentd's mark or without. */
-async function session(frontDoor: boolean): Promise<{ client: Client; events: Notification[] }> {
+/**
+ * A session, with the launcher as Claude Code starts it: the front door
+ * started with --channels (agentd marks it AGENTD_FRONT_DOOR=1 and
+ * AGENTD_CHANNEL=1), the front door started without (the managed settings do
+ * not approve it, or config.json turns it off), or any other session.
+ */
+async function session(kind: "channel" | "front door without the channel" | "another session"): Promise<{ client: Client; events: Notification[] }> {
   const events: Notification[] = []
   const env: Record<string, string> = { PATH: process.env.PATH ?? "", HOME: root, AGENTD_HOME: paths.root }
-  if (frontDoor) env.AGENTD_FRONT_DOOR = "1"
+  if (kind !== "another session") env.AGENTD_FRONT_DOOR = "1"
+  if (kind === "channel") env.AGENTD_CHANNEL = "1"
   const client = new Client({ name: "front-door", version: "1.0.0" })
   client.fallbackNotificationHandler = async (n) => void events.push(n)
   await client.connect(new StdioClientTransport({ command: process.execPath, args: [LAUNCHER], env, stderr: "ignore" }))
@@ -99,7 +108,7 @@ const reply = (ts: string, text: string) => ({ team_id: "T1", event: { type: "me
 
 describe("the Slack channel into the front door (STEP-3293)", () => {
   it("delivers a person's reply into the session as a channel event, and a yes records the recommendation itself, once", async () => {
-    const { client, events } = await session(true)
+    const { client, events } = await session("channel")
     // A channel, and nothing more: no tools, and no relay of permission prompts.
     expect(client.getServerCapabilities()?.experimental).toEqual({ "claude/channel": {} })
     expect((await client.listTools()).tools).toEqual([])
@@ -128,7 +137,7 @@ describe("the Slack channel into the front door (STEP-3293)", () => {
     )
     expect(listNew(paths.inbox)).toEqual([])
     expect(listNew<{ kind: string; text?: string }>(paths.outbox).map((e) => e.payload)).toEqual([
-      expect.objectContaining({ kind: "reply", threadTs: "1700.1", text: "Thanks. I added your decision to STEP-7: Nate agreed with the recommendation: use the publication date. It goes back to Ready. Nothing needed from you." }),
+      expect.objectContaining({ kind: "reply", threadTs: "1700.1", text: "Thanks, Nate. I added your decision to STEP-7: use the publication date. It goes back to Ready. Nothing needed from you." }),
       expect.objectContaining({ kind: "react", name: "white_check_mark" }),
     ])
     // Handled: never pushed again.
@@ -137,12 +146,12 @@ describe("the Slack channel into the front door (STEP-3293)", () => {
   }, 30_000)
 
   it("pushes again, after a restart, a message the front door never closed", async () => {
-    const first = await session(true)
+    const first = await session("channel")
     const { deps } = bridge()
     await handleEnvelope(deps, reply("1700.6", "what do you recommend?"))
     await until(() => first.events.length === 1)
     await first.client.close()
-    const second = await session(true)
+    const second = await session("channel")
     await until(() => second.events.length === 1)
     expect((second.events[0].params as { meta: Record<string, string> }).meta.key).toBe("msg:CQ:1700.6")
     // A question back is answered in the thread and acked: then it stops.
@@ -151,15 +160,17 @@ describe("the Slack channel into the front door (STEP-3293)", () => {
     expect(second.events).toHaveLength(1)
   }, 30_000)
 
-  it("is no channel in any other session on the mini: no capability, and nothing pushed", async () => {
-    const { client, events } = await session(false)
-    // The launcher never starts the runtime's server there: the quiet one answers.
-    expect(client.getServerVersion()).toEqual({ name: "slack", version: "idle" })
-    expect(client.getServerCapabilities()?.experimental).toBeUndefined()
-    const { deps } = bridge()
-    await handleEnvelope(deps, reply("1700.7", "what do you recommend?"))
-    await new Promise((r) => setTimeout(r, 2_500))
-    expect(events).toEqual([])
-    expect(readChannelState(paths)).toBeNull()
-  }, 30_000)
+  for (const kind of ["front door without the channel", "another session"] as const) {
+    it(`is no channel in ${kind === "another session" ? "any other session on the mini" : "a front door started without --channels"}: no capability, and nothing pushed (STEP-3293 review)`, async () => {
+      const { client, events } = await session(kind)
+      // The launcher never starts the runtime's server there: the quiet one answers.
+      expect(client.getServerVersion()).toEqual({ name: "slack", version: "idle" })
+      expect(client.getServerCapabilities()?.experimental).toBeUndefined()
+      const { deps } = bridge()
+      await handleEnvelope(deps, reply("1700.7", "what do you recommend?"))
+      await new Promise((r) => setTimeout(r, 2_500))
+      expect(events).toEqual([])
+      expect(readChannelState(paths)).toBeNull()
+    }, 30_000)
+  }
 })

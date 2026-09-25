@@ -9,7 +9,7 @@ import { listJobs, moveJob, readWatchedPrs, recordPr, submitJob, updateWatchedPr
 import type { Logger } from "../../log.ts"
 import { realExec, type Exec } from "../../worker/git.ts"
 import { fakeExec } from "../../__tests__/fakes.ts"
-import { cleanup, Every, healthStatus, inboxStuck, linearDownNotice, refreshCheckout, sentryCheckInUrl, watchPrs } from "../health.ts"
+import { cleanup, Every, healthStatus, inboxStuck, inboxUnhandled, linearDownNotice, refreshCheckout, sentryCheckInUrl, watchPrs } from "../health.ts"
 import { failingRequired, planRevision, PR_FIELDS } from "../revise.ts"
 
 const quiet: Logger = { info() {}, warn() {}, error() {} }
@@ -121,7 +121,7 @@ describe("watchPrs, and the revise loop (STEP-3274)", () => {
     await w.run()
     expect(outbox(paths).filter((p) => p.kind === "issue").map((p) => p.text)).toEqual([
       // One question with its options and a default, never "a person needs to look" (STEP-3285). 13:00 UTC is 15:00 in Copenhagen.
-      `The automatic checks on <${PR1}|PR #1> failed again for a reason that has nothing to do with the code (Test on abc1234), even after I started them again.\n\nMy recommendation: have me start them once more. Reply yes to go with it, or tell me what you want instead. You can also reply "leave it" to leave the PR to a person. If nobody answers, I do it at 15:00.`,
+      `The automatic checks on <${PR1}|PR #1> failed again for a reason that has nothing to do with the code (Test on abc1234), even after I started them again.\n\nMy recommendation: have me start them once more. Reply yes to go with it, or tell me what you want instead. You can also reply "leave it" to leave the PR to a person. I go with my recommendation at 15:00.`,
     ])
   })
 
@@ -142,7 +142,7 @@ describe("watchPrs, and the revise loop (STEP-3274)", () => {
     expect(listJobs(paths, "pending").map((j) => [j.issue, j.kind])).toEqual([["STEP-7", "revise"]])
     // STEP-8's infrastructure failed again at the same head: one question, with a default.
     expect(sent.filter((p) => p.kind === "issue")).toEqual([
-      expect.objectContaining({ issue: "STEP-8", question: true, text: expect.stringMatching(/^The automatic checks on .*\/pull\/2\|PR #2> failed again .*\n\nMy recommendation: have me start them once more\. Reply yes .* If nobody answers, I do it at \d\d:\d\d\.$/) }),
+      expect.objectContaining({ issue: "STEP-8", question: true, text: expect.stringMatching(/^The automatic checks on .*\/pull\/2\|PR #2> failed again .*\n\nMy recommendation: have me start them once more\. Reply yes .* I go with my recommendation at \d\d:\d\d\.$/) }),
     ])
   })
 
@@ -219,7 +219,7 @@ describe("watchPrs, and the revise loop (STEP-3274)", () => {
         kind: "issue",
         issue: "STEP-7",
         question: true,
-        text: `<${PR1}|PR #1> still has review feedback after I worked on it 3 times (changes requested by nate).\n\nMy recommendation: leave it to a person. Reply yes to go with it, or tell me what you want instead. You can also reply "fix it" to have me try once more. If nobody answers, I do it at 15:00.`,
+        text: `<${PR1}|PR #1> still has review feedback after I worked on it 3 times (changes requested by nate).\n\nMy recommendation: leave it to a person. Reply yes to go with it, or tell me what you want instead. You can also reply "fix it" to have me try once more. I go with my recommendation at 15:00.`,
       }),
     ])
   })
@@ -404,9 +404,14 @@ describe("healthStatus and sentryCheckInUrl", () => {
     expect(healthStatus({ ...grew, outboxFailedBefore: null }).ok).toBe(true)
   })
 
-  it("reports Slack messages that have waited over an hour for Linear", () => {
-    expect(healthStatus({ ...ok, stuckInbox: 1 }).problems).toEqual(["1 Slack message has waited over an hour for Linear"])
-    expect(healthStatus({ ...ok, stuckInbox: 2 }).problems).toEqual(["2 Slack messages have waited over an hour for Linear"])
+  it("reports Slack requests that have waited over an hour for Linear", () => {
+    expect(healthStatus({ ...ok, stuckInbox: 1 }).problems).toEqual(["1 Slack request has waited over an hour for Linear"])
+    expect(healthStatus({ ...ok, stuckInbox: 2 }).problems).toEqual(["2 Slack requests have waited over an hour for Linear"])
+  })
+
+  it("reports people's Slack messages the front door has not closed in half an hour (STEP-3293 review)", () => {
+    expect(healthStatus({ ...ok, unhandledInbox: 1 }).problems).toEqual(["1 person's Slack message has waited over 30 minutes for the front door"])
+    expect(healthStatus({ ...ok, unhandledInbox: 3 }).problems).toEqual(["3 people's Slack messages have waited over 30 minutes for the front door"])
   })
 
   it("sets the status on the monitor's check-in URL", () => {
@@ -415,17 +420,22 @@ describe("healthStatus and sentryCheckInUrl", () => {
   })
 })
 
-describe("inboxStuck", () => {
-  it("counts the answers and unfiled intakes the bridge has retried for over an hour, and nothing that waits for the front door", () => {
+describe("inboxStuck and inboxUnhandled", () => {
+  it("counts the unfiled intakes the bridge has retried for over an hour, and apart from them, people's messages the front door left open for half an hour", () => {
     const paths = agentPaths(mkdtempSync(join(tmpdir(), "agentd-inbox-")))
     const old = "2026-09-24T10:30:00.000Z"
-    const recent = "2026-09-24T11:30:00.000Z"
+    const halfHour = "2026-09-24T11:25:00.000Z"
+    const recent = "2026-09-24T11:45:00.000Z"
     putOnce(paths.inbox, "a", { type: "answer", issue: "STEP-7", receivedAt: old })
     putOnce(paths.inbox, "b", { type: "intake", issue: null, receivedAt: old })
-    putOnce(paths.inbox, "c", { type: "answer", issue: "STEP-7", receivedAt: recent })
+    putOnce(paths.inbox, "c", { type: "reply", issue: "STEP-7", receivedAt: recent })
     putOnce(paths.inbox, "d", { type: "intake", issue: "STEP-9", receivedAt: old })
-    putOnce(paths.inbox, "e", { type: "mention", receivedAt: old })
-    expect(inboxStuck(paths, NOW)).toBe(2)
+    putOnce(paths.inbox, "e", { type: "mention", receivedAt: halfHour })
+    putOnce(paths.inbox, "f", { type: "reply", issue: "STEP-7", receivedAt: halfHour })
+    putOnce(paths.inbox, "g", { type: "instruction", receivedAt: old })
+    expect(inboxStuck(paths, NOW)).toBe(1)
+    // B1: a message the channel pushed into a session that never registered it waits here, and health says so.
+    expect(inboxUnhandled(paths, NOW)).toBe(3)
   })
 })
 

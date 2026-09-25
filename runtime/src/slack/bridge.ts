@@ -9,9 +9,10 @@
  *
  * It never decides what a person's words mean (STEP-3293): the front door
  * reads each reply in its own session, pushed by the Slack channel
- * (channel/server.ts), and answers, records a decision or acts. Only while
- * the front door is down does the bridge act on words itself, and only on
- * "pause" and "leave it". Anything else waits, with a note that it will.
+ * (channel/server.ts), and answers, records a decision or acts. The bridge
+ * acts on words itself only where waiting would hurt: "pause" always, and
+ * "leave it" while the front door is down. It never closes a message: the
+ * front door reads every one, with what the bridge did beside it.
  */
 
 import { randomUUID } from "node:crypto"
@@ -26,14 +27,14 @@ import { enqueueSlack, type ChannelKey } from "../outbox.ts"
 import { releasePidLock, takePidLock } from "../pidlock.ts"
 import { assertLinearKeyFile, loadSlackSecrets } from "../secrets.ts"
 import { onQueue } from "../select.ts"
-import { issueForThread, saveThread } from "../threads.ts"
+import { issueForThread, saveThread, threadFor } from "../threads.ts"
 import { createLinearTracker, type Tracker } from "../tracker.ts"
 import { classify, type Classified, type ClassifyContext, type SlackEnvelope } from "./classify.ts"
-import { parseInstruction, type InstructionEntry } from "./instruction.ts"
+import { parseInstruction, type Action, type InstructionEntry } from "./instruction.ts"
 import { isSlackTrouble, slackErrorCode, startOutbox, type SendContext, type SlackWeb } from "./send.ts"
 import { fromSlack, intakeIssue, mentionedUsers } from "./text.ts"
-import { frontDoorUp } from "../channel/state.ts"
-import { tickPath } from "../tick.ts"
+import { frontDoorUp, lastTickAt } from "../agentd/frontdoor.ts"
+import { NOTHING_NEEDED } from "../plain.ts"
 
 export interface BridgeWeb extends SlackWeb {
   userName(userId: string): Promise<string>
@@ -61,7 +62,12 @@ type IntakeEntry = Extract<Classified, { type: "intake" }> & {
   /** When Linear first refused it: the give-up day counts from here, not from the delivery. */
   failingSince?: string
 }
-type PersonEntry = Extract<Classified, { type: "reply" | "mention" }> & { userName: string; receivedAt: string; heldReplySent?: boolean }
+type PersonEntry = Extract<Classified, { type: "reply" | "mention" }> & {
+  userName: string
+  receivedAt: string
+  /** What the bridge did about the words itself (pause, leave), which the front door must not do again. */
+  acted?: Action[]
+}
 
 export async function handleEnvelope(deps: BridgeDeps, envelope: SlackEnvelope): Promise<Classified["type"]> {
   const c = classify(envelope, deps.classifyContext)
@@ -76,7 +82,11 @@ export async function handleEnvelope(deps: BridgeDeps, envelope: SlackEnvelope):
   // disk before any call that can wait on the network. The put is the dedupe:
   // a redelivery never files a second issue or applies an answer twice.
   const intake = c.type === "intake" ? { linearId: randomUUID(), issue: null } : {}
-  if (!putOnce(deps.paths.inbox, c.key, { ...c, userName: c.user, receivedAt, ...intake })) return c.type
+  // A reply keeps the question it answered, as the thread stood when it came:
+  // a question asked later never changes what their "yes" agreed to (STEP-3293 review).
+  const thread = c.type === "reply" && c.issue ? threadFor(deps.paths, c.issue) : null
+  const asked = c.type === "reply" ? { lastQuestion: thread?.lastQuestion ?? null, lastQuestionAt: thread?.lastQuestionAt ?? null } : {}
+  if (!putOnce(deps.paths.inbox, c.key, { ...c, userName: c.user, receivedAt, ...intake, ...asked })) return c.type
   // The sender's name, for the front door, the issue and the answer. Their user id when Slack cannot say.
   const userName = await deps.web.userName(c.user).catch(() => c.user)
   // For the front door and for the record a decision leaves on the issue: names for Slack's mention markup, and the message's link.
@@ -89,44 +99,64 @@ export async function handleEnvelope(deps: BridgeDeps, envelope: SlackEnvelope):
     if (entry) writeJsonAtomic(path, { ...entry, userName, ...(person ? { readableText, permalink } : {}) })
   }
   if (c.type === "intake") await fileIntake(deps, c.key)
-  if (person) holdIfDown(deps, c.key)
+  if (person) actForFrontDoor(deps, c.key)
   return c.type
 }
 
+/** What the bridge says in a thread while the front door cannot read it: a restart, a usage limit. */
+export const AWAY_NOTE = `I am not reading messages right now, and I will read this one as soon as I am back. ${NOTHING_NEEDED}`
+
 /**
- * A person's reply or mention is the front door's to read. While the front
- * door is down, the bridge acts on "pause" and "leave it" alone, through
- * agentd, and tells everyone else it will be back: it never records an answer
- * or reads other words itself. The message stays for the front door.
+ * A person's reply or mention is the front door's to read, and it stays in
+ * the inbox until the front door closes it. The bridge acts on the words
+ * itself only where waiting would hurt, through agentd: "pause" at once,
+ * always, since it is safe and only a person lifts it, and "leave it" too
+ * while the front door is down. The entry records what it did (`acted`), so
+ * the front door handles the rest of the words and does nothing twice. While
+ * the front door is down, it says so in the thread, once each time.
  */
-export function holdIfDown(deps: BridgeDeps, key: string): void {
+export function actForFrontDoor(deps: BridgeDeps, key: string): void {
   const path = entryPath(deps.paths.inbox, key)
   const entry = readJson<PersonEntry>(path)
-  if (!entry || entry.heldReplySent) return
+  if (!entry) return
   const now = deps.now()
-  const tick = readJson<{ at: string }>(tickPath(deps.paths))
-  if (frontDoorUp(deps.paths, deps.config, now, tick ? new Date(tick.at) : null)) return
+  const up = frontDoorUp(deps.paths, deps.config, now)
   const said = parseInstruction(entry.text)
-  const actions = said.actions.filter((a) => a === "pause" || a === "leave")
   const issue = entry.type === "reply" ? entry.issue : null
-  if (actions.length && (issue || said.target.issue || said.target.pr)) {
-    fileInstruction(deps, {
-      issue, channel: entry.channel, ts: entry.ts, threadTs: entry.threadTs, user: entry.user, userName: entry.userName, text: entry.text, actions, target: said.target,
+  const acted = entry.acted ?? []
+  const due = said.actions.filter((a) => (a === "pause" || (a === "leave" && !up)) && !acted.includes(a))
+  if (due.length && (issue || said.target.issue || said.target.pr)) {
+    // A key of its own: the front door's instruct files instr:<channel>:<ts> for the rest of the words.
+    fileInstruction(deps, `instr:bridge-${due.join("-")}:${entry.channel}:${entry.ts}`, {
+      issue, channel: entry.channel, ts: entry.ts, threadTs: entry.threadTs, user: entry.user, userName: entry.userName, text: entry.text, actions: due, target: said.target,
     })
-    ack(deps.paths.inbox, key)
-    return
+    writeJsonAtomic(path, { ...entry, acted: [...acted, ...due] })
   }
-  writeJsonAtomic(path, { ...entry, heldReplySent: true })
-  enqueueSlack(deps.paths, { kind: "reply", channelId: entry.channel, threadTs: entry.threadTs, text: "I am restarting and will reply here shortly." }, now)
-  deps.log.info("front door down: held a message for it", { key })
+  if (!up) tellAway(deps, entry, now)
+}
+
+const awayNotesPath = (paths: AgentPaths) => join(paths.state, "front-door-away-notes.json")
+
+/**
+ * The away note, once per thread for each time the front door is down: the
+ * time it last woke up names the outage, and a later wakeup starts a new one.
+ */
+function tellAway(deps: BridgeDeps, entry: PersonEntry, now: Date): void {
+  const outage = lastTickAt(deps.paths)?.toISOString() ?? "never"
+  const thread = `${entry.channel}:${entry.threadTs}`
+  const notes = readJson<Record<string, string>>(awayNotesPath(deps.paths)) ?? {}
+  if (notes[thread] === outage) return
+  const current = Object.fromEntries(Object.entries(notes).filter(([, at]) => at === outage))
+  writeJsonAtomic(awayNotesPath(deps.paths), { ...current, [thread]: outage })
+  enqueueSlack(deps.paths, { kind: "reply", channelId: entry.channel, threadTs: entry.threadTs, text: AWAY_NOTE }, now)
+  deps.log.info("front door down: told the thread", { key: entry.key })
 }
 
 /**
  * An instruction for agentd (agentd/instructions.ts), which acts on it within
- * seconds and replies in words. Filed once per message.
+ * seconds and replies in words. Filed once per key.
  */
-function fileInstruction(deps: BridgeDeps, entry: Omit<InstructionEntry, "type" | "key" | "receivedAt">): void {
-  const key = `instr:${entry.channel}:${entry.ts}`
+function fileInstruction(deps: BridgeDeps, key: string, entry: Omit<InstructionEntry, "type" | "key" | "receivedAt">): void {
   const filed: InstructionEntry = { type: "instruction", key, ...entry, receivedAt: deps.now().toISOString() }
   if (putOnce(deps.paths.inbox, key, filed)) appendLedger(deps.paths, { type: "instruction.received", issue: entry.issue ?? entry.target.issue ?? undefined, actions: entry.actions }, deps.now())
 }
@@ -230,11 +260,11 @@ export async function fileIntake(deps: BridgeDeps, key: string): Promise<void> {
   })
 }
 
-/** Every minute: intakes not yet filed, and a note to anyone whose message waits while the front door is down. */
+/** Every minute: intakes not yet filed, and for a person's message still open, what actForFrontDoor does now the front door is up or down. */
 export async function retryPending(deps: BridgeDeps): Promise<void> {
   for (const { key, payload } of listNew<{ type: string; issue?: string | null }>(deps.paths.inbox)) {
     if (payload.type === "intake" && !payload.issue) await fileIntake(deps, key)
-    if (payload.type === "reply" || payload.type === "mention") holdIfDown(deps, key)
+    if (payload.type === "reply" || payload.type === "mention") actForFrontDoor(deps, key)
   }
 }
 

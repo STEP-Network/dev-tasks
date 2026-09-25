@@ -9,7 +9,6 @@
 import { existsSync } from "node:fs"
 import { join } from "node:path"
 import { openDecisions } from "./agentd/decisions.ts"
-import { inFlight, readChannelState } from "./channel/state.ts"
 import type { AgentConfig, AgentPaths } from "./config.ts"
 import { listNew, readJson, writeJsonAtomic } from "./fsq.ts"
 import { threadFor } from "./threads.ts"
@@ -41,6 +40,8 @@ export interface InboxEvent {
   question?: string
   /** Set on reply: the decision agentd waits on for the issue, with the reply it takes by default. */
   decision?: { id: string; defaultReply: string; replies: string[] }
+  /** Set on a reply or mention the bridge acted on itself (pause, leave): done already, so never again. */
+  acted?: string[]
 }
 
 export interface Digest {
@@ -86,6 +87,10 @@ type StoredEntry = {
   text: string
   receivedAt: string
   filedBy?: string
+  /** On a reply: the last question this mini had asked in the thread when the bridge filed it (STEP-3293). */
+  lastQuestion?: string | null
+  lastQuestionAt?: string | null
+  acted?: string[]
 }
 
 /** The types the front door reads. "answer" is a reply filed before STEP-3293, read the same way. */
@@ -108,7 +113,8 @@ export function pauseReason(paths: AgentPaths): string | null {
 function toEvent(paths: AgentPaths, p: StoredEntry, queue: AgentConfig["queue"]): InboxEvent {
   const reply = p.type === "reply" || p.type === "answer"
   const decision = reply && p.issue ? openDecisions(paths, p.issue)[0] : undefined
-  const question = reply && p.issue ? threadFor(paths, p.issue)?.lastQuestion : undefined
+  // The question they answered: the one asked before the bridge filed the reply. Older entries carry none, and the thread's stands in.
+  const question = reply && p.issue ? (p.lastQuestionAt !== undefined ? p.lastQuestion : threadFor(paths, p.issue)?.lastQuestion) : undefined
   return {
     key: p.key,
     type: p.type === "intake" ? "intake" : reply ? "reply" : "mention",
@@ -124,6 +130,7 @@ function toEvent(paths: AgentPaths, p: StoredEntry, queue: AgentConfig["queue"])
     ...(p.filedBy ? { filedBy: p.filedBy } : {}),
     ...(question ? { question } : {}),
     ...(decision ? { decision: { id: decision.id, defaultReply: decision.defaultReply, replies: decision.options.map((o) => o.reply) } } : {}),
+    ...(p.acted?.length ? { acted: p.acted } : {}),
   }
 }
 
@@ -146,11 +153,10 @@ export async function buildDigest(deps: DigestDeps): Promise<Digest> {
   writeJsonAtomic(tickPath(paths), { at: now.toISOString() })
   const paused = existsSync(paths.pauseFile)
 
-  // What the Slack channel pushed into this session minutes ago, the front door is on already (STEP-3293).
-  const channel = readChannelState(paths)
-  const events = inboxEvents(paths, config)
-    .filter((e) => !inFlight(channel, e.key, now))
-    .slice(0, 10)
+  // Every message not closed yet, pushed by the Slack channel or not: Claude
+  // Code drops a push it did not register the channel for, and says nothing
+  // (STEP-3293 review). Closing one twice is refused, so it is handled once.
+  const events = inboxEvents(paths, config).slice(0, 10)
 
   const finished = listJobs(paths, "done").filter((j) => !j.reported)
   for (const job of finished) updateJob(paths, "done", job.id, { reported: true })

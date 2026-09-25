@@ -72,8 +72,9 @@ export type AnyInstructionEntry = InstructionEntry | MondayInstructionEntry
  * What a person's words on an issue are: an instruction when they name an
  * action, or null for an answer. A reply to a question the issue waits on
  * (awaiting-answer), or to a person's to-do (human-todo), stays an answer
- * whatever words it uses. The Slack bridge's applyAnswer applies the same
- * rule in place, and the Monday bridge through this (monday/route.ts).
+ * whatever words it uses. The Monday bridge applies it through this
+ * (monday/route.ts). In Slack the front door reads each reply itself
+ * (STEP-3293), and instruct files only the actions the words name.
  */
 export function instructionFor(text: string, issue: { labels: readonly string[] }): Instruction | null {
   const said = parseInstruction(text)

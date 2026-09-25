@@ -2,10 +2,11 @@
  * The Slack channel's MCP server (channel/channel.ts), over stdio. The
  * dev-tasks plugin declares it (plugin/.mcp.json, through
  * plugin/scripts/slack-channel.mjs), and agentd starts the front door with
- * `--channels plugin:dev-tasks@dev-tasks-marketplace`, which the mini's
- * managed settings approve (runbook section 8). It is a channel only in the
- * front door's own session, which agentd marks AGENTD_FRONT_DOOR=1: in any
- * other session on the mini it declares nothing and pushes nothing.
+ * `--channels plugin:dev-tasks@dev-tasks-marketplace` when the mini's
+ * managed settings approve it (runbook section 1). It is a channel only in a
+ * session agentd started that way, which it marks AGENTD_FRONT_DOOR=1 and
+ * AGENTD_CHANNEL=1: in any other session on the mini it declares nothing and
+ * pushes nothing.
  *
  * It has no tools, and it never asks to relay permission prompts
  * (claude/channel/permission): the front door acts through agentctl alone,
@@ -24,8 +25,8 @@ export interface ChannelServerOptions {
   paths: AgentPaths
   config: AgentConfig
   now: () => Date
-  /** AGENTD_FRONT_DOOR=1: the front door's own session. */
-  frontDoor: boolean
+  /** AGENTD_FRONT_DOOR=1 and AGENTD_CHANNEL=1: the front door's own session, started with --channels. */
+  live: boolean
   pid: number
 }
 
@@ -34,15 +35,15 @@ export function createChannelServer(o: ChannelServerOptions): { server: Server; 
   const server = new Server(
     { name: "slack", version: "1.0.0" },
     {
-      capabilities: { tools: {}, ...(o.frontDoor ? { experimental: { "claude/channel": {} } } : {}) },
-      ...(o.frontDoor ? { instructions: CHANNEL_INSTRUCTIONS } : {}),
+      capabilities: { tools: {}, ...(o.live ? { experimental: { "claude/channel": {} } } : {}) },
+      ...(o.live ? { instructions: CHANNEL_INSTRUCTIONS } : {}),
     },
   )
   server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: [] }))
   let timer: NodeJS.Timeout | null = null
   let busy = false
   const start = () => {
-    if (!o.frontDoor || timer) return
+    if (!o.live || timer) return
     const channel = new SlackChannel({
       paths: o.paths,
       config: o.config,
@@ -79,7 +80,7 @@ if (process.argv[1]?.endsWith("channel/server.ts")) {
     paths,
     config: loadConfig(paths),
     now: () => new Date(),
-    frontDoor: process.env.AGENTD_FRONT_DOOR === "1",
+    live: process.env.AGENTD_FRONT_DOOR === "1" && process.env.AGENTD_CHANNEL === "1",
     pid: process.pid,
   })
   const transport = new StdioServerTransport()

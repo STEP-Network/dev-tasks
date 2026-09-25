@@ -172,7 +172,7 @@ describe("applyFrontDoor", () => {
     const next = await applyFrontDoor(deps, FRESH_FRONT_DOOR, { kind: "start", mode: "new", reason: "first start", fastExits: 0 })
     // Its own settings file, which install.sh renders: a person's own sessions keep the user's settings.
     expect(f.lines()[0]).toBe(
-      `tmux -L agentd new-session -d -s frontdoor -e AGENTD_FRONT_DOOR=1 -x 220 -y 60 -c /Users/eve/polads /usr/local/bin/claude --channels plugin:dev-tasks@dev-tasks-marketplace --settings ${paths.root}/front-door-settings.json --model sonnet --permission-mode auto --permission-prompts none '/loop /dev-tasks:front-door'`,
+      `tmux -L agentd new-session -d -s frontdoor -e AGENTD_FRONT_DOOR=1 -e AGENTD_CHANNEL=1 -x 220 -y 60 -c /Users/eve/polads /usr/local/bin/claude --channels plugin:dev-tasks@dev-tasks-marketplace --settings ${paths.root}/front-door-settings.json --model sonnet --permission-mode auto --permission-prompts none '/loop /dev-tasks:front-door'`,
     )
     expect(next).toMatchObject({ sessionId: null, lastStartAt: NOW.toISOString(), starts: [NOW.toISOString()], waitUntil: null, kickedAt: null })
   })
@@ -194,6 +194,8 @@ describe("applyFrontDoor", () => {
       await applyFrontDoor({ ...deps, log: { ...quiet, warn: (m, fields) => warnings.push([m, fields]) } }, FRESH_FRONT_DOOR, { kind: "start", mode: "new", reason: "first start", fastExits: 0 })
       expect(f.lines()[0], label).toContain("new-session")
       expect(f.lines()[0], label).not.toContain("--channels")
+      // Nor the mark the plugin runs its channel server on (STEP-3293 review).
+      expect(f.lines()[0], label).not.toContain("AGENTD_CHANNEL")
       expect(warnings, label).toEqual([["front door started without the Slack channel", { why: expect.stringContaining(deps.managedSettings) }]])
     }
   })
@@ -204,6 +206,7 @@ describe("applyFrontDoor", () => {
     const config = { ...deps.config, frontDoor: { ...deps.config.frontDoor, channel: false } }
     await applyFrontDoor({ ...deps, config, log: { ...quiet, warn: (m) => warnings.push(m) } }, FRESH_FRONT_DOOR, { kind: "start", mode: "new", reason: "first start", fastExits: 0 })
     expect(f.lines()[0]).not.toContain("--channels")
+    expect(f.lines()[0]).not.toContain("AGENTD_CHANNEL")
     expect(warnings).toEqual([])
   })
 

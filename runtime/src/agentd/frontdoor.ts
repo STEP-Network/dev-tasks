@@ -30,7 +30,7 @@ import { readJson, writeJsonAtomic } from "../fsq.ts"
 import { appendLedger, type Logger } from "../log.ts"
 import { enqueueSlack } from "../outbox.ts"
 import { tickPath } from "../tick.ts"
-import { limitedUntil, type UsageSnapshot } from "../usage.ts"
+import { limitedUntil, readUsage, type UsageSnapshot } from "../usage.ts"
 import type { Exec } from "../worker/git.ts"
 
 export const LOOP_PROMPT = "/loop /dev-tasks:front-door"
@@ -220,6 +220,22 @@ export function lastTickAt(paths: AgentPaths): Date | null {
   return tick ? new Date(tick.at) : null
 }
 
+/**
+ * Whether the front door will read a message soon (STEP-3293 review): it
+ * woke up within staleTickMinutes, it is not at its usage limit, and agentd
+ * is not holding it back. Its wakeups decide, never the Slack channel's
+ * heartbeat alone: the channel process outlives a front door stuck at its
+ * usage limit, and can die on its own while the front door still wakes up
+ * and reads the digest.
+ */
+export function frontDoorUp(paths: AgentPaths, config: Pick<AgentConfig, "frontDoor">, now: Date): boolean {
+  const tick = lastTickAt(paths)
+  if (!tick || now.getTime() - tick.getTime() >= config.frontDoor.staleTickMinutes * 60_000) return false
+  const held = readFrontDoorState(paths).waitUntil
+  if (held && Date.parse(held) > now.getTime()) return false
+  return limitedUntil(readUsage(paths), now) === null
+}
+
 /** tmux on the front door's own server, by the absolute path install.sh recorded. */
 function tmuxOn(deps: { exec: Exec; config: AgentConfig }, args: string[]) {
   return deps.exec(deps.config.frontDoor.tmuxPath, ["-L", TMUX_SOCKET, ...args], { timeoutMs: TMUX_TIMEOUT_MS })
@@ -287,14 +303,18 @@ export async function applyFrontDoor(deps: FrontDoorDeps, state: FrontDoorState,
   if (refusal) throw new FrontDoorRefused(refusal)
   if (action.kind === "restart") await tmux(["kill-session", "-t", `=${session}`])
   const resumeId = action.kind === "restart" || action.mode === "resume" ? state.sessionId : null
+  const channel = slackChannel(deps)
   const command = claudeCommand({
     claudePath: deps.config.frontDoor.claudePath,
     resumeId,
     model: deps.config.frontDoor.model,
     settingsPath: frontDoorSettingsPath(deps.paths),
-    channel: slackChannel(deps),
+    channel,
   })
-  const r = await tmux(["new-session", "-d", "-s", session, "-e", "AGENTD_FRONT_DOOR=1", "-x", "220", "-y", "60", "-c", deps.config.repo.path, command])
+  // AGENTD_CHANNEL=1 only beside --channels: the plugin runs the channel server
+  // where Claude Code was asked to register it, and nowhere else (STEP-3293 review).
+  const env = ["-e", "AGENTD_FRONT_DOOR=1", ...(channel ? ["-e", "AGENTD_CHANNEL=1"] : [])]
+  const r = await tmux(["new-session", "-d", "-s", session, ...env, "-x", "220", "-y", "60", "-c", deps.config.repo.path, command])
   if (r.code !== 0) throw new Error(`tmux new-session failed (${r.code}): ${r.stderr.trim()}`)
   const mode = resumeId ? "resume" : "new"
   appendLedger(deps.paths, { type: "frontdoor.start", mode, reason: action.reason }, now)

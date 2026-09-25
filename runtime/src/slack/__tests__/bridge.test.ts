@@ -8,11 +8,14 @@ import { describe, expect, it, vi } from "vitest"
 import { agentPaths, ConfigSchema } from "../../config.ts"
 import { countIn, listNew, putOnce } from "../../fsq.ts"
 import type { Logger } from "../../log.ts"
-import { threadFor } from "../../threads.ts"
+import { saveThread, threadFor } from "../../threads.ts"
 import { writeChannelState } from "../../channel/state.ts"
+import { tickPath } from "../../tick.ts"
+import { usagePath } from "../../usage.ts"
 import { createLinearTracker } from "../../tracker.ts"
 import { fakeTracker, issue } from "../../__tests__/fakes.ts"
 import {
+  AWAY_NOTE,
   bridgeStatus,
   checkLocal,
   exitCodeFor,
@@ -238,16 +241,23 @@ describe("intake", () => {
   })
 })
 
+/** The front door woke up at `at` (its digest's heartbeat): up within frontDoor.staleTickMinutes, 75 by default. */
+const wokeAt = (paths: BridgeDeps["paths"], at: string) => {
+  mkdirSync(paths.state, { recursive: true })
+  writeFileSync(tickPath(paths), JSON.stringify({ at }))
+}
+const up = (paths: BridgeDeps["paths"]) => wokeAt(paths, "2026-09-24T07:59:00.000Z")
+const down = (paths: BridgeDeps["paths"]) => wokeAt(paths, "2026-09-24T06:30:00.000Z")
+
 describe("replies in a thread the mini owns (STEP-3293)", () => {
   const reply = (ts: string, text: string, extra: Record<string, unknown> = {}): SlackEnvelope => ({
     team_id: "T1",
     event: { type: "message", user: "UNATE", channel: "CQ", ts, thread_ts: "1700.1", text, ...extra },
   })
   const PARKED = issue({ id: "STEP-7", state: "On hold", labels: ["polads", "agent-ready", "awaiting-answer"], description: "## Goal\n\nFix it." })
-  /** The front door's session holds the channel open: its heartbeat is fresh. */
-  const up = (paths: BridgeDeps["paths"], at = "2026-09-24T07:59:30.000Z") =>
-    writeChannelState(paths, { pid: 1, at, connectedAt: "2026-09-24T07:00:00.000Z", delivered: {} })
-  const down = (paths: BridgeDeps["paths"]) => up(paths, "2026-09-24T07:50:00.000Z")
+  const replies = (paths: BridgeDeps["paths"]) => listNew<{ type: string; key: string; acted?: string[] }>(paths.inbox).map((e) => e.payload).filter((p) => p.type === "reply")
+  const instructions = (paths: BridgeDeps["paths"]) =>
+    listNew<{ type: string; key: string; actions?: string[] }>(paths.inbox).map((e) => e.payload).filter((p) => p.type === "instruction").map((p) => [p.key, p.actions]).sort((a, b) => String(a[0]).localeCompare(String(b[0])))
 
   it("go to the front door as they are, and the bridge records nothing: Nate's 'what do you recommend?' on STEP-3225", async () => {
     const { deps, fake, paths } = setup([PARKED])
@@ -268,15 +278,38 @@ describe("replies in a thread the mini owns (STEP-3293)", () => {
     expect(listNew(paths.outbox)).toEqual([])
   })
 
+  it("keep the question they answered, as the thread stood when they came (STEP-3293 review)", async () => {
+    const { deps, paths } = setup([PARKED])
+    up(paths)
+    saveThread(paths, { issue: "STEP-7", channelId: "CQ", ts: "1700.1", permalink: null, createdAt: "2026-09-24T07:00:00.000Z", lastQuestionAt: "2026-09-24T07:30:00.000Z", lastQuestion: "Which date?\n\nMy recommendation: the publication date. Reply yes to go with it, or tell me what you want instead." })
+    await handleEnvelope(deps, reply("1700.5", "yes"))
+    // A later question changes the thread, never the reply already filed.
+    saveThread(paths, { ...threadFor(paths, "STEP-7")!, lastQuestionAt: "2026-09-24T08:05:00.000Z", lastQuestion: "And the footer?" })
+    expect(replies(paths)[0]).toMatchObject({ lastQuestionAt: "2026-09-24T07:30:00.000Z", lastQuestion: expect.stringContaining("the publication date") })
+  })
+
   it("that name one of the fixed actions go to the front door too, which reads them, while it is up", async () => {
     const { deps, paths } = setup([issue({ id: "STEP-7", state: "In Review", labels: ["polads", "agent-ready"] })])
     up(paths)
     await handleEnvelope(deps, reply("1700.5", "fix it and merge"))
-    expect(listNew<{ type: string }>(paths.inbox).map((e) => e.payload.type)).toEqual(["reply"])
+    await handleEnvelope(deps, reply("1700.6", "leave it, I'll take it"))
+    expect(listNew<{ type: string }>(paths.inbox).map((e) => e.payload.type)).toEqual(["reply", "reply"])
     expect(listNew(paths.outbox)).toEqual([])
   })
 
-  it("while the front door is down: pause and leave act through agentd, and anything else waits for it, with one note", async () => {
+  it("act on pause at once, even with the front door up, and leave the message for it with what they did (STEP-3293 review)", async () => {
+    // A pause is safe, and only a person lifts it: it never waits for a front door stuck at its usage limit.
+    const { deps, paths } = setup([PARKED])
+    up(paths)
+    await handleEnvelope(deps, reply("1700.5", "pause, and fix the failing test when you are back"))
+    await retryPending(deps)
+    expect(instructions(paths)).toEqual([["instr:bridge-pause:CQ:1700.5", ["pause"]]])
+    // The rest of the words, "fix the failing test", are the front door's: the message stays open.
+    expect(replies(paths)).toEqual([expect.objectContaining({ key: "msg:CQ:1700.5", acted: ["pause"] })])
+    expect(listNew(paths.outbox)).toEqual([])
+  })
+
+  it("while the front door is down: pause and leave act through agentd, nothing is closed, and each thread hears once (STEP-3293 review)", async () => {
     const { deps, paths } = setup([PARKED])
     down(paths)
     await handleEnvelope(deps, reply("1700.5", "pause for now"))
@@ -284,27 +317,48 @@ describe("replies in a thread the mini owns (STEP-3293)", () => {
     await handleEnvelope(deps, reply("1700.7", "fix it and merge"))
     await handleEnvelope(deps, reply("1700.8", "don't pause, what do you recommend?"))
     await retryPending(deps)
-    const inbox = listNew<{ type: string; actions?: string[]; key: string }>(paths.inbox).map((e) => e.payload)
-    expect(inbox.filter((p) => p.type === "instruction").map((p) => [p.key, p.actions])).toEqual([
-      ["instr:CQ:1700.5", ["pause"]],
-      ["instr:CQ:1700.6", ["leave"]],
+    await retryPending(deps)
+    expect(instructions(paths)).toEqual([
+      ["instr:bridge-leave:CQ:1700.6", ["leave"]],
+      ["instr:bridge-pause:CQ:1700.5", ["pause"]],
     ])
-    // Nothing is recorded or revised on the bridge's own reading: those two wait for the front door.
-    expect(inbox.filter((p) => p.type === "reply").map((p) => p.key)).toEqual(["msg:CQ:1700.7", "msg:CQ:1700.8"])
-    expect(outboxTexts(paths)).toEqual(["I am restarting and will reply here shortly.", "I am restarting and will reply here shortly."])
+    // Nothing is recorded, revised or closed on the bridge's own reading: all four wait for the front door.
+    expect(replies(paths).map((p) => [p.key, p.acted])).toEqual([
+      ["msg:CQ:1700.5", ["pause"]],
+      ["msg:CQ:1700.6", ["leave"]],
+      ["msg:CQ:1700.7", undefined],
+      ["msg:CQ:1700.8", undefined],
+    ])
+    expect(outboxTexts(paths)).toEqual([AWAY_NOTE])
+    expect(AWAY_NOTE).toBe("I am not reading messages right now, and I will read this one as soon as I am back. Nothing needed from you.")
+    // The front door woke up, then went away again: a new outage, a new note.
+    wokeAt(paths, "2026-09-24T06:40:00.000Z")
+    await handleEnvelope(deps, reply("1700.9", "and the label?"))
+    expect(outboxTexts(paths)).toEqual([AWAY_NOTE, AWAY_NOTE])
   })
 
-  it("judge a front door that never had a channel by its last wakeup", async () => {
-    const quiet = setup([PARKED])
-    mkdirSync(quiet.paths.state, { recursive: true })
-    writeFileSync(join(quiet.paths.state, "frontdoor-tick.json"), JSON.stringify({ at: "2026-09-24T07:30:00.000Z" }))
-    await handleEnvelope(quiet.deps, reply("1700.5", "what do you recommend?"))
-    expect(listNew(quiet.paths.outbox)).toEqual([])
-    const gone = setup([PARKED])
-    mkdirSync(gone.paths.state, { recursive: true })
-    writeFileSync(join(gone.paths.state, "frontdoor-tick.json"), JSON.stringify({ at: "2026-09-24T06:30:00.000Z" }))
-    await handleEnvelope(gone.deps, reply("1700.5", "what do you recommend?"))
-    expect(outboxTexts(gone.paths)).toEqual(["I am restarting and will reply here shortly."])
+  it("judge the front door by its wakeups and its usage limit, never by the channel's heartbeat alone (STEP-3293 review)", async () => {
+    const fresh = { pid: 1, at: "2026-09-24T07:59:50.000Z", connectedAt: "2026-09-24T07:00:00.000Z", delivered: {} }
+    // The channel process is alive, the front door stopped waking up an hour and a half ago.
+    const stuck = setup([PARKED])
+    down(stuck.paths)
+    writeChannelState(stuck.paths, fresh)
+    await handleEnvelope(stuck.deps, reply("1700.5", "what do you recommend?"))
+    expect(outboxTexts(stuck.paths)).toEqual([AWAY_NOTE])
+    // The channel process died on its own: the front door still wakes up and reads the digest.
+    const alone = setup([PARKED])
+    up(alone.paths)
+    writeChannelState(alone.paths, { ...fresh, at: "2026-09-24T07:20:00.000Z" })
+    await handleEnvelope(alone.deps, reply("1700.5", "what do you recommend?"))
+    expect(listNew(alone.paths.outbox)).toEqual([])
+    // At its usage limit, however recent its last wakeup.
+    const limited = setup([PARKED])
+    up(limited.paths)
+    const resets = Math.round(Date.parse("2026-09-24T10:00:00.000Z") / 1000)
+    writeFileSync(usagePath(limited.paths), JSON.stringify({ at: "2026-09-24T07:59:00.000Z", fiveHourPct: 100, fiveHourResetsAt: resets, sevenDayPct: 50, sevenDayResetsAt: resets + 86_400 }))
+    await handleEnvelope(limited.deps, reply("1700.5", "pause please"))
+    expect(outboxTexts(limited.paths)).toEqual([AWAY_NOTE])
+    expect(instructions(limited.paths)).toEqual([["instr:bridge-pause:CQ:1700.5", ["pause"]]])
   })
 
   it("carry their words readably, for the front door and for the decision a person makes", async () => {
@@ -359,20 +413,25 @@ describe("mentions", () => {
 })
 
 describe("mentions that name a PR (STEP-3293)", () => {
-  it("go to the front door, which reads them, and act on the bridge's reading only while it is down, for pause and leave", async () => {
+  it("go to the front door, which reads them: the bridge acts on pause alone while it is up, and on leave too while it is down", async () => {
     const at = (ts: string, text: string): SlackEnvelope => ({ team_id: "T1", event: { type: "app_mention", user: "UNATE", channel: "CAG", ts, text } })
+    const payloads = (paths: BridgeDeps["paths"]) => listNew<{ type: string; ts?: string; actions?: string[]; target?: unknown }>(paths.inbox).map((e) => e.payload)
     const upNow = setup()
-    writeChannelState(upNow.paths, { pid: 1, at: "2026-09-24T07:59:30.000Z", connectedAt: "2026-09-24T07:00:00.000Z", delivered: {} })
+    up(upNow.paths)
     await handleEnvelope(upNow.deps, at("1950.1", "<@UBOT> fix <https://github.com/STEP-Network/v0-politiske-annoncer/pull/1679|#1679> and merge"))
-    expect(listNew<{ type: string }>(upNow.paths.inbox).map((e) => e.payload.type)).toEqual(["mention"])
+    await handleEnvelope(upNow.deps, at("1950.4", "<@UBOT> leave #1680 to me, I'll take it"))
+    expect(payloads(upNow.paths).map((p) => p.type)).toEqual(["mention", "mention"])
     const downNow = setup()
-    writeChannelState(downNow.paths, { pid: 1, at: "2026-09-24T07:50:00.000Z", connectedAt: "2026-09-24T07:00:00.000Z", delivered: {} })
+    down(downNow.paths)
     await handleEnvelope(downNow.deps, at("1950.2", "<@UBOT> pause #1679"))
     await handleEnvelope(downNow.deps, at("1950.3", "<@UBOT> pause for a bit"))
-    expect(listNew<{ type: string; actions?: string[]; target?: unknown }>(downNow.paths.inbox).map((e) => e.payload)).toEqual([
+    expect(payloads(downNow.paths).filter((p) => p.type === "instruction")).toEqual([
       expect.objectContaining({ type: "instruction", issue: null, threadTs: "1950.2", actions: ["pause"], target: { pr: 1679 } }),
-      // A mention that names no issue or PR waits for the front door.
-      expect.objectContaining({ type: "mention", ts: "1950.3" }),
+    ])
+    // Both stay for the front door: the first with what the bridge did, the second, naming no issue or PR, as it came.
+    expect(payloads(downNow.paths).filter((p) => p.type === "mention").map((p) => [p.ts, (p as { acted?: string[] }).acted])).toEqual([
+      ["1950.2", ["pause"]],
+      ["1950.3", undefined],
     ])
   })
 })

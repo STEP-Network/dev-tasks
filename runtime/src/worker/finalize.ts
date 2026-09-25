@@ -220,8 +220,8 @@ async function settle(ctx: FinalizeContext, outcome: Outcome, progress: { pushed
 
   if (status === "needs_input") {
     // The question first, as a local write. Should the park then fail, the
-    // runner reports it, and the answer still reaches the issue: the bridge
-    // appends it whatever the state.
+    // runner reports it, and the answer still reaches the issue: the front
+    // door records it (agentctl decide) whatever the state.
     inThread(askWithRecommendation(outcome.report!.question!, outcome.report!.recommendation))
     post(`${issue.id}: I have a question before I can go on. It is in the issue's thread: please answer there.`)
     await ctx.tracker.updateIssue(issue.id, { state: "On hold", addLabels: ["awaiting-answer"] })

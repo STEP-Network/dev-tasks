@@ -392,6 +392,11 @@ describe("/front-door: talking with the agent in Slack (STEP-3293)", () => {
   it("reads a pushed Slack message as the digest's event, and closes each one once", () => {
     expect(source).toContain('`<channel source="..." key="..." kind="..." ...>their words</channel>`')
     expect(source).toMatch(/handle each once, whichever way it came, and close it/)
+    // The digest offers pushed messages too, a redelivery is acked first, and what the bridge did is never done twice (STEP-3293 review).
+    expect(source).toMatch(/The digest lists every message not closed yet, pushed\s+or not/)
+    expect(source).toMatch(/before any other answer, ack it first/)
+    expect(source).not.toMatch(/check the thread\s+before you answer it twice/)
+    expect(source).toMatch(/`acted` lists what the bridge did about the words itself/)
   })
 
   it("has one call for each kind of reply: a decision, a question back, an instruction, and asks when unsure", () => {
@@ -399,7 +404,13 @@ describe("/front-door: talking with the agent in Slack (STEP-3293)", () => {
     expect(source).toContain("~/.agentd/bin/agentctl decide --key <key> --text-file ~/.front-door/decision-<ts>.md")
     expect(source).toMatch(/Never record a bare\s+"yes"/)
     expect(source).toMatch(/\*\*A question back\*\*[\s\S]*The issue keeps waiting\. Then ack it\./)
+    // A question back is a new question, so a later yes agrees to the new recommendation (STEP-3293 review).
+    expect(source).toContain("~/.agentd/bin/agentctl ask --issue <issue> --text-file ~/.front-door/ask-<issue>.md --recommendation-file ~/.front-door/rec-<issue>.md")
+    expect(source).toMatch(/Never put a recommendation in `agentctl slack reply`/)
     expect(source).toContain("~/.agentd/bin/agentctl instruct --key <key> --actions revise,merge")
+    expect(source).toMatch(/naming only the actions their own words ask for/)
+    // A yes on a person's to-do means they will do it.
+    expect(source).toMatch(/\*\*On an issue waiting on a person's hands\*\* \(`human-todo`\): a "yes"\s+means they will do it, so ack it\./)
     expect(source).toMatch(/\*\*Unsure\*\* which it is: reply "Is that your decision, or a question for\s+me\?" and ack it\./)
     // The bridge no longer records answers: its old promise is gone.
     expect(source).not.toMatch(/the bridge writes them into the issue/)
@@ -411,13 +422,26 @@ describe("/front-door: talking with the agent in Slack (STEP-3293)", () => {
 })
 
 describe("every question to a person carries a recommendation (STEP-3293)", () => {
-  it("goes out through agentctl ask with --recommendation-file, in every skill", () => {
-    const asks = readdirSync(resolve(PLUGIN_ROOT, "skills")).flatMap((name) => {
+  const skills = () =>
+    readdirSync(resolve(PLUGIN_ROOT, "skills")).flatMap((name) => {
       const file = resolve(PLUGIN_ROOT, "skills", name, "SKILL.md")
-      if (!existsSync(file)) return []
-      return readFileSync(file, "utf-8").split("\n").filter((l) => /agentctl ask --issue/.test(l)).map((l) => [name, l.trim()])
+      return existsSync(file) ? [[name, readFileSync(file, "utf-8")] as const] : []
     })
+
+  it("goes out through agentctl ask with --recommendation-file, in every skill, or as a hand-off", () => {
+    const asks = skills().flatMap(([name, text]) => text.split("\n").filter((l) => /agentctl ask --issue/.test(l)).map((l) => [name, l.trim()]))
     expect(asks.length).toBeGreaterThanOrEqual(3)
-    for (const [name, line] of asks) expect(line, name).toContain("--recommendation-file")
+    for (const [name, line] of asks) expect(line, name).toMatch(/--recommendation-file|--handoff$/)
+  })
+
+  it("hands a person's to-do over with --handoff, never a recommendation a yes could agree to (STEP-3293 review)", () => {
+    const handoffs = skills().filter(([, text]) => /Needs a person:/.test(text))
+    expect(handoffs.map(([name]) => name).sort()).toEqual(expect.arrayContaining(["front-door", "refine"]))
+    for (const [name, text] of handoffs) {
+      const after = text.slice(text.indexOf("Needs a person:"))
+      const ask = after.split("\n").find((l) => /agentctl ask --issue/.test(l))
+      expect(ask, name).toMatch(/--handoff$/)
+      expect(after.slice(0, after.indexOf(ask!)), name).not.toMatch(/rec-/)
+    }
   })
 })

@@ -1,5 +1,6 @@
 /** The two human-readable outputs of agentctl: status now, and the ledger over a period. */
 
+import { plural } from "../plain.ts"
 import type { UsageSnapshot } from "../usage.ts"
 
 export interface StatusInput {
@@ -15,7 +16,8 @@ export interface StatusInput {
   heldBack: string[]
   bridge: { at: string; connected: boolean; outboxWaiting: number; outboxFailed: number; error?: string; stopped?: boolean } | null
   /** The Slack channel into the front door's session (STEP-3293): its heartbeat, and the messages waiting for the front door. */
-  channel?: { at: string | null; waiting: number; enabled: boolean }
+  /** off: why agentd starts the front door without the channel (config.json, or the managed settings), null when it opens it. */
+  channel?: { at: string | null; waiting: number; off: string | null }
   usage: UsageSnapshot | null
   linear: { ok: true; email: string } | { ok: false; error: string }
   now: Date
@@ -54,13 +56,18 @@ function bridgeLine(s: StatusInput): string {
   return `${b.connected ? "connected" : "DISCONNECTED"}${paused}, heartbeat ${minutesAgo(s.now, at)}, outbox ${b.outboxWaiting} waiting, ${b.outboxFailed} failed`
 }
 
+/**
+ * The channel server's own heartbeat, and never "connected": Claude Code does
+ * not say whether it registered the channel, so the messages still open say
+ * whether they reach the front door (health alerts at half an hour).
+ */
 function channelLine(s: StatusInput): string {
   const c = s.channel!
-  const waiting = `${c.waiting} message(s) waiting for the front door`
-  if (!c.enabled) return `off (frontDoor.channel), ${waiting}`
-  if (!c.at) return `never connected: messages wait for the front door's next wakeup, ${waiting}`
+  const waiting = `${plural(c.waiting, "message", "messages")} waiting for the front door`
+  if (c.off) return `off (${c.off}), ${waiting}`
+  if (!c.at) return `server never ran: messages wait for the front door's next wakeup, ${waiting}`
   const at = new Date(c.at)
-  return s.now.getTime() - at.getTime() > 2 * 60_000 ? `NOT CONNECTED for ${minutes(s.now, at)} min, ${waiting}` : `connected, ${waiting}`
+  return s.now.getTime() - at.getTime() > 2 * 60_000 ? `server NOT RUNNING for ${minutes(s.now, at)} min, ${waiting}` : `server running, ${waiting}`
 }
 
 export function statusReport(s: StatusInput): string {

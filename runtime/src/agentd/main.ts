@@ -26,7 +26,7 @@ import { realExec, type Exec } from "../worker/git.ts"
 import { heartbeatAndSweep } from "./claims.ts"
 import { frontDoorAlive, FrontDoorRefused, lastTickAt, readFrontDoorState, superviseFrontDoor } from "./frontdoor.ts"
 import { takeDefaults } from "./decisions.ts"
-import { cleanup, Every, healthStatus, inboxStuck, linearDownNotice, refreshCheckout, sentryCheckInUrl, watchPrs, type BridgeHeartbeat } from "./health.ts"
+import { cleanup, Every, healthStatus, inboxStuck, inboxUnhandled, linearDownNotice, refreshCheckout, sentryCheckInUrl, watchPrs, type BridgeHeartbeat } from "./health.ts"
 import { actOnInstructions } from "./instructions.ts"
 import { spawnWorkerProcess, superviseJobs, workerLiveness, type Liveness } from "./jobrunner.ts"
 
@@ -171,6 +171,7 @@ export async function runDuties(d: DutyDeps, memo: DutyMemo): Promise<void> {
         staleTickMinutes: config.frontDoor.staleTickMinutes,
         outboxFailedBefore: memo.outboxFailedSeen,
         stuckInbox: inboxStuck(paths, now()),
+        unhandledInbox: inboxUnhandled(paths, now()),
         checkout: memo.lastRefresh,
       })
       memo.outboxFailedSeen = bridge?.outboxFailed ?? memo.outboxFailedSeen

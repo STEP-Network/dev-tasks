@@ -13,6 +13,9 @@
 
 export const NOTHING_NEEDED = "Nothing needed from you."
 
+/** "1 message", "3 messages". */
+export const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`
+
 /** Words a person should never have to learn to read the mini's messages. */
 export const JARGON = /\b(self-check|siblings?|reports?|checklist|worker|worktree|session|mutations?|reportProblem|wall-clock|structured output)\b/i
 
@@ -89,6 +92,17 @@ export function recommendationOf(question: string | null | undefined): string | 
   const end = rest.indexOf(RECOMMENDATION_TAIL)
   const rec = (end === -1 ? rest : rest.slice(0, end)).trim().replace(/[\s.]+$/, "")
   return rec || null
+}
+
+/**
+ * A hand-off: something a person must do that the agent cannot (STEP-3293
+ * review). It carries no recommendation, so a "yes" agrees to nothing: it
+ * asks them to say when it is done.
+ */
+export const HANDOFF_TAIL = "Reply done when it is done."
+
+export function handoff(text: string): string {
+  return `${text.trim()}\n\n${HANDOFF_TAIL}`
 }
 
 /** A worker's question as a person reads it: with its recommendation, or saying plainly there is none to agree to. */

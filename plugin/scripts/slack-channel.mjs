@@ -3,9 +3,11 @@
 // declares it (.mcp.json) for every session that loads the plugin, so it
 // starts the runtime's channel server (runtime/src/channel/server.ts) only
 // where that is the front door: a dev-tasks checkout with its runtime beside
-// this plugin, and AGENTD_FRONT_DOOR=1, which agentd sets on the front door's
-// session alone. Anywhere else (a laptop, a person's own session on the mini)
-// it is a quiet MCP server with nothing in it, so no session lists a failed one.
+// this plugin, AGENTD_FRONT_DOOR=1, which agentd sets on the front door's
+// session alone, and AGENTD_CHANNEL=1, which it adds only when it started that
+// session with --channels. Anywhere else (a laptop, a person's own session on
+// the mini, a front door without the channel) it is a quiet MCP server with
+// nothing in it, so no session lists a failed one.
 
 import { spawn } from "node:child_process"
 import { existsSync } from "node:fs"
@@ -17,7 +19,7 @@ const runtime = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "runti
 const server = join(runtime, "src", "channel", "server.ts")
 const loader = join(runtime, "node_modules", "tsx", "dist", "loader.mjs")
 
-if (process.env.AGENTD_FRONT_DOOR === "1" && existsSync(server) && existsSync(loader)) {
+if (process.env.AGENTD_FRONT_DOOR === "1" && process.env.AGENTD_CHANNEL === "1" && existsSync(server) && existsSync(loader)) {
   const child = spawn(process.execPath, ["--import", loader, server], { stdio: "inherit" })
   child.on("exit", (code) => process.exit(code ?? 0))
   for (const signal of ["SIGTERM", "SIGINT"]) process.on(signal, () => child.kill(signal))

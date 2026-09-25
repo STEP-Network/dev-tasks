@@ -8,12 +8,13 @@
  *             recommendation: use the publication date", never a bare "yes"),
  *             and the issue moves on as an answer always did
  *   instruct  one of the fixed actions (revise, rerun, merge, retry, pause,
- *             leave), filed for agentd (agentd/instructions.ts), which acts and
- *             replies in words
+ *             leave) the person's own words ask for, filed for agentd
+ *             (agentd/instructions.ts), which acts and replies in words
  *
  * Who said it, and their words, come from the bridge's own inbox entry: the
- * front door names the entry, never the person. A question back, or a reply
- * the front door is unsure of, gets an answer in the thread and is acked.
+ * front door names the entry, never the person, and can file nothing their
+ * words do not ask for. A question back, or a reply the front door is unsure
+ * of, gets an answer in the thread and is acked.
  */
 
 import { openDecisions } from "./agentd/decisions.ts"
@@ -42,6 +43,11 @@ export interface PersonEntry {
   readableText?: string
   permalink?: string | null
   receivedAt: string
+  /** On a reply: the last question this mini had asked in the thread when the bridge filed it. Absent on entries filed before. */
+  lastQuestion?: string | null
+  lastQuestionAt?: string | null
+  /** What the bridge did about the words itself (pause, leave). */
+  acted?: Action[]
 }
 
 const PERSON_TYPES = new Set(["reply", "answer", "mention"])
@@ -54,28 +60,56 @@ export function personEntry(paths: AgentPaths, key: string): PersonEntry {
   return entry
 }
 
-/** Words that agree and say nothing else: a decision needs what was decided. */
-const BARE = /^\s*(yes|yep|yeah|y|ok|okay|sure|fine|agreed|agree|go|go ahead|do it|sounds good|lgtm|👍)[\s.!]*$/i
+const AGREE = "(yes|yep|yeah|y|ok|okay|sure|fine|agreed|agree|go|go ahead|go for it|go with it|go with that|do it|sounds good|lgtm|👍|:\\+1:|:thumbsup:)"
+const POLITE = "(please|thanks|thank you)"
+/** Words that agree and say nothing else ("yes", "ok, go ahead", "yes please"): a decision needs what was decided. */
+export const BARE = new RegExp(`^\\s*(${POLITE}[\\s,.!]+)*${AGREE}([\\s,.!]+(${AGREE}|${POLITE}))*[\\s.!]*$`, "i")
+
+const words = (entry: PersonEntry) => (entry.readableText ?? entry.text).replace(/\s+/g, " ").trim()
+const who = (entry: PersonEntry) => entry.userName || entry.user
 
 /**
- * The decision as the issue keeps it: whose it is, what it is, and their own
- * words beside it. `agree` takes the recommendation of the last question
- * this mini asked in the thread.
+ * The question a reply answered: the last one asked before the bridge filed
+ * it. A question asked after it is one their "yes" never saw, so agreeing is
+ * refused then (STEP-3293 review).
  */
-export function decisionText(paths: AgentPaths, entry: PersonEntry, how: { agree: true } | { text: string }): string {
-  const who = entry.userName || entry.user
-  const words = (entry.readableText ?? entry.text).replace(/\s+/g, " ").trim()
-  let decided: string
-  if ("agree" in how) {
-    const rec = recommendationOf(entry.issue ? threadFor(paths, entry.issue)?.lastQuestion : null)
-    if (!rec) throw new Error(`there is no recommendation in ${entry.issue ?? "this"} thread to agree with: record what they decided with --text-file`)
-    decided = `${who} agreed with the recommendation: ${rec}`
-  } else {
-    const text = how.text.trim()
-    if (!text || BARE.test(text)) throw new Error("a decision must say what was decided, not only yes: write it out, or use --agree for the recommendation")
-    decided = `${who} decided: ${text.replace(/[\s.]+$/, "")}`
+export function questionAnswered(paths: AgentPaths, entry: PersonEntry): string | null {
+  const thread = entry.issue ? threadFor(paths, entry.issue) : null
+  const latestAt = thread?.lastQuestionAt ? Date.parse(thread.lastQuestionAt) : null
+  const filed = entry.lastQuestionAt !== undefined
+  const answeredAt = filed ? (entry.lastQuestionAt ? Date.parse(entry.lastQuestionAt) : null) : latestAt
+  const later = latestAt !== null && (filed ? answeredAt === null || latestAt > answeredAt : latestAt > Date.parse(entry.receivedAt))
+  if (later) {
+    throw new Error(`a new question went to the ${entry.issue} thread after this reply, so their yes did not agree to it: ask them again, or record what they decided with --text-file`)
   }
-  return `${decided}. (Their words: "${words}")`
+  return filed ? (entry.lastQuestion ?? null) : (thread?.lastQuestion ?? null)
+}
+
+export interface Decision {
+  /** What the issue keeps: whose decision, what it is, and their own words beside it. */
+  recorded: string
+  /** What was decided, as the thanks names it. */
+  what: string
+  agreed: boolean
+}
+
+/**
+ * The decision as the issue keeps it. `agree` takes the recommendation of
+ * the question the reply answered. Written out, it must say more than their
+ * words did when they said only yes.
+ */
+export function decisionText(paths: AgentPaths, entry: PersonEntry, how: { agree: true } | { text: string }): Decision {
+  const said = words(entry)
+  if ("agree" in how) {
+    const rec = recommendationOf(questionAnswered(paths, entry))
+    if (!rec) throw new Error(`there is no recommendation in ${entry.issue ?? "this"} thread to agree with: record what they decided with --text-file`)
+    return { recorded: `${who(entry)} agreed with the recommendation: ${rec}. (Their words: "${said}")`, what: rec, agreed: true }
+  }
+  const text = how.text.trim().replace(/[\s.]+$/, "")
+  if (!text || BARE.test(text)) throw new Error("a decision must say what was decided, not only yes: write it out, or use --agree for the recommendation")
+  // Their bare yes with nothing to agree to is not a decision the front door may write for them.
+  if (BARE.test(said)) throw new Error(`${who(entry)} said only "${said}", which decides nothing without a recommendation: ask them what they decided`)
+  return { recorded: `${who(entry)} decided: ${text}. (Their words: "${said}")`, what: text, agreed: false }
 }
 
 export interface DecideDeps {
@@ -85,10 +119,14 @@ export interface DecideDeps {
 }
 
 /** Records the decision on the issue, moves the issue on as an answer always did, says so in the thread, and acks the message. */
-export async function recordDecision(deps: DecideDeps, entry: PersonEntry, decision: string): Promise<{ issue: string; movedTo: string | null }> {
+export async function recordDecision(deps: DecideDeps, entry: PersonEntry, decision: Decision): Promise<{ issue: string; movedTo: string | null }> {
   if (!entry.issue) throw new Error(`${entry.key} is not in an issue's thread, so there is no issue to record a decision on`)
   const current = await deps.tracker.readIssue(entry.issue)
-  const description = appendAnswer(current.description, { ts: entry.ts, userName: entry.userName || entry.user, text: decision, permalink: entry.permalink ?? null })
+  // A hand-off asks for a person's hands: their yes there means they will do it, not that it is done (STEP-3293 review).
+  if (decision.agreed && current.labels.includes("human-todo")) {
+    throw new Error(`${entry.issue} waits on a person to do something (human-todo), so a yes is not a decision: once they say it is done, record that with --text-file, and otherwise ack it`)
+  }
+  const description = appendAnswer(current.description, { ts: entry.ts, userName: who(entry), text: decision.recorded, permalink: entry.permalink ?? null })
   const move = answerTransition(current)
   await deps.tracker.updateIssue(entry.issue, { ...(description !== current.description ? { description } : {}), ...move })
   ack(deps.paths.inbox, entry.key)
@@ -96,7 +134,7 @@ export async function recordDecision(deps: DecideDeps, entry: PersonEntry, decis
   const moved = move.state ? ` It goes back to ${move.state}.` : ""
   const threadTs = entry.threadTs ?? entry.ts
   // Words first, and a ✅ beside them: never a bare ✅ (STEP-3285).
-  enqueueSlack(deps.paths, { kind: "reply", channelId: entry.channel, threadTs, text: `Thanks. I added your decision to ${entry.issue}: ${decision.split(". (Their words")[0]}.${moved} ${NOTHING_NEEDED}` }, now)
+  enqueueSlack(deps.paths, { kind: "reply", channelId: entry.channel, threadTs, text: `Thanks, ${who(entry)}. I added your decision to ${entry.issue}: ${decision.what}.${moved} ${NOTHING_NEEDED}` }, now)
   enqueueSlack(deps.paths, { kind: "react", channelId: entry.channel, ts: entry.ts, name: "white_check_mark" }, now)
   appendLedger(deps.paths, { type: "answer.applied", issue: entry.issue, movedTo: move.state ?? null, decided: true }, now)
   return { issue: entry.issue, movedTo: move.state ?? null }
@@ -117,15 +155,45 @@ export function defaultActions(paths: AgentPaths, entry: PersonEntry): Action[] 
 }
 
 /**
- * One of the fixed actions a person asked for, as the front door read it,
- * filed for agentd with the person and words the bridge recorded. The
- * message itself is acked: agentd replies in its thread.
+ * The actions instruct may file for a person (STEP-3293 review): the fixed
+ * verbs in their own words, or, for a plain yes to agentd's open decision,
+ * the reply it recommended. Nothing their words do not ask for, so no text
+ * the front door reads elsewhere can act in their name. A target they named
+ * is the one it acts on.
  */
-export function fileInstructionFor(paths: AgentPaths, entry: PersonEntry, actions: Action[], target: InstructionEntry["target"], now: Date): InstructionEntry {
-  if (!actions.length) throw new Error("name at least one action")
-  for (const a of actions) if (!ACTIONS.includes(a)) throw new Error(`${a} is not an action agentd takes (${ACTIONS.join(", ")})`)
+export function actionsAsked(paths: AgentPaths, entry: PersonEntry, named: string[], target: InstructionEntry["target"]): Action[] {
+  if (!named.length) throw new Error("name at least one action")
+  if (named.length === 1 && named[0] === "default") {
+    if (!BARE.test(words(entry))) throw new Error(`${who(entry)} did not just say yes, so their words do not take agentd's default: file the actions they name, or ask them`)
+    return defaultActions(paths, entry)
+  }
+  for (const a of named) if (!ACTIONS.includes(a as Action)) throw new Error(`${a} is not an action agentd takes (${ACTIONS.join(", ")})`)
+  const said = parseInstruction(entry.text)
+  const extra = named.filter((a) => !said.actions.includes(a as Action))
+  if (extra.length) {
+    const asked = said.actions.length ? `they asked for ${said.actions.join(", ")}` : "they asked for none of the actions"
+    throw new Error(`${who(entry)}'s words do not ask for ${extra.join(" or ")} (${asked}): file only what they asked for, or ask them`)
+  }
+  if ((said.target.issue && target.issue && said.target.issue !== target.issue) || (said.target.pr && target.pr && said.target.pr !== target.pr)) {
+    throw new Error(`${who(entry)} named ${said.target.issue ?? `#${said.target.pr}`}, so the target must be that`)
+  }
+  return named as Action[]
+}
+
+/**
+ * The actions a person asked for, filed for agentd with the person and words
+ * the bridge recorded, less any the bridge already did (pause, leave). The
+ * message itself is acked: agentd replies in its thread. null when the
+ * bridge had done them all.
+ */
+export function fileInstructionFor(paths: AgentPaths, entry: PersonEntry, actions: Action[], target: InstructionEntry["target"], now: Date): InstructionEntry | null {
+  const todo = [...new Set(actions)].filter((a) => !(entry.acted ?? []).includes(a))
   const issue = entry.issue ?? null
-  if (!issue && !target.issue && !target.pr && !target.url) throw new Error("a mention names no issue or PR: pass --target STEP-<n> or --target #<number>")
+  if (todo.length && !issue && !target.issue && !target.pr && !target.url) throw new Error("a mention names no issue or PR: pass --target STEP-<n> or --target #<number>")
+  if (!todo.length) {
+    ack(paths.inbox, entry.key)
+    return null
+  }
   const key = `instr:${entry.channel}:${entry.ts}`
   const filed: InstructionEntry = {
     type: "instruction",
@@ -135,9 +203,9 @@ export function fileInstructionFor(paths: AgentPaths, entry: PersonEntry, action
     ts: entry.ts,
     threadTs: entry.threadTs ?? entry.ts,
     user: entry.user,
-    userName: entry.userName || entry.user,
+    userName: who(entry),
     text: entry.text,
-    actions: [...new Set(actions)],
+    actions: todo,
     target,
     receivedAt: now.toISOString(),
   }

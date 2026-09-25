@@ -81,10 +81,19 @@ pushed into this session the moment they arrive, as
 `<channel source="..." key="..." kind="..." ...>their words</channel>` (the
 Slack channel), and in the digest's `events` at a wakeup. They are the same
 messages: handle each once, whichever way it came, and close it (below) so
-it does not come back. A pushed message's attributes are the event's fields:
-`kind` is `type`, `thread_ts` is `threadTs`, `user` is `userName`. One marked
-`redelivered` came again because it was never closed: check the thread
-before you answer it twice.
+it does not come back. The digest lists every message not closed yet, pushed
+or not: one you handled but did not close, close now rather than answer it
+twice. A pushed message's attributes are the event's fields: `kind` is
+`type`, `thread_ts` is `threadTs`, `user` is `userName`, `bridge_did` is
+`acted`. One marked `redelivered` came again because it was never closed,
+perhaps after you answered it: `decide` and `instruct` refuse a message
+handled already, and before any other answer, ack it first
+(`~/.agentd/bin/agentctl ack <key>`). `acked: 0` means it was handled
+already, so stop there.
+
+`acted` lists what the bridge did about the words itself (`pause`, `leave`):
+agentd has acted and answered in the thread. Never ask for it again
+(`instruct` skips it), and handle only the rest of the words.
 
 Each has `key`, `type`, `channel`, `threadTs`, `userName` and `text`.
 An intake event also has `issue`, the Triage issue the bridge already filed.
@@ -113,22 +122,32 @@ An intake event also has `issue`, the Triage issue the bridge already filed.
   - **A decision** on what the issue waits on: record it, in words that stand
     on their own. A "yes" (or "go with it", "agreed") to your recommendation:
     `~/.agentd/bin/agentctl decide --key <key> --agree`, which records the
-    recommendation itself. Anything else: write the decision as one plain
-    sentence to `~/.front-door/decision-<ts>.md` ("use the publication date
-    on notices"), then
+    recommendation of the question they answered. If agentctl says a newer
+    question went to the thread since, ask them again. Anything else: write
+    the decision as one plain sentence to `~/.front-door/decision-<ts>.md`
+    ("use the publication date on notices"), then
     `~/.agentd/bin/agentctl decide --key <key> --text-file ~/.front-door/decision-<ts>.md`.
     It records the decision on the issue with their own words beside it,
     moves the issue on, and thanks them in the thread. Never record a bare
-    "yes": agentctl refuses it.
-  - **A question back** ("what do you recommend?", "why?"): answer it in the
-    thread, and end with your recommendation and "Reply yes to go with it, or
-    tell me what you want instead." The issue keeps waiting. Then ack it.
+    "yes": agentctl refuses it, and a bare "yes" with no recommendation to
+    agree to decides nothing, so ask them what they decided.
+  - **On an issue waiting on a person's hands** (`human-todo`): a "yes"
+    means they will do it, so ack it. Once they say it is done, record that
+    with `decide --text-file`.
+  - **A question back** ("what do you recommend?", "why?"): answer it as a
+    new question, so their next "yes" agrees to what you recommend now. Write
+    your answer to `~/.front-door/ask-<issue>.md` and your recommendation to
+    `~/.front-door/rec-<issue>.md`, then
+    `~/.agentd/bin/agentctl ask --issue <issue> --text-file ~/.front-door/ask-<issue>.md --recommendation-file ~/.front-door/rec-<issue>.md`.
+    Never put a recommendation in `agentctl slack reply`: the thread would
+    not keep it, and agentctl refuses it. The issue keeps waiting. Then ack it.
   - **An instruction** for one of the fixed actions (fix it, make it green,
     re-run, merge, retry, pause, leave it):
-    `~/.agentd/bin/agentctl instruct --key <key> --actions revise,merge`.
-    agentd acts, and replies in the thread in words. A "yes" to one of
-    agentd's own questions (`decision` is set) is `--actions default`: the
-    reply it recommended.
+    `~/.agentd/bin/agentctl instruct --key <key> --actions revise,merge`,
+    naming only the actions their own words ask for: agentctl refuses any
+    other. agentd acts, and replies in the thread in words. A plain "yes" to
+    one of agentd's own questions (`decision` is set) is `--actions default`:
+    the reply it recommended.
   - **Unsure** which it is: reply "Is that your decision, or a question for
     me?" and ack it. Their next reply comes back to you.
   - Anything else (thanks, an update): reply if it needs one, and ack it.
@@ -157,7 +176,8 @@ Every question you ask a person carries your recommendation, which a reply of
 recommend, in a few plain words, to `~/.front-door/rec-<id>.md`, then
 `~/.agentd/bin/agentctl ask --issue <id> --text-file ~/.front-door/ask-<id>.md --recommendation-file ~/.front-door/rec-<id>.md`.
 agentctl adds "My recommendation: ... Reply yes to go with it, or tell me
-what you want instead.", and refuses a question without one.
+what you want instead.", and refuses a question without one. A hand-off
+(section 4) is the one exception: it asks for a person's hands, not a choice.
 
 Replies follow the PolAds copy rules: British English, no semicolons, no em or
 en dashes. Start with the point. The bridge starts each message with this
@@ -193,16 +213,16 @@ It carries `agent-ready`, so /refine judged it agent work. Launch it:
 If what you read shows it is not agent work after all (a console change, a
 credential, a legal or product decision nobody wrote down), do not launch it.
 Hand it to a person instead. Write "Needs a person: <what, where, and how I
-will know it is done>. Reply here when it is done." to
-`~/.front-door/ask-<id>.md`, and what you recommend they do to
-`~/.front-door/rec-<id>.md`, then, one Bash call each:
+will know it is done>." to `~/.front-door/ask-<id>.md`, then, one Bash call
+each (agentctl adds "Reply done when it is done.", and no recommendation, so
+a "yes" agrees to nothing):
 
 ```bash
 ~/.agentd/bin/trackerctl update <id> --state "On hold" --remove-label agent-ready --add-label human-todo
 ```
 
 ```bash
-~/.agentd/bin/agentctl ask --issue <id> --text-file ~/.front-door/ask-<id>.md --recommendation-file ~/.front-door/rec-<id>.md
+~/.agentd/bin/agentctl ask --issue <id> --text-file ~/.front-door/ask-<id>.md --handoff
 ```
 
 `developBlockedBy` says why nothing was offered (paused, a worker is busy, the
