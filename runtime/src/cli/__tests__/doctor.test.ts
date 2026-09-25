@@ -5,7 +5,7 @@ import { beforeEach, describe, expect, it } from "vitest"
 import { agentPaths, type AgentPaths } from "../../config.ts"
 import { fakeExec } from "../../__tests__/fakes.ts"
 import type { ExecResult } from "../../worker/git.ts"
-import { doctorChecks, formatDoctor, type DoctorDeps } from "../doctor.ts"
+import { doctorChecks, formatDoctor, repoToolchain, type DoctorDeps } from "../doctor.ts"
 import { recordHooksProbe, type HooksProbe } from "../hooks-probe.ts"
 import { recordSandboxProbe } from "../sandbox-probe.ts"
 
@@ -87,26 +87,61 @@ describe("doctorChecks", () => {
     expect(text).toContain("ok    gh: eve-polads, can push to STEP-Network/v0-politiske-annoncer")
   })
 
-  it("asks for the pnpm the checkout's package.json names, once it names one (STEP-3156)", async () => {
+  /** The checkout config.json names, with PolAds's package.json as of STEP-3156 (#1664) unless given another. */
+  function checkout(pkg: Record<string, unknown> = { engines: { node: "24.x" }, packageManager: "pnpm@12.6.0+sha512.abc" }): Responses {
     const repo = join(home, "polads")
     mkdirSync(repo, { recursive: true })
     const config = JSON.parse(readFileSync(paths.config, "utf8"))
     writeFileSync(paths.config, JSON.stringify({ ...config, repo: { path: repo } }))
-    writeFileSync(join(repo, "package.json"), JSON.stringify({ packageManager: "pnpm@11.2.0+sha512.abc" }))
-    const answers: Responses = [[/rev-parse --is-inside-work-tree$/, { stdout: "true\n" }]]
-    expect(await failed(deps({}, answers))).toEqual([expect.stringMatching(/^pnpm: 10\.33\.0 is not pnpm 11, which the checkout's package\.json asks for.*pnpm self-update 11\.2\.0.*pnpm@11/)])
-    expect(await failed(deps({}, [...answers, [/^pnpm --version$/, { stdout: "11.2.0\n" }]]))).toEqual([])
+    writeFileSync(join(repo, "package.json"), JSON.stringify(pkg))
+    return [
+      [/rev-parse --is-inside-work-tree$/, { stdout: "true\n" }],
+      [/^pnpm --version$/, { stdout: "12.6.0\n" }],
+    ]
+  }
+
+  it("takes the latest pnpm, and warns only below the one the checkout's packageManager names", async () => {
+    const answers = checkout()
+    expect((await doctorChecks(deps({ nodeVersion: "24.3.0" }, answers))).filter((c) => c.level !== "ok")).toEqual([])
+    expect(await warned(deps({ nodeVersion: "24.3.0" }, [[/^pnpm --version$/, { stdout: "13.0.1\n" }], ...answers]))).toEqual([])
+    const old: Responses = [[/^pnpm --version$/, { stdout: "10.33.0\n" }], ...answers]
+    expect(await failed(deps({ nodeVersion: "24.3.0" }, old))).toEqual([])
+    expect(await warned(deps({ nodeVersion: "24.3.0" }, old))).toEqual([
+      expect.stringMatching(/^pnpm: 10\.33\.0 is older than 12\.6\.0, which the checkout's packageManager names\. .*pnpm self-update\. .*brew upgrade pnpm/),
+    ])
   })
 
-  it("refuses a pnpm other than 10, and names the fix", async () => {
-    const problems = await failed(deps({}, [[/^pnpm --version$/, { stdout: "12.1.0\n" }]]))
-    expect(problems).toEqual([expect.stringMatching(/^pnpm: 12\.1\.0 is not pnpm 10, which CI asks for.*onlyBuiltDependencies.*pnpm self-update 10\..*pnpm@10/)])
+  it("takes any pnpm when the checkout names none, and refuses a missing one", async () => {
+    const answers = checkout({ engines: { node: "24.x" } })
+    expect(await warned(deps({ nodeVersion: "24.3.0" }, [[/^pnpm --version$/, { stdout: "9.0.0\n" }], ...answers]))).toEqual([])
+    expect(await failed(deps({ nodeVersion: "24.3.0" }, [[/^pnpm --version$/, { code: 127, stderr: "command not found: pnpm" }], ...answers]))).toEqual([
+      expect.stringMatching(/^pnpm: missing: pnpm's own installer .*brew install pnpm/),
+    ])
   })
 
-  it("warns on a Node other than 20, and refuses one older than the runtime's floor", async () => {
-    expect(await warned(deps({ nodeVersion: "24.3.0" }))).toEqual([expect.stringMatching(/^node: 24\.3\.0 .*CI runs Node 20.*STEP-3156/)])
-    expect(await failed(deps({ nodeVersion: "24.3.0" }))).toEqual([])
-    expect(await failed(deps({ nodeVersion: "20.10.0" }))).toEqual([expect.stringMatching(/^node: 20\.10\.0 .*20\.18\.1/)])
+  it("takes the latest Node, warns below the checkout's engines.node floor, and refuses one below the runtime's", async () => {
+    const answers = checkout()
+    for (const version of ["24.0.0", "24.3.0", "26.9.0"]) expect(await warned(deps({ nodeVersion: version }, answers)), version).toEqual([])
+    expect(await warned(deps({ nodeVersion: "22.11.0" }, answers))).toEqual([expect.stringMatching(/^node: 22\.11\.0 is older than the checkout's engines\.node, 24\.x: brew upgrade node/)])
+    expect(await failed(deps({ nodeVersion: "22.11.0" }, answers))).toEqual([])
+    expect(await failed(deps({ nodeVersion: "20.10.0" }, answers))).toEqual([expect.stringMatching(/^node: 20\.10\.0 .*runtime's floor, 20\.18\.1/)])
+    // Never a pin: no word about CI's Node, whatever runs.
+    expect((await doctorChecks(deps({ nodeVersion: "20.20.2" })))).not.toContainEqual(expect.objectContaining({ detail: expect.stringMatching(/CI/) }))
+  })
+
+  it("reads the floor from the ranges engines.node is written in", () => {
+    const floor = (node: string) => {
+      const repo = join(home, `range-${Math.random().toString(36).slice(2)}`)
+      mkdirSync(repo, { recursive: true })
+      writeFileSync(join(repo, "package.json"), JSON.stringify({ engines: { node } }))
+      return repoToolchain(repo).nodeFloor
+    }
+    expect(floor("24.x")).toEqual([24, 0, 0])
+    expect(floor(">=24")).toEqual([24, 0, 0])
+    expect(floor("^24.1.2")).toEqual([24, 1, 2])
+    expect(floor(">=20.18.1 <27")).toEqual([20, 18, 1])
+    expect(floor("*")).toBeNull()
+    expect(repoToolchain(join(home, "no-checkout"))).toEqual({ nodeRange: null, nodeFloor: null, pnpm: null })
   })
 
   it("refuses a git identity the worker's sandbox cannot read", async () => {
@@ -235,12 +270,17 @@ describe("doctorChecks", () => {
       [/^gh auth status$/, { code: 1, stderr: "User interaction is not allowed." }],
       [/^claude auth status$/, { code: 1, stdout: '{"loggedIn":false}' }],
     ]
-    expect(await failed(deps({ env: { SSH_CONNECTION: "100.64.0.2 51234 100.64.0.9 22" } }, locked))).toEqual([])
-    expect(await warned(deps({ env: { SSH_CONNECTION: "100.64.0.2 51234 100.64.0.9 22" } }, locked))).toEqual([
-      expect.stringMatching(/^gh: not reachable over SSH.*own Terminal/),
-      expect.stringMatching(/^claude login: not reachable over SSH.*own Terminal/),
-    ])
+    // SSH_CONNECTION as install.sh sees it, AGENTD_OVER_SSH as the agentctl shim passes it on.
+    for (const env of [{ SSH_CONNECTION: "100.64.0.2 51234 100.64.0.9 22" }, { AGENTD_OVER_SSH: "1" }]) {
+      expect(await failed(deps({ env }, locked))).toEqual([])
+      expect(await warned(deps({ env }, locked))).toEqual([
+        expect.stringMatching(/^gh: can't check over SSH \(login keychain\): .*own Terminal/),
+        expect.stringMatching(/^claude login: can't check over SSH \(login keychain\): .*own Terminal/),
+      ])
+    }
+    // In the GUI session they fail, and a mark that is not 1 is no SSH session.
     expect((await failed(deps({}, locked))).map((f) => f.split(":")[0])).toEqual(["gh", "claude login"])
+    expect((await failed(deps({ env: { AGENTD_OVER_SSH: "" } }, locked))).map((f) => f.split(":")[0])).toEqual(["gh", "claude login"])
   })
 
   it("refuses a laptop profile, a missing config and two names for one mini", async () => {

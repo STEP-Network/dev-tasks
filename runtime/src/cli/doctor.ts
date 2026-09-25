@@ -113,10 +113,12 @@ async function gitIdentity(d: DoctorDeps): Promise<Check> {
  * Over SSH the login keychain is out of reach ("User interaction is not
  * allowed"), so gh and claude report no login there although both work in
  * the automatic-login GUI session, where the LaunchAgents run. A failing
- * keychain check is then a warning to run doctor from the mini's own Terminal.
+ * keychain check is then a warning to run doctor from the mini's own
+ * Terminal. The agentctl shim starts node with a clean environment, so it
+ * passes the SSH session on as AGENTD_OVER_SSH=1 (templates/shim.sh).
  */
-const overSsh = (d: DoctorDeps) => Boolean(d.env.SSH_CONNECTION)
-const KEYCHAIN = "not reachable over SSH, where the login keychain is locked: run doctor from the mini's own Terminal (in person or over Screen Sharing)"
+const overSsh = (d: DoctorDeps) => Boolean(d.env.SSH_CONNECTION) || d.env.AGENTD_OVER_SSH === "1"
+const KEYCHAIN = "can't check over SSH (login keychain): run doctor from the mini's own Terminal, in person or over Screen Sharing"
 
 async function github(d: DoctorDeps, slug: string): Promise<Check> {
   const status = await d.exec("gh", ["auth", "status"])
@@ -139,39 +141,62 @@ async function tool(d: DoctorDeps, name: string, command: string, args: string[]
   return { level: "ok", name, detail: version }
 }
 
+export interface RepoToolchain {
+  /** package.json's engines.node, as written (`24.x`). */
+  nodeRange: string | null
+  /** The lowest version that range names: `24.x` is 24.0.0. */
+  nodeFloor: number[] | null
+  /** packageManager's pnpm version (`pnpm@12.6.0`). */
+  pnpm: string | null
+}
+
 /**
- * The pnpm the checkout asks for: package.json's `packageManager`
- * (`pnpm@10.33.0`) once it has one (STEP-3156), else 10, which CI pins.
+ * What the checkout's package.json asks of the toolchain. The mini installs
+ * the latest Node and pnpm, so these are floors, never pins. All null with no
+ * checkout yet, or for what it does not name.
  */
-export function wantedPnpm(repo: string | null): { major: string; version: string; from: string } {
-  if (repo) {
-    try {
-      const pm = (JSON.parse(readFileSync(join(repo, "package.json"), "utf8")) as { packageManager?: unknown }).packageManager
-      const m = typeof pm === "string" ? /^pnpm@((\d+)\.\d+\.\d+)/.exec(pm) : null
-      if (m) return { major: m[2], version: m[1], from: "the checkout's package.json" }
-    } catch {
-      // No checkout yet, or no package.json: CI's pin below.
+export function repoToolchain(repo: string | null): RepoToolchain {
+  const none: RepoToolchain = { nodeRange: null, nodeFloor: null, pnpm: null }
+  if (!repo) return none
+  let pkg: { engines?: { node?: unknown }; packageManager?: unknown }
+  try {
+    pkg = JSON.parse(readFileSync(join(repo, "package.json"), "utf8"))
+  } catch {
+    return none
+  }
+  const range = typeof pkg.engines?.node === "string" ? pkg.engines.node : null
+  const lowest = range ? /(\d+)(?:\.(\d+))?(?:\.(\d+))?/.exec(range) : null
+  const pm = typeof pkg.packageManager === "string" ? /^pnpm@(\d+\.\d+\.\d+)/.exec(pkg.packageManager) : null
+  return {
+    nodeRange: lowest ? range : null,
+    nodeFloor: lowest ? [Number(lowest[1]), Number(lowest[2] ?? 0), Number(lowest[3] ?? 0)] : null,
+    pnpm: pm ? pm[1] : null,
+  }
+}
+
+function pnpm(version: string, code: number, want: RepoToolchain): Check {
+  if (code !== 0) {
+    return { level: "fail", name: "pnpm", detail: "missing: pnpm's own installer as this user, or brew install pnpm from the admin account (runbook, section 1)" }
+  }
+  const v = semver(version)
+  if (want.pnpm && v && below(v, semver(want.pnpm)!)) {
+    return {
+      level: "warn",
+      name: "pnpm",
+      detail:
+        `${version} is older than ${want.pnpm}, which the checkout's packageManager names. ` +
+        "A pnpm from pnpm's own installer (~/Library/pnpm): pnpm self-update. From Homebrew: brew upgrade pnpm, from the admin account",
     }
   }
-  return { major: "10", version: "10", from: "CI" }
+  return { level: "ok", name: "pnpm", detail: version }
 }
 
-function pnpm(version: string, code: number, want: ReturnType<typeof wantedPnpm>): Check {
-  if (code === 0 && version.startsWith(`${want.major}.`)) return { level: "ok", name: "pnpm", detail: version }
-  return {
-    level: "fail",
-    name: "pnpm",
-    detail:
-      `${code === 0 ? version : "missing"} is not pnpm ${want.major}, which ${want.from} asks for: another ignores package.json's pnpm.onlyBuiltDependencies. ` +
-      `A pnpm from pnpm's own installer (~/Library/pnpm): pnpm self-update ${want.version}. ` +
-      `From Homebrew: brew install pnpm@${want.major}, and put /opt/homebrew/opt/pnpm@${want.major}/bin first on PATH in ~/.zprofile`,
-  }
-}
-
-function node(version: string): Check {
+function node(version: string, want: RepoToolchain): Check {
   const v = semver(version) ?? [0, 0, 0]
   if (below(v, NODE_FLOOR)) return { level: "fail", name: "node", detail: `${version} is older than the runtime's floor, ${NODE_FLOOR.join(".")}` }
-  if (v[0] !== 20) return { level: "warn", name: "node", detail: `${version} works, but CI runs Node 20 (STEP-3156 tracks the move)` }
+  if (want.nodeFloor && below(v, want.nodeFloor)) {
+    return { level: "warn", name: "node", detail: `${version} is older than the checkout's engines.node, ${want.nodeRange}: brew upgrade node, from the admin account` }
+  }
   return { level: "ok", name: "node", detail: version }
 }
 
@@ -327,8 +352,9 @@ export async function doctorChecks(d: DoctorDeps): Promise<Check[]> {
   add(await gitIdentity(d))
   if (config) add(await github(d, config.repo.slug))
   const p = await d.exec("pnpm", ["--version"])
-  add(pnpm(p.stdout.trim(), p.code, wantedPnpm(config?.repo.path ?? null)))
-  add(node(d.nodeVersion))
+  const toolchain = repoToolchain(config?.repo.path ?? null)
+  add(pnpm(p.stdout.trim(), p.code, toolchain))
+  add(node(d.nodeVersion, toolchain))
   const claude = d.fresh || !config ? "claude" : config.frontDoor.claudePath
   add(await tool(d, "tmux", d.fresh || !config ? "tmux" : config.frontDoor.tmuxPath, ["-V"]))
   add(await tool(d, "jq", "jq", ["--version"]))

@@ -6,8 +6,9 @@
 # LINEAR_API_KEY or DEV_TASKS_LINEAR_ENDPOINT set in front of it reach
 # nothing. AGENTD_FRONT_DOOR passes on, as 1 or empty: agentd's mark on the
 # front door's session, which agentctl reads to refuse what only a person may
-# do. node --import with tsx's loader, not tsx's own command, which opens an
-# IPC socket the sandbox refuses.
+# do. So does AGENTD_OVER_SSH, 1 in an SSH session: doctor cannot check the
+# keychain logins there, and says so. node --import with tsx's loader, not
+# tsx's own command, which opens an IPC socket the sandbox refuses.
 exec /usr/bin/env -i \
   HOME="__HOME__" \
   USER="__USER__" \
@@ -15,5 +16,6 @@ exec /usr/bin/env -i \
   PATH="__PATH__" \
   AGENTD_HOME="__AGENTD_HOME__" \
   AGENTD_FRONT_DOOR="${AGENTD_FRONT_DOOR:+1}" \
+  AGENTD_OVER_SSH="${SSH_CONNECTION:+1}" \
   LANG="en_US.UTF-8" \
   "__NODE__" --import "__LOADER__" "__SCRIPT__" "$@"
