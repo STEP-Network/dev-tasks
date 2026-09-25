@@ -69,7 +69,7 @@ describe("neutralise", () => {
 
   it("writes no www. autolink, and no bare Linear profile link", () => {
     // GitHub takes a zero-width space as part of a host, and the URL parser then drops it: only a broken "www." is no link.
-    for (const text of ["see www.evil.example/x", "see WWW.evil.example/x", "see www.ëvil.example", "[www.evil.example](x)"]) {
+    for (const text of ["see www.evil.example/x", "see WWW.evil.example/x", "see www.ëvil.example", "[www.evil.example](x)", "see _www.evil.example/x", "see wwww.evil.example"]) {
       expect(neutralise(text), text).not.toMatch(/www\./i)
     }
     expect(neutralise("see www.evil.example/x")).toBe("see w\u200bww.\u200bevil.\u200bexample/x")
