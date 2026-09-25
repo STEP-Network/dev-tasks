@@ -188,20 +188,25 @@ export async function startMerge(exec: Exec, path: string, base: string): Promis
   return { conflicts }
 }
 
-/** An added line that opens or closes a conflict: `=======` alone is also a Markdown heading's underline. */
-const MARKER = /^\+(<{7}|>{7})(\s|$)/
+/**
+ * An added line that opens or closes a conflict, or opens its base's part
+ * (diff3): seven characters or more, as a conflict-marker-size attribute
+ * makes them longer. `=======` alone is also a Markdown heading's underline.
+ */
+const MARKER = /^\+(<{7,}|>{7,}|\|{7,})(\s|$)/
 
 /**
  * The files where HEAD adds a conflict marker over every one of `refs`
  * (STEP-3340). A Markdown or YAML file passes CI with one, so the runner
  * never pushes it. Over every ref: a merge of the base brings the base's own
- * lines, which are not the round's. The diff as git stores it: no external
- * diff and no textconv, which the branch's attributes could name.
+ * lines, which are not the round's. The diff as git stores it, in text: no
+ * external diff, no textconv, and no file hidden as binary (`-diff`), which
+ * the branch's attributes could each name.
  */
 export async function conflictMarkers(exec: Exec, path: string, refs: readonly string[]): Promise<string[]> {
   let found: string[] | null = null
   for (const ref of refs) {
-    const out = await mustGit(exec, ["-C", path, "diff", "--no-color", "--no-ext-diff", "--no-textconv", "-U0", ref, "HEAD"])
+    const out = await mustGit(exec, ["-C", path, "diff", "--no-color", "--no-ext-diff", "--no-textconv", "--text", "-U0", ref, "HEAD"])
     const files = new Set<string>()
     let file = ""
     let header = false

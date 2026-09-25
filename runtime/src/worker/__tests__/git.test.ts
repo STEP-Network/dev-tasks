@@ -234,6 +234,19 @@ describe("conflictMarkers (STEP-3340)", () => {
     expect(leftoverMarkers(["1", "2", "3", "4", "5", "6", "7"])).toBe("leftover conflict marker in 1, 2, 3, 4, 5 and 2 more files")
   })
 
+  it("reads longer markers, a diff3 base's marker, and a file its attributes would show as binary", async () => {
+    const { dir, git, write } = repo()
+    // conflict-marker-size=10 writes ten; -diff would make git diff print "Binary files differ".
+    write(".gitattributes", "hidden.txt -diff\n")
+    write("long-open.ts", "<<<<<<<<<< HEAD\nours\n")
+    write("long-close.ts", "theirs\n>>>>>>>>>> origin/staging\n")
+    write("base.ts", "||||||| merged common ancestors\n")
+    write("hidden.txt", "<<<<<<< HEAD\nours\n")
+    git("add", ".")
+    git("commit", "-q", "-m", "next")
+    expect(await conflictMarkers(realExec, dir, ["HEAD~1"])).toEqual(["base.ts", "hidden.txt", "long-close.ts", "long-open.ts"])
+  })
+
   it("counts only a marker new over every ref: one the base already had came in by the merge", async () => {
     const { dir, git, write } = repo()
     git("checkout", "-q", "-b", "STEP-7-x")

@@ -573,7 +573,7 @@ describe("runJob", () => {
 
       it("never pushes commits that leave a conflict marker the round added, and ends the round stuck, asking what next", async () => {
         const marked = "diff --git a/docs/notice.md b/docs/notice.md\n--- a/docs/notice.md\n+++ b/docs/notice.md\n@@ -3 +3,5 @@\n+<<<<<<< HEAD\n+the PR's\n+=======\n+staging's\n+>>>>>>> origin/staging\n"
-        const { deps, job, f, outbox } = merging([[/ diff --no-color --no-ext-diff --no-textconv -U0 origin\/(STEP-7-fix-the-date|staging) HEAD$/, { stdout: marked }]])
+        const { deps, job, f, outbox } = merging([[/ diff --no-color --no-ext-diff --no-textconv --text -U0 origin\/(STEP-7-fix-the-date|staging) HEAD$/, { stdout: marked }]])
         expect(await runJob(deps, job.id)).toMatchObject({ status: "blocked", reason: "leftover conflict marker in docs/notice.md" })
         expect(f.lines().some((l) => / push /.test(l))).toBe(false)
         expect(outbox().join("\n")).toContain(`on <${PR_URL}|PR #1674>: leftover conflict marker in docs/notice.md. Nothing new was pushed. Reply "fix it"`)
@@ -581,7 +581,7 @@ describe("runJob", () => {
 
       it("pushes a merge whose only marker-like line came from the base", async () => {
         const marked = "diff --git a/vendor/x.txt b/vendor/x.txt\n--- a/vendor/x.txt\n+++ b/vendor/x.txt\n@@ -0,0 +1 @@\n+>>>>>>> the base's own line\n"
-        const { deps, job, f } = merging([[/ diff --no-color --no-ext-diff --no-textconv -U0 origin\/STEP-7-fix-the-date HEAD$/, { stdout: marked }]])
+        const { deps, job, f } = merging([[/ diff --no-color --no-ext-diff --no-textconv --text -U0 origin\/STEP-7-fix-the-date HEAD$/, { stdout: marked }]])
         expect(await runJob(deps, job.id)).toMatchObject({ status: "done" })
         expect(f.lines().some((l) => l.endsWith(" push -u origin HEAD:refs/heads/STEP-7-fix-the-date"))).toBe(true)
       })
