@@ -21,6 +21,9 @@
  *     for, in Needs you; this mini's product's Waiting for UAT in Test day,
  *     with the steps to check (another product's is archived). When Linear
  *     no longer needs a person, the item moves to Done.
+ *     Once the board has its Slack thread column (Wave 2), each item has one
+ *     Slack thread with the item's link, and what a person settles in one
+ *     door is said in the other (spec 6).
  *  4. Done items are archived after archiveAfterDays.
  *  5. Replies queued for the board (agentd's answers to an instruction, and
  *     the bridge's own) are posted, with a like on the person's update.
@@ -37,16 +40,18 @@ import { createHash } from "node:crypto"
 import type { AgentConfig, AgentPaths } from "../config.ts"
 import { ack, fail, listNew } from "../fsq.ts"
 import { appendLedger, redact, type Logger } from "../log.ts"
-import { personKey, secondAnswerText } from "../answer.ts"
-import { lastQuestion } from "../outbox.ts"
+import { answerSaid, personKey, recordedAnswers, secondAnswerText } from "../answer.ts"
+import { enqueueSlack, lastQuestion } from "../outbox.ts"
 import { prRef, recommendationOf } from "../plain.ts"
 import { openDecisions, questionText, type Decision } from "../agentd/decisions.ts"
 import { truncateChars } from "../slack/text.ts"
+import { threadFor } from "../threads.ts"
 import { extractAcceptanceCriteria, isIssueGone, PLAN_RECOMMENDATION, type Tracker } from "../tracker.ts"
 import { MondayRefused, type MondayApi, type MondayBoard, type MondayItem } from "./client.ts"
 import type { PeopleIssue, PeopleView } from "./people.ts"
 import { aboutText, lookBody, lookName, needBody, needKind, needName, plainText, planBody, planName, quote, requestIssue, say, stableUuid, toHtml, uatBody, uatName, type MondayKind, type NeedSource } from "./render.ts"
 import { routeWords, type Words } from "./route.ts"
+import { slackMessage, threadTarget } from "./threads.ts"
 import { parseVerdict, recordVerdict, verdictReply } from "../verdict.ts"
 import { dropRecord, enqueueMonday, mondayOutbox, readCursor, readRecords, saveRecord, writeCursor, type ItemRecord, type MondayReply, type MondayState } from "./store.ts"
 
@@ -135,6 +140,8 @@ export function createMondayBridge(deps: MondayBridgeDeps): MondayBridge {
   const agentLabel = cfg.agentLabel ?? capitalised(deps.config.mini)
   const agentLabels = cfg.agentLabels ?? [agentLabel]
   const person = new Map(cfg.people.map((p) => [p.id, p]))
+  /** The two doors (spec 6), open once the board has its Slack thread column: until go-live the bridge runs as before. */
+  const doors = Boolean(cfg.columns.slackThread)
   const noted = new Set<string>()
   const once = (key: string, fn: () => void) => {
     if (noted.has(key)) return
@@ -362,7 +369,10 @@ export function createMondayBridge(deps: MondayBridgeDeps): MondayBridge {
       return
     }
     // agentd answers an instruction itself, once it has acted (agentd/instructions.ts).
-    if (routed.to === "issue") reply(item.id, words, say.answered(who.name, routed.movedTo), pass.now)
+    if (routed.to === "issue") {
+      reply(item.id, words, say.answered(who.name, routed.movedTo), pass.now)
+      if (rec.kind === "needs") settledHere(rec, say.mirrored(who.name, "on Monday", answerSaid(routed.recorded)), pass.now)
+    }
     // Words from before the newest question: the item still needs them, for that one.
     if (routed.to === "newer-question") {
       reply(item.id, words, say.newerQuestion(who.name, routed.question), pass.now)
@@ -391,6 +401,15 @@ export function createMondayBridge(deps: MondayBridgeDeps): MondayBridge {
     )
     mark(rec, words.id)
     reply(item.id, words, verdictReply(who.name, out), pass.now, out.outcome !== "not-waiting")
+    if (out.outcome !== "not-waiting") settledHere(rec, say.mirroredVerdict(who.name, "on Monday", out), pass.now)
+  }
+
+  /** Settled on this board: said in the item's Slack thread, and no note from the other door when it goes to Done. */
+  function settledHere(rec: ItemRecord, text: string, now: Date): void {
+    if (!doors) return
+    mirrorToSlack(rec, text, now)
+    rec.answeredHere = true
+    save(rec)
   }
 
   // 2. Requests -------------------------------------------------------------
@@ -534,7 +553,7 @@ export function createMondayBridge(deps: MondayBridgeDeps): MondayBridge {
       const itemId = adopted?.id ?? (await api.createItem(cfg!.boardId, group, truncateChars(need.name, 250), columnsFor(need, true)))
       rec = {
         key: need.key, kind: need.kind, issue: need.issue.id, itemId, state: "Needs you", bodyHash: null,
-        createdAt: pass.now.toISOString(), doneAt: null, handled: adopted ? adopted.updates.map((u) => u.id) : [],
+        createdAt: pass.now.toISOString(), doneAt: null, handled: adopted ? adopted.updates.map((u) => u.id) : [], thread: { state: "wanted" },
         // A new item carries its Request link already (columnsFor); an adopted one gets it below.
         ...(need.request && !adopted ? { requestItem: need.request } : {}),
       }
@@ -555,15 +574,17 @@ export function createMondayBridge(deps: MondayBridgeDeps): MondayBridge {
     }
     if (rec.bodyHash === hash && rec.state !== "Done") return
     await api.postUpdate(rec.itemId, toHtml(need.body))
-    // The item asks: the first answer after this counts.
+    // The item asks: the first answer after this counts, in either door.
     rec.askedAt = pass.now.toISOString()
+    rec.answeredHere = false
     rec.bodyHash = hash
     rec.state = "Needs you"
     rec.doneAt = null
     save(rec)
   }
 
-  async function needs(pass: Pass): Promise<void> {
+  /** Each need's issue's Slack thread link, as Linear keeps it: where threads() posts. */
+  async function needs(pass: Pass): Promise<Map<string, string | null>> {
     const linear = await people.needsYou()
     // Test day is what a person can try on the test site: this mini's product, and no other's.
     const product = deps.config.repo.product
@@ -594,10 +615,61 @@ export function createMondayBridge(deps: MondayBridgeDeps): MondayBridge {
         log.error("monday item not written", { key: need.key, error: message(error) })
       }
     }
+    // What settled the ones going to Done, when it was the other door: read once.
+    const settling = recs.filter((r) => !elsewhere.has(r.key) && !wanted.has(r.key) && r.state !== "Done")
+    const settled = new Map((doors && settling.length ? await people.byIdentifiers(settling.map((r) => r.issue)) : []).map((i) => [i.id, i]))
     for (const rec of recs) {
       if (elsewhere.has(rec.key)) await dropElsewhere(rec, pass)
-      else if (!wanted.has(rec.key) && rec.state !== "Done") await resolve(rec, pass, null)
+      else if (!wanted.has(rec.key) && rec.state !== "Done") await resolve(rec, pass, settledNote(rec, settled.get(rec.issue)))
     }
+    return new Map([...known.values(), ...uat].map((i) => [i.id, i.slackThread]))
+  }
+
+  /** What settled an item in the other door: the Slack answer that did, or where a tried change went. null when this door settled it. */
+  function settledNote(rec: ItemRecord, issue: PeopleIssue | undefined): string | null {
+    if (!issue || rec.answeredHere) return null
+    if (rec.kind === "uat") return issue.state === "Approved" ? say.settled(issue.id, "approved") : issue.state === "Needs Correction" ? say.settled(issue.id, "sent back to be fixed") : null
+    const since = rec.askedAt ?? rec.createdAt
+    const answer = recordedAnswers(issue.description).filter((a) => a.source === "slack" && a.applied && a.at !== null && a.at >= since).at(-1)
+    return answer ? say.mirrored(answer.who, "in Slack", answerSaid(answer.text)) : null
+  }
+
+  /** Spec 6: every Needs-you item has one Slack thread, with the item's link. */
+  async function threads(pass: Pass, linked: Map<string, string | null>): Promise<void> {
+    for (const rec of readRecords(paths)) {
+      if (rec.kind === "request" || rec.state === "Done") continue
+      // An item made this pass waits for the next one: the board gives its link then.
+      const item = pass.byId.get(rec.itemId)
+      if (!item) continue
+      // An item made before Wave 2 gets its thread now, except a per-issue Test day item: the one exception to spec 6 (Decisions).
+      if (!rec.thread) {
+        if (item.groupId === groupOf(pass, "testDay")) continue
+        rec.thread = { state: "wanted" }
+      }
+      try {
+        const permalink = threadFor(paths, rec.issue)?.permalink ?? linked.get(rec.issue) ?? null
+        if (rec.thread.state === "wanted") {
+          const message = slackMessage(threadTarget(paths, rec.issue, permalink), rec.issue, say.onMonday(item.url), true)
+          if (message) enqueueSlack(paths, message, pass.now)
+          rec.thread = { ...rec.thread, state: "posted" }
+          save(rec)
+        }
+        // The thread's link on the item, once it is known: one write, and again only if it changes.
+        if (permalink && rec.thread.permalink !== permalink) {
+          await api.setColumns(cfg!.boardId, rec.itemId, { [cfg!.columns.slackThread!]: { url: permalink, text: "Slack thread" } })
+          rec.thread = { ...rec.thread, permalink }
+          save(rec)
+        }
+      } catch (error) {
+        log.warn("monday Slack thread link not written yet", { issue: rec.issue, item: rec.itemId, error: message(error) })
+      }
+    }
+  }
+
+  /** The other door (spec 6): what a person settled on Monday, said in the item's Slack thread. Nothing when it has none. */
+  function mirrorToSlack(rec: ItemRecord, text: string, now: Date): void {
+    const message = slackMessage(threadTarget(paths, rec.issue, rec.thread?.permalink ?? null), rec.issue, text, false)
+    if (message) enqueueSlack(paths, message, now)
   }
 
   /**
@@ -677,16 +749,19 @@ export function createMondayBridge(deps: MondayBridgeDeps): MondayBridge {
       const board = await api.readBoard(cfg.boardId, Object.values(cfg.columns).filter((c): c is string => Boolean(c)), { columnIds: [cfg.columns.answer], since: new Date(since.getTime() - OVERLAP_MS) })
       const pass: Pass = { board, groups: groupIds(board.groups), byId: new Map(board.items.map((i) => [i.id, i])), now }
       // Each part on its own: Linear down stops the needs, not the replies.
-      const part = async (name: string, fn: () => Promise<void>) => {
+      const part = async <T>(name: string, fn: () => Promise<T>): Promise<T | null> => {
         try {
-          await fn()
+          return await fn()
         } catch (error) {
           log.error(`monday ${name} failed`, { error: message(error) })
+          return null
         }
       }
       await part("words", () => hearWords(pass))
       await part("requests", () => requests(pass))
-      await part("needs", () => needs(pass))
+      const linked = await part("needs", () => needs(pass))
+      // Not without the needs: an item whose issue has a thread on another mini would get a second one.
+      if (doors && linked) await part("threads", () => threads(pass, linked))
       await part("archive", () => archive(pass))
       await part("replies", drain)
     },

@@ -39,6 +39,15 @@ export interface ItemRecord {
   askedAt?: string
   /** The request item its Request column links to (Wave 2): written once, and again only when it changes. */
   requestItem?: string
+  /**
+   * Its Slack thread (spec 6): wanted until the Monday link is said there,
+   * then posted. permalink: the thread's link, once known, as the Slack
+   * thread column shows it. Absent on an item made before Wave 2 (the
+   * bridge gives an open one outside Test day its thread).
+   */
+  thread?: { state: "wanted" | "posted"; permalink?: string }
+  /** Settled on this board since it last asked: the other door is told here, so this one needs no note from it. */
+  answeredHere?: boolean
   /** Words Linear keeps refusing, by id: when it first did. After a day the bridge gives up and says so. */
   failing?: Record<string, string>
   /**

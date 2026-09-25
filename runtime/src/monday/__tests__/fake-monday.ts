@@ -260,7 +260,8 @@ export function doorsSetup(seed: TrackerIssue[] = [], opts: { extra?: Record<str
   const fake = fakeTracker(seed)
   const monday = fakeMonday(undefined, null, newLayout ? { [BOARD]: LAYOUT } : undefined)
   const { people } = fakePeople(fake.issues, opts.extra, opts.parents)
-  const log: Logger = { info: () => {}, warn: () => {}, error: () => {} }
+  const warned: string[] = []
+  const log: Logger = { info: () => {}, warn: (m) => warned.push(m), error: (m) => warned.push(m) }
   let now = T0
   const bridge = createMondayBridge({ paths, config, log, now: () => now, api: monday.api, tracker: fake.tracker, people })
   const later = (minutes: number) => {
@@ -269,7 +270,7 @@ export function doorsSetup(seed: TrackerIssue[] = [], opts: { extra?: Record<str
   }
   const slack = () => listNew<OutboxMessage & { queuedAt: string }>(paths.outbox).map((e) => e.payload)
   const texts = (itemId: string) => monday.items.get(itemId)?.updates.map((u) => u.text) ?? []
-  return { paths, config, fake, monday, bridge, later, slack, texts }
+  return { paths, config, fake, monday, people, bridge, later, slack, texts, warned }
 }
 
 /** The issue's own Slack thread on this mini, as send.ts saves it. */
