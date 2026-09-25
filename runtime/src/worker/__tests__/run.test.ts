@@ -735,6 +735,33 @@ describe("modelFor, checkPlugins and checkBilling", () => {
   })
 })
 
+describe("a usertest job (WS5)", () => {
+  const view = [
+    [/gh pr view 12 /, { stdout: JSON.stringify({ url: PR, headRefOid: "e".repeat(40), labels: [{ name: "approval/look" }] }) }],
+    [/gh pr diff 12 /, { stdout: "components/account/Profile.tsx\n" }],
+  ] as Array<[RegExp, Partial<ExecResult>]>
+
+  it("reads the merged PR, runs the browser test without claiming the issue or a worker session, and ends done with its verdict", async () => {
+    // The browser test is off in this config, so the test ends as soon as it starts.
+    const { deps, job, fake, f, q, paths } = setup({ job: { kind: "usertest", usertest: { target: "staging", pr: 12 } }, exec: view })
+    expect(await runJob(deps, job.id)).toMatchObject({ status: "done", reason: "browser test: skipped, the browser test is off on this mini", prUrl: PR })
+    expect(fake.called("claimIssue")).toEqual([])
+    expect(q.seen).toEqual([])
+    expect(f.lines().filter((l) => l.startsWith("gh pr "))).toEqual([
+      "gh pr view 12 --repo STEP-Network/v0-politiske-annoncer --json url,headRefOid,labels",
+      "gh pr diff 12 --repo STEP-Network/v0-politiske-annoncer --name-only",
+    ])
+    expect(listJobs(paths, "done")[0]).toMatchObject({ kind: "usertest", userTestStartedAt: "2026-09-24T09:40:00.000Z" })
+  })
+
+  it("ends skipped, never lost, when the job has no PR or gh cannot read it", async () => {
+    const none = setup({ job: { kind: "usertest" } })
+    expect(await runJob(none.deps, none.job.id)).toMatchObject({ status: "skipped", reason: "a usertest job without its PR" })
+    const unreadable = setup({ job: { kind: "usertest", usertest: { target: "staging", pr: 12 } }, exec: [[/gh pr view/, { code: 1 }]] })
+    expect(await runJob(unreadable.deps, unreadable.job.id)).toMatchObject({ status: "skipped", reason: "gh could not read the PR" })
+  })
+})
+
 describe("runSession's own init check (WS5)", () => {
   it("stops a session whose init message fails the caller's check, after the plugin and billing checks pass", async () => {
     const { query } = queryOf([[INIT, DONE]])

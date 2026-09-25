@@ -37,6 +37,7 @@ import { denyBannedBash, denyWorkerPaths, ENV_TEMPLATE, workerEnv, workerToolDen
 import { SMALL_CHANGE_FILES, clause, toOutcome, type Outcome, type ResultMessageLike } from "./outcome.ts"
 import { buildReviseBrief, finalizeRevise, gatherFeedback } from "./revise.ts"
 import { checkBilling, checkPlugins, runSession, type QueryFn, type SdkMessage } from "./session.ts"
+import { runUserTestJob } from "./usertest-step.ts"
 
 // Moved to session.ts, which the browser test shares: every import from here keeps working.
 export { checkBilling, checkPlugins, runSession, type QueryFn, type SdkMessage, type SessionEnd } from "./session.ts"
@@ -341,6 +342,8 @@ export async function runJob(deps: RunDeps, jobId: string): Promise<JobResult> {
     )
     return finish({ ...nothing, status: "skipped", reason: why })
   }
+  // A merged PR's browser test (agentctl usertest): no claim, no worktree and no worker session.
+  if (job.kind === "usertest") return runUserTestJob(deps, job, finish)
 
   // 1. read, skip or claim. Linear failing here ends the job the ordinary way,
   // as skipped and marked linearFailed (the digest waits before offering the

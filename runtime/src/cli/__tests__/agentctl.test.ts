@@ -63,6 +63,17 @@ describe("run", () => {
     expect(listJobs(agentPaths(), "pending").map((j) => j.issue)).toEqual(["STEP-8"])
   })
 
+  it("queues a browser test of a merged PR on staging, or on the release candidate (WS5)", async () => {
+    expect(await run(["usertest", "--issue", "STEP-7", "--pr", "12"], out, deps())).toBe(0)
+    expect(listJobs(agentPaths(), "pending")[0]).toMatchObject({ issue: "STEP-7", kind: "usertest", usertest: { target: "staging", pr: 12 } })
+    await run(["usertest", "--issue", "STEP-8", "--pr", "13", "--target", "rc"], out, deps())
+    expect(listJobs(agentPaths(), "pending").find((j) => j.issue === "STEP-8")).toMatchObject({ kind: "usertest", usertest: { target: "rc", pr: 13 } })
+    for (const args of [["--pr", "14", "--target", "prod"], [], ["--pr", "x"], ["--pr", "0"], ["--pr", "1.5"]]) {
+      await expect(run(["usertest", "--issue", "STEP-9", ...args], out, deps()), args.join(" ")).rejects.toBeInstanceOf(UsageError)
+    }
+    expect(listJobs(agentPaths(), "pending").map((j) => j.issue)).toEqual(["STEP-7", "STEP-8"])
+  })
+
   it("queues a question in the issue's thread, always with this mini's recommendation (STEP-3293)", async () => {
     await run(["ask", "--issue", "STEP-7", "--text", "Which date?", "--recommendation", "the publication date"], out, deps())
     expect(listNew(agentPaths().outbox)[0].payload).toMatchObject({
