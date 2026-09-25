@@ -118,7 +118,17 @@ const MondayBridgeSchema = z
      * (Nate, Kristoffer, Tomas: their Monday user ids). linearEmail maps an
      * issue's owner or requester to the item's Person.
      */
-    people: z.array(z.object({ id: MONDAY_ID, name: z.string().min(1), linearEmail: z.string().optional() })).min(1),
+    people: z
+      .array(
+        z.object({
+          id: MONDAY_ID,
+          name: z.string().min(1),
+          linearEmail: z.string().optional(),
+          /** Their Slack member id: an answer in Slack and one on Monday are then the same person's (answer.ts personKey). */
+          slackId: z.string().regex(/^[UW][A-Z0-9]+$/).optional(),
+        }),
+      )
+      .min(1),
     /** Who an item goes to when its issue names none of the people: Nate. */
     defaultPerson: MONDAY_ID,
     /** This mini in the Agent column's dropdown. Default: its name, capitalised. */

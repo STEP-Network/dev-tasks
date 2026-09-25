@@ -21,8 +21,9 @@ import { putOnce } from "../fsq.ts"
 import { listJobs, readWatchedPrs } from "../jobs.ts"
 import { appendLedger } from "../log.ts"
 import { openDecisions } from "../agentd/decisions.ts"
-import { agreedTo, askedSince, BARE, noteCorrection, recordAnswer } from "../answer.ts"
+import { agreedTo, askedSince, BARE, noteCorrection, recordAnswer, type RecordedAnswer } from "../answer.ts"
 import { lastQuestion } from "../outbox.ts"
+import { withRecommendation } from "../plain.ts"
 import { instructionFor, type Action, type MondayInstructionEntry } from "../slack/instruction.ts"
 import type { Tracker } from "../tracker.ts"
 
@@ -40,9 +41,13 @@ export interface Words {
 
 export type Routed =
   | { to: "agentd"; actions: Action[] }
-  | { to: "issue"; movedTo: string | null }
+  | { to: "issue"; movedTo: string | null; recorded: string }
   /** Written before this mini's newest question: not an answer to it, so the person is asked to answer that one. */
   | { to: "newer-question"; question: string }
+  /** Another person answered first, and said the same: nothing new is recorded. */
+  | { to: "same"; first: RecordedAnswer }
+  /** Another person answered first, and said something else: theirs counts, these words are kept beside it. */
+  | { to: "second"; first: RecordedAnswer }
 
 /** Whether the issue's most recent job on this mini, running, queued or done, is one that ended blocked. */
 function blockedNow(paths: AgentPaths, issue: string): boolean {
@@ -58,10 +63,24 @@ export function ownsWork(paths: AgentPaths, issue: string): boolean {
 
 export async function routeWords(
   deps: { paths: AgentPaths; tracker: Tracker; mini: string },
-  input: { issue: string; request: boolean; itemId: string; who: { id: string; name: string }; words: Words; now: Date },
+  input: {
+    issue: string
+    request: boolean
+    itemId: string
+    who: { id: string; name: string }
+    words: Words
+    now: Date
+    /** When the item last asked: the first answer after it counts. null on a request. */
+    since: string | null
+    /** The person's key (answer.ts personKey). */
+    by: string
+    /** The item's own recommendation: what a bare yes agrees to when this mini asked no question on the issue (another mini's plan). */
+    recommendation: string | null
+  },
 ): Promise<Routed> {
   const { paths, tracker } = deps
   const { issue, words, who, now } = input
+  const when = { ...(words.at ? { at: words.at } : {}), by: input.by }
   const current = await tracker.readIssue(issue)
   // "No, do X" on the board is a lesson for the weekly retro, as in Slack (STEP-3290), answer or instruction alike.
   noteCorrection({ paths, mini: deps.mini, now: () => now }, { issue, source: "monday", key: `correction:monday:${words.id}`, who: who.name, text: words.text })
@@ -71,19 +90,27 @@ export async function routeWords(
   // No agreement, no move. Their words stay on the issue unless they are only a yes, which says nothing now.
   if (!said && asked && askedSince(asked.at, words.at)) {
     if (!BARE.test(words.text)) {
-      await recordAnswer({ paths, tracker }, { issue, who: who.name, words: words.text, ts: words.id, permalink: words.permalink, source: "monday" }, { current, move: false })
+      await recordAnswer({ paths, tracker }, { issue, who: who.name, words: words.text, ts: words.id, permalink: words.permalink, source: "monday", ...when }, { move: false })
     }
     appendLedger(paths, { type: "answer.before_question", issue, via: "monday" }, now)
     return { to: "newer-question", question: asked.text }
   }
   // A plain yes to a question that recommended something is that recommendation, as in Slack (STEP-3293 review).
-  const decided = said ? null : agreedTo(words.text, asked?.text, current)
+  // With no question of this mini's on the issue, it is the item's own recommendation: another mini's plan.
+  const question = asked?.text ?? (input.recommendation ? withRecommendation("", input.recommendation) : null)
+  const decided = said ? null : agreedTo(words.text, question, current)
   // One recorder for Slack and Monday (answer.ts). An instruction leaves the issue where it is: agentd acts on it.
-  const { movedTo } = await recordAnswer(
+  // Only an answer is weighed against the first one: an instruction ("merge it") after another person's answer is agentd's still.
+  const out = await recordAnswer(
     { paths, tracker },
-    { issue, who: who.name, words: words.text, ts: words.id, permalink: words.permalink, source: "monday", ...(decided ? { decided } : {}) },
-    { current, move: !said },
+    { issue, who: who.name, words: words.text, ts: words.id, permalink: words.permalink, source: "monday", ...(decided ? { decided } : {}), ...when },
+    { move: !said, since: said ? null : input.since },
   )
+  const { movedTo } = out
+  if (out.outcome === "same" || out.outcome === "second") {
+    appendLedger(paths, { type: `answer.${out.outcome}`, issue, via: "monday" }, now)
+    return { to: out.outcome, first: out.first! }
+  }
   if (said) {
     const key = `instr:monday:${words.id}`
     const entry: MondayInstructionEntry = {
@@ -95,5 +122,5 @@ export async function routeWords(
     return { to: "agentd", actions: said.actions }
   }
   appendLedger(paths, { type: "answer.applied", issue, movedTo, via: "monday", ...(decided ? { decided: true } : {}) }, now)
-  return { to: "issue", movedTo }
+  return { to: "issue", movedTo, recorded: out.recorded }
 }

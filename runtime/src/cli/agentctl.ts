@@ -264,7 +264,7 @@ export async function run(argv: string[], out: (line: string) => void, overrides
         throw new UsageError(message(error))
       }
       try {
-        print({ decided: await recordDecision({ paths, tracker: deps.tracker(), now }, entry, decision), decision: decision.recorded })
+        print({ decided: await recordDecision({ paths, tracker: deps.tracker(), now, config: loadConfig(paths) }, entry, decision), decision: decision.recorded })
       } catch (error) {
         if (!(error instanceof Error) || !/human-todo|not in an issue's thread/.test(error.message)) throw error
         throw new UsageError(error.message)

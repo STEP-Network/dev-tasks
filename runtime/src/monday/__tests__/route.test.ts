@@ -24,17 +24,51 @@ function setup(labels = ["agent-ready", "awaiting-answer", "polads"]) {
   const paths = agentPaths(mkdtempSync(join(tmpdir(), "agentd-route-")))
   mkdirSync(paths.state, { recursive: true })
   const fake = fakeTracker([issue({ id: "STEP-7", state: "On hold", labels, description: "Brief" })])
-  const say = (text: string, id = "U1", at: string | null = NOW.toISOString()) =>
-    routeWords({ paths, tracker: fake.tracker, mini: "eve" }, { issue: "STEP-7", request: false, itemId: "I1", who: { id: "M1", name: "Nate" }, words: { id, text, updateId: id, threadId: null, permalink: null, at }, now: NOW })
+  const say = (text: string, id = "U1", at: string | null = NOW.toISOString(), as: { who?: { id: string; name: string }; since?: string | null; recommendation?: string | null } = {}) => {
+    const who = as.who ?? { id: "M1", name: "Nate" }
+    return routeWords(
+      { paths, tracker: fake.tracker, mini: "eve" },
+      { issue: "STEP-7", request: false, itemId: "I1", who, words: { id, text, updateId: id, threadId: null, permalink: null, at }, now: NOW, since: as.since ?? null, by: `monday:${who.id}`, recommendation: as.recommendation ?? null },
+    )
+  }
   return { paths, fake, say }
 }
+
+describe("routeWords: the first answer counts (Wave 2)", () => {
+  const ADA = { id: "M2", name: "Ada" }
+
+  it("passes the item's question time, and says whose answer counts when another person answered first", async () => {
+    const { fake, say } = setup(["awaiting-answer", "polads"])
+    const first = await say("use the order date", "U1", "2026-09-25T10:00:10.000Z", { who: ADA, since: NOW.toISOString() })
+    expect(first).toMatchObject({ to: "issue", movedTo: "Refining", recorded: "use the order date" })
+    fake.issues.set("STEP-7", { ...fake.issues.get("STEP-7")!, state: "On hold", labels: ["awaiting-answer"] })
+    const second = await say("the publication date", "U2", "2026-09-25T10:00:40.000Z", { since: NOW.toISOString() })
+    expect(second).toMatchObject({ to: "second", first: { who: "Ada", text: "use the order date" } })
+    expect(fake.issues.get("STEP-7")).toMatchObject({ state: "On hold", labels: ["awaiting-answer"] })
+    expect(await say("Use the order date!", "U3", "2026-09-25T10:01:00.000Z", { since: NOW.toISOString() })).toMatchObject({ to: "same", first: { who: "Ada" } })
+  })
+
+  it("files an instruction after another person's answer for agentd: it is not a second answer", async () => {
+    const { paths, fake, say } = setup(["awaiting-answer", "polads"])
+    recordPr(paths, { issue: "STEP-7", url: "https://github.com/STEP-Network/v0-politiske-annoncer/pull/1679", openedAt: NOW.toISOString() })
+    await say("use the order date", "U1", "2026-09-25T10:00:10.000Z", { who: ADA, since: NOW.toISOString() })
+    expect(await say("merge it", "U2", "2026-09-25T10:00:40.000Z", { since: NOW.toISOString() })).toMatchObject({ to: "agentd" })
+    expect(fake.issues.get("STEP-7")!.description).not.toContain("(Not applied")
+  })
+
+  it("takes a bare yes as agreement to the item's own recommendation when this mini asked no question on the issue (another mini's plan)", async () => {
+    const { fake, say } = setup(["awaiting-answer", "polads"])
+    await say("yes", "U1", NOW.toISOString(), { recommendation: "Build it as planned" })
+    expect(fake.issues.get("STEP-7")!.description).toContain("Nate agreed with the recommendation: Build it as planned.")
+  })
+})
 
 describe("routeWords: answers on the Monday board (STEP-3293 re-review)", () => {
   it("records a plain yes to a question that recommended something as that recommendation, never a bare yes, as Slack does", async () => {
     // The reviewer's proof, turned round: the board showed the Slack question with its recommendation, and "Nate: yes" was all the issue kept.
     const { paths, fake, say } = setup()
     enqueueSlack(paths, { kind: "issue", issue: "STEP-7", text: QUESTION, question: true }, NOW)
-    expect(await say("yes")).toEqual({ to: "issue", movedTo: "Ready" })
+    expect(await say("yes")).toMatchObject({ to: "issue", movedTo: "Ready" })
     const description = fake.issues.get("STEP-7")!.description
     const recorded = answerText({ who: "Nate", words: "yes", decided: { agreed: true, recommendation: "use the publication date" } })
     expect(recorded).toBe('Nate agreed with the recommendation: use the publication date. (Their words: "yes")')
@@ -89,7 +123,7 @@ describe("routeWords: answers on the Monday board (STEP-3293 re-review)", () => 
     expect(fake.issues.get("STEP-7")).toMatchObject({ state: "On hold", description: expect.stringMatching(/\*\*Nate\*\*: the publication date, whatever the rule says$/) })
     expect(fake.issues.get("STEP-7")!.description).not.toContain("agreed with the recommendation")
     // Written after it, a yes agrees to the newer one.
-    expect(await say("yes", "U3", "2026-09-25T09:14:00.000Z")).toEqual({ to: "issue", movedTo: "Ready" })
+    expect(await say("yes", "U3", "2026-09-25T09:14:00.000Z")).toMatchObject({ to: "issue", movedTo: "Ready" })
     expect(fake.issues.get("STEP-7")!.description).toContain("Nate agreed with the recommendation: use the submission date.")
   })
 

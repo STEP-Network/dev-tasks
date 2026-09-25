@@ -43,8 +43,9 @@ import { fileURLToPath } from "node:url"
 import { resolveTracker } from "../src/tracker/index.ts"
 import { assertNoSecretText, readTextFile } from "../src/tracker/secrets-guard.ts"
 import { approvalPatch, touchesApproval } from "../src/tracker/approval.ts"
+import { answerEntries, keepAnswers, RECORDER_LABELS } from "../src/tracker/answers.ts"
 import { stableUuid } from "../src/tracker/ids.ts"
-import { branchNameFor, type IssuePatch, type ProjectInput, type Tracker, type TrackerIssue } from "../src/tracker/types.ts"
+import { branchNameFor, type CreateIssueInput, type IssuePatch, type ProjectInput, type Tracker, type TrackerIssue } from "../src/tracker/types.ts"
 
 export interface ParsedArgs {
   command: string
@@ -192,13 +193,44 @@ export function buildPatch(flags: ParsedArgs["flags"], readText: (path: string) 
   return patch
 }
 
+const isRecorderLabel = (label: string) => RECORDER_LABELS.includes(label.trim().toLowerCase())
+const recorderLabel = (label: string) =>
+  new Error(`${USAGE}\n${label} is the answer recorder's: a person's answer sets it, never an edit`)
+
 /**
  * update's patch as it goes to Linear. An agent never lowers an approval class
  * (the human-agent flow spec, section 3), so a patch that touches one is
  * checked against the issue's labels first, and refused rather than written.
+ * The answer recorder's marks are its alone (Wave 2): plan-approved is never
+ * added and neither plan label taken away (/refine may add plan-to-approve,
+ * which asks the question), and a new description keeps every answer entry
+ * the issue has, as it was, or is refused.
  */
 export async function guardedPatch(tracker: Pick<Tracker, "readIssue">, ref: string, patch: IssuePatch): Promise<IssuePatch> {
-  return touchesApproval(patch) ? approvalPatch((await tracker.readIssue(ref)).labels, patch) : patch
+  for (const label of patch.addLabels ?? []) if (label.trim().toLowerCase() === "plan-approved") throw recorderLabel(label)
+  for (const label of patch.removeLabels ?? []) if (isRecorderLabel(label)) throw recorderLabel(label)
+  if (!touchesApproval(patch) && patch.description === undefined) return patch
+  const current = await tracker.readIssue(ref)
+  let guarded = touchesApproval(patch) ? approvalPatch(current.labels, patch) : patch
+  if (patch.description !== undefined) {
+    const kept = keepAnswers(current.description, patch.description)
+    if ("refused" in kept) throw new Error(`${USAGE}\n${kept.refused}`)
+    guarded = { ...guarded, description: kept.description }
+  }
+  return guarded
+}
+
+/**
+ * create's input as it goes to Linear: a new issue carrying a plan label or a
+ * recorder's marker is the same forgery as an edit adding one.
+ */
+export function guardedCreate<T extends CreateIssueInput>(input: T): T {
+  for (const label of input.labels ?? []) if (isRecorderLabel(label)) throw recorderLabel(label)
+  const marked = answerEntries(input.description ?? "")[0]
+  if (marked) {
+    throw new Error(`${USAGE}\nAnswers on an issue are the answer recorder's to write: a new issue carries none (${marked.source}:${marked.id})`)
+  }
+  return input
 }
 
 /** `trackerctl update`: the flags as a patch, guarded, then written. */
@@ -311,17 +343,19 @@ async function main(): Promise<void> {
     }
     case "create": {
       const due = str(flags, "due")
-      const issue = await tracker.createIssue({
-        title: sent("title"),
-        description: textFlag(flags, "description"),
-        labels: list(flags, "label"),
-        state: str(flags, "state"),
-        parent: str(flags, "parent"),
-        projectId: str(flags, "project"),
-        milestoneId: str(flags, "milestone"),
-        dueDate: due === undefined ? undefined : dateFlag(due, "due"),
-        clientId: clientIdFor(flags),
-      })
+      const issue = await tracker.createIssue(
+        guardedCreate({
+          title: sent("title"),
+          description: textFlag(flags, "description"),
+          labels: list(flags, "label"),
+          state: str(flags, "state"),
+          parent: str(flags, "parent"),
+          projectId: str(flags, "project"),
+          milestoneId: str(flags, "milestone"),
+          dueDate: due === undefined ? undefined : dateFlag(due, "due"),
+          clientId: clientIdFor(flags),
+        }),
+      )
       process.stdout.write(JSON.stringify(issue) + "\n")
       return
     }

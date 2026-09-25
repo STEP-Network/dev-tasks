@@ -35,6 +35,8 @@ export interface ItemRecord {
   doneAt: string | null
   /** Update ids and Answer column changes (log:<id>) already acted on. */
   handled: string[]
+  /** When the item last asked (its body posted, or a second answer asked back): the first answer after it counts (spec 6). */
+  askedAt?: string
   /** Words Linear keeps refusing, by id: when it first did. After a day the bridge gives up and says so. */
   failing?: Record<string, string>
   /**

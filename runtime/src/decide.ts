@@ -18,8 +18,8 @@
  */
 
 import { openDecisions } from "./agentd/decisions.ts"
-import { answerText, askedSince, BARE, recordAnswer, type Decided } from "./answer.ts"
-import type { AgentPaths } from "./config.ts"
+import { answerText, askedSince, BARE, personKey, recordAnswer, secondAnswerText, type Decided } from "./answer.ts"
+import type { AgentConfig, AgentPaths } from "./config.ts"
 import { ack, entryPath, putOnce, readJson } from "./fsq.ts"
 import { readWatchedPrs } from "./jobs.ts"
 import { appendLedger } from "./log.ts"
@@ -128,6 +128,8 @@ export interface DecideDeps {
   paths: AgentPaths
   tracker: Tracker
   now: () => Date
+  /** Who a Slack member is on Monday too (bridges.monday.people[].slackId): one person, one key, in both doors. */
+  config: AgentConfig
 }
 
 /**
@@ -135,12 +137,39 @@ export interface DecideDeps {
  * Monday share (answer.ts), moves the issue on as an answer always did, says
  * so in the thread, and acks the message. A yes on a person's to-do is
  * refused there: it means they will do it, not that it is done.
+ *
+ * The first answer after the question counts (spec 6): the same answer from
+ * someone else is thanked and records nothing, and a different one is kept
+ * on the issue unapplied while they are asked, as a new question in the
+ * thread, what they meant.
  */
 export async function recordDecision(deps: DecideDeps, entry: PersonEntry, decision: Decision): Promise<{ issue: string; movedTo: string | null }> {
   if (!entry.issue) throw new Error(`${entry.key} is not in an issue's thread, so there is no issue to record a decision on`)
-  const { movedTo } = await recordAnswer(deps, { issue: entry.issue, who: who(entry), words: words(entry), ts: entry.ts, permalink: entry.permalink ?? null, source: "slack", decided: decision.decided })
+  const out = await recordAnswer(
+    deps,
+    {
+      issue: entry.issue, who: who(entry), words: words(entry), ts: entry.ts, permalink: entry.permalink ?? null, source: "slack", decided: decision.decided,
+      // Slack's ts is the second it was written.
+      at: new Date(Number(entry.ts.split(".")[0]) * 1000).toISOString(),
+      by: personKey(deps.config, { slack: entry.user }),
+    },
+    { since: entry.lastQuestionAt ?? threadFor(deps.paths, entry.issue)?.lastQuestionAt ?? null },
+  )
+  const { movedTo } = out
   ack(deps.paths.inbox, entry.key)
   const now = deps.now()
+  if (out.outcome === "same") {
+    enqueueSlack(deps.paths, { kind: "reply", channelId: entry.channel, threadTs: entry.threadTs ?? entry.ts, text: `Thanks, ${who(entry)}. ${out.first!.who} gave the same answer already, so it stands as it is. ${NOTHING_NEEDED}` }, now)
+    enqueueSlack(deps.paths, { kind: "react", channelId: entry.channel, ts: entry.ts, name: "white_check_mark" }, now)
+    appendLedger(deps.paths, { type: "answer.same", issue: entry.issue }, now)
+    return { issue: entry.issue, movedTo: null }
+  }
+  if (out.outcome === "second") {
+    // A new question in the thread, so their next reply answers it.
+    enqueueSlack(deps.paths, { kind: "issue", issue: entry.issue, text: secondAnswerText(out.first!), question: true }, now)
+    appendLedger(deps.paths, { type: "answer.second", issue: entry.issue }, now)
+    return { issue: entry.issue, movedTo: null }
+  }
   const moved = movedTo ? ` It goes back to ${movedTo}.` : ""
   const threadTs = entry.threadTs ?? entry.ts
   // Words first, and a ✅ beside them: never a bare ✅ (STEP-3285).

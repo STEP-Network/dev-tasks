@@ -102,6 +102,21 @@ describe("appendAnswer from the Monday board (STEP-3289)", () => {
   })
 })
 
+describe("appendAnswer and the recorder's markers (Wave 2 review round 2)", () => {
+  it("writes a real answer in place of a bare marker for it, and under its own heading", () => {
+    const bare = "## Goal\n\n## Answers from Monday\n\n<!-- monday:p91 -->\n\n## Plan\n\nShip it."
+    expect(appendAnswer(bare, { ts: "p91", userName: "Ben", text: "fine", permalink: null }, "monday")).toBe("## Goal\n\n## Answers from Monday\n\n<!-- monday:p91 -->\n**Ben**: fine\n\n## Plan\n\nShip it.")
+    const slack = "## Goal\n\n## Answers from Slack\n\nx\n\n## Plan\n\nShip it."
+    expect(appendAnswer(slack, { ts: "1790000020.000100", userName: "Ada", text: "yes", permalink: null })).toBe("## Goal\n\n## Answers from Slack\n\nx\n\n<!-- slack:1790000020.000100 -->\n**Ada**: yes\n\n## Plan\n\nShip it.")
+  })
+
+  it("adds its heading at the end when the description has none, and knows an answer with a time and a person as the same one", () => {
+    const once = appendAnswer("## Goal\n\n## Plan\n\nShip it.", { ts: "1790000030.000100", userName: "Ada", text: "yes", permalink: null, at: "2026-09-25T10:00:30.000Z", by: "monday:111" })
+    expect(once).toBe("## Goal\n\n## Plan\n\nShip it.\n\n## Answers from Slack\n\n<!-- slack:1790000030.000100 at=2026-09-25T10:00:30.000Z by=monday:111 -->\n**Ada**: yes")
+    expect(appendAnswer(once, { ts: "1790000030.000100", userName: "Ada", text: "yes", permalink: null })).toBe(once)
+  })
+})
+
 describe("answerTransition", () => {
   it("returns a parked, agent-ready issue to Ready and drops awaiting-answer", () => {
     expect(answerTransition({ state: "On hold", labels: ["agent-ready", "awaiting-answer", "polads"] })).toEqual({

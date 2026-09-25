@@ -158,6 +158,8 @@ export const say = {
   closed: (id: string) => `${id} was closed without a change, so this is done. ${NOTHING_NEEDED}`,
   passed: (name: string) => `Thanks, ${name}. I marked it as approved, so it goes out with the next release. ${NOTHING_NEEDED}`,
   failed: (name: string, sub: string) => `Thanks, ${name}. I wrote down what you saw as ${sub}, and the change goes back to be fixed. ${NOTHING_NEEDED}`,
+  /** Another person gave this answer first (spec 6): nothing new is recorded. The same words as Slack's. */
+  sameAnswer: (name: string, first: string) => `Thanks, ${name}. ${first} gave the same answer already, so it stands as it is. ${NOTHING_NEEDED}`,
   newerQuestion: (name: string, question: string) =>
     `Thanks, ${name}. I asked a newer question after you wrote this, so I have not taken it as your answer. Please answer the newer one here: ${plainText(question)}`,
   onlyVerdicts: (look = false) =>
