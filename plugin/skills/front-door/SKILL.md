@@ -207,7 +207,24 @@ on. Nothing to do unless a result looks wrong, and then say so in
 ## 4. The next develop job
 
 If `develop` is set, read the issue once (`~/.agentd/bin/trackerctl read <develop.id>`).
-It carries `agent-ready`, so /refine judged it agent work. Launch it:
+It carries `agent-ready`, so /refine judged it agent work.
+
+If the issue has no `approval/` label yet, give it one first, by the rules
+in /refine Phase 4. Try work needs a person's OK on the plan first, so if it
+needs `approval/try`, do not launch it: class it and send it back to
+refining in one Bash call, and the next wakeup's refine asks for the OK:
+
+```bash
+~/.agentd/bin/trackerctl update <develop.id> --add-label approval/try --state Refining --remove-label agent-ready
+```
+
+For Auto or Look, one Bash call:
+
+```bash
+~/.agentd/bin/trackerctl update <develop.id> --add-label approval/<auto or look>
+```
+
+Then, and for an issue that already had its label, launch it:
 
 ```bash
 ~/.agentd/bin/agentctl job submit --issue <develop.id>

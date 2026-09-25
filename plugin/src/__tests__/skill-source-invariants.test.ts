@@ -453,3 +453,49 @@ describe("every question to a person carries a recommendation (STEP-3293)", () =
     }
   })
 })
+
+describe("/refine sets the approval class", () => {
+  const source = skill("refine")
+
+  it("names the three class labels", () => {
+    for (const label of ["approval/auto", "approval/look", "approval/try"]) expect(source).toContain(label)
+  })
+
+  it("never lowers a class", () => {
+    expect(source).toMatch(/never lower/i)
+  })
+
+  it("asks a person to approve the plan for Try work before it is Ready", () => {
+    expect(source).toMatch(/Try work waits for a person's OK on the plan/)
+    // The park that asks for the OK carries the class, and only when that is the class set or kept: never over a person's lower one.
+    expect(source).toMatch(/park the issue\s+as above, with `--add-label approval\/try` in the same update when the class\s+you set or kept is `approval\/try`/)
+    expect(source).toMatch(/Try work is\s+an issue whose class, set or kept in Phase 4, is `approval\/try`: one a person\s+keeps at `approval\/look` or `approval\/auto` is not, whatever the rules say\./)
+  })
+
+  it("keeps a class the issue already has exactly as it is: a person may have set it", () => {
+    expect(source).toMatch(/If the issue already has an approval label, keep it exactly as it is, even\s+when these rules give a higher one: a person may have set it\. Set a class\s+only when it has none/)
+    expect(source).not.toMatch(/Keep a class the issue already has,\s+or raise it/)
+  })
+
+  it("never classes a change that widens what agents may do as Auto (spec section 1)", () => {
+    expect(source).toMatch(/A change that widens what agents may do is never Auto, even inside\s+`\.claude\/`: permissions and deny rules, blocking hooks, `CODEOWNERS`,\s+GitHub rulesets and `\.github\/workflows\/`\. Class it `approval\/try`\./)
+  })
+})
+
+describe("/front-door classifies before it launches", () => {
+  const source = skill("front-door")
+
+  it("gives an unclassified issue a class before agentctl job submit", () => {
+    const classify = source.indexOf("--add-label approval/")
+    expect(classify).toBeGreaterThan(-1)
+    expect(classify).toBeLessThan(source.indexOf("~/.agentd/bin/agentctl job submit --issue <develop.id>"))
+  })
+
+  it("classes Try work and sends it back to refining in one call, before any launch", () => {
+    const tryBack = source.indexOf("~/.agentd/bin/trackerctl update <develop.id> --add-label approval/try --state Refining --remove-label agent-ready")
+    expect(tryBack).toBeGreaterThan(source.indexOf("If the issue has no `approval/` label yet"))
+    expect(tryBack).toBeLessThan(source.indexOf("~/.agentd/bin/agentctl job submit --issue <develop.id>"))
+    // Never a class first and a send-back after: a launch between the two would build Try work unapproved.
+    expect(source).not.toContain("~/.agentd/bin/trackerctl update <develop.id> --state Refining --remove-label agent-ready")
+  })
+})
