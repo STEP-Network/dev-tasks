@@ -146,6 +146,49 @@ describe("run", () => {
     expect(existsSync(agentPaths().pauseFile)).toBe(false)
   })
 
+  it("probes the worker's hooks on the binary workers run, for free with --scripted, and records either probe for doctor", async () => {
+    writeConfig()
+    const binary = "/sdk/claude-agent-sdk-darwin-arm64/claude"
+    const exec = fakeExec([[/^\/sdk\/.*claude --version$/, { stdout: "2.1.281 (Claude Code)\n" }]]).exec
+    // A session that refuses each scripted command as the guards word it, with dev-tasks loaded once.
+    const scripted = [
+      ...Array(6).fill("BLOCKED: Destructive command detected: 'git reset --hard'"),
+      "Workers never open or merge PRs. The launcher opens the PR and arms auto-merge.",
+      "Workers never read or write ~/.config or .env files: this machine's secrets live there, and no task needs them.",
+    ]
+    const query = async () => ((args: { options: { cwd?: string } }) =>
+      (async function* () {
+        yield { type: "system", subtype: "init", apiKeySource: "none", plugins: [{ name: "dev-tasks", path: "/Users/eve/dev-tasks/plugin" }] }
+        for (const content of scripted) yield { type: "user", message: { content: [{ type: "tool_result", content }] } }
+        void args
+      })()) as unknown as AgentctlDeps["query"] extends () => Promise<infer Q> ? Q : never
+    expect(await run(["probe-hooks", "--scripted"], out, deps({ exec, query, workerClaude: () => binary }))).toBe(0)
+    expect(printed.at(-1)).toMatch(/^ok {3}the plugin's guard refuses git reset --hard\n[\s\S]*\nthe worker's hooks fire on 2\.1\.281 \(Claude Code\)$/)
+    const record = JSON.parse(readFileSync(join(root, "state", "hooks-probe.json"), "utf8"))
+    expect(record.scripted).toMatchObject({ kind: "scripted", ok: true, claudePath: binary, claudeVersion: "2.1.281 (Claude Code)", pluginHookFired: true, workerGuardFired: true })
+    await expect(run(["probe-hooks", "--scripted", "yes"], out, deps({ exec, query, workerClaude: () => binary }))).rejects.toThrow(/--scripted takes no value/)
+    await expect(run(["probe-hooks", "--scripted"], out, deps({ exec, query, workerClaude: () => null }))).rejects.toThrow(/Agent SDK's claude is missing.*npm ci/)
+
+    // The real-model probe, as before, now recorded beside the scripted one. A throwaway HOME: it looks for a Claude token there.
+    const savedHome = process.env.HOME
+    process.env.HOME = root
+    try {
+      const model = async () => (() =>
+        (async function* () {
+          yield { type: "system", subtype: "init", apiKeySource: "none", plugins: [{ name: "dev-tasks", path: "/p" }] }
+          yield { type: "user", message: { content: [{ type: "tool_result", content: "BLOCKED: Destructive command detected: 'git reset --hard'" }] } }
+          yield { type: "user", message: { content: [{ type: "tool_result", content: "Workers never push. The launcher pushes your commits after you report." }] } }
+        })()) as unknown as AgentctlDeps["query"] extends () => Promise<infer Q> ? Q : never
+      expect(await run(["probe-hooks"], out, deps({ exec, query: model, workerClaude: () => binary }))).toBe(0)
+      expect(JSON.parse(printed.at(-1)!)).toEqual({ pluginHookFired: true, workerGuardFired: true, loadedPlugins: ["dev-tasks"], apiKeySource: "none" })
+      const both = JSON.parse(readFileSync(join(root, "state", "hooks-probe.json"), "utf8"))
+      expect(both.model).toMatchObject({ kind: "model", ok: true, claudePath: binary, claudeVersion: "2.1.281 (Claude Code)", apiKeySource: "none" })
+      expect(both.scripted).toMatchObject({ kind: "scripted", ok: true })
+    } finally {
+      process.env.HOME = savedHome
+    }
+  })
+
   it("probes only the front door's own claude: the record is what agentd starts it on", async () => {
     writeConfig()
     await expect(run(["probe-sandbox", "--claude", "/elsewhere/claude"], out, deps())).rejects.toThrow(/front door's own claude/)

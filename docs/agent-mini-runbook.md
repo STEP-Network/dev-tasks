@@ -235,8 +235,9 @@ those two as "run from the mini's own Terminal" instead of failing, and
 install.sh says the same when it finishes. The LaunchAgents run in the GUI
 session and use its keychain, so agentd, the bridge, the front door and the
 workers are not affected. Everything else works over SSH. `agentctl
-probe-sandbox`, `resume` and `probe-hooks` need no login from there, only a
-terminal: `ssh -t`.
+probe-sandbox`, `probe-hooks --scripted` and `resume` need no login from
+there, only a terminal: `ssh -t`. The real-model `agentctl probe-hooks`
+uses the Claude login, so it belongs in the mini's own Terminal.
 
 ```bash
 bash ~/dev-tasks/runtime/scripts/install.sh
@@ -335,14 +336,27 @@ with a wakeup 0 or 1 min ago, `worker: idle`, `bridge: connected`, a
 - On the phone or claude.ai, signed in as Eve, the front door appears under
   Remote Control. If it does not, attach, run `/remote-control` once, and
   detach.
-- `~/.agentd/bin/agentctl probe-hooks` (a few cents): a real SDK session in
-  a throwaway repository proves the plugin's hooks and the worker's own
-  guard fire. Expected: `"pluginHookFired":true`, `"workerGuardFired":true`,
+- `~/.agentd/bin/agentctl probe-hooks --scripted` (free, a few seconds, no
+  login): a worker session with the worker's own settings, on the Claude
+  Code workers run (the Agent SDK's, not the front door's), in a throwaway
+  home and repository, against a local fake of the Messages API that
+  attempts each command the guards refuse. Every line must say `ok`, and
+  the last `the worker's hooks fire on <version>`. It records the binary and
+  the version it passed on, and doctor's `hooks probe` line trusts the
+  worker's hooks only on those. If a line says FAIL, keep the mini paused
+  and report it: workers would run unguarded.
+- `~/.agentd/bin/agentctl probe-hooks` (a few cents, from the mini's own
+  Terminal: it uses the Claude login): the same with a real model, which
+  also shows the worker authenticates on the subscription. Expected:
+  `"pluginHookFired":true`, `"workerGuardFired":true`,
   `"loadedPlugins":["dev-tasks"]` (with Claude Code's own built-in plugins
-  beside it, if any), `"apiKeySource":"none"`, and exit 0.
+  beside it, if any), `"apiKeySource":"none"`, and exit 0. A model may
+  decline a destructive command, which reads as a hook that did not fire:
+  the scripted probe is the one to trust for the hooks. Doctor accepts
+  either as proof.
 
 Then `~/.agentd/bin/agentctl resume` when someone is watching. It, and
-both probes, run only at a person's terminal: over SSH use `ssh -t`.
+the probes, run only at a person's terminal: over SSH use `ssh -t`.
 
 ## 10. Watching it
 
@@ -404,6 +418,7 @@ cd ~/dev-tasks && git pull --ff-only
 (cd plugin && npm ci) && (cd runtime && npm ci)
 bash ~/dev-tasks/runtime/scripts/install.sh      # re-renders, restarts agentd and the bridge
 ~/.agentd/bin/agentctl probe-sandbox             # every line ok, or stay paused
+~/.agentd/bin/agentctl probe-hooks --scripted    # every line ok, or stay paused
 tmux -L agentd kill-session -t =frontdoor        # agentd resumes it within 15 seconds, on the new plugin
 ~/.agentd/bin/agentctl resume
 ```
@@ -416,6 +431,12 @@ status` says why. To update it: pause, `claude update`, `agentctl
 probe-sandbox`, restart the front door as above, resume. `cd
 ~/dev-tasks/runtime && npm test` runs the same probe with the SDK's own
 binary.
+
+Workers run a different Claude Code: the one the Agent SDK ships, in
+`~/dev-tasks/runtime/node_modules`, which `npm ci` changes when the pull
+brings a new SDK. So `agentctl probe-hooks --scripted` comes after every
+update, and doctor's `hooks probe` line warns while its record names
+another binary or version than the one workers run now.
 
 The front door's plugin comes straight from `~/dev-tasks/plugin` (section
 7), so the pull updates it and the restart loads it. If `/plugin` in the
@@ -488,7 +509,7 @@ was: `/dev`, `/preview` and `/ship` on their laptops.
   that PolAds's project settings enable, so it loads once, and
   `runtime/src/__tests__/sessions.test.ts` checks that with the binary the
   SDK ships. If a later version loads both, every job stops at its start
-  and `agentctl probe-hooks` shows it first.
+  and `agentctl probe-hooks --scripted` shows it first.
 - **`agentctl probe-sandbox` says FAIL.** The installed Claude Code treats
   the front door's settings differently from the one they were built on.
   Keep the mini paused, note the failing lines and the version in the

@@ -11,6 +11,7 @@ import { existsSync, readFileSync, statSync } from "node:fs"
 import { dirname, join } from "node:path"
 import { assertProfileMini, loadConfig, type AgentConfig, type AgentPaths } from "../config.ts"
 import { frontDoorSettingsPath, frontDoorSettingsProblem } from "../agentd/frontdoor.ts"
+import { readHooksProbes, workerClaudePath, type HooksProbe } from "./hooks-probe.ts"
 import { readSandboxProbe } from "./sandbox-probe.ts"
 import { agentdSecretsPath, assertLinearKeyFile, claudeTokenPath, linearKeyPath, slackSecretsPath } from "../secrets.ts"
 import type { Exec } from "../worker/git.ts"
@@ -32,6 +33,8 @@ export interface DoctorDeps {
   profile: () => string
   /** hooks/lib/profile.sh get mini */
   profileMini: () => string | null
+  /** The Claude Code workers run: the Agent SDK's own. Default: workerClaudePath(). */
+  workerClaude?: () => string | null
   /**
    * Check claude and tmux as PATH finds them, not the paths config.json
    * recorded: install.sh asks for this, so a binary that moved since the last
@@ -228,6 +231,35 @@ function sandboxProbeCheck(d: DoctorDeps, claude: string, installed: string): Ch
 }
 
 /**
+ * Whether the plugin's hooks and the worker's guard fire in a worker session
+ * (hooks-probe.ts): trusted only for the binary workers run, at the version a
+ * probe passed on. Either probe is proof, the free scripted one or the
+ * real-model one.
+ */
+function hooksProbeCheck(d: DoctorDeps, binary: string | null, installed: string): Check {
+  const name = "hooks probe"
+  if (!binary) return { level: "fail", name, detail: "the Agent SDK's claude is missing, and no worker can start without it: cd ~/dev-tasks/runtime && npm ci" }
+  const probes = Object.values(readHooksProbes(d.paths)).filter((p): p is HooksProbe => Boolean(p))
+  const label = (p: HooksProbe) => (p.kind === "scripted" ? "agentctl probe-hooks --scripted" : "agentctl probe-hooks")
+  if (!probes.length) return { level: "warn", name, detail: "never run: agentctl probe-hooks --scripted, once installed (runbook, section 9)" }
+  const current = (p: HooksProbe) => p.claudePath === binary && p.claudeVersion === installed
+  const passed = probes.filter((p) => p.ok && current(p)).sort((a, b) => b.at.localeCompare(a.at))[0]
+  if (passed) return { level: "ok", name, detail: `${label(passed)} passed on ${passed.claudeVersion}, ${passed.at}` }
+  const failed = probes.find(current)
+  if (failed) {
+    const what = failed.checks.filter((c) => !c.ok).map((c) => c.name)
+    const fired = `plugin hooks ${failed.pluginHookFired ? "fired" : "did NOT fire"}, the worker's guard ${failed.workerGuardFired ? "fired" : "did NOT fire"}`
+    return { level: "fail", name, detail: `${label(failed)} failed on ${failed.claudeVersion} (${what.length ? what.join(", ") : fired}): keep the mini paused` }
+  }
+  const last = [...probes].sort((a, b) => b.at.localeCompare(a.at))[0]
+  return {
+    level: "warn",
+    name,
+    detail: `${label(last)} ${last.ok ? "passed" : "failed"} on ${last.claudePath} ${last.claudeVersion}, but workers run ${binary} ${installed || "unknown"}: agentctl probe-hooks --scripted`,
+  }
+}
+
+/**
  * The front door's --settings are added to the user's and the project's, not
  * put in their place: a `sandbox` block or `permissions.allow` rules in the
  * user's settings or the checkout's settings.local.json reach the front door
@@ -311,6 +343,8 @@ export async function doctorChecks(d: DoctorDeps): Promise<Check[]> {
   )
   // Compared with the path agentd starts the front door with, whichever claude doctor asked.
   add(sandboxProbeCheck(d, config?.frontDoor.claudePath ?? "claude", (await d.exec(claude, ["--version"])).stdout.trim().split("\n")[0]))
+  const worker = (d.workerClaude ?? workerClaudePath)()
+  add(hooksProbeCheck(d, worker, worker ? (await d.exec(worker, ["--version"])).stdout.trim().split("\n")[0] : ""))
   if (config) {
     const repo = await d.exec("git", ["-C", config.repo.path, "rev-parse", "--is-inside-work-tree"])
     add(

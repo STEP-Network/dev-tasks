@@ -1,9 +1,10 @@
 /**
  * agentctl: the agent mini's local control, for the front door (tick, ack,
  * job submit, ask, slack post and reply), a person on the machine (status,
- * report, pause, resume, doctor, probe-sandbox) and the rehearsal
- * (probe-hooks). One line of output per call: JSON, or text for status,
- * report, doctor and probe-sandbox. Usage errors exit 64, anything else 1.
+ * report, pause, resume, doctor, probe-sandbox, probe-hooks --scripted) and
+ * the rehearsal (probe-hooks). One line of output per call: JSON, or text for
+ * status, report, doctor and the free probes. Usage errors exit 64, anything
+ * else 1.
  * Installed as ~/.agentd/bin/agentctl (runtime/templates/shim.sh), which runs
  * it with a clean environment and `node --import <tsx's loader>`.
  */
@@ -26,6 +27,7 @@ import { checkBilling, checkPlugins, type QueryFn } from "../worker/run.ts"
 import { parseCli, UsageError } from "./args.ts"
 import { doctorChecks, formatDoctor } from "./doctor.ts"
 import { statusReport, summariseLedger, type StatusInput } from "./report.ts"
+import { probeWorkerHooks, recordHooksProbe, workerClaudePath } from "./hooks-probe.ts"
 import { probeFrontDoorSandbox, recordSandboxProbe } from "./sandbox-probe.ts"
 
 export { parseCli, UsageError }
@@ -48,6 +50,8 @@ export interface AgentctlDeps {
   now: () => Date
   /** The Agent SDK's query(), loaded only for the probes. */
   query: () => Promise<QueryFn>
+  /** The Claude Code workers run: the Agent SDK's own (hooks-probe.ts). */
+  workerClaude: () => string | null
 }
 
 const DEFAULTS: AgentctlDeps = {
@@ -57,6 +61,7 @@ const DEFAULTS: AgentctlDeps = {
   exec: realExec,
   now: () => new Date(),
   query: async () => (await import("@anthropic-ai/claude-agent-sdk")).query as unknown as QueryFn,
+  workerClaude: workerClaudePath,
 }
 
 const message = (error: unknown) => (error instanceof Error ? error.message : String(error))
@@ -271,6 +276,7 @@ export async function run(argv: string[], out: (line: string) => void, overrides
           }
         },
         profileMini: () => readProfileMini(),
+        workerClaude: deps.workerClaude,
         fresh: flags.fresh === true,
       })
       const { text, ok } = formatDoctor(checks)
@@ -278,12 +284,35 @@ export async function run(argv: string[], out: (line: string) => void, overrides
       return ok ? 0 : 1
     }
     case "probe-hooks": {
+      if (flags.scripted !== undefined && flags.scripted !== true) throw new UsageError("--scripted takes no value")
+      // Both kinds probe, and record, the binary workers run: the Agent SDK's own.
+      const config = loadConfig(paths)
+      const claudePath = deps.workerClaude()
+      if (!claudePath) throw new Error("the Agent SDK's claude is missing, and no worker can start without it: cd ~/dev-tasks/runtime && npm ci")
+      const version = await deps.exec(claudePath, ["--version"])
+      if (version.code !== 0) throw new Error(`${claudePath} --version failed: ${version.stderr.trim() || `exit ${version.code}`}`)
+      const claudeVersion = version.stdout.trim().split("\n")[0]
+      if (flags.scripted === true) {
+        // Free: the fake Messages API on loopback, and no login.
+        const probe = await probeWorkerHooks({ query: await deps.query(), config, claudePath, now })
+        probe.claudeVersion = claudeVersion
+        recordHooksProbe(paths, probe)
+        print(
+          [
+            ...probe.checks.map((c) => `${c.ok ? "ok  " : "FAIL"} ${c.name}${c.ok ? "" : `: ${c.detail}`}`),
+            probe.ok ? `the worker's hooks fire on ${claudeVersion}` : `the worker's hooks do NOT all fire on ${claudeVersion}: keep the mini paused`,
+          ].join("\n"),
+        )
+        return probe.ok ? 0 : 1
+      }
       // Spends a few cents: a real SDK session in a throwaway repository.
-      const verdict = await probeHooks({ query: await deps.query(), config: loadConfig(paths), exec: deps.exec, claudeToken: loadClaudeOauthToken(paths.home) })
+      const verdict = await probeHooks({ query: await deps.query(), config, exec: deps.exec, claudeToken: loadClaudeOauthToken(paths.home) })
       print(verdict)
       // What every job needs: both guards fire, the plugin loaded exactly once, and the subscription pays.
       const once = checkPlugins(verdict.loadedPlugins.map((name) => ({ name }))) === null
-      return verdict.pluginHookFired && verdict.workerGuardFired && once && checkBilling(verdict.apiKeySource) === null ? 0 : 1
+      const ok = verdict.pluginHookFired && verdict.workerGuardFired && once && checkBilling(verdict.apiKeySource) === null
+      recordHooksProbe(paths, { at: now().toISOString(), kind: "model", claudePath, claudeVersion, ok, ...verdict, checks: [] })
+      return ok ? 0 : 1
     }
     case "probe-sandbox": {
       // Free: fakes of the Messages API and Linear on loopback. With the front
