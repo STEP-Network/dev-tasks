@@ -1,7 +1,7 @@
 /**
  * The Monday API, as the Monday bridge uses it (STEP-3289) and no more: read
- * one board, read who changed its Answer column, and write items, updates
- * and column values. The token is the agent's own Monday user's, from
+ * one board and who changed its Answer column (one call), read the account's
+ * daily call limit, and write items, updates and column values. The token is the agent's own Monday user's, from
  * ~/.config/agentd/monday.env. It travels only in the Authorization header:
  * never in a query, a log line, an error or an argv, and a redirect is
  * refused rather than followed with it.
@@ -41,6 +41,8 @@ export interface MondayBoard {
   groups: Array<{ id: string; title: string }>
   /** Active items only: Monday leaves archived and deleted ones out. */
   items: MondayItem[]
+  /** The watched column's changes since the time asked for, oldest first. */
+  changes: ColumnChange[]
 }
 
 /** One change to a column, from the board's activity log: who, which item, and what it now says. */
@@ -52,12 +54,23 @@ export interface ColumnChange {
   at: string
 }
 
+/**
+ * Monday answered, and refused (a GraphQL error): the same request would be
+ * refused again. Not an outage, which retries.
+ */
+export class MondayRefused extends Error {}
+
 export interface MondayApi {
   /** The token's own user. */
   me(): Promise<{ id: string; name: string; isAdmin: boolean }>
-  readBoard(boardId: string, columnIds: string[]): Promise<MondayBoard>
-  /** Changes to one column since `since`, oldest first. */
-  columnLog(boardId: string, columnId: string, since: Date): Promise<ColumnChange[]>
+  /**
+   * The board in one call: its groups, its items (a further call per 100
+   * past the first 100), and who changed `watch.columnId` since `watch.since`,
+   * from its activity log. A column value carries no author, the log does.
+   */
+  readBoard(boardId: string, columnIds: string[], watch: { columnId: string; since: Date }): Promise<MondayBoard>
+  /** The account's API calls a day (monday's plans allow 1,000 to 25,000), or null when Monday does not say. */
+  dailyLimit(): Promise<number | null>
   createItem(boardId: string, groupId: string, name: string, values: Record<string, unknown>): Promise<string>
   setColumns(boardId: string, itemId: string, values: Record<string, unknown>): Promise<void>
   moveItem(itemId: string, groupId: string): Promise<void>
@@ -78,6 +91,8 @@ const PAGE_SIZE = 100
 const MAX_PAGES = 20
 const ID_RE = /^\d+$/
 const COLUMN_RE = /^[a-z0-9_]+$/
+/** Monday's limits, which it reports as GraphQL errors too: the minute, the day, the complexity budget, concurrency. */
+const LIMIT_RE = /rate.?limit|daily.?limit|complexity|concurren|maxConcurrency|timeout|internal server error/i
 
 const ITEM_FIELDS = `
   id name url created_at creator_id
@@ -160,9 +175,15 @@ export function createMondayApi(token: string, opts: MondayApiOptions = {}): Mon
         last = `status ${res.status}`
         continue
       }
-      const json = (await res.json().catch(() => null)) as { data?: T; errors?: Array<{ message?: string }>; error_message?: string } | null
+      type Problem = { message?: string; extensions?: { code?: string } }
+      const json = (await res.json().catch(() => null)) as { data?: T; errors?: Problem[]; error_message?: string; error_code?: string } | null
       const problems = [...(json?.errors ?? []).map((e) => e.message ?? "an error"), ...(json?.error_message ? [json.error_message] : [])]
-      if (problems.length) throw new Error(`Monday: ${redact(problems.join("; "))}`)
+      if (problems.length) {
+        const message = `Monday: ${redact(problems.join("; "))}`
+        const codes = [json?.error_code ?? "", ...(json?.errors ?? []).map((e) => e.extensions?.code ?? "")].join(" ")
+        // A limit is Monday out of reach for a while, as a 429 is: not a refusal of this request.
+        throw LIMIT_RE.test(`${codes} ${message}`) ? new Error(message) : new MondayRefused(message)
+      }
       if (!res.ok || !json?.data) throw new Error(`Monday: status ${res.status} with no data`)
       return json.data
     }
@@ -175,15 +196,22 @@ export function createMondayApi(token: string, opts: MondayApiOptions = {}): Mon
       return { id: String(data.me.id), name: data.me.name, isAdmin: Boolean(data.me.is_admin) }
     },
 
-    async readBoard(boardId, columnIds) {
-      const first = await request<{ boards: Array<{ groups: Array<{ id: string; title: string }>; items_page: { cursor: string | null; items: RawItem[] } }> }>(
+    async readBoard(boardId, columnIds, watch) {
+      type RawLog = { id: string; event: string; data: string; user_id: string; created_at: string }
+      // The log's arguments are written into the query, checked first: their types vary between API versions.
+      const first = await request<{
+        boards: Array<{ groups: Array<{ id: string; title: string }>; items_page: { cursor: string | null; items: RawItem[] }; activity_logs: RawLog[] | null }>
+      }>(
         `query($board: [ID!], $columns: [String!]) {
            boards(ids: $board) {
              groups { id title }
              items_page(limit: ${PAGE_SIZE}) { cursor items { ${ITEM_FIELDS} } }
+             activity_logs(column_ids: ["${checked(watch.columnId, COLUMN_RE, "Monday column id")}"], from: "${watch.since.toISOString()}", limit: 500) {
+               id event data user_id created_at
+             }
            }
          }`,
-        { board: [boardId], columns: columnIds },
+        { board: [checked(boardId, ID_RE, "Monday id")], columns: columnIds },
       )
       const board = first.boards[0]
       if (!board) throw new Error(`Monday: no board ${boardId}, or the token's user cannot see it`)
@@ -198,22 +226,8 @@ export function createMondayApi(token: string, opts: MondayApiOptions = {}): Mon
         items.push(...next.next_items_page.items.map(toItem))
         cursor = next.next_items_page.cursor
       }
-      return { groups: board.groups, items }
-    },
-
-    async columnLog(boardId, columnId, since) {
-      // Written into the query, checked first: activity_logs' argument types vary between API versions.
-      const data = await request<{ boards: Array<{ activity_logs: Array<{ id: string; event: string; data: string; user_id: string; created_at: string }> | null }> }>(
-        `query {
-           boards(ids: [${checked(boardId, ID_RE, "Monday id")}]) {
-             activity_logs(column_ids: ["${checked(columnId, COLUMN_RE, "Monday column id")}"], from: "${since.toISOString()}", limit: 500) {
-               id event data user_id created_at
-             }
-           }
-         }`,
-      )
       const changes: ColumnChange[] = []
-      for (const log of data.boards[0]?.activity_logs ?? []) {
+      for (const log of board.activity_logs ?? []) {
         if (log.event !== "update_column_value") continue
         let parsed: Record<string, unknown>
         try {
@@ -221,12 +235,21 @@ export function createMondayApi(token: string, opts: MondayApiOptions = {}): Mon
         } catch {
           continue
         }
-        if (parsed.column_id !== columnId || parsed.pulse_id === undefined) continue
+        if (parsed.column_id !== watch.columnId || parsed.pulse_id === undefined) continue
         const text = changedText(parsed)
         if (text === null) continue
         changes.push({ id: String(log.id), itemId: String(parsed.pulse_id), userId: String(log.user_id), text, at: logTime(String(log.created_at)) })
       }
-      return changes.sort((a, b) => a.at.localeCompare(b.at))
+      return { groups: board.groups, items, changes: changes.sort((a, b) => a.at.localeCompare(b.at)) }
+    },
+
+    async dailyLimit() {
+      // Only at the root, where monday allows platform_api.
+      const data = await request<{ platform_api: { daily_limit: { base: number | null; total: number | null } | null } | null }>(
+        `query { platform_api { daily_limit { base total } } }`,
+      )
+      const limit = data.platform_api?.daily_limit
+      return limit?.total ?? limit?.base ?? null
     },
 
     async createItem(boardId, groupId, name, values) {

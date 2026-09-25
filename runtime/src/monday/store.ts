@@ -37,6 +37,12 @@ export interface ItemRecord {
   handled: string[]
   /** Words Linear keeps refusing, by id: when it first did. After a day the bridge gives up and says so. */
   failing?: Record<string, string>
+  /**
+   * Answer column changes Linear refused, kept whole: the board's activity
+   * log is read a few minutes back only, so a longer outage would lose them.
+   * An update needs no copy: it is on the item, read again every poll.
+   */
+  retry?: Record<string, { userId: string; text: string }>
   /** A request whose Linear link, State and group are written to the board. */
   linked?: boolean
 }

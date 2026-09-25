@@ -159,7 +159,7 @@ export const say = {
   passed: (name: string) => `Thanks, ${name}. I marked it as approved, so it goes out with the next release. ${NOTHING_NEEDED}`,
   failed: (name: string, sub: string) => `Thanks, ${name}. I wrote down what you saw as ${sub}, and the change goes back to be fixed. ${NOTHING_NEEDED}`,
   onlyVerdicts: () => "I read only PASS or FAIL here. Start your reply with PASS if it works, or with FAIL and what you saw.",
-  notWaiting: (state: string) => `This is no longer waiting for a test (it is ${state} now), so I did not record it. ${NOTHING_NEEDED}`,
+  notWaiting: () => `This change is no longer waiting for a test, so I did not record your verdict. ${NOTHING_NEEDED}`,
   gone: (id: string) => `I could not add this to ${id}, because ${id} is no longer in Linear. ${NOTHING_NEEDED}`,
   refused: (id: string) => `Linear refused this for a whole day, so I have stopped trying to add it to ${id}. Please write it again.`,
 }

@@ -26,14 +26,14 @@ import { listJobs, readWatchedPrs, submitJob, updateWatchedPr, type JobRecord, t
 import { appendLedger, type Logger } from "../log.ts"
 import { enqueueMonday } from "../monday/store.ts"
 import { enqueueSlack } from "../outbox.ts"
-import type { Action, InstructionEntry } from "../slack/instruction.ts"
+import type { Action, AnyInstructionEntry, InstructionEntry } from "../slack/instruction.ts"
 import type { Exec } from "../worker/git.ts"
 import { mergeMode, readAutoMergePolicy } from "../worker/run.ts"
 import { closeDecision, openDecisions } from "./decisions.ts"
 import { requiredChecks } from "./health.ts"
 import { failingRequired, MAX_REVISE_ROUNDS, type OwnPrView } from "./revise.ts"
 
-export type { InstructionEntry }
+export type { AnyInstructionEntry, InstructionEntry }
 
 export interface InstructionDeps {
   exec: Exec
@@ -49,7 +49,7 @@ const ORDER: Action[] = ["pause", "leave", "revise", "rerun", "retry", "merge"]
 
 /** Every instruction in the inbox: act, reply in its thread, and mark it handled. */
 export async function actOnInstructions(deps: InstructionDeps): Promise<void> {
-  for (const { key, payload } of listNew<InstructionEntry>(deps.paths.inbox)) {
+  for (const { key, payload } of listNew<AnyInstructionEntry>(deps.paths.inbox)) {
     if (payload.type !== "instruction") continue
     let lines: string[]
     try {
@@ -75,7 +75,7 @@ export async function actOnInstructions(deps: InstructionDeps): Promise<void> {
 }
 
 /** The watched PR the instruction means: the thread's issue, a named issue, or a named PR of this mini's. */
-function findPr(paths: AgentPaths, entry: InstructionEntry): { issue: string | null; pr: WatchedPr | null } {
+function findPr(paths: AgentPaths, entry: AnyInstructionEntry): { issue: string | null; pr: WatchedPr | null } {
   const watched = readWatchedPrs(paths)
   const byNumber = (n: number) => watched.find((p) => Number(p.url.split("/").pop()) === n) ?? null
   const issue = entry.issue ?? entry.target.issue ?? null
@@ -100,7 +100,7 @@ async function viewPr(deps: InstructionDeps, url: string): Promise<OwnPrView & {
 const busyJob = (paths: AgentPaths, issue: string): JobRecord | null =>
   [...listJobs(paths, "running"), ...listJobs(paths, "pending")].find((j) => j.issue === issue) ?? null
 
-async function act(deps: InstructionDeps, entry: InstructionEntry): Promise<string[]> {
+async function act(deps: InstructionDeps, entry: AnyInstructionEntry): Promise<string[]> {
   const { paths, config } = deps
   const now = deps.now()
   const who = entry.userName || entry.user
@@ -209,7 +209,8 @@ async function act(deps: InstructionDeps, entry: InstructionEntry): Promise<stri
   return lines.length ? lines : [`I read that as an instruction for ${issue}, but found nothing to do.`]
 }
 
-function lastBlocked(paths: AgentPaths, issue: string): JobRecord | null {
+/** The issue's last finished job, when it ended blocked: what "retry" takes up again. */
+export function lastBlocked(paths: AgentPaths, issue: string): JobRecord | null {
   const done = listJobs(paths, "done").filter((j) => j.issue === issue && j.endedAt)
   const last = done.sort((a, b) => a.endedAt!.localeCompare(b.endedAt!)).at(-1)
   return last?.result?.status === "blocked" ? last : null

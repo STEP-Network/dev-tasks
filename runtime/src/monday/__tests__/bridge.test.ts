@@ -1,17 +1,18 @@
-import { mkdtempSync, rmSync } from "node:fs"
+import { existsSync, mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { describe, expect, it } from "vitest"
 import { agentPaths, ConfigSchema } from "../../config.ts"
-import { listNew } from "../../fsq.ts"
+import { countIn, listNew } from "../../fsq.ts"
 import type { Logger } from "../../log.ts"
 import { enqueueSlack } from "../../outbox.ts"
 import type { MondayInstructionEntry } from "../../slack/instruction.ts"
 import type { TrackerIssue } from "../../tracker.ts"
 import { fakeTracker, issue } from "../../__tests__/fakes.ts"
 import { askDecision } from "../../agentd/decisions.ts"
+import { recordPr } from "../../jobs.ts"
 import { createMondayBridge } from "../bridge.ts"
-import type { ColumnChange, MondayApi, MondayItem } from "../client.ts"
+import { MondayRefused, type ColumnChange, type MondayApi, type MondayItem } from "../client.ts"
 import type { PeopleIssue, PeopleView } from "../people.ts"
 import { enqueueMonday, mondayOutbox, readRecords } from "../store.ts"
 
@@ -32,21 +33,24 @@ const PR = "https://github.com/STEP-Network/v0-politiske-annoncer/pull/1679"
 const T0 = new Date("2026-09-25T09:00:00.000Z")
 
 /** An in-memory board that records every call, as the Monday API would take it. */
-function fakeMonday(me = { id: AGENT, name: "PolAds agents", isAdmin: false }) {
+function fakeMonday(me = { id: AGENT, name: "PolAds agents", isAdmin: false }, dailyLimit: number | null | Error = null) {
   const items = new Map<string, MondayItem>()
   const logs: ColumnChange[] = []
   const calls: Array<{ method: string; args: unknown[] }> = []
+  /** Items Monday cannot be reached for, as in an outage: their updates fail, and are not refused. */
+  const down = new Set<string>()
   let next = 1000
   let clock = T0
   const record = (method: string, args: unknown[]) => calls.push({ method, args })
   const find = (id: string) => {
     const hit = items.get(id)
-    if (!hit) throw new Error(`Monday: no item ${id}`)
+    // As Monday answers for an item that is gone: a GraphQL error.
+    if (!hit) throw new MondayRefused(`Monday: Item ${id} not found`)
     return hit
   }
   const setValues = (item: MondayItem, values: Record<string, unknown>) => {
     for (const [id, v] of Object.entries(values)) {
-      const value = v as { label?: string; labels?: string[]; url?: string; text?: string; date?: string }
+      const value = (v ?? {}) as { label?: string; labels?: string[]; url?: string; text?: string; date?: string }
       item.columns[id] = { text: value.label ?? value.labels?.join(", ") ?? value.text ?? value.date ?? null, value: JSON.stringify(v) }
     }
   }
@@ -55,13 +59,14 @@ function fakeMonday(me = { id: AGENT, name: "PolAds agents", isAdmin: false }) {
       record("me", [])
       return me
     },
-    async readBoard(boardId, columnIds) {
-      record("readBoard", [boardId, columnIds])
-      return { groups: GROUPS, items: structuredClone([...items.values()]) }
+    async readBoard(boardId, columnIds, watch) {
+      record("readBoard", [boardId, columnIds, watch.columnId, watch.since.toISOString()])
+      return { groups: GROUPS, items: structuredClone([...items.values()]), changes: logs.filter((l) => l.at >= watch.since.toISOString()) }
     },
-    async columnLog(boardId, columnId, since) {
-      record("columnLog", [boardId, columnId, since.toISOString()])
-      return logs.filter((l) => l.at >= since.toISOString())
+    async dailyLimit() {
+      record("dailyLimit", [])
+      if (dailyLimit instanceof Error) throw dailyLimit
+      return dailyLimit
     },
     async createItem(boardId, groupId, name, values) {
       record("createItem", [boardId, groupId, name, values])
@@ -81,6 +86,7 @@ function fakeMonday(me = { id: AGENT, name: "PolAds agents", isAdmin: false }) {
     },
     async postUpdate(itemId, html, threadId = null) {
       record("postUpdate", [itemId, html, threadId])
+      if (down.has(itemId)) throw new Error("Monday: gave up after 3 attempts (status 503)")
       const id = `u${next++}`
       find(itemId).updates.push({ id, creatorId: me.id, text: html, createdAt: clock.toISOString(), threadId: threadId ?? id })
       return id
@@ -97,8 +103,9 @@ function fakeMonday(me = { id: AGENT, name: "PolAds agents", isAdmin: false }) {
     api,
     items,
     calls,
+    down,
     called: (method: string) => calls.filter((c) => c.method === method).map((c) => c.args),
-    writes: () => calls.filter((c) => !["me", "readBoard", "columnLog"].includes(c.method)),
+    writes: () => calls.filter((c) => !["me", "readBoard", "dailyLimit"].includes(c.method)),
     at: (t: Date) => {
       clock = t
     },
@@ -125,14 +132,19 @@ function fakeMonday(me = { id: AGENT, name: "PolAds agents", isAdmin: false }) {
   }
 }
 
-/** The people's view of the fake tracker's issues, with the fields only Linear's people-facing reads carry. */
-function fakePeople(issues: Map<string, TrackerIssue>, extra: Record<string, Partial<PeopleIssue>> = {}) {
+/**
+ * The people's view of the fake tracker's issues, with the fields only
+ * Linear's people-facing reads carry. `parents` maps a sub-issue to its parent.
+ */
+function fakePeople(issues: Map<string, TrackerIssue>, extra: Record<string, Partial<PeopleIssue>> = {}, parents: Record<string, string> = {}) {
   const types: Record<string, string> = { Released: "completed", Canceled: "canceled", Duplicate: "duplicate", Triage: "triage" }
   const view = (i: TrackerIssue): PeopleIssue => ({
     id: i.id, uuid: i.uuid, title: i.title, description: i.description, url: i.url, state: i.state, stateType: types[i.state] ?? "started",
     labels: i.labels, owner: null, requester: null, dueDate: null, prUrl: null, uatSteps: null, ...extra[i.id],
   })
-  const parents: Array<[string, string]> = []
+  const parentOf = new Map(Object.entries(parents))
+  const byUuid = (uuid: string) => [...issues.values()].find((i) => i.uuid === uuid)
+  const adopted: Array<[string, string, number]> = []
   const people: PeopleView = {
     async needsYou() {
       return [...issues.values()]
@@ -146,14 +158,34 @@ function fakePeople(issues: Map<string, TrackerIssue>, extra: Record<string, Par
     async byIdentifiers(ids) {
       return ids.flatMap((id) => (issues.has(id) ? [view(issues.get(id)!)] : []))
     },
-    async setParent(child, parent) {
-      parents.push([child, parent])
+    async adoptFix(child, parent, priority) {
+      adopted.push([child, parent, priority])
+      const c = byUuid(child)
+      const p = byUuid(parent)
+      if (c && p) parentOf.set(c.id, p.id)
+    },
+    async parentOf(id) {
+      const parent = issues.get(parentOf.get(id) ?? "")
+      if (!parent) return null
+      const fixes = [...parentOf].filter(([, p]) => p === parent.id).map(([c]) => issues.get(c)!)
+      const openFixes = fixes.filter((f) => f.title.startsWith("UAT fix:") && !["Approved", "Released", "Canceled"].includes(f.state)).map((f) => f.id)
+      return { id: parent.id, state: parent.state, openFixes }
     },
   }
-  return { people, parents }
+  return { people, adopted }
 }
 
-function setup(seed: TrackerIssue[] = [], opts: { extra?: Record<string, Partial<PeopleIssue>>; me?: { id: string; name: string; isAdmin: boolean }; failOn?: string[] } = {}) {
+interface SetupOptions {
+  extra?: Record<string, Partial<PeopleIssue>>
+  me?: { id: string; name: string; isAdmin: boolean }
+  /** Tracker methods that throw. The same array: empty it and Linear is back. */
+  failOn?: string[]
+  parents?: Record<string, string>
+  dailyLimit?: number | null | Error
+  monday?: Record<string, unknown>
+}
+
+function setup(seed: TrackerIssue[] = [], opts: SetupOptions = {}) {
   const paths = agentPaths(mkdtempSync(join(tmpdir(), "agentd-monday-")))
   const config = ConfigSchema.parse({
     mini: "eve", repo: { path: "/r" }, pluginRoot: "/p", slack: { allowedUsers: ["UNATE"] },
@@ -162,12 +194,14 @@ function setup(seed: TrackerIssue[] = [], opts: { extra?: Record<string, Partial
         enabled: true,
         people: [{ id: NATE, name: "Nate", linearEmail: "nate@polads.eu" }, { id: KRISTOFFER, name: "Kristoffer", linearEmail: "kristoffer@polads.eu" }],
         defaultPerson: NATE,
+        ...opts.monday,
       },
     },
   })
-  const fake = fakeTracker(seed, undefined, opts.failOn)
-  const monday = fakeMonday(opts.me)
-  const { people, parents } = fakePeople(fake.issues, opts.extra)
+  const failOn = opts.failOn ?? []
+  const fake = fakeTracker(seed, undefined, failOn)
+  const monday = fakeMonday(opts.me, opts.dailyLimit)
+  const { people, adopted } = fakePeople(fake.issues, opts.extra, opts.parents)
   const logged: Array<{ level: string; msg: string; fields?: Record<string, unknown> }> = []
   const log: Logger = {
     info: (msg, fields) => logged.push({ level: "info", msg, fields }),
@@ -182,7 +216,7 @@ function setup(seed: TrackerIssue[] = [], opts: { extra?: Record<string, Partial
   }
   const inbox = () => listNew<MondayInstructionEntry>(paths.inbox).map((e) => e.payload)
   const texts = (itemId: string) => monday.items.get(itemId)?.updates.map((u) => u.text) ?? []
-  return { paths, config, fake, monday, parents, bridge, later, inbox, logged, texts }
+  return { paths, config, fake, monday, adopted, bridge, later, inbox, logged, texts, failOn }
 }
 
 const stateOf = (item: MondayItem | undefined) => item?.columns[COL.state]?.text
@@ -280,6 +314,8 @@ describe("the Monday bridge: Linear to Needs you (STEP-3289)", () => {
     expect(stateOf(monday.items.get(id))).toBe("Needs you")
     expect(monday.items.get(id)!.groupId).toBe("g_needs")
     expect(monday.called("createItem")).toHaveLength(1)
+    // Asked again, the item starts with an empty Answer column.
+    expect(monday.called("setColumns").at(-1)?.[2]).toMatchObject({ [COL.answer]: "", [COL.state]: { label: "Needs you" } })
   })
 })
 
@@ -329,7 +365,7 @@ describe("the Monday bridge: answers (STEP-3289)", () => {
     expect(inbox()).toEqual([])
     const now = fake.issues.get("STEP-7")!
     expect(now).toMatchObject({ state: "Ready", labels: ["agent-ready"] })
-    expect(now.description).toBe(`## Goal\n\nFix it.\n\n## Answers from Monday\n\n<!-- monday:${said} -->\n**Kristoffer** ([Monday](${item.url}/posts/${said})): Use the publication date, then merge`)
+    expect(now.description).toBe(`## Goal\n\nFix it.\n\n## Answers from Monday\n\n<!-- monday:${said} -->\n**Kristoffer** ([Monday](${item.url}/posts/${thread}?reply=reply-${said})): Use the publication date, then merge`)
     // The reply went out in the same poll, under the person's thread, with a like beside it.
     expect(listNew(mondayOutbox(paths))).toEqual([])
     expect(monday.called("postUpdate").at(-1)).toEqual([item.id, "Eve: Thanks, Kristoffer. I added your answer to the issue, and an agent picks it up again. Nothing needed from you.", thread])
@@ -515,7 +551,7 @@ describe("the Monday bridge: test day (STEP-3289)", () => {
   })
 
   it("records a FAIL as a UAT fix sub-issue carrying what they saw, and Needs Correction", async () => {
-    const { bridge, monday, fake, parents, later } = uat()
+    const { bridge, monday, fake, adopted, later } = uat()
     await bridge.sync()
     const item = monday.item(/Try it on the test site/)!
     later(1)
@@ -523,9 +559,11 @@ describe("the Monday bridge: test day (STEP-3289)", () => {
     later(2)
     await bridge.sync()
     const sub = [...fake.issues.values()].find((i) => i.title === "UAT fix: Fix the date")!
-    expect(sub).toMatchObject({ state: "Triage", labels: ["polads", "bug"] })
+    // As review-uat files one: ready for an agent, at the parent's priority, with a bar for its own review.
+    expect(sub).toMatchObject({ state: "Ready", labels: ["bug", "polads", "agent"] })
     expect(sub.description).toContain("> the date is still the order date")
-    expect(parents).toEqual([[sub.uuid, "uuid-STEP-7"]])
+    expect(sub.description).toContain("## Acceptance criteria")
+    expect(adopted).toEqual([[sub.uuid, "uuid-STEP-7", 3]])
     expect(fake.called("comment")[0][1]).toMatch(new RegExp(`^UAT FAIL from Kristoffer on the Monday board .*The fix is tracked in ${sub.id}\\.$`))
     expect(fake.issues.get("STEP-7")!.state).toBe("Needs Correction")
   })
@@ -584,5 +622,186 @@ describe("the Monday bridge: its own guards (STEP-3289)", () => {
     const reads = monday.calls.length
     await bridge.drain()
     expect(monday.calls.length).toBe(reads)
+  })
+})
+
+describe("the Monday bridge: whose words move this mini (STEP-3289 review)", () => {
+  it("puts a request's words onto its issue, never to agentd, whatever they say, even once this mini has a PR for it", async () => {
+    const { bridge, monday, fake, later, inbox, paths } = setup()
+    const id = monday.request(NATE, "Add a Danish label")
+    await bridge.sync()
+    const filed = [...fake.issues.values()][0]
+    recordPr(paths, { issue: filed.id, url: PR, openedAt: T0.toISOString() })
+    later(1)
+    monday.says(id, NATE, "Please fix the date and resolve the typo, then merge")
+    later(2)
+    await bridge.sync()
+    expect(inbox()).toEqual([])
+    expect(fake.issues.get(filed.id)!.description).toContain("Please fix the date and resolve the typo, then merge")
+  })
+
+  it("reads the fixed verbs as words where this mini has no work of its own on the issue, and as an instruction where it has a PR", async () => {
+    const { bridge, monday, fake, later, inbox, paths } = setup([
+      issue({ id: "STEP-7", state: "In Progress", labels: ["needs-human"], description: "Mine." }),
+      issue({ id: "STEP-8", state: "In Progress", labels: ["needs-human"], description: "Bob's." }),
+    ])
+    recordPr(paths, { issue: "STEP-7", url: PR, openedAt: T0.toISOString() })
+    await bridge.sync()
+    const ids = { mine: readRecords(paths).find((r) => r.issue === "STEP-7")!.itemId, other: readRecords(paths).find((r) => r.issue === "STEP-8")!.itemId }
+    later(1)
+    monday.says(ids.other, NATE, "hold off on this, I'll handle it")
+    monday.says(ids.mine, NATE, "fix it")
+    later(2)
+    await bridge.sync()
+    // "hold off" on an issue this mini holds nothing of pauses nothing here, and reaches the issue.
+    expect(existsSync(paths.pauseFile)).toBe(false)
+    expect(fake.issues.get("STEP-8")!.description).toContain("hold off on this, I'll handle it")
+    expect(inbox()).toEqual([expect.objectContaining({ issue: "STEP-7", actions: ["revise"] })])
+  })
+})
+
+describe("the Monday bridge: when Linear is down (STEP-3289 review)", () => {
+  it("keeps an Answer column change Linear refused, however long it stays down, and applies it once Linear is back", async () => {
+    const { bridge, monday, fake, later, failOn } = setup([issue({ id: "STEP-7", state: "On hold", labels: ["human-todo"], description: "Do the DNS." })])
+    await bridge.sync()
+    const item = monday.item(/job for a person/)!
+    failOn.push("updateIssue")
+    later(1)
+    monday.answers(item.id, NATE, "Done, the record is in.")
+    later(2)
+    await bridge.sync()
+    // Long past the activity log's window.
+    later(45)
+    await bridge.sync()
+    expect(fake.called("updateIssue")).toHaveLength(2)
+    failOn.length = 0
+    later(45)
+    await bridge.sync()
+    expect(fake.issues.get("STEP-7")!.description).toContain("**Nate**: Done, the record is in.")
+    later(45)
+    await bridge.sync()
+    expect(fake.called("updateIssue")).toHaveLength(3)
+  })
+})
+
+describe("the Monday bridge: replies (STEP-3289 review)", () => {
+  it("holds back only the replies of an item Monday cannot be reached for, in order, and drops a reply Monday refuses at once", async () => {
+    const { bridge, monday, paths } = setup([issue({ id: "STEP-7", state: "On hold", labels: ["human-todo"] }), issue({ id: "STEP-8", state: "On hold", labels: ["human-todo"] })])
+    await bridge.sync()
+    const [a, b] = readRecords(paths).map((r) => r.itemId)
+    monday.down.add(a)
+    enqueueMonday(paths, { itemId: a, threadId: null, text: "first for a", like: null }, T0)
+    enqueueMonday(paths, { itemId: a, threadId: null, text: "second for a", like: null }, T0)
+    enqueueMonday(paths, { itemId: "9999", threadId: null, text: "for a deleted item", like: null }, T0)
+    enqueueMonday(paths, { itemId: b, threadId: null, text: "for b", like: null }, T0)
+    await bridge.drain()
+    const posted = () => monday.called("postUpdate").filter((c) => String(c[1]).startsWith("Eve: ")).map((c) => `${c[0]} ${c[1]}`)
+    expect(posted()).toEqual([`${a} Eve: first for a`, `9999 Eve: for a deleted item`, `${b} Eve: for b`])
+    expect(countIn(mondayOutbox(paths), "failed")).toBe(1)
+    expect(countIn(mondayOutbox(paths), "new")).toBe(2)
+    monday.down.delete(a)
+    await bridge.drain()
+    expect(monday.items.get(a)!.updates.map((u) => u.text).filter((t) => t.startsWith("Eve: "))).toEqual(["Eve: first for a", "Eve: second for a"])
+    expect(countIn(mondayOutbox(paths), "new")).toBe(0)
+  })
+
+  it("likes a person's update only beside a reply that says the thing was done", async () => {
+    const { bridge, monday, later } = setup([issue({ id: "STEP-7", title: "Fix the date", state: "Waiting for UAT", labels: ["polads"] })])
+    await bridge.sync()
+    const item = monday.item(/Try it on the test site/)!
+    later(1)
+    monday.says(item.id, NATE, "merge it")
+    later(2)
+    await bridge.sync()
+    expect(monday.called("postUpdate").at(-1)?.[1]).toMatch(/I read only PASS or FAIL here/)
+    expect(monday.called("like")).toEqual([])
+  })
+})
+
+describe("the Monday bridge: test day, closing the loop (STEP-3289 review)", () => {
+  const seed = (fixState: string) => [
+    issue({ id: "STEP-5", title: "Fix the date", state: "Needs Correction", labels: ["polads"] }),
+    issue({ id: "STEP-8", title: "UAT fix: the date", state: "Waiting for UAT", labels: ["polads", "bug"] }),
+    issue({ id: "STEP-9", title: "UAT fix: the label", state: fixState, labels: ["polads", "bug"] }),
+  ]
+
+  it("sends a UAT fix's parent back to Agent UAT once a person passes its last open fix", async () => {
+    const { bridge, monday, fake, later } = setup(seed("Released"), { parents: { "STEP-8": "STEP-5", "STEP-9": "STEP-5" } })
+    await bridge.sync()
+    later(1)
+    monday.says(monday.item(/UAT fix: the date/)!.id, NATE, "PASS")
+    later(2)
+    await bridge.sync()
+    expect(fake.issues.get("STEP-8")!.state).toBe("Approved")
+    expect(fake.issues.get("STEP-5")!.state).toBe("Agent UAT")
+    expect(fake.called("comment").find((c) => c[0] === "STEP-5")?.[1]).toMatch(/^STEP-8 is fixed and approved \(Nate, on the Monday board\), so STEP-5 goes back/)
+  })
+
+  it("leaves the parent in Needs Correction while another of its fixes is open", async () => {
+    const { bridge, monday, fake, later } = setup(seed("In Progress"), { parents: { "STEP-8": "STEP-5", "STEP-9": "STEP-5" } })
+    await bridge.sync()
+    later(1)
+    monday.says(monday.item(/UAT fix: the date/)!.id, NATE, "PASS")
+    later(2)
+    await bridge.sync()
+    expect(fake.issues.get("STEP-8")!.state).toBe("Approved")
+    expect(fake.issues.get("STEP-5")!.state).toBe("Needs Correction")
+  })
+})
+
+describe("the Monday bridge: requests one at a time (STEP-3289 review)", () => {
+  it("files the other requests when Linear refuses one", async () => {
+    const { bridge, monday, fake, logged } = setup()
+    const create = fake.tracker.createIssue
+    fake.tracker.createIssue = async (input) => {
+      if (input.title.startsWith("Broken")) throw new Error("Linear: refused (fake)")
+      return create(input)
+    }
+    monday.request(NATE, "Broken request")
+    monday.request(KRISTOFFER, "Add a Danish label")
+    await bridge.sync()
+    expect([...fake.issues.values()].map((i) => i.title)).toEqual(["Add a Danish label"])
+    expect(logged.some((l) => l.level === "warn" && /request not filed yet/.test(l.msg))).toBe(true)
+  })
+})
+
+describe("the Monday bridge: the account's daily API calls (STEP-3289 review)", () => {
+  it("polls no more often than apiShare of the account's daily calls allows, and every pollMinutes when there are plenty", async () => {
+    const standard = setup([], { dailyLimit: 1000 })
+    expect(standard.bridge.pollEveryMs()).toBe(2 * 60_000)
+    await standard.bridge.sync()
+    // 20 percent of 1,000 calls is 200 reads a day: one every 7.2 minutes, rounded up.
+    expect(standard.bridge.pollEveryMs()).toBe(8 * 60_000)
+    const pro = setup([], { dailyLimit: 10_000 })
+    await pro.bridge.sync()
+    expect(pro.bridge.pollEveryMs()).toBe(2 * 60_000)
+    const narrow = setup([], { dailyLimit: 10_000, monday: { apiShare: 0.01 } })
+    await narrow.bridge.sync()
+    expect(narrow.bridge.pollEveryMs()).toBe(15 * 60_000)
+  })
+
+  it("reads the limit once a day, and polls every pollMinutes, saying so once, when Monday does not tell it", async () => {
+    const s = setup([], { dailyLimit: new Error("Monday: Field 'platform_api' doesn't exist") })
+    await s.bridge.sync()
+    s.later(2)
+    await s.bridge.sync()
+    expect(s.monday.called("dailyLimit")).toHaveLength(1)
+    expect(s.bridge.pollEveryMs()).toBe(2 * 60_000)
+    s.later(24 * 60 + 1)
+    await s.bridge.sync()
+    expect(s.monday.called("dailyLimit")).toHaveLength(2)
+    expect(s.logged.filter((l) => /daily API limit/.test(l.msg))).toHaveLength(1)
+  })
+})
+
+describe("the Monday bridge: agents on the board (STEP-3289 review)", () => {
+  it("names only its own agent unless agentLabels lists the others", async () => {
+    const extra = { "STEP-7": { owner: { name: "Bob", email: "bob@polads.eu" } } }
+    const alone = setup([issue({ id: "STEP-7", state: "On hold", labels: ["awaiting-answer"] })], { extra })
+    await alone.bridge.sync()
+    expect(alone.monday.called("createItem")[0][3]).not.toHaveProperty(COL.agent)
+    const both = setup([issue({ id: "STEP-7", state: "On hold", labels: ["awaiting-answer"] })], { extra, monday: { agentLabels: ["Eve", "Bob"] } })
+    await both.bridge.sync()
+    expect(both.monday.called("createItem")[0][3]).toMatchObject({ [COL.agent]: { labels: ["Bob"] } })
   })
 })

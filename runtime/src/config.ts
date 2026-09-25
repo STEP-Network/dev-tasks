@@ -78,7 +78,16 @@ const MondayBridgeSchema = z
   .object({
     enabled: z.boolean().default(false),
     boardId: MONDAY_ID.default("5104953028"),
+    /** The shortest time between two reads of the board. apiShare can make it longer. */
     pollMinutes: z.number().int().positive().default(2),
+    /**
+     * The share of the account's daily Monday API calls the board's reads may
+     * take: 1,000 a day on Basic and Standard, 10,000 on Pro, 25,000 on
+     * Enterprise, shared by everyone's API use (developer.monday.com, Rate
+     * limits). The bridge reads the account's own limit and polls no more
+     * often than this allows.
+     */
+    apiShare: z.number().gt(0).max(1).default(0.2),
     columns: z
       .object({
         person: MONDAY_COLUMN.default("multiple_person_mm7hcr31"),
@@ -110,8 +119,8 @@ const MondayBridgeSchema = z
     defaultPerson: MONDAY_ID,
     /** This mini in the Agent column's dropdown. Default: its name, capitalised. */
     agentLabel: z.string().optional(),
-    /** The dropdown's labels for agents: an issue held by a Linear account of that name shows it. */
-    agentLabels: z.array(z.string()).default(["Eve", "Bob"]),
+    /** The dropdown's labels for agents: an issue held by a Linear account of that name shows it. Default: agentLabel alone. */
+    agentLabels: z.array(z.string()).optional(),
     /** The label a request from the board gets in Linear. */
     requestLabel: z.string().default("intake/monday"),
     archiveAfterDays: z.number().positive().default(14),

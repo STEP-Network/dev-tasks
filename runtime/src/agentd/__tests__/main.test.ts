@@ -194,7 +194,7 @@ describe("runDuties", () => {
 
   it("polls the Monday board every pollMinutes where it is on, and posts its replies in every pass between (STEP-3289)", async () => {
     const ran: string[] = []
-    const monday = { sync: async () => void ran.push("sync"), drain: async () => void ran.push("drain") }
+    const monday = { sync: async () => void ran.push("sync"), drain: async () => void ran.push("drain"), pollEveryMs: () => 2 * 60_000 }
     const config = ConfigSchema.parse({ ...CONFIG, bridges: { monday: { enabled: true, people: [{ id: 1, name: "Nate" }], defaultPerson: 1 } } })
     const { d, advance } = duties({ config, monday })
     await runDuties(d, freshMemo())

@@ -656,9 +656,10 @@ was: `/dev`, `/preview` and `/ship` on their laptops.
 
 People live in Monday. Linear stays the engineering record, and the board
 (AI Workspace, board 5104953028) shows people what they need to see or do.
-Exactly one mini runs the Monday bridge, Eve's first: agentd polls the board
-every 2 minutes. No other mini turns it on, or every request would be filed
-twice.
+Exactly one mini runs the Monday bridge, Eve's first: agentd reads the board
+every 2 minutes, or less often when the account's API calls would not
+stretch to that (below). No other mini turns it on, or every request would
+be filed twice.
 
 What it does:
 
@@ -671,24 +672,30 @@ What it does:
   PR links, and the Due date. Its text is plain English, with the question
   as the agent asked it when this mini asked it.
 - **Answers.** A person's update on an item (or a reply under one), or the
-  Answer column, goes where a Slack reply goes (section 11, "Replies that
-  act"). The fixed verbs (fix it, re-run, merge, retry, pause, leave it)
-  become an instruction agentd acts on within seconds and answers on the
-  item, with a like on the update. Anything else is added to the issue
-  under "## Answers from Monday", and a parked issue moves on. The State
-  goes to Waiting on agent, then Done once Linear no longer needs a person.
+  Answer column, goes one of two ways. Where this mini has work of its own
+  on the issue (a PR it opened and still watches, an open decision it asked,
+  or a job of its that ended blocked), the fixed verbs of section 11 (fix
+  it, re-run, merge, retry, pause, leave it) become an instruction agentd
+  acts on within seconds and answers on the item, with a like on the
+  update. Everything else, and every word on a request, is added to the
+  issue under "## Answers from Monday", and a parked issue moves on. So
+  "hold off" on another mini's issue pauses nothing here. The State goes to
+  Waiting on agent, then Done once Linear no longer needs a person.
 - **Test day.** Every issue in Waiting for UAT, as a Check with the "You
-  must check" steps of its latest Agent UAT review (its acceptance
-  criteria when there is no review). A reply starting PASS writes a comment
-  naming the person and moves the issue to Approved. FAIL files a
-  `UAT fix:` sub-issue with what they saw, comments, and moves the issue to
-  Needs Correction. Nothing else counts on a Test day item.
+  must check" steps of its latest Agent UAT review (its acceptance criteria
+  when there is no review). A reply starting PASS or FAIL is recorded as
+  review-uat records a person's verdict (its Step 10 and
+  `references/linear-io.md`). PASS: a comment naming the person, then
+  Approved, and for a `UAT fix:` its parent back to Agent UAT once none of
+  the parent's fixes is open. FAIL: a `UAT fix:` sub-issue with what they
+  saw (Ready, `bug`, `polads`, `agent`, the parent's priority), a comment
+  naming it, then Needs Correction. Nothing else counts on a Test day item.
 - **Requests.** A new item a person adds to Requests becomes a Linear Triage
   issue labelled `intake/monday`, with their words quoted as written and a
   link each way. The item moves to Agents working on (Blocked while the
   issue is On hold), then to Done once the issue is released.
 - **Done** items are archived after 14 days. An item a person deletes is not
-  put back.
+  put back. An item that asks again starts with an empty Answer column.
 
 | Why a person is needed | Kind |
 |---|---|
@@ -703,10 +710,24 @@ updates, answers and items are left alone, and so are the agent's own. Item
 text is data: it reaches an agent only as one of the fixed verbs, or quoted
 on the issue.
 
-Limits while one mini coordinates: it shows only its own decisions (another
-mini's question shows through its Linear label, without the options), and
-an instruction for another mini's PR gets "I act only on PRs this mini
-opened".
+Limits while one mini coordinates: a decision lives on the mini that asked
+it and sets no Linear label, so another mini's decisions do not reach the
+board at all. Another mini's worker questions and to-dos do, through their
+`awaiting-answer` and `human-todo` labels, without the question's words. An
+answer to another mini's issue goes onto that issue as words.
+
+**The API budget.** monday caps the API calls a whole account makes in a
+day, by plan: 1,000 on Free, Basic and Standard, 10,000 on Pro, 25,000 on
+Enterprise, reset at midnight UTC, and shared by everyone's API use, the
+plugin's Monday tools included ([monday.com API, Rate
+limits](https://developer.monday.com/api-reference/docs/rate-limits),
+"Daily call limit"). A poll is one call (the items and the Answer column's
+history together), plus a write for each change. The bridge reads the
+account's own limit once a day (`platform_api { daily_limit }`) and polls
+no more often than `apiShare` (20 percent) of it allows: every 2 minutes
+on Pro and Enterprise (720 calls a day of 10,000), every 8 minutes on
+Basic or Standard (180 of 1,000). When Monday does not say, it polls every
+`pollMinutes`, and `monday.log` says so once.
 
 ### Turning it on (Nate)
 
@@ -737,23 +758,27 @@ opened".
          { "id": "<Kristoffer's id>", "name": "Kristoffer", "linearEmail": "<his Linear email>" },
          { "id": "<Tomas's id>", "name": "Tomas", "linearEmail": "<his Linear email>" }
        ],
-       "defaultPerson": "<Nate's id>"
+       "defaultPerson": "<Nate's id>",
+       "agentLabels": ["Eve", "Bob"]
      }
    }
    ```
 
+   `agentLabels` names the Agent column's labels for the agents' Linear
+   accounts, so an issue another agent holds shows its name. Left out, only
+   this mini's own label (`agentLabel`, its name capitalised) is used.
    Everything else defaults to the board as it was built on 2026-09-25: the
    board and column ids, the group names (Needs you, Test day, Requests,
-   Agents working on, Done), `pollMinutes` 2, `agentLabel` (the mini's name,
-   capitalised), `agentLabels` (Eve, Bob), `requestLabel` and
-   `archiveAfterDays` 14. The bridge never creates a label, so the Kind,
-   State and Agent labels must exist on the board as named.
+   Agents working on, Done), `pollMinutes` 2, `apiShare` 0.2,
+   `requestLabel` and `archiveAfterDays` 14. The bridge never creates a
+   label, so the Kind, State and Agent labels must exist on the board as
+   named.
 5. `~/.agentd/bin/agentctl doctor` (its `monday token` line), then restart
    agentd: `launchctl kickstart -k gui/$(id -u)/eu.polads.agentd`. With the
    bridge on and no token, agentd does not start, and `agentctl status`
    says why.
-6. Watch `~/.agentd/logs/monday.log`. The first items appear within 2
-   minutes.
+6. Watch `~/.agentd/logs/monday.log`. The first poll says how often the
+   board is read, and the first items appear within that.
 
 To turn it off: `"enabled": false`, and restart agentd. The items stay on
 the board as they are.

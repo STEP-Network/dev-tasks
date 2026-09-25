@@ -68,6 +68,7 @@ describe("loadConfig", () => {
       enabled: true,
       boardId: "5104953028",
       pollMinutes: 2,
+      apiShare: 0.2,
       people: [{ id: "111", name: "Nate", linearEmail: "nate@polads.eu" }, { id: "222", name: "Kristoffer" }],
       defaultPerson: "111",
       requestLabel: "intake/monday",
@@ -78,6 +79,8 @@ describe("loadConfig", () => {
       linear: "link_mm7hz1nj", pr: "link_mm7h42x", due: "date_mm7hfrdv", answer: "long_text_mm7hzj39",
     })
     expect(monday!.groups).toEqual({ needsYou: "Needs you", testDay: "Test day", requests: "Requests", working: "Agents working on", done: "Done" })
+    // No agent is named for it: the bridge takes this mini's own label (monday/bridge.ts).
+    expect(monday!.agentLabels).toBeUndefined()
   })
 
   it("takes only Monday user ids for the people, and a default person who is one of them", () => {

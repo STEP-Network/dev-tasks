@@ -72,7 +72,7 @@ export interface DutyDeps {
   /** One GET of the Sentry check-in URL. */
   checkIn: (url: string) => Promise<{ ok: boolean; status: number }>
   /** The Monday bridge, on the coordinator mini only (bridges.monday.enabled, STEP-3289). */
-  monday?: Pick<MondayBridge, "sync" | "drain">
+  monday?: Pick<MondayBridge, "sync" | "drain" | "pollEveryMs">
 }
 
 /** What agentd carries from one loop to the next. */
@@ -121,11 +121,12 @@ export async function runDuties(d: DutyDeps, memo: DutyMemo): Promise<void> {
   })
   // A person's Slack reply is acted on at once, before the job it may queue is started (STEP-3285).
   await step("instructions", () => actOnInstructions({ exec: d.exec, paths, config, now, log }))
-  // The board every pollMinutes, and between polls only the replies the instructions just queued (STEP-3289).
+  // The board every poll (pollMinutes, or longer to stay within the account's
+  // daily API calls), and between polls only the replies just queued (STEP-3289).
   const monday = config.bridges.monday
   if (d.monday && monday?.enabled) {
     const bridge = d.monday
-    if (d.every.due("monday", monday.pollMinutes * 60_000)) await step("monday", () => bridge.sync())
+    if (d.every.due("monday", bridge.pollEveryMs())) await step("monday", () => bridge.sync())
     else await step("monday replies", () => bridge.drain())
   }
   await step("jobs", () => superviseJobs({ paths, config, now, log, bootAt: d.bootAt, liveness: d.liveness, kill: d.kill, spawnWorker: d.spawnWorker }))

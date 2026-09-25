@@ -20,9 +20,9 @@ import { releasePidLock, takePidLock } from "../pidlock.ts"
 import { assertLinearKeyFile, loadSlackSecrets } from "../secrets.ts"
 import { onQueue } from "../select.ts"
 import { issueForThread, saveThread } from "../threads.ts"
-import { createLinearTracker, isIssueGone, type Tracker } from "../tracker.ts"
+import { createLinearTracker, type Tracker } from "../tracker.ts"
 import { classify, type Classified, type ClassifyContext, type SlackEnvelope } from "./classify.ts"
-import { instructionFor, parseInstruction, type SlackInstructionEntry } from "./instruction.ts"
+import { parseInstruction, type InstructionEntry } from "./instruction.ts"
 import { isSlackTrouble, slackErrorCode, startOutbox, type SendContext, type SlackWeb } from "./send.ts"
 import { answerTransition, appendAnswer, fromSlack, intakeIssue, mentionedUsers } from "./text.ts"
 
@@ -93,9 +93,9 @@ export async function handleEnvelope(deps: BridgeDeps, envelope: SlackEnvelope):
  * An instruction for agentd (agentd/instructions.ts), which acts on it within
  * seconds and replies in words. Filed once per message.
  */
-function fileInstruction(deps: BridgeDeps, entry: Omit<SlackInstructionEntry, "type" | "key" | "receivedAt">): void {
+function fileInstruction(deps: BridgeDeps, entry: Omit<InstructionEntry, "type" | "key" | "receivedAt">): void {
   const key = `instr:${entry.channel}:${entry.ts}`
-  const filed: SlackInstructionEntry = { type: "instruction", key, ...entry, receivedAt: deps.now().toISOString() }
+  const filed: InstructionEntry = { type: "instruction", key, ...entry, receivedAt: deps.now().toISOString() }
   if (putOnce(deps.paths.inbox, key, filed)) appendLedger(deps.paths, { type: "instruction.received", issue: entry.issue ?? entry.target.issue ?? undefined, actions: entry.actions }, deps.now())
 }
 
@@ -115,8 +115,10 @@ function refusedForADay(deps: BridgeDeps, path: string, entry: { failingSince?: 
   return deps.now().getTime() - Date.parse(entry.failingSince) > GIVE_UP_MS
 }
 
-/** In tracker.ts since the Monday bridge needs it too (STEP-3289). */
-export { isIssueGone }
+/** An error that says Linear has no such issue, in the adapter's own words (plugin/src/tracker/linear.ts). */
+export function isIssueGone(error: unknown): boolean {
+  return error instanceof Error && error.message.startsWith("Linear: no issue ")
+}
 
 /** Display names for the users a message mentions, for Linear, where <@U1> means nothing. */
 async function namesFor(deps: BridgeDeps, text: string): Promise<Record<string, string>> {
@@ -212,8 +214,9 @@ export async function applyAnswer(deps: BridgeDeps, key: string): Promise<void> 
         // ("fix it and merge") is an instruction, not an answer. A reply to a
         // question the issue waits on, or to a person's to-do, stays an
         // answer, whatever words it uses.
-        const said = instructionFor(entry.text, current)
-        if (said) {
+        const said = parseInstruction(entry.text)
+        const waits = current.labels.includes("awaiting-answer") || current.labels.includes("human-todo")
+        if (said.actions.length && !waits) {
           fileInstruction(deps, {
             issue: entry.issue, channel: entry.channel, ts: entry.ts, threadTs: entry.threadTs,
             user: entry.user, userName: entry.userName, text: entry.text, actions: said.actions, target: said.target,

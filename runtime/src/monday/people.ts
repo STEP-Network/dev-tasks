@@ -44,32 +44,42 @@ export interface PeopleView {
   waitingForUat(): Promise<PeopleIssue[]>
   /** Issues by identifier (STEP-7). Unknown ones are left out. */
   byIdentifiers(ids: string[]): Promise<PeopleIssue[]>
-  /** Makes one issue (by uuid) a sub-issue of another. */
-  setParent(childUuid: string, parentUuid: string): Promise<void>
+  /** Files one issue (by uuid) under another, at the given priority: a UAT fix under the change it failed. */
+  adoptFix(childUuid: string, parentUuid: string, priority: number): Promise<void>
+  /** An issue's parent, with the parent's UAT fixes still open. null when it has no parent. */
+  parentOf(id: string): Promise<{ id: string; state: string; openFixes: string[] } | null>
 }
 
 export const NEEDS_LABELS = ["needs-human", "human-todo", "awaiting-answer"]
 /** The labels that ask a person only while the issue is parked for them. */
 const PARKED_LABELS = ["human-todo", "awaiting-answer"]
+/** A UAT fix that has reached one of these no longer holds its parent back (review-uat's linear-io.md, PASS). */
+const FIX_SETTLED = ["Approved", "Released", "Canceled", "Duplicate"]
 
-const UAT_REVIEW_PREFIX = "# UAT review"
+/**
+ * review-uat's comment opens with "## Agent UAT review, {date}" and carries
+ * the report's "# UAT review" title further down (its linear-io.md): the
+ * words both share.
+ */
+const UAT_REVIEW = "UAT review"
 const PR_RE = /^https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/pull\/\d+$/
 
 /*
- * ~90 complexity points an issue (labels at 50, attachments and comments at
- * 10 each), so a page of 50 is ~4,500, under Linear's 10,000 a query
- * (plugin/src/tracker/linear.ts has the arithmetic).
+ * ~40 complexity points an issue (labels at 20, attachments at 5, review
+ * comments at 10), so a page of 50 is ~2,000. Linear refuses 10,000 in one
+ * query and gives a key 3M an hour, shared with the front door and the
+ * worker (plugin/src/tracker/linear.ts has the arithmetic).
  */
 const PAGE_SIZE = 50
 const MAX_PAGES = 10
 const FIELDS = `
   id identifier title description url dueDate
   state { name type }
-  labels(first: 50) { nodes { name } }
+  labels(first: 20) { nodes { name } }
   assignee { name email }
   creator { name email }
-  attachments(first: 10) { nodes { url } }
-  comments(first: 10, filter: { body: { startsWith: "${UAT_REVIEW_PREFIX}" } }) { nodes { body createdAt } }
+  attachments(first: 5) { nodes { url } }
+  comments(first: 10, filter: { body: { contains: "${UAT_REVIEW}" } }) { nodes { body createdAt } }
 `
 
 interface RawIssue {
@@ -89,16 +99,25 @@ interface RawIssue {
 
 type Page = { issues: { nodes: RawIssue[]; pageInfo: { hasNextPage: boolean; endCursor: string | null } } }
 
-/** The "You must check" section of the newest Agent UAT review (the PolAds review-uat skill's format), or null. */
+/**
+ * The "You must check" section of the newest Agent UAT review (the PolAds
+ * review-uat skill's format), as written, or null. The section may sit a
+ * level down under the review's own heading, and ends at the next heading
+ * as high as its own.
+ */
 export function uatSteps(comments: Array<{ body: string; createdAt: string }>): string | null {
-  const newest = comments.filter((c) => c.body.startsWith(UAT_REVIEW_PREFIX)).sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0]
-  if (!newest) return null
-  const lines = newest.body.split(/\r?\n/)
-  const start = lines.findIndex((line) => /^##\s.*you must check/i.test(line))
-  if (start === -1) return null
-  const end = lines.findIndex((line, i) => i > start && /^#{1,2}\s/.test(line))
-  const section = lines.slice(start + 1, end === -1 ? undefined : end).join("\n").trim()
-  return section || null
+  const sections = comments
+    .filter((c) => c.body.includes(UAT_REVIEW))
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+    .map((c) => {
+      const lines = c.body.split(/\r?\n/)
+      const start = lines.findIndex((line) => /^#{2,3}\s.*you must check/i.test(line))
+      if (start === -1) return null
+      const level = /^(#+)/.exec(lines[start])![1].length
+      const end = lines.findIndex((line, i) => i > start && new RegExp(`^#{1,${level}}\\s`).test(line))
+      return lines.slice(start + 1, end === -1 ? undefined : end).join("\n").trim() || null
+    })
+  return sections[0] ?? null
 }
 
 function toIssue(raw: RawIssue): PeopleIssue {
@@ -160,14 +179,38 @@ export function createPeopleView(request: LinearRequest = linearRequest): People
     async byIdentifiers(ids) {
       const numbers = ids.map((id) => new RegExp(`^${LINEAR_TEAM_KEY}-(\\d+)$`).exec(id)).filter((m): m is RegExpExecArray => m !== null).map((m) => Number(m[1]))
       if (!numbers.length) return []
-      return all(`number: { in: $numbers }`, ", $numbers: [Float!]", { numbers })
+      // Linear prices a query by the page it asks for, not by what comes back.
+      return all(`number: { in: $numbers }`, ", $numbers: [Float!]", { numbers, first: Math.min(PAGE_SIZE, numbers.length) })
     },
 
-    async setParent(childUuid, parentUuid) {
+    async adoptFix(childUuid, parentUuid, priority) {
       await request(`mutation($id: String!, $input: IssueUpdateInput!) { issueUpdate(id: $id, input: $input) { success } }`, {
         id: childUuid,
-        input: { parentId: parentUuid },
+        input: { parentId: parentUuid, priority },
       })
+    },
+
+    async parentOf(id) {
+      const number = Number(new RegExp(`^${LINEAR_TEAM_KEY}-(\\d+)$`).exec(id)?.[1])
+      if (!number) return null
+      type Child = { identifier: string; title: string; state: { name: string } | null }
+      const data = await request<{ issues: { nodes: Array<{ parent: { identifier: string; state: { name: string } | null; children: { nodes: Child[] } } | null }> } }>(
+        `query($team: String!, $number: Float!) {
+           issues(first: 1, filter: { team: { key: { eq: $team } }, number: { eq: $number } }) {
+             nodes { parent { identifier state { name } children(first: 50) { nodes { identifier title state { name } } } } }
+           }
+         }`,
+        { team: LINEAR_TEAM_KEY, number },
+      )
+      const parent = data.issues.nodes[0]?.parent
+      if (!parent) return null
+      return {
+        id: parent.identifier,
+        state: parent.state?.name ?? "",
+        openFixes: parent.children.nodes
+          .filter((c) => c.title.startsWith("UAT fix:") && !FIX_SETTLED.includes(c.state?.name ?? ""))
+          .map((c) => c.identifier),
+      }
     },
   }
 }

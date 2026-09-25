@@ -47,7 +47,7 @@ interface InstructionBase {
 }
 
 /** An instruction as the Slack bridge files it in the inbox, for agentd (agentd/instructions.ts). */
-export interface SlackInstructionEntry extends InstructionBase {
+export interface InstructionEntry extends InstructionBase {
   channel: string
   ts: string
   /** Where agentd answers: the reply's thread, or the mention itself. */
@@ -65,13 +65,15 @@ export interface MondayInstructionEntry extends InstructionBase {
   monday: { itemId: string; updateId: string | null; threadId: string | null }
 }
 
-export type InstructionEntry = SlackInstructionEntry | MondayInstructionEntry
+/** Every instruction agentd acts on, wherever the words were said. */
+export type AnyInstructionEntry = InstructionEntry | MondayInstructionEntry
 
 /**
  * What a person's words on an issue are: an instruction when they name an
  * action, or null for an answer. A reply to a question the issue waits on
  * (awaiting-answer), or to a person's to-do (human-todo), stays an answer
- * whatever words it uses. Slack replies and Monday updates both go this way.
+ * whatever words it uses. The Slack bridge's applyAnswer applies the same
+ * rule in place, and the Monday bridge through this (monday/route.ts).
  */
 export function instructionFor(text: string, issue: { labels: readonly string[] }): Instruction | null {
   const said = parseInstruction(text)

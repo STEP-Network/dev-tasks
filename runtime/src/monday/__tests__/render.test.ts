@@ -84,7 +84,7 @@ describe("the board's words (plain English)", () => {
     const lines = [
       say.answered("Nate", "Ready"), say.answered("Nate", "Refining"), say.answered("Nate", null), say.filed("Nate", "STEP-9"),
       say.released("STEP-9"), say.closed("STEP-9"), say.passed("Nate"), say.failed("Nate", "STEP-10"), say.onlyVerdicts(),
-      say.notWaiting("Approved"), say.gone("STEP-9"), say.refused("STEP-9"),
+      say.notWaiting(), say.gone("STEP-9"), say.refused("STEP-9"),
     ]
     for (const line of lines) expectPlainEnglish(line)
     expect(say.answered("Nate", "Ready")).toBe("Thanks, Nate. I added your answer to the issue, and an agent picks it up again. Nothing needed from you.")
