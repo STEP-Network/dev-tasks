@@ -287,6 +287,19 @@ describe("/refine", () => {
     expect(frontDoor).toMatch(/Ready or In Progress that has no `approval\/` label/)
   })
 
+  it("never classes the issue it is about to launch ahead of the Try send-back, which comes before the launch (review of #147)", () => {
+    const backfill = frontDoor.slice(frontDoor.indexOf("Whenever you touch an open issue"), frontDoor.indexOf("If `develop` is set"))
+    expect(backfill).not.toMatch(/launch it/)
+    expect(backfill).toMatch(/The issue you are about to launch is the exception/)
+    const sendBack = frontDoor.indexOf("--add-label approval/try --state Refining --remove-label agent-ready")
+    expect(sendBack).toBeGreaterThan(frontDoor.indexOf("If `develop` is set"))
+    expect(sendBack).toBeLessThan(frontDoor.indexOf("agentctl job submit --issue <develop.id>"))
+  })
+
+  it("takes agent-ready away when it parks a Try plan, so nothing launches it before the OK", () => {
+    expect(source).toMatch(/`--add-label plan-to-approve` and `--remove-label agent-ready` beside it/)
+  })
+
   it("builds Try work only on plan-approved, which the answer recorder alone sets, and never reads approval from text", () => {
     expect(source).toMatch(/only when the issue carries `plan-approved`/)
     expect(source).not.toMatch(/already approve this plan/)

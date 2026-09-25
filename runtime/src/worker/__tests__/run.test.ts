@@ -99,6 +99,15 @@ describe("mergeMode", () => {
 })
 
 describe("runJob", () => {
+  it("never works on a request with tasks: skips it, takes its agent-ready away, and claims nothing (Wave 2)", async () => {
+    const { deps, job, fake, q } = setup()
+    const result = await runJob({ ...deps, subIssues: async () => ["STEP-8", "STEP-9"] }, job.id)
+    expect(result).toMatchObject({ status: "skipped", reason: "STEP-7 has sub-issues (STEP-8, STEP-9): it is a request, and its tasks are the work" })
+    expect(fake.issues.get("STEP-7")!.labels).not.toContain("agent-ready")
+    expect(fake.calls.filter((c) => c.method === "claimIssue")).toEqual([])
+    expect(q.seen).toHaveLength(0)
+  })
+
   it("claims, prepares the worktree, runs the session and opens the PR", async () => {
     const { deps, job, fake, f, q, paths, outbox } = setup()
     expect(await runJob(deps, job.id)).toMatchObject({ status: "done", prUrl: PR, branch: "STEP-7-fix-the-date", costUsd: 2.4, turns: 31 })

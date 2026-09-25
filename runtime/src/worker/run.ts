@@ -29,7 +29,7 @@ import { enqueueSlack } from "../outbox.ts"
 import { NOTHING_NEEDED } from "../plain.ts"
 import { lessonsFromFeedback, recordLessons, type Lesson } from "../retro/lessons.ts"
 import { loadClaudeOauthToken } from "../secrets.ts"
-import { branchNameFor, createLinearTracker, type Tracker, type TrackerIssue } from "../tracker.ts"
+import { branchNameFor, createLinearTracker, openSubIssues, type Tracker, type TrackerIssue } from "../tracker.ts"
 import { buildBrief, WORKER_RESULT_SCHEMA, workerRules, type BriefInput } from "./brief.ts"
 import { finalize, FinalizeFailed, type MergeMode } from "./finalize.ts"
 import { changedFiles, commitMessages, commitsAhead, historyRewrite, ownChanges, prepareWorktree, startMerge, realExec, WorktreeRefused, type Exec } from "./git.ts"
@@ -193,6 +193,8 @@ export interface RunDeps {
   pnpmStore: string | null
   /** From ~/.config/agentd/claude.env when the Keychain login does not reach the SDK. */
   claudeToken: string | null
+  /** An issue's open sub-issues: a request with tasks is never worked on itself (Wave 2). Absent, nothing is looked up. */
+  subIssues?: (issue: string) => Promise<string[]>
 }
 
 /**
@@ -387,6 +389,12 @@ export async function runJob(deps: RunDeps, jobId: string): Promise<JobResult> {
         return finish({ ...nothing, status: "skipped", reason: `the issue is ${current.state}, not ${job.retryOf ? "Ready or On hold" : "Ready"}` })
       }
       if (current.assigneeId && current.assigneeId !== me.id) return finish({ ...nothing, status: "skipped", reason: "someone else holds the issue" })
+      // A request with tasks is never worked on itself (Wave 2): its tasks are the work. It never carries agent-ready, so the front door stops offering it.
+      const tasks = deps.subIssues ? await deps.subIssues(current.id) : []
+      if (tasks.length) {
+        await tracker.updateIssue(current.id, { removeLabels: ["agent-ready"] })
+        return finish({ ...nothing, status: "skipped", reason: `${current.id} has sub-issues (${tasks.join(", ")}): it is a request, and its tasks are the work` })
+      }
       branch = branchNameFor(current.id, current.title)
       const open = await exec("gh", ["pr", "list", "--repo", config.repo.slug, "--head", branch, "--state", "open", "--json", "url", "--jq", ".[0].url // empty"], { cwd: config.repo.path })
       if (open.code === 0 && open.stdout.trim().startsWith("https://")) {
@@ -581,6 +589,7 @@ if (process.argv[1]?.endsWith("/worker/run.ts")) {
         paths,
         config,
         tracker: createLinearTracker(),
+        subIssues: openSubIssues,
         exec: realExec,
         query: query as unknown as QueryFn,
         now: () => new Date(),

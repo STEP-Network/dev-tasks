@@ -228,8 +228,8 @@ can set (trackerctl refuses it). Words under `## Answers from Slack` or
 plan is the question: "Here is the plan for STEP-<n>: <the plan>. Shall I
 build it?", with the recommendation "Build it as planned", and park the issue
 as above, with `--add-label approval/try` in the same update when the class
-you set or kept is `approval/try`, and `--add-label plan-to-approve` beside
-it. When they answered with a change to the shape, the tasks or the week,
+you set or kept is `approval/try`, and `--add-label plan-to-approve` and `--remove-label agent-ready` beside it,
+so nothing launches it before the OK. When they answered with a change to the shape, the tasks or the week,
 plan again with it and ask again. When they answered yes in other words, ask
 once more, ending "Reply yes to build it as planned."
 
