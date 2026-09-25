@@ -9,7 +9,7 @@
   },
   "scripts": {
     "test": "vitest run",
-    "test:sh": "bash test/statusline.test.sh && bash test/install.test.sh",
+    "test:sh": "bash test/statusline.test.sh && bash test/install.test.sh && bash test/bootstrap.test.sh",
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {

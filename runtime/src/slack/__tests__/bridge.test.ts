@@ -516,6 +516,12 @@ describe("starting", () => {
     })
   })
 
+  it("names the app's own bot user in bridge.json once Slack named it, for the other minis' otherAgentBots", () => {
+    const paths = agentPaths(mkdtempSync(join(tmpdir(), "bridge-status-")))
+    expect(bridgeStatus(paths, { connected: true, lastEventAt: null, refused: null, botUserId: "UBOB" })).toMatchObject({ botUserId: "UBOB" })
+    expect(bridgeStatus(paths, { connected: false, lastEventAt: null, refused: null })).not.toHaveProperty("botUserId")
+  })
+
   it("exits 1, for launchd to try again, only when Slack could not be reached or had trouble of its own", () => {
     const refusal = (code: string) => Object.assign(new Error(`An API error occurred: ${code}`), { code: "slack_webapi_platform_error", data: { ok: false, error: code } })
     expect(exitCodeFor(Object.assign(new Error("fetch failed"), { code: "slack_webapi_request_error" }))).toBe(1)

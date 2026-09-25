@@ -399,12 +399,15 @@ export interface BridgeState {
   lastEventAt: string | null
   /** Why the outbox is paused: Slack refused the app. null once a message goes out again. */
   refused: string | null
+  /** The app's own bot user, once auth.test named it: what the other minis list in slack.otherAgentBots. */
+  botUserId?: string
 }
 
 /**
  * ~/.agentd/state/bridge.json, written every 30 seconds and on every change.
  * `error` is set while the outbox is paused, so agentctl status and the
  * health check see why nothing is posted even though the bridge is running.
+ * `botUserId` is the id bootstrap-mini.sh hands to the other minis.
  */
 export function bridgeStatus(paths: AgentPaths, state: BridgeState, now: Date = new Date()): Record<string, unknown> {
   return {
@@ -415,6 +418,7 @@ export function bridgeStatus(paths: AgentPaths, state: BridgeState, now: Date = 
     outboxWaiting: countIn(paths.outbox, "new"),
     outboxFailed: countIn(paths.outbox, "failed"),
     ...(state.refused ? { error: state.refused } : {}),
+    ...(state.botUserId ? { botUserId: state.botUserId } : {}),
   }
 }
 
@@ -451,6 +455,7 @@ async function main(): Promise<void> {
   writeStatus()
 
   const s = await setup(paths).catch(halt)
+  state.botUserId = s.botUserId
 
   const tracker = createLinearTracker()
   const names = new Map<string, string>()
