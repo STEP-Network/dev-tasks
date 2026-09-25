@@ -117,7 +117,10 @@ describe("runDuties", () => {
     const pr = "https://github.com/example/repo/pull/7"
     const view = {
       url: pr, number: 7, state: "OPEN", headRefName: "STEP-7-x", headRefOid: "b".repeat(40), labels: [{ name: "approval/look" }],
-      statusCheckRollup: [{ name: "Approval class", conclusion: "FAILURE", detailsUrl: "https://github.com/example/repo/actions/runs/111/job/222" }],
+      statusCheckRollup: [
+        { name: "Approval class", conclusion: "FAILURE", detailsUrl: "https://github.com/example/repo/actions/runs/111/job/222" },
+        { name: "Approval class label", conclusion: "SUCCESS", detailsUrl: "https://github.com/example/repo/actions/runs/111/job/223" },
+      ],
     }
     const f = fakeExec([
       [/^gh pr view /, { stdout: JSON.stringify(view) }],

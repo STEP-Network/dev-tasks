@@ -163,6 +163,8 @@ export interface WatchedPr {
   infra?: Record<string, boolean>
   /** The head at which agentd last acted on a red Approval class check (it raises the issue's class once per head). */
   classRaised?: string
+  /** The head at which it re-ran a red Approval class check that had nothing to raise, before it asks a person. */
+  classRerun?: string
 }
 
 /**
