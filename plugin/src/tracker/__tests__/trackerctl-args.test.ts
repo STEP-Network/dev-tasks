@@ -9,7 +9,8 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest"
-import { spawnSync } from "node:child_process"
+import { spawn, spawnSync } from "node:child_process"
+import { createServer } from "node:http"
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { dirname, join, resolve } from "node:path"
@@ -288,4 +289,73 @@ describe("trackerctl update", () => {
     await runUpdate(t, "STEP-1", flagsOf("--add-label", "approval/try"), () => "")
     expect(t.writes).toEqual([{ addLabels: ["approval/try"], removeLabels: ["approval/auto"] }])
   })
+})
+
+describe("trackerctl update, the whole CLI against a fake Linear (Wave 1)", () => {
+  // main() as a skill runs it: parse, runUpdate, the adapter, a loopback server
+  // standing in for Linear. It proves the command itself goes through the guard.
+  const LABELS = [
+    { id: "label-auto", name: "approval/auto" },
+    { id: "label-look", name: "approval/look" },
+    { id: "label-try", name: "approval/try" },
+  ]
+  async function fakeLinear(issueLabels: string[]) {
+    const mutations: Array<Record<string, unknown>> = []
+    const issue = {
+      id: "uuid-1", identifier: "STEP-1", title: "t", description: "", url: "https://linear.example/STEP-1", priority: 0,
+      updatedAt: "2026-09-25T10:00:00.000Z", state: { name: "Ready" }, labels: { nodes: issueLabels.map((name) => ({ name })) }, assignee: null,
+    }
+    const server = createServer((req, res) => {
+      let body = ""
+      req.on("data", (chunk) => (body += chunk))
+      req.on("end", () => {
+        const { query, variables } = JSON.parse(body) as { query: string; variables: Record<string, unknown> }
+        res.writeHead(200, { "content-type": "application/json" })
+        if (/^\s*mutation/.test(query)) {
+          mutations.push(variables)
+          res.end(JSON.stringify({ data: { issueUpdate: { issue } } }))
+        } else if (query.includes("teams(")) {
+          const nodes = [{ id: "team-1", key: "STEP", name: "Step", states: { nodes: [{ id: "state-ready", name: "Ready" }] }, labels: { nodes: LABELS, pageInfo: { hasNextPage: false, endCursor: null } } }]
+          res.end(JSON.stringify({ data: { teams: { nodes } } }))
+        } else {
+          res.end(JSON.stringify({ data: { issues: { nodes: [issue] } } }))
+        }
+      })
+    })
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", () => resolve()))
+    const { port } = server.address() as { port: number }
+    return { url: `http://127.0.0.1:${port}/graphql`, mutations, close: () => new Promise<void>((resolve) => server.close(() => resolve())) }
+  }
+  const cli = (url: string, args: string[]) =>
+    new Promise<{ status: number | null; stderr: string }>((resolve) => {
+      const child = spawn(join(PLUGIN_ROOT, "node_modules", ".bin", "tsx"), [join(PLUGIN_ROOT, "scripts", "trackerctl.ts"), ...args], {
+        env: { PATH: process.env.PATH ?? "", HOME: mkdtempSync(join(tmpdir(), "trackerctl-home-")), DEV_TASKS_TRACKER: "linear", LINEAR_API_KEY: "lin_api_notreal", DEV_TASKS_LINEAR_ENDPOINT: url },
+      })
+      let stderr = ""
+      child.stderr.on("data", (chunk) => (stderr += chunk))
+      child.on("close", (status) => resolve({ status, stderr }))
+    })
+
+  it("refuses to lower the class, and sends Linear no write", async () => {
+    const linear = await fakeLinear(["polads", "approval/try"])
+    try {
+      const run = await cli(linear.url, ["update", "STEP-1", "--add-label", "approval/auto"])
+      expect(run.stderr).toMatch(/only a person/i)
+      expect(run.status).toBe(1)
+      expect(linear.mutations).toEqual([])
+    } finally {
+      await linear.close()
+    }
+  }, 30_000)
+
+  it("raises the class and takes the lower label off in the one write", async () => {
+    const linear = await fakeLinear(["polads", "approval/auto"])
+    try {
+      const run = await cli(linear.url, ["update", "STEP-1", "--add-label", "approval/look"])
+      expect(run.status).toBe(0)
+      expect(linear.mutations).toEqual([{ id: "uuid-1", input: { addedLabelIds: ["label-look"], removedLabelIds: ["label-auto"] } }])
+    } finally {
+      await linear.close()
+    }
+  }, 30_000)
 })
