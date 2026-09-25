@@ -12,19 +12,41 @@ import { PNG } from "pngjs"
 // build, and vitest would load its ESM build instead. Both read this one.
 const { applyPalette, GIFEncoder, quantize } = createRequire(import.meta.url)("gifenc") as typeof import("gifenc")
 
-/** Never throws: a frame that is not a whole PNG (a screenshot cut off by the time limit) is left out, and fewer than two frames make no GIF. */
-export function gifFromPngs(files: readonly string[], outFile: string, o: { width?: number; delayMs?: number; maxFrames?: number } = {}): string | null {
-  const read = (file: string) => {
-    try {
-      return PNG.sync.read(readFileSync(file))
-    } catch {
-      return null
-    }
+/** A screenshot shape a GIF can hold: no taller than four times its width, and no more than 40 million pixels. */
+const MAX_ASPECT = 4
+const MAX_PIXELS = 40_000_000
+
+/** The PNG, or null when it is not a whole PNG of a shape a GIF can hold. Its size is read from the header before anything is decoded. */
+function readFrame(file: string) {
+  try {
+    const bytes = readFileSync(file)
+    if (bytes.length < 24) return null
+    const w = bytes.readUInt32BE(16)
+    const h = bytes.readUInt32BE(20)
+    if (!w || !h || h > MAX_ASPECT * w || w * h > MAX_PIXELS) return null
+    return PNG.sync.read(bytes)
+  } catch {
+    return null
   }
-  const frames = files
-    .map(read)
-    .filter((png): png is NonNullable<typeof png> => png !== null)
-    .slice(0, o.maxFrames ?? 12)
+}
+
+/** Whether a file is a whole PNG: what the browser test counts as a screenshot it really saved. */
+export function readablePng(file: string): boolean {
+  return readFrame(file) !== null
+}
+
+/**
+ * Never throws: a frame that is not a whole PNG (a screenshot cut off by the
+ * time limit), or one far taller than it is wide, is left out, and fewer
+ * than two frames make no GIF. It reads no more frames than it uses.
+ */
+export function gifFromPngs(files: readonly string[], outFile: string, o: { width?: number; delayMs?: number; maxFrames?: number } = {}): string | null {
+  const frames: Array<NonNullable<ReturnType<typeof readFrame>>> = []
+  for (const file of files) {
+    if (frames.length >= (o.maxFrames ?? 12)) break
+    const png = readFrame(file)
+    if (png) frames.push(png)
+  }
   if (frames.length < 2) return null
   const width = o.width ?? 960
   const gif = GIFEncoder()
