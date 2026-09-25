@@ -18,7 +18,7 @@ Then, once per agent (step N2):
 3. Basic Information, App-Level Tokens: make one with the scope `connections:write`. That token (`xapp-...`) is `SLACK_APP_TOKEN`.
 4. Both tokens go in that mini's `~/.config/agentd/slack.env`, chmod 600 (step N3). Each mini holds only its own app's tokens.
 5. Add the bot to `#polads-agents`, `#polads-questions`, `#polads-intake` and `#polads-releases`: in each channel's settings, Integrations, Add an App, pick `PolAds Eve`. Not `/invite @eve`, which can pick a person called the same. The bridge refuses to start while the bot is missing from any of them.
-6. Once a second agent exists, tell each mini about the other's bot: its member ID (the bot's profile in Slack, More, Copy member ID) goes in `slack.otherAgentBots` in the other mini's `~/.agentd/config.json`, and that mini's bridge is restarted.
+6. Once a second agent exists, tell each mini about the other's bot: its member ID (the bot's profile in Slack, More, Copy member ID, or `botUserId` in that mini's `~/.agentd/state/bridge.json` once its bridge has started) goes in `slack.otherAgentBots` in the other mini's `~/.agentd/config.json`, and that mini's bridge is restarted. `runtime/scripts/bootstrap-mini.sh` prints the commands.
 
 ## Private and Slack Connect channels
 

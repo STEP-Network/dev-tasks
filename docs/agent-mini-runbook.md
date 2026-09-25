@@ -60,6 +60,11 @@ On every mini already running: add the new agent's bot to
 `slack.otherAgentBots`, and restart that mini's bridge. The new mini lists
 theirs (section 6).
 
+Once a person has done sections 1, 2, 4 and 5 and installed the
+orchestrator's key, the orchestrator does sections 3, 6, 8 and 9 from its own
+machine with `runtime/scripts/bootstrap-mini.sh` (Bootstrapping a mini, under
+Orchestrator access near the end). Section 7 comes after it, at the mini.
+
 ## 1. The machine (Nate, from the mini's admin account)
 
 1. Create a standard (not admin) user named `<agent>`.
@@ -651,7 +656,11 @@ Over SSH:
   A chain or a piped script hides which step failed.
 - **The login shell's PATH is not there.** `ssh` runs a shell that does not
   read `~/.zprofile`. `~/.agentd/bin/agentctl` and `trackerctl` carry their
-  own PATH. Any other command runs as `zsh -lc '<command>'`.
+  own PATH. Any other command runs as `zsh -lc '<command>'`, which reads
+  `~/.zprofile` but not `~/.zshrc`, where pnpm's own installer puts
+  `~/Library/pnpm/bin`: on Eve's mini `zsh -lc` finds neither pnpm nor
+  claude. Name the PATH in front of the command, as bootstrap-mini.sh does:
+  `export PATH="$HOME/Library/pnpm/bin:$HOME/.local/bin:/opt/homebrew/bin:$PATH"`.
 - **`ssh -tt` only for the person-only commands**: `agentctl probe-sandbox`,
   `probe-hooks`, `resume` and `retry`, which refuse without a terminal. Everything
   else runs without one.
@@ -659,7 +668,54 @@ Over SSH:
   by a person, at the mini or in an interactive `ssh -t` session.
 - **The login keychain is locked.** doctor reports `gh` and `claude login` as
   "can't check over SSH (login keychain)": expected. Check them in the mini's
-  own Terminal (section 8). The LaunchAgents are not affected.
+  own Terminal (section 8). The LaunchAgents are not affected. Nor is git
+  through gh's login: `git fetch` in `~/polads` fails over SSH with "could
+  not read Username". `runtime/scripts/gui-session.sh` runs a command in the
+  automatic-login session instead, as a one-shot LaunchAgent, where the
+  keychain is open.
+
+### Bootstrapping a mini
+
+Once a person has done sections 1, 2, 4 and 5 and installed the key above,
+the orchestrator runs, from its own checkout of dev-tasks:
+
+```bash
+runtime/scripts/bootstrap-mini.sh --dry-run --allowed-users <id>,<id> --other-bots <bot id> <agent> <mini>
+runtime/scripts/bootstrap-mini.sh --allowed-users <id>,<id> --other-bots <bot id> <agent> <mini>
+```
+
+`--allowed-users` are the Slack member ids of section 4, the same on every
+mini. `--other-bots` are the other agents' bots (Eve's, for Bob). The SSH key
+is `~/.ssh/<agent>_mini_ed25519` unless `--key` names another. The keys and
+ids stay out of this repository.
+
+It does section 3: both checkouts, PolAds's dependencies with the agent's
+standalone pnpm, the plugin's and the runtime's, and the profile. Then
+section 6: `config.json` from the template, with the agent's name and paths,
+the allowed users, the other agents' bots, an empty allowlist,
+`worker.autoMerge` on, and the template's models and limits, which are Eve's.
+Then the first start's `PAUSE`, section 8 (`install.sh`), section 9's
+`probe-sandbox` and `probe-hooks --scripted` over `ssh -tt`, `agentctl
+status` and `agentctl doctor`.
+
+- One step per SSH call. The first that fails stops the run and names
+  itself. Once it is fixed, the same command runs again.
+- A checkout that exists is fetched. A `config.json` that exists is kept
+  (`--force-config` writes it again). `PAUSE` is written only on a mini that
+  had no `config.json`, so a mini a person resumed stays resumed.
+- PolAds is private, so its clone and fetch run in the automatic-login
+  session (`gui-session.sh`, sent over the same SSH call). dev-tasks is
+  public.
+- It reads no secret and passes none: the secrets files are checked by their
+  mode. `--dry-run` prints every step's command and the `config.json` it
+  would write, and runs nothing.
+
+It ends with what is left to a person: section 7 at the mini, then a
+restart of the front door, the logins that SSH cannot check, and `agentctl
+resume` when someone is watching. It also prints the new agent's bot id,
+which the bridge records in `~/.agentd/state/bridge.json` once Slack takes
+the app, with the three commands that add it to `slack.otherAgentBots` on
+every other mini and restart their bridges.
 
 ## Troubleshooting
 
