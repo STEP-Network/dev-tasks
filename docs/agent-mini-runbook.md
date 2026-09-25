@@ -1020,12 +1020,12 @@ Tasks server, or any other). It refuses:
   takes out an answer entry: the guard reads the description as it stands
   (the Linear key, `LINEAR_API_KEY` or `~/.config/linear/.env`) and applies
   the patch first. An edit that keeps every entry passes.
-- From the shell: to `api.monday.com` or `api.linear.app`, a GraphQL
-  mutation, or any body not written out in the command itself (from a file,
-  stdin, a redirect, a curl config, wget's `--post-file` or `--body-file`,
-  or anything the shell fills in: `$(…)`, `$VAR`, a backtick). A Slack write
-  method (`chat.`, `reactions.`, `files.`, `conversations.open` and the like)
-  to `slack.com/api`. And `sudo` on its own list.
+- From the shell: any command that names `api.monday.com` or
+  `api.linear.app` (and so `client-api.linear.app`), reads included. The
+  Monday and Linear tools cover reads, and no rule on a request's body can
+  see a mutation the shell builds from a file, a variable or a pipe. A Slack
+  write method (`chat.`, `reactions.`, `files.`, `conversations.open` and the
+  like) to `slack.com/api`. And `sudo` on its own list.
 - A guard that cannot run refuses: with no `node` on `PATH`, a Node that
   fails, or a tool call it cannot read, every guarded call is refused.
 
@@ -1039,9 +1039,9 @@ Tasks server, or any other). It refuses:
   waits for one Linear read. Without a Linear key it is refused in every
   workspace.
 - Monday's `execute_code` is refused on every board.
-- No Monday or Linear mutation, no Monday or Linear body from a file or a
-  variable, and no Slack write goes out by `curl` or `wget` from an agent
-  session, on any board, workspace or channel.
+- No shell call to Monday or Linear at all, reads included, and no Slack
+  write, from an agent session, on any board, workspace or channel. Even a
+  `grep` for the host name is refused: search code with the Grep tool.
 - Without `node` on `PATH`, every Monday, Slack, Linear and dev-tasks tool
   that writes is refused.
 - Until the list is in place, every Monday, dev-tasks and Slack write is
@@ -1095,9 +1095,12 @@ guard, by root only:
 **What it does not do.** It is a guardrail for misled sessions, not a
 sandbox. It stops a misled session, not a determined one: a
 session set on writing as a person can still find another way (a script
-file, a host built from parts, its own environment). Two more doors it does
+file, a host built from parts, its own environment). Three more doors it does
 not see at all:
 
+- **A script that calls the APIs from a file** (python, node, or anything
+  else the command runs): only the command's own words are read, never the
+  file it runs.
 - **The Make connector**, which runs Monday and Slack modules on the
   person's own Monday and Slack connections: a scenario it builds or runs
   writes as the person, and its tools name no Monday or Slack server.

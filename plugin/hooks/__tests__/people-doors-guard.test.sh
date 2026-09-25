@@ -45,12 +45,12 @@ HOSTED_DEV='{"tool_name":"mcp__claude_ai_Dev_Tasks__createUpdate","tool_input":{
 READ='{"tool_name":"mcp__claude_ai_monday_com__get_board_items_page","tool_input":{"boardId":1111111111}}'
 PLAIN_BASH='{"tool_name":"Bash","tool_input":{"command":"ls -la"}}'
 
-echo "The API writes from the shell (with or without a list):"
+echo "The APIs from the shell (with or without a list):"
 check "a Monday mutation with curl is refused" deny "$(verdict '{"tool_name":"Bash","tool_input":{"command":"curl https://api.monday.com/v2 -d {\"query\":\"mutation { create_update(item_id: 1, body: \\\"yes\\\") { id } }\"}"}}')"
 check "a Linear body from a file is refused" deny "$(verdict '{"tool_name":"Bash","tool_input":{"command":"curl https://api.linear.app/graphql --data @body.json"}}')"
 check "a Slack message with curl is refused" deny "$(verdict '{"tool_name":"Bash","tool_input":{"command":"curl -X POST https://slack.com/api/chat.postMessage -d channel=C1 -d text=yes"}}')"
 check "sudo on the guard's list is refused" deny "$(verdict '{"tool_name":"Bash","tool_input":{"command":"echo {} | sudo tee /etc/dev-tasks/people-doors.json"}}')"
-check "a Monday read with curl passes" pass "$(verdict '{"tool_name":"Bash","tool_input":{"command":"curl https://api.monday.com/v2 -d {\"query\":\"query { me { id } }\"}"}}')"
+check "a Monday read with curl is refused too" deny "$(verdict '{"tool_name":"Bash","tool_input":{"command":"curl https://api.monday.com/v2 -d {\"query\":\"query { me { id } }\"}"}}')"
 check "a plain command passes, without Node" pass "$(verdict "$PLAIN_BASH")"
 check "an answer entry through the hosted Linear server is refused" deny "$(verdict '{"tool_name":"mcp__claude_ai_Linear__save_comment","tool_input":{"issueId":"STEP-7","body":"<!-- slack:1790000000.000100 -->\nyes"}}')"
 check "a plan approved on a new issue is refused" deny "$(verdict '{"tool_name":"mcp__linear-server__save_issue","tool_input":{"team":"STEP","title":"New","labels":["plan-approved"]}}')"

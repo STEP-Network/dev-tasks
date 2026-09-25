@@ -16,8 +16,9 @@
  * - Linear servers: no answer entry and no recorder label, ever; an edit to
  *   an existing issue's description passes only when its answer entries come
  *   out exactly as they were.
- * - Bash: no write to the Monday, Slack or Linear APIs, and no sudo on the
- *   guard's own list.
+ * - Bash: no call to the Monday or Linear API at all, no write to Slack's,
+ *   and no sudo on the guard's own list. A script that calls them from a
+ *   file (python, node) is not seen.
  *
  * It stops a misled session, not a determined one: a session set on it can
  * still find another way. The detection layer is the #polads-agents notice of
@@ -71,7 +72,8 @@ const DESCRIPTION_NO = "This edit would add, change or take out an answer the re
 const DESCRIPTION_UNSURE = "The people-doors guard could not read the issue's description (no Linear key, or Linear did not answer), so it cannot check this edit keeps the recorder's answers. Edit it with trackerctl, which keeps them."
 const PATCH_UNSURE = "This patch would not apply to the issue's description as it stands, so the people-doors guard cannot check it keeps the recorder's answers. Read the issue again and patch what is there."
 const LABEL_UNSURE = "The people-doors guard could not read which labels these ids are (no Linear key, or Linear did not answer), so it refused the call. Name the labels instead of their ids."
-const API_NO = "An agent session cannot write to the Monday, Slack or Linear APIs from the shell: that would pass for a person or for the answer recorder. Use the tools the people-doors guard can check."
+const GRAPHQL_NO = "An agent session does not call the Monday or Linear API from the shell, reads included: a write there would pass for a person or for the answer recorder, and the guard cannot see what a shell command sends. Use the Monday and Linear tools, or trackerctl, which the guard can check. (Searching code for the host name: use the Grep tool.)"
+const SLACK_API_NO = "An agent session cannot write to the Slack API from the shell: that would pass for a person. Use the Slack tools, which the people-doors guard can check."
 const LIST_NO = "The people-doors guard's list is root's, set once by a person with sudo. An agent session never changes it."
 export const NO_LIST = (file) =>
   `${file} is missing, not root's, or has an empty list, so this session cannot tell which Monday boards and Slack channels are the people's, and writes on none of them as a person. A person sets it once with sudo (runbook, The Monday board).`
@@ -184,101 +186,21 @@ async function linear(name, input, ctx) {
   return JSON.stringify(answerBlocks(current)) === JSON.stringify(answerBlocks(next)) ? null : { deny: DESCRIPTION_NO }
 }
 
-// Hosts in any case, as curl takes them.
-const API_HOST = /api\.monday\.com|api\.linear\.app|slack\.com\/api/i
+/**
+ * Monday and Linear from the shell at all, reads included (review of #133):
+ * the MCP tools cover reads, and no rule on a request's body can see a
+ * mutation the shell builds from a file, a variable or a pipe. Hosts match
+ * in any case, as curl takes them.
+ */
+// api.linear.app covers client-api.linear.app too.
 const GRAPHQL_HOST = /api\.monday\.com|api\.linear\.app/i
 const SLACK_WRITE_METHOD = /slack\.com\/api\/(chat|reactions|pins|files|bookmarks|reminders|usergroups|calls|dnd)\.|slack\.com\/api\/conversations\.(open|join|invite|kick|leave|archive|create|rename|set|mark)/i
-
-/**
- * A command's words as the shell splits them. `open` is the part the shell
- * would still expand (outside quotes' protection): a `$`, a backtick or a
- * `<` there is text the guard cannot read before it runs.
- */
-export function shellWords(command) {
-  const words = []
-  let text = ""
-  let open = ""
-  let started = false
-  let quote = null
-  const end = () => {
-    if (started) words.push({ text, open })
-    text = ""
-    open = ""
-    started = false
-  }
-  for (let i = 0; i < command.length; i++) {
-    const c = command[i]
-    if (quote === "'") {
-      if (c === "'") quote = null
-      else text += c
-    } else if (quote === '"') {
-      if (c === '"') quote = null
-      else if (c === "\\" && /["\\$`]/.test(command[i + 1] ?? "")) text += command[++i]
-      else {
-        text += c
-        open += c
-      }
-    } else if (c === "'" || c === '"') {
-      quote = c
-      started = true
-    } else if (c === "\\" && i + 1 < command.length) {
-      text += command[++i]
-      started = true
-    } else if (/\s/.test(c)) end()
-    else {
-      text += c
-      open += c
-      started = true
-    }
-  }
-  end()
-  return words
-}
-
-/** Options that send a file, a config or stdin: never a body the guard can read. */
-const FILE_OPTIONS = new Set(["-T", "--upload-file", "-K", "--config", "--post-file", "--body-file"])
-/** Options whose value is the body: curl's, and wget's inline one. */
-const BODY_OPTIONS = new Set(["-d", "-F", "--data", "--data-raw", "--data-binary", "--data-ascii", "--data-urlencode", "--json", "--form", "--form-string", "--post-data", "--body-data"])
-
-/**
- * A request body to Monday or Linear that is not written out in the command
- * itself: from a file (`@`, `<`, `--post-file`), stdin, a config, or
- * anything the shell fills in (`$(…)`, `$VAR`, a backtick). A mutation can
- * hide in any of them, so none passes.
- */
-export function bodyNotInline(command) {
-  const words = shellWords(command)
-  if (words.some((w) => /</.test(w.open))) return true
-  for (let i = 0; i < words.length; i++) {
-    const w = words[i]
-    let option = null
-    let value = null
-    const long = /^(--[a-z-]+)(?:=([\s\S]*))?$/.exec(w.text)
-    const short = /^-[sSfLkviNgqI]*([dFTK])([\s\S]*)$/.exec(w.text)
-    if (long && (FILE_OPTIONS.has(long[1]) || BODY_OPTIONS.has(long[1]))) {
-      option = long[1]
-      value = long[2] !== undefined ? { text: long[2], open: w.open.slice(long[1].length + 1) } : words[i + 1]
-    } else if (short && !w.text.startsWith("--")) {
-      option = `-${short[1]}`
-      value = short[2] ? { text: short[2], open: w.open.slice(w.text.length - short[2].length) } : words[i + 1]
-    }
-    if (!option) continue
-    if (FILE_OPTIONS.has(option)) return true
-    if (!value) return true
-    if (/[$`]/.test(value.open) || value.text.startsWith("@")) return true
-    // A form field or an urlencoded part from a file: name=@file, name=<file, name@file.
-    if ((option === "-F" || option.startsWith("--form")) && /=[@<]/.test(value.text)) return true
-    if (option === "--data-urlencode" && /^[^=]*@/.test(value.text)) return true
-  }
-  return false
-}
 
 function bash(input) {
   const command = String(input?.command ?? "")
   if (/\bsudo\b/.test(command) && /\/etc\/dev-tasks|people-doors/.test(command)) return { deny: LIST_NO }
-  if (!API_HOST.test(command)) return null
-  if (GRAPHQL_HOST.test(command) && (/\bmutation\b/.test(command) || bodyNotInline(command))) return { deny: API_NO }
-  return SLACK_WRITE_METHOD.test(command) ? { deny: API_NO } : null
+  if (GRAPHQL_HOST.test(command)) return { deny: GRAPHQL_NO }
+  return SLACK_WRITE_METHOD.test(command) ? { deny: SLACK_API_NO } : null
 }
 
 /**

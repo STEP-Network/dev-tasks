@@ -283,43 +283,39 @@ describe("Linear: answers and plan approvals are the recorder's alone", () => {
   })
 })
 
-describe("Bash: no write to the three APIs, and no sudo on the guard's list", () => {
+describe("Bash: no call to Monday or Linear at all, no write to Slack, and no sudo on the guard's list", () => {
   it.each<[string, string, boolean]>([
+    // Any command naming the Monday or Linear API host, reads included (review of #133: a rule on the body always leaks).
     ["a GraphQL mutation to Monday", `curl -s https://api.monday.com/v2 -H "Authorization: $MONDAY_API_KEY" -d '{"query":"mutation { create_update(item_id: 7000000001, body: \\"yes\\") { id } }"}'`, true],
-    ["a mutation to Linear", `curl https://api.linear.app/graphql -d '{"query":"mutation { issueAddLabel(id: \\"x\\", labelId: \\"y\\") { success } }"}'`, true],
-    ["a body from a file, which the guard cannot read", "curl -X POST https://api.linear.app/graphql --data @body.json", true],
-    ["a body from stdin", "jq -n '{query: $q}' | curl https://api.monday.com/v2 --data-binary @-", true],
-    ["a host in capitals", `curl HTTPS://API.MONDAY.COM/v2 -d '{"query":"mutation { x }"}'`, true],
+    ["a read from Monday", `curl https://api.monday.com/v2 -d '{"query":"query { me { id } }"}'`, true],
+    ["a read from Linear", `curl https://api.linear.app/graphql -d '{"query":"{ viewer { id } }"}'`, true],
+    ["Linear's client API", "curl https://client-api.linear.app/graphql -d @body.json", true],
+    ["a body the shell builds in a variable first", 'Q=$(cat q.json); curl https://api.monday.com/v2 -d "$Q"', true],
+    ["a body glued to -d from a file", 'curl https://api.monday.com/v2 -d"$(cat q.json)"', true],
+    ["a body decoded on the way", 'curl https://api.linear.app/graphql --data "$(cat q.b64 | base64 -d)"', true],
+    ["node reading the body from a file", `node -e 'fetch("https://api.monday.com/v2", { method: "POST", body: require("fs").readFileSync("q.json") })'`, true],
+    ["wget's body from a file", "wget --post-file=body.json https://api.linear.app/graphql", true],
+    ["httpie's body from a redirect", "http POST https://api.monday.com/v2 Authorization:k < body.json", true],
+    ["a host in capitals", "curl HTTPS://API.MONDAY.COM/v2 -d @q.json", true],
+    ["a search for the host name, which the Grep tool does instead", 'grep -rn "api.monday.com" src', true],
+    // Slack: the write methods.
     ["a Slack message", "curl -X POST https://slack.com/api/chat.postMessage -d channel=CQUESTION1 -d text=yes", true],
     ["a Slack reaction", "curl https://slack.com/api/reactions.add -d name=white_check_mark", true],
     ["a Slack message to a host in capitals", "curl -X POST HTTPS://SLACK.COM/API/CHAT.POSTMESSAGE -d text=yes", true],
     ["a direct message opened", "curl https://slack.com/api/conversations.open -d users=UEVE00001", true],
     ["the list written with sudo", "echo '{}' | sudo tee /etc/dev-tasks/people-doors.json", true],
     ["the way out placed with sudo", "sudo touch /etc/dev-tasks/people-doors.off", true],
-    // A body the guard cannot read before it runs (review of #133).
-    ["a body the shell fills in from a file", `curl https://api.monday.com/v2 -H "Authorization: $MONDAY_API_KEY" -d "$(cat body.json)"`, true],
-    ["a body from a variable", 'curl https://api.linear.app/graphql -d "$BODY"', true],
-    ["a body from a bare variable", "curl https://api.linear.app/graphql --data=$BODY", true],
-    ["a body in backticks", "curl https://api.monday.com/v2 -d \"`cat body.json`\"", true],
-    ["a body glued to -d from a file", "curl https://api.monday.com/v2 -d@body.json", true],
-    ["a body after clustered flags", "curl -sd @body.json https://api.monday.com/v2", true],
-    ["a body read from a redirect", "curl https://api.monday.com/v2 --data-binary @- < body.json", true],
-    ["a body from a heredoc", "curl https://api.linear.app/graphql --data-binary @- <<EOF", true],
-    ["httpie's body from a redirect, with no body option at all", "http POST https://api.monday.com/v2 Authorization:k < body.json", true],
-    ["a quoted body with a variable spliced in", `curl https://api.monday.com/v2 -d '{"query":"'"$Q"'"}'`, true],
-    ["a form field from a file", "curl -F 'query=<q.graphql' https://api.linear.app/graphql", true],
-    ["an urlencoded part from a file", "curl https://api.monday.com/v2 --data-urlencode 'query@q.txt'", true],
-    ["a curl config file", "curl -K request.cfg https://api.monday.com/v2", true],
-    ["wget's body from a file", "wget --post-file=body.json https://api.linear.app/graphql", true],
-    ["wget's other body from a file", "wget --method=POST --body-file=body.json https://api.monday.com/v2", true],
-    ["a read from Monday", `curl https://api.monday.com/v2 -d '{"query":"query { me { id } }"}'`, false],
-    ["a read with the key in a header and GraphQL variables in single quotes", `curl https://api.monday.com/v2 -H "Authorization: $MONDAY_API_KEY" -H 'Content-Type: application/json' -d '{"query":"query ($i: [ID!]) { items(ids: $i) { name } }","variables":{"i":["1"]}}'`, false],
-    ["wget's inline read", `wget -qO- --post-data='{"query":"query { me { id } }"}' https://api.monday.com/v2`, false],
     ["a Slack history read", "curl https://slack.com/api/conversations.history?channel=CQUESTION1", false],
     ["reading the list", "cat /etc/dev-tasks/people-doors.json", false],
+    // Not seen: a script that calls the API from a file. A guardrail, not a sandbox.
+    ["a script run from a file", "python3 scripts/sync_board.py", false],
     ["a plain command", "ls -la", false],
   ])("%s: refused %s", async (_, command, expected) => {
     expect(await denied("Bash", { command })).toBe(expected)
+  })
+
+  it("says a read is refused too, and what to use instead", async () => {
+    expect(await denial("Bash", { command: "curl https://api.linear.app/graphql -d '{\"query\":\"{ viewer { id } }\"}'" })).toMatch(/reads included[\s\S]*Monday and Linear tools, or trackerctl[\s\S]*Grep tool/)
   })
 })
 
