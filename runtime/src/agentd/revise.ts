@@ -226,13 +226,21 @@ export function approvalCheckAt(view: OwnPrView): "none" | "running" | "green" |
 }
 
 /**
- * Whether the PR's class label is this head's: the label job passed at this
- * head. Skipped or still running, the label may be an older head's, and a
- * person may have lowered the class since.
+ * Where this head's label job stands: not there, still running, passed (the
+ * PR's class label is this head's), or finished without a class, as when
+ * the check could not read Linear and skipped it. Only a pass makes the label
+ * this head's: otherwise it may be an older head's, and a person may have
+ * lowered the class since.
  */
-export function labelledAtHead(view: OwnPrView): boolean {
-  return view.statusCheckRollup.some((c) => checkName(c) === APPROVAL_LABEL_CHECK && conclusionOf(c) === "SUCCESS")
+export function labelJobAt(view: OwnPrView): "none" | "running" | "passed" | "without" {
+  const job = view.statusCheckRollup.find((c) => checkName(c) === APPROVAL_LABEL_CHECK)
+  if (!job) return "none"
+  const conclusion = conclusionOf(job)
+  if (UNDECIDED.has(conclusion)) return "running"
+  return conclusion === "SUCCESS" ? "passed" : "without"
 }
+
+export const labelledAtHead = (view: OwnPrView): boolean => labelJobAt(view) === "passed"
 
 /**
  * When the Approval class check is red at the head and this head's label job
@@ -265,19 +273,22 @@ async function rerunCheck(deps: ReviseDeps, pr: WatchedPr, runId: string | null)
 /**
  * Raises the issue's class to what the check found, once per head. It waits,
  * marking nothing, while the check is not there yet or still running, and
- * while this head's label job has not labelled the PR. Never throws: a
+ * while this head's label job is not there or still running. Never throws: a
  * failure is logged and tried again at the next watch.
  */
 async function raiseClass(deps: ReviseDeps, pr: WatchedPr, view: OwnPrView): Promise<WatchedPr> {
   const head = view.headRefOid
   if (!deps.tracker || pr.classRaised === head) return pr
-  if (approvalCheckAt(view) !== "red" || !labelledAtHead(view)) return pr
+  const label = labelJobAt(view)
+  if (approvalCheckAt(view) !== "red" || label === "none" || label === "running") return pr
   const check = view.statusCheckRollup.find((c) => checkName(c) === APPROVAL_CHECK)
   const runId = check ? (actionsJob(check)?.runId ?? null) : null
   try {
+    // Red, and the label job finished without a class (the check could not read Linear): nothing to raise from.
+    if (label === "without") return await nothingToRaise(deps, pr, head, runId, "no class")
     const issue = await deps.tracker.readIssue(pr.issue)
     const raise = classRaise(view, issue.labels)
-    if (!raise) return await nothingToRaise(deps, pr, head, runId)
+    if (!raise) return await nothingToRaise(deps, pr, head, runId, "already")
     const had = classOfLabels(issue.labels)
     await deps.tracker.updateIssue(pr.issue, approvalPatch(issue.labels, { addLabels: [approvalLabel(raise.to)] }))
     await rerunCheck(deps, pr, raise.runId)
@@ -295,12 +306,14 @@ async function raiseClass(deps: ReviseDeps, pr: WatchedPr, view: OwnPrView): Pro
 }
 
 /**
- * Red, and the issue's class is already where this head's label puts it. The
+ * Red, with nothing to raise: the issue's class is already where this head's
+ * label puts it, or the check gave no class (it could not read Linear). The
  * check reads Linear when it runs, so it may have run before the class
- * changed: start it once more at this head. Still red after that, ask a
- * person once, as a failure the infrastructure keeps causing does.
+ * changed, or while Linear was out of reach: start it once more at this head.
+ * Still red after that, ask a person once, as a failure the infrastructure
+ * keeps causing does.
  */
-async function nothingToRaise(deps: ReviseDeps, pr: WatchedPr, head: string, runId: string | null): Promise<WatchedPr> {
+async function nothingToRaise(deps: ReviseDeps, pr: WatchedPr, head: string, runId: string | null, why: "already" | "no class"): Promise<WatchedPr> {
   if (pr.classRerun !== head) {
     await rerunCheck(deps, pr, runId)
     return { ...pr, classRerun: head }
@@ -312,7 +325,9 @@ async function nothingToRaise(deps: ReviseDeps, pr: WatchedPr, head: string, run
       id: `class-${pr.issue}-${head.slice(0, 12)}`,
       issue: pr.issue,
       url: pr.url,
-      question: `The approval check on ${prLink(pr.url)} is still red after I started it again, and ${pr.issue} already has the approval level the change needs, so I have nothing to raise. A person needs to see why: the check's summary says what it found.`,
+      question: `The approval check on ${prLink(pr.url)} is still red after I started it again, and ${
+        why === "already" ? `${pr.issue} already has the approval level the change needs` : "it did not say which approval level the change needs"
+      }, so I have nothing to raise. A person needs to see why: the check's summary says what it found.`,
       options: [{ reply: "leave it", does: "leave the PR to a person" }],
       defaultReply: "leave it",
       defaultAction: { kind: "leave" },

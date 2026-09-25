@@ -131,6 +131,7 @@ describe("reviseOwnPr raises the class once per head", () => {
     const { paths, t, watch } = setup()
     await watch(view(["approval/try"], "FAILURE", "SKIPPED"))
     await watch(view(["approval/try"], "FAILURE", ""))
+    await watch(view(["approval/try"], "FAILURE", null))
     expect(t.issues.get("STEP-7")!.labels).toEqual(["polads", "approval/auto"])
     expect(t.called("readIssue")).toEqual([])
     expect(readWatchedPrs(paths)[0].classRaised).toBeUndefined()
@@ -151,6 +152,26 @@ describe("reviseOwnPr raises the class once per head", () => {
     expect(readWatchedPrs(paths)[0].classRaised).toBeUndefined()
   })
 
+  it("with a red check that gave no class (its label job skipped: Linear out of reach), re-runs it once at the head, then asks a person once (STEP-3314 re-check)", async () => {
+    // The reviewer's probe, turned round: three watches brought no re-run, no question, and no mark.
+    for (const labelJob of ["SKIPPED", "FAILURE"]) {
+      const { paths, t, lines, watch } = setup(["polads", "approval/look"])
+      await watch(view(["approval/look"], "FAILURE", labelJob))
+      expect(lines().filter((l) => l.startsWith("gh run rerun")), labelJob).toEqual(["gh run rerun 111 --repo STEP-Network/v0-politiske-annoncer"])
+      expect(readWatchedPrs(paths)[0], labelJob).toMatchObject({ classRerun: HEAD })
+      expect(openDecisions(paths, "STEP-7"), labelJob).toEqual([])
+      await watch(view(["approval/look"], "FAILURE", labelJob))
+      expect(openDecisions(paths, "STEP-7"), labelJob).toEqual([expect.objectContaining({ defaultReply: "leave it", question: expect.stringContaining("it did not say which approval level the change needs") })])
+      expect(readWatchedPrs(paths)[0].classRaised, labelJob).toBe(HEAD)
+      await watch(view(["approval/look"], "FAILURE", labelJob))
+      expect(lines().filter((l) => l.startsWith("gh run rerun")), labelJob).toHaveLength(1)
+      expect(openDecisions(paths, "STEP-7"), labelJob).toHaveLength(1)
+      // No class to go on: Linear is never asked, and nothing is raised from the PR's old label.
+      expect(t.called("readIssue"), labelJob).toEqual([])
+      expect(t.issues.get("STEP-7")!.labels, labelJob).toEqual(["polads", "approval/look"])
+    }
+  })
+
   it("with nothing to raise, re-runs the check once at the head, then asks a person once (STEP-3314 review)", async () => {
     // The issue is already at the PR's class, or higher: the check may have read Linear before the class changed.
     const { paths, t, lines, watch } = setup(["polads", "approval/try"])
@@ -163,7 +184,10 @@ describe("reviseOwnPr raises the class once per head", () => {
     // Still red at the same head: one question, the head done, and no second re-run.
     await watch(view(["approval/look"]))
     expect(openDecisions(paths, "STEP-7")).toEqual([
-      expect.objectContaining({ issue: "STEP-7", defaultReply: "leave it", defaultAction: { kind: "leave" }, question: expect.stringContaining("still red after I started it again") }),
+      expect.objectContaining({
+        issue: "STEP-7", defaultReply: "leave it", defaultAction: { kind: "leave" },
+        question: expect.stringMatching(/still red after I started it again, and STEP-7 already has the approval level the change needs/),
+      }),
     ])
     expect(readWatchedPrs(paths)[0].classRaised).toBe(HEAD)
     await watch(view(["approval/look"]))
