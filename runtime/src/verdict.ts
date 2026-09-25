@@ -25,13 +25,16 @@ import type { Tracker } from "./tracker.ts"
 export type Verdict = { verdict: "pass" | "fail"; note: string }
 
 /**
- * What may follow a verdict word: the end, a new line, or punctuation that
- * ends it (a dash with a space after it). Never a question mark or more
- * words: "pass me the link again?" and "fail to see why" are not verdicts.
+ * What may follow a verdict word, after any space on its line (a no-break
+ * space too): the end, a new line, punctuation that ends it (":", ",", ".",
+ * "!", a dash), or an emoji such as 👍. Never a question mark or more words:
+ * "pass me the link again?" and "fail to see why" are not verdicts. What
+ * ends it is not part of what they saw.
  */
-const ENDED = String.raw`(?=[ \t]*(?:$|\n|[:.,!]|[-–—](?:\s|$)))[\s:.,!\-–—]*`
-const VERDICT = new RegExp(String.raw`^\s*(pass|fail)${ENDED}`, "i")
-const LOOKS_RIGHT = new RegExp(String.raw`^\s*looks (?:good|right|fine)(?: to me)?${ENDED}`, "i")
+const EMOJI = String.raw`\p{Extended_Pictographic}\p{Emoji_Modifier}\u{FE0F}\u{200D}`
+const ENDED = String.raw`(?=[^\S\n]*(?:$|\n|[:.,!\-–—]|\p{Extended_Pictographic}))[\s:.,!\-–—${EMOJI}]*`
+const VERDICT = new RegExp(String.raw`^\s*(pass|fail)${ENDED}`, "iu")
+const LOOKS_RIGHT = new RegExp(String.raw`^\s*looks (?:good|right|fine)(?: to me)?${ENDED}`, "iu")
 /** A Look's change says what should change, after a colon. */
 const CHANGE = /^\s*change\s*:\s*/i
 
