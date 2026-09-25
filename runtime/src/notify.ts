@@ -3,11 +3,12 @@
  * urgent ping, once per key, in the thread of the item it is about, and the
  * morning digest the coordinator's Monday bridge posts in #polads-questions.
  */
+import { existsSync, readdirSync } from "node:fs"
 import { join } from "node:path"
 import type { AgentConfig, AgentPaths } from "./config.ts"
 import { readJson, safeKey, writeJsonAtomic } from "./fsq.ts"
 import { appendLedger } from "./log.ts"
-import { enqueueSlack } from "./outbox.ts"
+import { enqueueSlack, type OutboxMessage } from "./outbox.ts"
 import { plainReason } from "./plain.ts"
 import { truncateChars } from "./slack/text.ts"
 
@@ -46,16 +47,56 @@ export function mentionsFor(config: AgentConfig, person?: string | null): string
   return (person && everyone.includes(person) ? [person] : everyone).map((id) => `<@${id}>`).join(" ")
 }
 
+interface PingRecord {
+  reason: PingReason
+  issue: string
+  at: string
+  /** Asked for outside working hours: the message waits here until flushPings sends it. */
+  waiting?: OutboxMessage
+}
+
+const pingsDir = (paths: AgentPaths) => join(paths.state, "pings")
+
+/**
+ * Once per key. Outside working hours (08:00 to 18:00 in queue.timeZone) it
+ * waits, and agentd sends it once they begin (flushPings): nobody is
+ * @-mentioned at night. true when it was taken, sent or waiting.
+ */
 export function ping(paths: AgentPaths, config: AgentConfig, p: Ping, now: Date): boolean {
-  const file = join(paths.state, "pings", `${safeKey(p.key)}.json`)
+  const file = join(pingsDir(paths), `${safeKey(p.key)}.json`)
   if (readJson(file)) return false
-  // Written first: a crash after it loses one ping, never sends two.
-  writeJsonAtomic(file, { reason: p.reason, issue: p.issue, at: now.toISOString() })
   // The text may carry a worker's or an issue's words (a blocked reason): escaped, so only these mentions reach anyone.
   const text = `${mentionsFor(config, p.person)} ${slackSafe(p.text)}`
-  enqueueSlack(paths, p.thread ? { kind: "reply", channelId: p.thread.channelId, threadTs: p.thread.threadTs, text } : { kind: "issue", issue: p.issue, text, question: false }, now)
+  const message: OutboxMessage = p.thread ? { kind: "reply", channelId: p.thread.channelId, threadTs: p.thread.threadTs, text } : { kind: "issue", issue: p.issue, text, question: false }
+  const record: PingRecord = { reason: p.reason, issue: p.issue, at: now.toISOString() }
+  if (!workingHours(now, config.queue.timeZone)) {
+    writeJsonAtomic(file, { ...record, waiting: message })
+    appendLedger(paths, { type: "ping.waiting", issue: p.issue, reason: p.reason }, now)
+    return true
+  }
+  // Written first: a crash after it loses one ping, never sends two.
+  writeJsonAtomic(file, record)
+  enqueueSlack(paths, message, now)
   appendLedger(paths, { type: "ping", issue: p.issue, reason: p.reason }, now)
   return true
+}
+
+/** The pings that waited for working hours, sent in the order they came, once those hours begin. agentd calls it every minute. */
+export function flushPings(paths: AgentPaths, config: AgentConfig, now: Date): number {
+  if (!workingHours(now, config.queue.timeZone) || !existsSync(pingsDir(paths))) return 0
+  const waiting = readdirSync(pingsDir(paths))
+    .filter((name) => name.endsWith(".json"))
+    .map((name) => ({ file: join(pingsDir(paths), name), record: readJson<PingRecord>(join(pingsDir(paths), name)) }))
+    .filter((e): e is { file: string; record: PingRecord & { waiting: OutboxMessage } } => Boolean(e.record?.waiting))
+    .sort((a, b) => a.record.at.localeCompare(b.record.at))
+  for (const { file, record } of waiting) {
+    const { waiting: message, ...sent } = record
+    // Marked sent first: a crash after it loses one ping, never sends two.
+    writeJsonAtomic(file, sent)
+    enqueueSlack(paths, message, now)
+    appendLedger(paths, { type: "ping", issue: record.issue, reason: record.reason, waited: true }, now)
+  }
+  return waiting.length
 }
 
 export const slackSafe = (text: string) => text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/\|/g, "")

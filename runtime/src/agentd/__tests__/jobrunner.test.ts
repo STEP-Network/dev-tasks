@@ -146,6 +146,13 @@ describe("superviseJobs", () => {
     expect(readLessons(paths)).toEqual([expect.objectContaining({ category: "blocked", source: "agentd", issue: "STEP-1", text: "the worker process died before reporting" })])
   })
 
+  it("a worker that died at night pings nobody until the morning", () => {
+    const { paths, deps } = setup({ liveness: () => "gone", now: () => new Date("2026-09-24T21:30:00.000Z") })
+    running(paths, "STEP-7", {})
+    superviseJobs(deps)
+    expect(pinged(paths)).toEqual([])
+  })
+
   it("a blocked job pings all three once", () => {
     const { paths, deps } = setup({ liveness: () => "gone" })
     running(paths, "STEP-7", {})

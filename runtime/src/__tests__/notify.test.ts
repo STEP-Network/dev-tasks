@@ -4,7 +4,7 @@ import { join } from "node:path"
 import { describe, expect, it } from "vitest"
 import { agentPaths, ConfigSchema } from "../config.ts"
 import { listNew } from "../fsq.ts"
-import { digestDue, digestText, dueSoon, mentionsFor, ping, slackSafe, workingHours } from "../notify.ts"
+import { digestDue, digestText, dueSoon, flushPings, mentionsFor, ping, slackSafe, workingHours } from "../notify.ts"
 import type { OutboxMessage } from "../outbox.ts"
 
 const TZ = "Europe/Copenhagen"
@@ -63,6 +63,30 @@ describe("digestText", () => {
 
 describe("ping", () => {
   const paths = () => agentPaths(mkdtempSync(join(tmpdir(), "agentd-ping-")))
+  /** 10:00 in Copenhagen. */
+  const DAY = new Date("2026-09-25T08:00:00.000Z")
+
+  it("never @-mentions anyone at night: the ping waits, once, and goes at 08:00", () => {
+    const p = paths()
+    const night = new Date("2026-09-25T20:00:00.000Z")
+    expect(ping(p, config, { key: "blocked:job-3", issue: "STEP-7", reason: "blocked", text: "STEP-7 is blocked." }, night)).toBe(true)
+    expect(ping(p, config, { key: "blocked:job-3", issue: "STEP-7", reason: "blocked", text: "again" }, night)).toBe(false)
+    expect(listNew<OutboxMessage>(p.outbox)).toEqual([])
+    expect(flushPings(p, config, new Date("2026-09-26T05:59:00.000Z"))).toBe(0)
+    expect(listNew<OutboxMessage>(p.outbox)).toEqual([])
+    expect(flushPings(p, config, new Date("2026-09-26T06:00:00.000Z"))).toBe(1)
+    expect(flushPings(p, config, new Date("2026-09-26T06:01:00.000Z"))).toBe(0)
+    expect(listNew<OutboxMessage>(p.outbox).map((e) => e.payload)).toEqual([expect.objectContaining({ kind: "issue", issue: "STEP-7", text: "<@UADA> <@UBEN> <@UCY> STEP-7 is blocked." })])
+  })
+
+  it("sends the night's pings in the order they came", () => {
+    const p = paths()
+    // Their keys sort the other way round: the time decides.
+    ping(p, config, { key: "a-late", issue: "STEP-2", reason: "blocked", text: "second" }, new Date("2026-09-25T21:00:00.000Z"))
+    ping(p, config, { key: "z-early", issue: "STEP-1", reason: "blocked", text: "first" }, new Date("2026-09-25T20:00:00.000Z"))
+    flushPings(p, config, new Date("2026-09-26T06:00:00.000Z"))
+    expect(listNew<OutboxMessage & { text: string }>(p.outbox).map((e) => e.payload.text)).toEqual([expect.stringMatching(/ first$/), expect.stringMatching(/ second$/)])
+  })
 
   it("pings once per key, in the issue's thread, @-mentioning the person", () => {
     const p = paths()
@@ -74,7 +98,7 @@ describe("ping", () => {
 
   it("lets no reason reach anyone but the people it mentions", () => {
     const p = paths()
-    ping(p, config, { key: "blocked:job-2", issue: "STEP-9", reason: "blocked", text: "STEP-9 is blocked: <!channel> read this." }, new Date())
+    ping(p, config, { key: "blocked:job-2", issue: "STEP-9", reason: "blocked", text: "STEP-9 is blocked: <!channel> read this." }, DAY)
     expect(listNew<OutboxMessage>(p.outbox)[0].payload).toMatchObject({ text: "<@UADA> <@UBEN> <@UCY> STEP-9 is blocked: &lt;!channel&gt; read this." })
   })
 
@@ -82,7 +106,7 @@ describe("ping", () => {
     expect(mentionsFor(config, null)).toBe("<@UADA> <@UBEN> <@UCY>")
     expect(mentionsFor(config, "UZED")).toBe("<@UADA> <@UBEN> <@UCY>")
     const p = paths()
-    ping(p, config, { key: "blocked:job-1", issue: "STEP-8", reason: "blocked", text: "STEP-8 is blocked.", thread: { channelId: "CQ", threadTs: "1790000000.000100" } }, new Date())
+    ping(p, config, { key: "blocked:job-1", issue: "STEP-8", reason: "blocked", text: "STEP-8 is blocked.", thread: { channelId: "CQ", threadTs: "1790000000.000100" } }, DAY)
     expect(listNew<OutboxMessage>(p.outbox)[0].payload).toMatchObject({ kind: "reply", channelId: "CQ", threadTs: "1790000000.000100" })
   })
 })

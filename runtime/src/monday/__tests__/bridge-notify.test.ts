@@ -6,6 +6,7 @@
 import { describe, expect, it } from "vitest"
 import { issue } from "../../__tests__/fakes.ts"
 import type { Logger } from "../../log.ts"
+import { flushPings } from "../../notify.ts"
 import { createMondayBridge } from "../bridge.ts"
 import { saveRecord } from "../store.ts"
 import { doorsSetup, REQ, T0, THREAD } from "./fake-monday.ts"
@@ -67,6 +68,20 @@ describe("money or legal questions close to their date (spec 6)", () => {
     later(2)
     await bridge.sync()
     expect(slack().filter((m) => m.text?.startsWith("<@"))).toEqual([expect.objectContaining({ kind: "reply", channelId: "CQ", threadTs: "1790000000.000100" })])
+  })
+
+  it("never pings in the morning about a question answered in the night", async () => {
+    const { bridge, slack, later, fake, paths, config } = doorsSetup([issue({ id: "STEP-30", title: "VAT on invoices", state: "In Progress", labels: ["needs-human", "money"] })], {
+      start: new Date("2026-09-25T17:58:00.000Z"),
+      extra: { "STEP-30": { dueDate: "2026-09-26" } },
+    })
+    await bridge.sync()
+    later(2)
+    await bridge.sync()
+    // Answered before the morning: nothing is left to ping about.
+    fake.issues.set("STEP-30", { ...fake.issues.get("STEP-30")!, labels: ["money"] })
+    flushPings(paths, config, new Date("2026-09-26T06:00:00.000Z"))
+    expect(pings(slack)).toEqual([])
   })
 
   it("pings a legal question too", async () => {
