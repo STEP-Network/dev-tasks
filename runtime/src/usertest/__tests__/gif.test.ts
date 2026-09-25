@@ -64,6 +64,13 @@ describe("gifFromPngs", () => {
     expect(frames).toBe(2)
     expect(readablePng(cut)).toBe(false)
     expect(readablePng(join(dir, "a.png"))).toBe(true)
+    // A whole screenshot counts whatever its shape: only the GIF leaves a tall one out.
+    const tall = join(dir, "tall.png")
+    writeFileSync(tall, PNG.sync.write(new PNG({ width: 1, height: 20000 })))
+    expect(readablePng(tall)).toBe(true)
+    const cutOff = join(dir, "cut-off.png")
+    writeFileSync(cutOff, readFileSync(join(dir, "a.png")).subarray(0, -12))
+    expect(readablePng(cutOff)).toBe(false)
   })
 
   it("makes none from a single frame", () => {

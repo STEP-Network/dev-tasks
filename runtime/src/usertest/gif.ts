@@ -30,9 +30,21 @@ function readFrame(file: string) {
   }
 }
 
-/** Whether a file is a whole PNG: what the browser test counts as a screenshot it really saved. */
+const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
+
+/**
+ * Whether a file is a whole PNG, whatever its shape: what the browser test
+ * counts as a screenshot it really saved. It starts with the PNG signature
+ * and ends with the IEND chunk, which a screenshot cut off never reaches.
+ * Nothing is decoded.
+ */
 export function readablePng(file: string): boolean {
-  return readFrame(file) !== null
+  try {
+    const bytes = readFileSync(file)
+    return bytes.length > 20 && bytes.subarray(0, 8).equals(PNG_SIGNATURE) && bytes.subarray(-8, -4).toString("latin1") === "IEND"
+  } catch {
+    return false
+  }
 }
 
 /**

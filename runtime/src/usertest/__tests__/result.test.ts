@@ -68,14 +68,18 @@ describe("neutralise", () => {
   })
 
   it("writes no www. autolink, and no bare Linear profile link", () => {
-    const www = neutralise("see www.evil.example/x")
-    expect(www).not.toContain("www.evil")
-    expect(www).toBe("see www.\u200bevil.\u200bexample/x")
+    // GitHub takes a zero-width space as part of a host, and the URL parser then drops it: only a broken "www." is no link.
+    for (const text of ["see www.evil.example/x", "see WWW.evil.example/x", "see www.ëvil.example", "[www.evil.example](x)"]) {
+      expect(neutralise(text), text).not.toMatch(/www\./i)
+    }
+    expect(neutralise("see www.evil.example/x")).toBe("see w\u200bww.\u200bevil.\u200bexample/x")
     expect(neutralise("linear.app/acme/profiles/someone")).not.toContain("linear.app")
   })
 
   it("writes no math, and no issue or PR reference", () => {
-    expect(neutralise("costs $5 and $6")).toBe("costs \\$5 and \\$6")
+    // No escape stops GitHub's math: a fullwidth dollar is no dollar to it.
+    expect(neutralise("costs $5 and $6")).toBe("costs ＄5 and ＄6")
+    expect(neutralise("\\$\\\\Huge PAY\\$")).not.toContain("$")
     for (const ref of ["#12", "GH-12", "owner/repo#12"]) expect(neutralise(`see ${ref}`)).not.toMatch(/#\d|GH-\d/)
   })
 
