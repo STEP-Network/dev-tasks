@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest"
 import { JARGON } from "../../plain.ts"
 import { fakeTracker, LINEAR_CLIENT_ID } from "../../__tests__/fakes.ts"
-import { aboutText, needBody, needKind, needName, plainText, requestIssue, say, stableUuid, toHtml, uatBody, uatName, type NeedSource } from "../render.ts"
+import { lookBody, lookName, planBody, planName, aboutText, needBody, needKind, needName, plainText, requestIssue, say, stableUuid, toHtml, uatBody, uatName, type NeedSource } from "../render.ts"
 
 const SOURCES: NeedSource[] = ["decision", "awaiting-answer", "human-todo", "needs-human"]
 
@@ -85,7 +85,13 @@ describe("the board's words (plain English)", () => {
     const lines = [
       say.answered("Nate", "Ready"), say.answered("Nate", "Refining"), say.answered("Nate", null), say.filed("Nate", "STEP-9"),
       say.released("STEP-9"), say.closed("STEP-9"), say.passed("Nate"), say.failed("Nate", "STEP-10"), say.onlyVerdicts(),
-      say.notWaiting(), say.gone("STEP-9"), say.refused("STEP-9"),
+      say.notWaiting(), say.gone("STEP-9"), say.refused("STEP-9"), say.onlyVerdicts(true), say.sameAnswer("Ben", "Ada"), say.planYes("Ada"),
+      say.onMonday("https://step.monday.com/boards/1/pulses/2"), say.mirrored("Ada", "on Monday", "use the order date"), say.mirrored("Ben", "in Slack", "x".repeat(400)),
+      say.mirroredVerdict("Ben", "on Monday", { outcome: "passed" }), say.mirroredVerdict("Ben", "in Slack", { outcome: "failed", fix: "STEP-10" }),
+      say.mirroredVerdict("Ben", "on Monday", { outcome: "not-waiting", state: "Approved" }), say.settled("STEP-4", "approved"),
+      planName("Bulk upload", "Eve"), planBody({ title: "Bulk upload", agent: "Eve", question: "Two tasks, this week.\n\nMy recommendation: Build it as planned." } as never),
+      planBody({ title: "Bulk upload", agent: null, question: null } as never),
+      lookName("Wider buttons"), lookBody("Wider buttons", "https://github.com/STEP-Network/v0-politiske-annoncer/pull/1679", "https://linear.app/step/issue/STEP-3"), lookBody("Wider buttons", null, "https://linear.app/step/issue/STEP-3"),
     ]
     for (const line of lines) expectPlainEnglish(line)
     expect(say.answered("Nate", "Ready")).toBe("Thanks, Nate. I added your answer to the issue, and an agent picks it up again. Nothing needed from you.")

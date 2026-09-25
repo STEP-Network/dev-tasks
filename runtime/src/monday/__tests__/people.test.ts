@@ -90,6 +90,22 @@ describe("the people's view of Linear (STEP-3289)", () => {
     expect(calls[0].query).toContain('comments(first: 10, filter: { body: { contains: "UAT review" } })')
   })
 
+  it("reads an issue's parent, its project and the link of its Slack thread (Wave 2)", async () => {
+    const PR = "https://github.com/STEP-Network/v0-politiske-annoncer/pull/1679"
+    const THREAD = "https://acme.slack.com/archives/CQ/p1790000000000100"
+    const { request, calls } = fakeRequest([[raw("STEP-11", {
+      parent: { identifier: "STEP-10" },
+      project: { id: "p1", name: "Translations", url: "u", targetDate: "2026-10-30" },
+      attachments: { nodes: [{ url: PR, title: "PR" }, { url: THREAD, title: "Slack intake thread" }] },
+    })]])
+    const [found] = await createPeopleView(request).byIdentifiers(["STEP-11"])
+    expect(found).toMatchObject({ parent: "STEP-10", project: { id: "p1", name: "Translations", url: "u", targetDate: "2026-10-30" }, slackThread: THREAD, prUrl: PR })
+    expect(calls[0].query).toContain("parent { identifier }")
+    expect(calls[0].query).toContain("attachments(first: 10) { nodes { url title } }")
+    const [plain] = await createPeopleView(fakeRequest([[raw("STEP-12", { attachments: { nodes: [{ url: THREAD, title: "Slack thread" }] } })]]).request).byIdentifiers(["STEP-12"])
+    expect(plain).toMatchObject({ parent: null, project: null, slackThread: THREAD })
+  })
+
   it("reads issues by their identifiers, in one query sized to them", async () => {
     const { request, calls } = fakeRequest([[raw("STEP-7"), raw("STEP-9")]])
     expect((await createPeopleView(request).byIdentifiers(["STEP-7", "STEP-9", "BAD-1"])).map((i) => i.id)).toEqual(["STEP-7", "STEP-9"])

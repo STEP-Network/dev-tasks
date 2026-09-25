@@ -232,6 +232,24 @@ describe("run", () => {
     await expect(run(["retry", "STEP-5-20260925060000"], out, deps())).rejects.toThrow(/ended done: only a blocked job is retried/)
     await expect(run(["retry", "STEP-6-20260925060000"], out, deps())).rejects.toThrow(/no finished job STEP-6-20260925060000/)
     for (const bad of [[], ["../../config"], ["STEP-3184"], ["a", "b"]]) await expect(run(["retry", ...bad], out, deps()), bad.join(" ")).rejects.toBeInstanceOf(UsageError)
+    // A develop job comes back as one.
+    expect(listJobs(agentPaths(), "pending")[0].kind).toBe("develop")
+  })
+
+  it("retries a blocked revise round as the same round on the same PR, a merge round included (STEP-3348)", async () => {
+    const revise = {
+      url: "https://github.com/example/repo/pull/7", number: 7, branch: "STEP-7-x", round: 2, since: "2026-09-25T10:00:00.000Z",
+      reasons: ["merge conflict with staging"],
+    }
+    mkdirSync(join(root, "jobs", "done"), { recursive: true })
+    writeFileSync(
+      join(root, "jobs", "done", "STEP-7-20260925230000.json"),
+      JSON.stringify({ id: "STEP-7-20260925230000", issue: "STEP-7", kind: "revise", model: null, submittedAt: NOW.toISOString(), revise, result: { status: "blocked", reason: "i18n locale parity" } }),
+    )
+    expect(await run(["retry", "STEP-7-20260925230000"], out, deps())).toBe(0)
+    expect(listJobs(agentPaths(), "pending")).toEqual([
+      expect.objectContaining({ issue: "STEP-7", kind: "revise", retryOf: "STEP-7-20260925230000", revise }),
+    ])
   })
 
   it("probes only the front door's own claude: the record is what agentd starts it on", async () => {
@@ -352,7 +370,7 @@ describe("agentctl verdict (Wave 2)", () => {
   it("verdict records a person's PASS from their own words, answers in the thread and acks it", async () => {
     writeConfig()
     const { fake, deps: d } = waiting()
-    const key = replyEntry("PASS works on my phone")
+    const key = replyEntry("PASS, works on my phone")
     expect(await run(["verdict", "--key", key], out, d)).toBe(0)
     expect(fake.issues.get("STEP-7")!.state).toBe("Approved")
     expect(fake.called("comment")).toEqual([["STEP-7", "UAT PASS from Ada in Slack (https://x.slack.com/archives/CQ/p1790330410000100): works on my phone"]])
@@ -378,7 +396,7 @@ describe("agentctl verdict (Wave 2)", () => {
     const { fake, deps: d } = waiting()
     const key = replyEntry("looks good")
     await expect(run(["verdict", "--key", key], out, d)).rejects.toThrow(UsageError)
-    await expect(run(["verdict", "--key", key], out, d)).rejects.toThrow(/do not start with PASS or FAIL, so they are not a verdict/)
+    await expect(run(["verdict", "--key", key], out, d)).rejects.toThrow(/are not a verdict: PASS or FAIL, alone or followed by punctuation and what they saw/)
     const mention = "msg:CAG:1790330500.000100"
     putOnce(agentPaths().inbox, mention, { type: "mention", key: mention, channel: "CAG", ts: "1790330500.000100", user: "UADA", userName: "Ada", text: "PASS", receivedAt: NOW.toISOString() })
     await expect(run(["verdict", "--key", mention], out, d)).rejects.toThrow(/not a reply in an issue's thread/)
@@ -390,7 +408,7 @@ describe("agentctl verdict (Wave 2)", () => {
     writeConfig()
     const { fake, deps: d } = waiting()
     fake.issues.set("STEP-7", { ...fake.issues.get("STEP-7")!, state: "Approved" })
-    expect(await run(["verdict", "--key", replyEntry("FAIL it broke")], out, d)).toBe(0)
+    expect(await run(["verdict", "--key", replyEntry("FAIL: it broke")], out, d)).toBe(0)
     expect(outbox()).toEqual([expect.objectContaining({ kind: "reply", text: "This change is no longer waiting for a test, so I did not record your verdict. Nothing needed from you." })])
     expect(listNew(agentPaths().inbox)).toEqual([])
   })

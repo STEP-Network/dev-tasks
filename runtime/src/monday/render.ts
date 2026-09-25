@@ -13,6 +13,7 @@ import { redact } from "../log.ts"
 import { NOTHING_NEEDED } from "../plain.ts"
 import { truncateChars } from "../slack/text.ts"
 import type { CreateIssueInput } from "../tracker.ts"
+import type { VerdictOutcome } from "../verdict.ts"
 
 /** The Kind column's labels. */
 export type MondayKind = "Decision" | "Approval" | "Check" | "Request" | "FYI"
@@ -132,6 +133,29 @@ export function needBody(source: NeedSource, n: NeedText): string {
   return parts.join("\n\n")
 }
 
+/** A Try plan waiting for a person's OK (Wave 2, the Approve plan group). */
+export const planName = (title: string, agent: string | null) => `${agent ?? "An agent"} has a plan to approve: ${oneLine(title, TITLE_MAX)}`
+
+export function planBody(n: NeedText): string {
+  const who = n.agent ?? "An agent"
+  return [
+    `${who} planned "${oneLine(n.title, TITLE_MAX)}" and needs a person's OK before building it.`,
+    n.question ? plainText(n.question) : "The plan is on the issue behind the Linear link.",
+    "Reply yes to build it as planned, or say what should change: the tasks, the shape or the week. Reply to this update, write in the Answer column, or answer in its Slack thread.",
+  ].join("\n\n")
+}
+
+/** A Look waiting for a person's eye (Wave 2, the Looks good? group). */
+export const lookName = (title: string) => `Does this look right? ${oneLine(title, TITLE_MAX)}`
+
+export function lookBody(title: string, prUrl: string | null, issueUrl: string): string {
+  return [
+    `"${oneLine(title, TITLE_MAX)}" changes how a page looks, and the agent's browser test has screenshots of it at desktop and phone width.`,
+    `See them in the browser test's comment on ${prUrl ? `the pull request, ${prUrl}, or on ` : ""}the Linear issue, ${issueUrl}.`,
+    'If it looks right, reply "looks good". If something should change, reply "change:" and what. Reply to this update, write in the Answer column, or answer in its Slack thread.',
+  ].join("\n\n")
+}
+
 export function uatName(title: string): string {
   return `Try it on the test site: ${oneLine(title, TITLE_MAX)}`
 }
@@ -141,7 +165,7 @@ export function uatBody(title: string, steps: string | null): string {
   return [
     `"${oneLine(title, TITLE_MAX)}" is on the test site, test.polads.eu, and waits for a person to try it before the next release.`,
     `What to check:\n${steps?.trim() || "Open the issue behind the Linear link and try what it describes."}`,
-    "When you have tried it, reply PASS if it works as described, or FAIL and what you saw. Reply to this update, or write it in the Answer column.",
+    "When you have tried it, reply PASS if it works as described, or FAIL: and what you saw. Reply to this update, or write it in the Answer column.",
   ].join("\n\n")
 }
 
@@ -160,16 +184,32 @@ export const say = {
   failed: (name: string, sub: string) => `Thanks, ${name}. I wrote down what you saw as ${sub}, and the change goes back to be fixed. ${NOTHING_NEEDED}`,
   /** Another person gave this answer first (spec 6): nothing new is recorded. The same words as Slack's. */
   sameAnswer: (name: string, first: string) => `Thanks, ${name}. ${first} gave the same answer already, so it stands as it is. ${NOTHING_NEEDED}`,
+  planYes: (name: string) =>
+    `Thanks, ${name}. A yes on its own does not say what to do with this plan, because it names no recommendation. Reply Build it as planned to approve it, or say what should change.`,
   newerQuestion: (name: string, question: string) =>
     `Thanks, ${name}. I asked a newer question after you wrote this, so I have not taken it as your answer. Please answer the newer one here: ${plainText(question)}`,
   onlyVerdicts: (look = false) =>
     look
       ? "I read only a verdict here. Start your reply with Looks good if it looks right, or with Change: and what should change."
-      : "I read only PASS or FAIL here. Start your reply with PASS if it works, or with FAIL and what you saw.",
+      : "I read only PASS or FAIL here. Start your reply with PASS if it works, or with FAIL: and what you saw.",
   notWaiting: () => `This change is no longer waiting for a test, so I did not record your verdict. ${NOTHING_NEEDED}`,
   gone: (id: string) => `I could not add this to ${id}, because ${id} is no longer in Linear. ${NOTHING_NEEDED}`,
   refused: (id: string) => `Linear refused this for a whole day, so I have stopped trying to add it to ${id}. Please write it again.`,
+  /** The item's Slack thread, the first time: the other door (spec 6). */
+  onMonday: (url: string) => `This is also on the Monday board: ${url}. Answer here or there, whichever suits you.`,
+  /** What a person settled in one door, said in the other (spec 6). */
+  mirrored: (name: string, door: Door, what: string) => `Answered by ${name} ${door}: ${oneLine(what, 300)}. This is done. ${NOTHING_NEEDED}`,
+  mirroredVerdict: (name: string, door: Door, out: VerdictOutcome) =>
+    out.outcome === "passed"
+      ? `${name} approved it ${door}. This is done. ${NOTHING_NEEDED}`
+      : out.outcome === "failed"
+        ? `${name} asked for a change ${door}, tracked as ${out.fix}, and it goes back to be fixed. ${NOTHING_NEEDED}`
+        : `${name} answered ${door}. ${NOTHING_NEEDED}`,
+  /** A tried change settled in the other door. */
+  settled: (id: string, what: string) => `Done: ${id} was ${what}. ${NOTHING_NEEDED}`,
 }
+
+type Door = "in Slack" | "on Monday"
 
 /** A UUID named by `name`, the same every time (plugin/src/tracker/ids.ts): the tracker's clientId. */
 export { stableUuid }

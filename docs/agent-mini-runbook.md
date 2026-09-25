@@ -889,13 +889,18 @@ What it does:
   parked issue moves on. So "hold off" on another mini's issue pauses
   nothing here. The State goes to Waiting on agent, then Done once Linear
   no longer needs a person. Words are acted on once, even when Monday fails
-  after Linear has them.
+  after Linear has them. The Recommendation column (Wave 2) is input too:
+  where this mini asked no question on the issue, a plain "yes" agrees to
+  what the column says, so write in it only what a yes should mean. A plain
+  "yes" to a plan with nothing to agree to is asked back and records
+  nothing. A person who writes out "Build it as planned" approves it.
 - **Test day.** Every issue in Waiting for UAT that carries this mini's
   product label (`repo.product`, `polads` on Eve), as a Check with the "You
   must check" steps of its latest Agent UAT review (its acceptance criteria
   when there is no review). Another product's issues (dev-tasks, say) cannot
   be tried on the test site, so they get no item, and one made for them
-  before is archived at the next poll, with nothing said on it. A reply starting PASS or FAIL is recorded as
+  before is archived at the next poll, with nothing said on it. A reply that is PASS or FAIL, alone or followed by punctuation and what
+  the person saw ("FAIL: the date is wrong", never "pass me the link"), is recorded as
   review-uat records a person's verdict (its Step 10 and
   `references/linear-io.md`). PASS: a comment naming the person, then
   Approved, and for a `UAT fix:` its parent back to Agent UAT once none of

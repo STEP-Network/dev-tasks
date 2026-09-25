@@ -96,6 +96,16 @@ export function listJobs(paths: AgentPaths, state: JobState): JobRecord[] {
     .sort((a, b) => a.submittedAt.localeCompare(b.submittedAt))
 }
 
+/**
+ * What a retry of a blocked job carries (agentctl retry, a "retry" reply): a
+ * revise round stays one, on the same PR, round and reasons, so a round that
+ * merges the base in merges it again (STEP-3348). The watcher counted the
+ * round when it queued it: the retry is that round again.
+ */
+export function retryFields(old: JobRecord): Partial<Pick<JobRecord, "retryOf" | "kind" | "revise">> {
+  return old.kind === "revise" ? { retryOf: old.id, kind: "revise", ...(old.revise ? { revise: old.revise } : {}) } : { retryOf: old.id }
+}
+
 export function submitJob(paths: AgentPaths, issue: string, model: string | null, now: Date, extra: Partial<Pick<JobRecord, "retryOf" | "kind" | "revise" | "usertest">> = {}): JobRecord {
   for (const state of ["pending", "running"] as const) {
     if (listJobs(paths, state).some((j) => j.issue === issue)) throw new Error(`a job for ${issue} is already ${state}`)

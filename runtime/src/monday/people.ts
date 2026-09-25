@@ -35,6 +35,12 @@ export interface PeopleIssue {
   prUrl: string | null
   /** The "You must check" section of its newest Agent UAT review comment, as written. */
   uatSteps: string | null
+  /** The parent's identifier (STEP-10): a task under a request (Wave 2). */
+  parent: string | null
+  /** The link of its "Slack thread" or "Slack intake thread" attachment. */
+  slackThread: string | null
+  /** The Linear project it sits in, if any. */
+  project: { id: string; name: string; url: string; targetDate: string | null } | null
 }
 
 export interface PeopleView {
@@ -65,7 +71,7 @@ const UAT_REVIEW = "UAT review"
 const PR_RE = /^https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/pull\/\d+$/
 
 /*
- * ~40 complexity points an issue (labels at 20, attachments at 5, review
+ * ~45 complexity points an issue (labels at 20, attachments at 10, review
  * comments at 10), so a page of 50 is ~2,000. Linear refuses 10,000 in one
  * query and gives a key 3M an hour, shared with the front door and the
  * worker (plugin/src/tracker/linear.ts has the arithmetic).
@@ -78,7 +84,9 @@ const FIELDS = `
   labels(first: 20) { nodes { name } }
   assignee { name email }
   creator { name email }
-  attachments(first: 5) { nodes { url } }
+  attachments(first: 10) { nodes { url title } }
+  parent { identifier }
+  project { id name url targetDate }
   comments(first: 10, filter: { body: { contains: "${UAT_REVIEW}" } }) { nodes { body createdAt } }
 `
 
@@ -93,9 +101,14 @@ interface RawIssue {
   labels: { nodes: Array<{ name: string }> }
   assignee: LinearPerson | null
   creator: LinearPerson | null
-  attachments: { nodes: Array<{ url: string }> }
+  attachments: { nodes: Array<{ url: string; title?: string | null }> }
   comments: { nodes: Array<{ body: string; createdAt: string }> }
+  parent?: { identifier: string } | null
+  project?: { id: string; name: string; url: string; targetDate: string | null } | null
 }
+
+/** The titles send.ts and the Slack bridge give an issue's Slack thread. */
+const SLACK_THREAD_TITLE = /^Slack (intake )?thread$/
 
 type Page = { issues: { nodes: RawIssue[]; pageInfo: { hasNextPage: boolean; endCursor: string | null } } }
 
@@ -135,6 +148,9 @@ function toIssue(raw: RawIssue): PeopleIssue {
     dueDate: raw.dueDate,
     prUrl: raw.attachments.nodes.map((a) => a.url).find((url) => PR_RE.test(url)) ?? null,
     uatSteps: uatSteps(raw.comments.nodes),
+    parent: raw.parent?.identifier ?? null,
+    slackThread: raw.attachments.nodes.find((a) => SLACK_THREAD_TITLE.test(a.title ?? ""))?.url ?? null,
+    project: raw.project ?? null,
   }
 }
 

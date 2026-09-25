@@ -48,6 +48,8 @@ export type Routed =
   | { to: "same"; first: RecordedAnswer }
   /** Another person answered first, and said something else: theirs counts, these words are kept beside it. */
   | { to: "second"; first: RecordedAnswer }
+  /** A bare yes to a plan with nothing to agree to: it says nothing about the plan, so the person is asked, and the plan waits. */
+  | { to: "unclear" }
 
 /** Whether the issue's most recent job on this mini, running, queued or done, is one that ended blocked. */
 function blockedNow(paths: AgentPaths, issue: string): boolean {
@@ -99,6 +101,11 @@ export async function routeWords(
   // With no question of this mini's on the issue, it is the item's own recommendation: another mini's plan.
   const question = asked?.text ?? (input.recommendation ? withRecommendation("", input.recommendation) : null)
   const decided = said ? null : agreedTo(words.text, question, current)
+  // A yes to a plan says what to do only when there is something to agree to: as Slack's decide, it is asked back, and nothing is recorded.
+  if (!said && !decided && BARE.test(words.text) && current.labels.includes("plan-to-approve")) {
+    appendLedger(paths, { type: "answer.unclear", issue, via: "monday" }, now)
+    return { to: "unclear" }
+  }
   // One recorder for Slack and Monday (answer.ts). An instruction leaves the issue where it is: agentd acts on it.
   // Only an answer is weighed against the first one: an instruction ("merge it") after another person's answer is agentd's still.
   const out = await recordAnswer(

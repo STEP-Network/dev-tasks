@@ -1,9 +1,9 @@
-import { mkdirSync, mkdtempSync, utimesSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, mkdtempSync, utimesSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { describe, expect, it } from "vitest"
+import { afterEach, describe, expect, it } from "vitest"
 import { agentPaths, ConfigSchema } from "../config.ts"
-import { answerCore, personKey, planTransition, recordAnswer, recordedAnswers } from "../answer.ts"
+import { ANSWER_LOCK, answerCore, personKey, planTransition, recordAnswer, recordedAnswers } from "../answer.ts"
 import { listNew } from "../fsq.ts"
 import { appendAnswer, answerTransition } from "../slack/text.ts"
 import { fakeTracker, issue } from "./fakes.ts"
@@ -103,6 +103,39 @@ describe("the first answer counts (spec 6)", () => {
     expect(recordedAnswers(fake.issues.get("STEP-7")!.description).map((a) => [a.who, a.applied])).toEqual([["Ada", true], ["Ben", false]])
   })
 
+  const timings = { ...ANSWER_LOCK }
+  afterEach(() => Object.assign(ANSWER_LOCK, timings))
+  /** A tracker whose writes take `ms`, as a slow Linear would. */
+  const slowWrites = (fake: ReturnType<typeof fakeTracker>, ms: number) => {
+    const update = fake.tracker.updateIssue
+    fake.tracker.updateIssue = async (...args) => {
+      await new Promise((resolve) => setTimeout(resolve, ms))
+      return update(...args)
+    }
+  }
+
+  it("keeps a slow holder's lock: it beats, so it never looks stale while it works", async () => {
+    Object.assign(ANSWER_LOCK, { waitMs: 3_000, staleMs: 150, beatMs: 30 })
+    const { deps, fake } = setup()
+    slowWrites(fake, 400)
+    const first = recordAnswer(deps, { ...ada, words: "use the order date" }, { since: Q })
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    const second = recordAnswer(deps, { ...ben, words: "the publication date" }, { since: Q })
+    expect([(await first).outcome, (await second).outcome]).toEqual(["recorded", "second"])
+  })
+
+  it("never releases a lock that was taken over: it is the new holder's", async () => {
+    const { deps, fake, paths } = setup()
+    slowWrites(fake, 50)
+    const lock = join(paths.state, "answer-locks", "STEP-7.lock")
+    const first = recordAnswer(deps, { ...ada, words: "use the order date" }, { since: Q })
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    // Another process took it over, as it would from a holder that stopped beating.
+    writeFileSync(lock, "4242:someone-else")
+    await first
+    expect(existsSync(lock)).toBe(true)
+  })
+
   it("takes over a lock its holder left when it died", async () => {
     const { deps, paths } = setup()
     mkdirSync(join(paths.state, "answer-locks"), { recursive: true })
@@ -149,6 +182,13 @@ describe("a Try plan is approved by the recorder alone (review, 2026-09-25)", ()
 
   it("reads a plan's answer: an agreement approves it, anything else only takes the question away, and no plan, no change", () => {
     expect(planTransition({ labels: ["plan-to-approve"] }, {})).toEqual({ removeLabels: ["plan-to-approve"] })
+    // Written out, "Build it as planned" says the same as a yes to it.
+    expect(planTransition({ labels: ["plan-to-approve"] }, { words: "build it as planned." })).toEqual({ removeLabels: ["plan-to-approve"], addLabels: ["plan-approved"] })
+    // Never how the front door worded their decision: only a yes, or their own words.
+    expect(planTransition({ labels: ["plan-to-approve"] }, { decided: { agreed: false, text: "Build it as planned" } })).toEqual({ removeLabels: ["plan-to-approve"] })
+    expect(planTransition({ labels: ["plan-to-approve"] }, { decided: { agreed: false, text: "Build it as planned" }, words: "sure, go on" })).toEqual({ removeLabels: ["plan-to-approve"] })
+    expect(planTransition({ labels: ["plan-to-approve"] }, { decided: { agreed: false, text: "build the plan" }, words: "Build it as planned" })).toEqual({ removeLabels: ["plan-to-approve"], addLabels: ["plan-approved"] })
+    expect(planTransition({ labels: ["plan-to-approve"] }, { words: "Build it as planned, but blue" })).toEqual({ removeLabels: ["plan-to-approve"] })
     expect(planTransition({ labels: ["approval/try"] }, { decided: { agreed: true, recommendation: "Build it as planned" } })).toEqual({})
   })
 })

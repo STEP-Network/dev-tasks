@@ -102,6 +102,10 @@ const MondayBridgeSchema = z
         pr: MONDAY_COLUMN.default("link_mm7h42x"),
         due: MONDAY_COLUMN.default("date_mm7hfrdv"),
         answer: MONDAY_COLUMN.default("long_text_mm7hzj39"),
+        /** Wave 2's three new columns: no defaults, so a board without them runs as before (spec 6). */
+        recommendation: MONDAY_COLUMN.optional(),
+        request: MONDAY_COLUMN.optional(),
+        slackThread: MONDAY_COLUMN.optional(),
       })
       .prefault({}),
     groups: z
@@ -110,6 +114,10 @@ const MondayBridgeSchema = z
         testDay: z.string().default("Test day"),
         requests: z.string().default("Requests"),
         working: z.string().default("Agents working on"),
+        /** Wave 2's groups: a need goes to its own only when it is configured (spec 6). */
+        approvePlan: z.string().optional(),
+        looks: z.string().optional(),
+        fyi: z.string().optional(),
         done: z.string().default("Done"),
       })
       .prefault({}),
