@@ -8,13 +8,14 @@
  * multi-line prose containing spaces, quotes and newlines.
  */
 
-import { describe, it, expect, beforeEach, afterEach } from "vitest"
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest"
 import { spawnSync } from "node:child_process"
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { dirname, join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
-import { buildPatch, claimantFor, parseArgs, readProfileMini, textFlag } from "../../../scripts/trackerctl.ts"
+import { buildPatch, claimantFor, guardedPatch, parseArgs, readProfileMini, runUpdate, textFlag } from "../../../scripts/trackerctl.ts"
+import type { TrackerIssue } from "../types.ts"
 
 const PLUGIN_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../../..")
 
@@ -242,4 +243,49 @@ describe("the claimant is this machine's mini", () => {
     expect(run.status).toBe(1)
     expect(run.stdout).toBe("")
   }, 30_000)
+})
+
+describe("guardedPatch", () => {
+  const tracker = (labels: string[]) => ({ readIssue: async () => ({ labels }) as unknown as TrackerIssue })
+
+  it("does not read the issue for a patch without approval labels", async () => {
+    const readIssue = vi.fn()
+    await guardedPatch({ readIssue }, "STEP-1", { state: "Ready" })
+    expect(readIssue).not.toHaveBeenCalled()
+  })
+
+  it("refuses to lower the class", async () => {
+    await expect(guardedPatch(tracker(["approval/try"]), "STEP-1", { addLabels: ["approval/look"] })).rejects.toThrow(/only a person/i)
+  })
+
+  it("raises and removes the old label", async () => {
+    expect(await guardedPatch(tracker(["approval/auto"]), "STEP-1", { addLabels: ["approval/look"] })).toEqual({ addLabels: ["approval/look"], removeLabels: ["approval/auto"] })
+  })
+})
+
+describe("trackerctl update", () => {
+  const tracker = (labels: string[]) => {
+    const writes: unknown[] = []
+    return {
+      writes,
+      readIssue: async () => ({ labels }) as unknown as TrackerIssue,
+      updateIssue: async (_ref: string, patch: unknown) => {
+        writes.push(patch)
+        return { labels } as unknown as TrackerIssue
+      },
+    }
+  }
+  const flagsOf = (...args: string[]) => parseArgs(["update", "STEP-1", ...args]).flags
+
+  it("writes nothing to Linear when the update would lower the class", async () => {
+    const t = tracker(["approval/try"])
+    await expect(runUpdate(t, "STEP-1", flagsOf("--add-label", "approval/auto", "--remove-label", "approval/try"), () => "")).rejects.toThrow(/only a person/i)
+    expect(t.writes).toEqual([])
+  })
+
+  it("writes a raise with the lower label taken off", async () => {
+    const t = tracker(["polads", "approval/auto"])
+    await runUpdate(t, "STEP-1", flagsOf("--add-label", "approval/try"), () => "")
+    expect(t.writes).toEqual([{ addLabels: ["approval/try"], removeLabels: ["approval/auto"] }])
+  })
 })

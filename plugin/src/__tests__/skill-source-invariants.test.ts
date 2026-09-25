@@ -453,3 +453,29 @@ describe("every question to a person carries a recommendation (STEP-3293)", () =
     }
   })
 })
+
+describe("/refine sets the approval class", () => {
+  const source = skill("refine")
+
+  it("names the three class labels", () => {
+    for (const label of ["approval/auto", "approval/look", "approval/try"]) expect(source).toContain(label)
+  })
+
+  it("never lowers a class", () => {
+    expect(source).toMatch(/never lower/i)
+  })
+
+  it("asks a person to approve the plan for Try work before it is Ready", () => {
+    expect(source).toMatch(/Try work waits for a person's OK on the plan/)
+  })
+})
+
+describe("/front-door classifies before it launches", () => {
+  const source = skill("front-door")
+
+  it("gives an unclassified issue a class before agentctl job submit", () => {
+    const classify = source.indexOf("--add-label approval/")
+    expect(classify).toBeGreaterThan(-1)
+    expect(classify).toBeLessThan(source.indexOf("~/.agentd/bin/agentctl job submit --issue <develop.id>"))
+  })
+})

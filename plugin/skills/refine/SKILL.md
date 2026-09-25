@@ -129,6 +129,28 @@ semicolons, no em or en dashes.
 - `complexity-high` for size L: the worker then runs on Opus.
 - Locks, for later phases: `schema` when it needs a migration, `i18n` when it
   changes `messages/*.json`.
+- The approval class, exactly one of three. It decides who approves the
+  change (the human-agent flow spec, section 3):
+  - `approval/try`: a new feature, a change to how a flow works, money
+    (pricing, checkout, credits, wallet, invoices, refunds, Paddle), legal
+    wording (the transparency notice, labels, regulated terms, the DPA and
+    terms texts, the regulatory-decisions record) or a customer email (a new
+    or changed template or recipient). A person approves the plan before it
+    is built, and tries it on test day.
+  - `approval/look`: a UI change that does not change a flow: layout,
+    styling, spacing, a label or an icon, a new read-only display. A person
+    gives it a visual OK from screenshots, at any time.
+  - `approval/auto`: everything else: backend, security, performance, tests,
+    refactors, infrastructure, text and translations, docs and the user
+    guide, and `.claude/`. The agents approve it.
+
+  When in doubt, take the higher class. Keep a class the issue already has,
+  or raise it. Never lower one: only a person lowers a class, and trackerctl
+  refuses the update. If a person's answer asks for a lower class, keep the
+  class, and reply in the thread in these words: "Only a person can lower the
+  approval level. You can do it in Linear: open <the issue's link> and set
+  the label approval/<class>." PolAds CI also raises a class the diff shows
+  was too low, and the mini copies that to the issue by itself.
 
 The type, product, flag and lock groups each hold one label: to change one,
 remove the old label and add the new one in the same update.
@@ -159,6 +181,14 @@ and the answer you recommend, in a few plain words, to
 ~/.agentd/bin/trackerctl update STEP-<n> --description-file ~/.front-door/refine-STEP-<n>.md --state "On hold" --add-label awaiting-answer
 ```
 
+Try work waits for a person's OK on the plan before it is built. Unless the
+answers under `## Answers from Slack` or `## Answers from Monday` already
+approve this plan, make that the question: "Here is the plan for STEP-<n>:
+<what changes for users, in two or three plain sentences>. Shall I build it?",
+with the recommendation "Build it as planned", and park the issue as above. A
+person's yes comes back as an answer in the description, and the next /refine
+makes it Ready. Auto and Look work goes Ready at once.
+
 Otherwise it is ready:
 
 ```bash
@@ -173,6 +203,7 @@ description.
 ## What /refine deliberately does NOT do
 
 - No code, no branch, no commit. A worker does that, from this brief.
+- No lowering of an approval class. Only a person lowers one.
 - No sub-issues for a person's to-dos. Their to-dos go to the issue's Slack
   thread, where people are.
 - No Linear estimate field. The size is in the brief, and `complexity-high` is

@@ -39,7 +39,8 @@ import { execFileSync } from "node:child_process"
 import { fileURLToPath } from "node:url"
 import { resolveTracker } from "../src/tracker/index.ts"
 import { assertNoSecretText, readTextFile } from "../src/tracker/secrets-guard.ts"
-import { branchNameFor, type IssuePatch } from "../src/tracker/types.ts"
+import { approvalPatch, touchesApproval } from "../src/tracker/approval.ts"
+import { branchNameFor, type IssuePatch, type Tracker, type TrackerIssue } from "../src/tracker/types.ts"
 
 export interface ParsedArgs {
   command: string
@@ -159,6 +160,25 @@ export function buildPatch(flags: ParsedArgs["flags"], readText: (path: string) 
  * door's sandbox and can read the Linear key, so the sandbox cannot be what
  * keeps that key out of an issue.
  */
+/**
+ * update's patch as it goes to Linear. An agent never lowers an approval class
+ * (the human-agent flow spec, section 3), so a patch that touches one is
+ * checked against the issue's labels first, and refused rather than written.
+ */
+export async function guardedPatch(tracker: Pick<Tracker, "readIssue">, ref: string, patch: IssuePatch): Promise<IssuePatch> {
+  return touchesApproval(patch) ? approvalPatch((await tracker.readIssue(ref)).labels, patch) : patch
+}
+
+/** `trackerctl update`: the flags as a patch, guarded, then written. */
+export async function runUpdate(
+  tracker: Pick<Tracker, "readIssue" | "updateIssue">,
+  ref: string,
+  flags: ParsedArgs["flags"],
+  readText: (path: string) => string,
+): Promise<TrackerIssue> {
+  return tracker.updateIssue(ref, await guardedPatch(tracker, ref, buildPatch(flags, readText)))
+}
+
 export function textFlag(
   flags: ParsedArgs["flags"],
   name: string,
@@ -293,8 +313,7 @@ async function main(): Promise<void> {
       return
     }
     case "update": {
-      const patch = buildPatch(flags, (path) => readTextFile(path, "--description-file"))
-      const issue = await tracker.updateIssue(requireArg(positional[0], "ref (positional)"), patch)
+      const issue = await runUpdate(tracker, requireArg(positional[0], "ref (positional)"), flags, (path) => readTextFile(path, "--description-file"))
       process.stdout.write(JSON.stringify(issue) + "\n")
       return
     }
