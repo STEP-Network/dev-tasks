@@ -20,14 +20,22 @@ describe("judgeNavigation", () => {
 })
 
 describe("formatBrowserProbe", () => {
+  const opens = { name: "staging opens", kind: "opens" as const }
+  const refused = { name: "https://example.com/ is refused", kind: "refused" as const }
+
   it("prints one line per check, and fails when any does", () => {
-    expect(formatBrowserProbe([{ name: "staging opens", ok: true, detail: "opened" }, { name: "https://example.com/ is refused", ok: true, detail: "refused: blocked" }])).toEqual({
+    expect(formatBrowserProbe([{ ...opens, ok: true, detail: "opened" }, { ...refused, ok: true, detail: "refused: blocked" }])).toEqual({
       ok: true,
       text: "ok   staging opens: opened\nok   https://example.com/ is refused: refused: blocked\nthe browser opens staging and nothing else",
     })
-    const bad = formatBrowserProbe([{ name: "staging opens", ok: true, detail: "opened" }, { name: "https://example.com/ is refused", ok: false, detail: "it opened" }])
+    const bad = formatBrowserProbe([{ ...opens, ok: true, detail: "opened" }, { ...refused, ok: false, detail: "it opened" }])
     expect(bad.ok).toBe(false)
     expect(bad.text).toContain("FAIL https://example.com/ is refused: it opened")
     expect(bad.text.split("\n").at(-1)).toBe("the browser's allowlist does NOT hold: keep the browser test off")
+  })
+
+  it("says staging did not open, not that the allowlist failed, when only staging failed", () => {
+    const text = formatBrowserProbe([{ ...opens, ok: false, detail: "net::ERR_NAME_NOT_RESOLVED" }, { ...refused, ok: true, detail: "refused: blocked" }]).text
+    expect(text.split("\n").at(-1)).toBe("staging did not open, so the allowlist is not proven: keep the browser test off until this passes")
   })
 })

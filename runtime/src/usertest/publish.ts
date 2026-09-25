@@ -14,13 +14,14 @@ import { must, type Exec } from "../worker/git.ts"
 
 export const USERTEST_REF_NAMESPACE = "agent-usertest"
 
-export function usertestRef(prNumber: number, sha: string): string {
-  return `refs/${USERTEST_REF_NAMESPACE}/pr-${prNumber}/${sha.slice(0, 12).toLowerCase()}`
+/** A staging or release candidate test of the same head keeps its images apart from the preview's: suffix "staging" or "rc". */
+export function usertestRef(prNumber: number, sha: string, suffix?: string): string {
+  return `refs/${USERTEST_REF_NAMESPACE}/pr-${prNumber}/${sha.slice(0, 12).toLowerCase()}${suffix ? `-${suffix}` : ""}`
 }
 
 const VERCEL_JSON = `${JSON.stringify({ git: { deploymentEnabled: false } }, null, 2)}\n`
 
-export async function publishImagesToGitHub(o: { exec: Exec; slug: string; prNumber: number; sha: string; files: readonly string[]; workDir: string }): Promise<Map<string, string>> {
+export async function publishImagesToGitHub(o: { exec: Exec; slug: string; prNumber: number; sha: string; files: readonly string[]; workDir: string; suffix?: string }): Promise<Map<string, string>> {
   let n = 0
   const api = async (method: string, path: string, body?: unknown): Promise<unknown> => {
     const args = ["api", "-X", method, `repos/${o.slug}/${path}`]
@@ -40,13 +41,15 @@ export async function publishImagesToGitHub(o: { exec: Exec; slug: string; prNum
   tree.push({ path: "vercel.json", mode: "100644", type: "blob", content: VERCEL_JSON })
   const t = (await api("POST", "git/trees", { tree })) as { sha: string }
   const commit = (await api("POST", "git/commits", { message: `Browser test images for PR #${o.prNumber} at ${o.sha.slice(0, 12)}`, tree: t.sha, parents: [] })) as { sha: string }
-  const ref = usertestRef(o.prNumber, o.sha)
+  const ref = usertestRef(o.prNumber, o.sha, o.suffix)
   const existing = await o.exec("gh", ["api", `repos/${o.slug}/git/ref/${ref.replace(/^refs\//, "")}`], { timeoutMs: 60_000 })
   if (existing.code === 0) await api("PATCH", `git/${ref}`, { sha: commit.sha, force: true })
   else await api("POST", "git/refs", { ref, sha: commit.sha })
   const older = (await api("GET", `git/matching-refs/${USERTEST_REF_NAMESPACE}/pr-${o.prNumber}/`)) as Array<{ ref: string }> | null
+  // Only other heads' refs: this head's preview and staging images both stay.
+  const thisHead = usertestRef(o.prNumber, o.sha)
   for (const r of older ?? []) {
-    if (r.ref !== ref) await o.exec("gh", ["api", "-X", "DELETE", `repos/${o.slug}/git/${r.ref}`], { timeoutMs: 60_000 })
+    if (!r.ref.startsWith(thisHead)) await o.exec("gh", ["api", "-X", "DELETE", `repos/${o.slug}/git/${r.ref}`], { timeoutMs: 60_000 })
   }
   return new Map(o.files.map((file) => [file, `https://github.com/${o.slug}/blob/${commit.sha}/${encodeURIComponent(basename(file))}?raw=true`]))
 }

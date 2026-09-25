@@ -172,8 +172,10 @@ export function superviseJobs(deps: JobRunnerDeps): void {
         job,
         reason,
         startedAt,
-        `Anything I committed stays on this mini, and my next try at ${job.issue} starts from it. ` +
-          `If I had taken the issue, I let it go after ${deps.config.claims.ttlHours} hours unless someone takes it first.`,
+        job.kind === "usertest"
+          ? "A browser test changes nothing, so nothing is left behind."
+          : `Anything I committed stays on this mini, and my next try at ${job.issue} starts from it. ` +
+              `If I had taken the issue, I let it go after ${deps.config.claims.ttlHours} hours unless someone takes it first.`,
         lostEarly,
       )
       if (said) deps.log.warn("worker gone without reporting", { issue: job.issue, jobId: job.id, pid: job.pid, reason })

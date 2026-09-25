@@ -317,7 +317,7 @@ export async function runJob(deps: RunDeps, jobId: string): Promise<JobResult> {
   }
   const finish = (result: JobResult, extra: Partial<JobRecord> = {}): JobResult => {
     moveJob(paths, jobId, "running", "done", { endedAt: deps.now().toISOString(), result, ...extra })
-    appendLedger(paths, { type: "worker.end", issue: job.issue, ...result }, deps.now())
+    appendLedger(paths, { type: "worker.end", issue: job.issue, kind: job.kind, ...result }, deps.now())
     if (result.status === "blocked") {
       learn([{ mini: config.mini, issue: job.issue, pr: result.prUrl, category: "blocked", source: "runner", text: result.reason, key: `blocked:${jobId}` }])
     }

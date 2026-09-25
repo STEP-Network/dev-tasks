@@ -82,7 +82,7 @@ const REFUSED: Record<number, string> = {
   404: "this site has no test sign-in",
   422: "the persona does not exist on this site",
   429: "the test sign-in is rate limited",
-  500: "this site cannot sign test users in (its sign-in service is the production one)",
+  500: "the test sign-in failed on the site's side (HTTP 500)",
 }
 
 export async function personaCookies(o: {

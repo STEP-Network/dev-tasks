@@ -219,7 +219,8 @@ async function act(deps: InstructionDeps, entry: AnyInstructionEntry): Promise<s
 }
 
 function lastBlocked(paths: AgentPaths, issue: string): JobRecord | null {
-  const done = listJobs(paths, "done").filter((j) => j.issue === issue && j.endedAt)
+  // A browser test is not work on the issue to try again (WS5).
+  const done = listJobs(paths, "done").filter((j) => j.issue === issue && j.endedAt && j.kind !== "usertest")
   const last = done.sort((a, b) => a.endedAt!.localeCompare(b.endedAt!)).at(-1)
   return last?.result?.status === "blocked" ? last : null
 }

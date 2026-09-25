@@ -45,6 +45,26 @@ describe("publishImagesToGitHub", () => {
     expect(lines().some((l) => l.startsWith(`gh api -X PATCH repos/example/repo/git/${usertestRef(7, SHA)} `))).toBe(true)
   })
 
+  it("keeps a staging test's images on a ref of their own, and prunes only other heads' refs", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "pub-"))
+    const file = join(dir, "main-01.png")
+    writeFileSync(file, "png")
+    const other = usertestRef(7, "d".repeat(40))
+    const { exec, lines } = fakeExec([
+      [/git\/blobs/, { stdout: '{"sha":"blob1"}' }],
+      [/git\/trees/, { stdout: '{"sha":"tree1"}' }],
+      [/git\/commits/, { stdout: '{"sha":"commit1"}' }],
+      [/api repos\/example\/repo\/git\/ref\/agent-usertest/, { code: 1, stdout: "", stderr: "Not Found" }],
+      [/matching-refs/, { stdout: JSON.stringify([{ ref: other }, { ref: usertestRef(7, SHA) }, { ref: `${usertestRef(7, SHA)}-staging` }]) }],
+    ])
+    await publishImagesToGitHub({ exec, slug: "example/repo", prNumber: 7, sha: SHA, files: [file], workDir: dir, suffix: "staging" })
+    const made = lines().find((l) => l.includes("-X POST repos/example/repo/git/refs "))!
+    expect(JSON.parse(readFileSync(made.split("--input ")[1], "utf8")).ref).toBe(`${usertestRef(7, SHA)}-staging`)
+    const deletes = lines().filter((l) => l.includes("-X DELETE"))
+    expect(deletes).toEqual([`gh api -X DELETE repos/example/repo/git/${other}`])
+    expect(usertestRef(7, SHA, "staging")).toBe(`refs/agent-usertest/pr-7/${SHA.slice(0, 12)}-staging`)
+  })
+
   it("names a ref outside heads, so Vercel never builds it", () => {
     expect(usertestRef(7, SHA)).toBe(`refs/agent-usertest/pr-7/${SHA.slice(0, 12)}`)
   })
