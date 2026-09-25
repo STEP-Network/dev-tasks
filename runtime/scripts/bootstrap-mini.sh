@@ -12,8 +12,14 @@
 #   section 9   agentctl probe-sandbox and probe-hooks --scripted (ssh -tt)
 #   then        agentctl status (paused) and agentctl doctor
 #
-#   bootstrap-mini.sh [--dry-run] [--key <file>] [--force-config]
+#   bootstrap-mini.sh [--dry-run] [--key <file>] [--force-config] [--usertest <file>]
 #                     --allowed-users U1,U2 [--other-bots U3] <agent> <host>
+#
+# --usertest <file> holds what config.json's `usertest` section (the browser
+# test, WS5) adds to the template's: `enabled` and the staging personas, which
+# this public repository may not name. The orchestrator keeps it in a private
+# file. Without it the section is left out, and the browser test stays off,
+# so --force-config without --usertest turns the test off on that mini.
 #
 # One step per SSH call, each read before the next: the first that fails
 # stops the run and names itself. Re-runnable: a checkout that exists is
@@ -35,9 +41,11 @@ DEV_TASKS_URL="https://github.com/STEP-Network/dev-tasks.git"
 POLADS_REPO="STEP-Network/v0-politiske-annoncer"
 
 usage() {
-  echo "usage: bootstrap-mini.sh [--dry-run] [--key <file>] [--force-config] --allowed-users U1,U2 [--other-bots U3] <agent> <host>" >&2
+  echo "usage: bootstrap-mini.sh [--dry-run] [--key <file>] [--force-config] [--usertest <file>] --allowed-users U1,U2 [--other-bots U3] <agent> <host>" >&2
   echo "  --allowed-users  the Slack member ids that may talk to the agent, the same on every mini" >&2
   echo "  --other-bots     the other agents' bot user ids (slack.otherAgentBots)" >&2
+  echo "  --usertest       a JSON file with config.json's usertest section (the browser test, kept private)" >&2
+  echo "  --force-config   writes config.json again: without --usertest it leaves the browser test section out" >&2
   echo "  --key            the SSH key for <agent>@<host> (default ~/.ssh/<agent>_mini_ed25519 when it exists)" >&2
   exit 64
 }
@@ -48,6 +56,7 @@ FORCE=0
 KEY=""
 USERS=""
 BOTS=""
+USERTEST=""
 ARGS=()
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -56,6 +65,7 @@ while [ "$#" -gt 0 ]; do
     --key) [ "$#" -ge 2 ] || usage; KEY=$2; shift ;;
     --allowed-users) [ "$#" -ge 2 ] || usage; USERS=$2; shift ;;
     --other-bots) [ "$#" -ge 2 ] || usage; BOTS=$2; shift ;;
+    --usertest) [ "$#" -ge 2 ] || usage; USERTEST=$2; shift ;;
     -h | --help) usage ;;
     -*) echo "bootstrap: unknown option $1" >&2; usage ;;
     *) ARGS+=("$1") ;;
@@ -84,6 +94,9 @@ BOTS_JSON=$(ids_json "$BOTS" "--other-bots")
 if [ -z "$KEY" ] && [ -f "$HOME/.ssh/${AGENT}_mini_ed25519" ]; then KEY="$HOME/.ssh/${AGENT}_mini_ed25519"; fi
 if [ -n "$KEY" ] && [ "$DRY" = 0 ] && [ ! -f "$KEY" ]; then fail "no SSH key at $KEY"; fi
 command -v jq >/dev/null || fail "jq is missing on this machine"
+if [ -n "$USERTEST" ]; then
+  jq -e 'type == "object"' "$USERTEST" >/dev/null 2>&1 || fail "--usertest: $USERTEST is not a JSON object (config.json's usertest section)"
+fi
 
 WORK=$(mktemp -d -t bootstrap-mini-XXXX)
 trap 'rm -rf "$WORK"' EXIT
@@ -151,12 +164,23 @@ fi
 # What the person's steps leave behind, before anything is written.
 step tools login 'missing=""; for t in node npm pnpm gh git jq tmux claude; do command -v "$t" >/dev/null || missing="$missing $t"; done
 [ -z "$missing" ] || { echo "missing on the PATH:$missing (runbook sections 1 and 2)"; exit 1; }
-echo "node $(node --version), pnpm $(pnpm --version) at $(command -v pnpm), $(claude --version)"'
+echo "node $(node --version), pnpm $(pnpm --version) at $(command -v pnpm), $(claude --version)"
+chrome="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+if [ -x "$chrome" ]; then echo "Chrome: $("$chrome" --version)"; else echo "no Google Chrome: the browser test needs it (brew install --cask google-chrome from the admin account)"; fi'
 step secrets login 'for f in ~/.config/linear/.env ~/.config/agentd/slack.env; do
   [ -f "$f" ] || { echo "$f is missing (runbook section 5)"; exit 1; }
   mode=$(stat -f %Lp "$f"); [ "$mode" = 600 ] || { echo "$f is mode $mode, not 600 (runbook section 5)"; exit 1; }
   echo "ok $f (600)"
-done'
+done
+u=~/.config/agentd/usertest.env
+if [ -f "$u" ]; then
+  mode=$(stat -f %Lp "$u"); [ "$mode" = 600 ] || { echo "$u is mode $mode, not 600 (runbook, The browser test)"; exit 1; }
+  echo "ok $u (600)"
+else
+  echo "$u absent: the browser test runs signed out"
+fi'
+USERTEST_ENV_ABSENT=0
+if [ "$DRY" = 0 ] && grep -q "usertest.env absent" "$OUT"; then USERTEST_ENV_ABSENT=1; fi
 step gui-session login 'launchctl print "gui/$(id -u)" >/dev/null 2>&1 || { echo "$(id -un) has no GUI session: log in at the mini, with automatic login on (runbook section 1)"; exit 1; }
 echo "ok gui/$(id -u)"'
 
@@ -183,6 +207,13 @@ jq --arg mini "$AGENT" --arg home "$REMOTE_HOME" --argjson users "$USERS_JSON" -
   | .queue.mode = "allowlist"
   | .queue.allow = []
   | .worker.autoMerge = true' "$TEMPLATE" > "$WORK/config.json"
+# The browser test's section comes from the orchestrator's private file, or not at all.
+if [ -n "$USERTEST" ]; then
+  jq --slurpfile u "$USERTEST" '.usertest = ((.usertest // {}) + $u[0])' "$WORK/config.json" > "$WORK/config.next.json"
+else
+  jq 'del(.usertest)' "$WORK/config.json" > "$WORK/config.next.json"
+fi
+mv "$WORK/config.next.json" "$WORK/config.json"
 if [ "$DRY" = 1 ]; then echo "config.json it writes on a mini that has none:"; jq . "$WORK/config.json"; fi
 step config login "if [ -e ~/.agentd/config.json ] && [ $FORCE = 0 ]; then cat > /dev/null; echo 'kept ~/.agentd/config.json (--force-config writes it again)'; else mkdir -p ~/.agentd && cat > ~/.agentd/config.json.tmp && mv ~/.agentd/config.json.tmp ~/.agentd/config.json && echo 'wrote ~/.agentd/config.json'; fi" "$WORK/config.json"
 
@@ -218,4 +249,9 @@ printf '     %s\n' \
   "jq --arg bot $BOT_SHOWN '.slack.otherAgentBots |= ((. + [\$bot]) | unique)' ~/.agentd/config.json > ~/.agentd/config.json.new" \
   "mv ~/.agentd/config.json.new ~/.agentd/config.json" \
   "launchctl kickstart -k gui/\$(id -u)/eu.polads.slack-bridge"
-echo "3. When someone is watching: ssh -tt $TARGET '~/.agentd/bin/agentctl resume'"
+LAST=3
+if [ "$USERTEST_ENV_ABSENT" = 1 ]; then
+  echo "3. For the browser test: put TEST_LOGIN_SECRET and VERCEL_AUTOMATION_BYPASS_SECRET in ~/.config/agentd/usertest.env on the mini, chmod 600 (Nate has the values)."
+  LAST=4
+fi
+echo "$LAST. When someone is watching: ssh -tt $TARGET '~/.agentd/bin/agentctl resume'"

@@ -211,4 +211,8 @@ describe("workerEnv", () => {
     )
     expect(env).toEqual({ PATH: "/bin", CLAUDE_CODE_OAUTH_TOKEN: "oauth" })
   })
+
+  it("drops the browser test's two secrets, which only the runtime's own code reads (WS5)", () => {
+    expect(workerEnv({ PATH: "/bin", TEST_LOGIN_SECRET: "x", VERCEL_AUTOMATION_BYPASS_SECRET: "y" }, {})).toEqual({ PATH: "/bin" })
+  })
 })

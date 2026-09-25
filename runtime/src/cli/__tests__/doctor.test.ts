@@ -5,7 +5,7 @@ import { beforeEach, describe, expect, it } from "vitest"
 import { agentPaths, type AgentPaths } from "../../config.ts"
 import { fakeExec } from "../../__tests__/fakes.ts"
 import type { ExecResult } from "../../worker/git.ts"
-import { doctorChecks, formatDoctor, repoToolchain, slackChannelCheck, type DoctorDeps } from "../doctor.ts"
+import { doctorChecks, formatDoctor, repoToolchain, slackChannelCheck, userTestChecks, type DoctorDeps } from "../doctor.ts"
 import { ConfigSchema } from "../../config.ts"
 import { recordHooksProbe, type HooksProbe } from "../hooks-probe.ts"
 import { recordSandboxProbe } from "../sandbox-probe.ts"
@@ -351,5 +351,58 @@ describe("slackChannelCheck (STEP-3293)", () => {
 
   it("is fine with the channel turned off in config.json: messages wait for the next wakeup", () => {
     expect(slackChannelCheck(config(false), "/nonexistent/managed-settings.json")).toMatchObject({ level: "ok", detail: expect.stringMatching(/^off in config\.json/) })
+  })
+})
+
+describe("userTestChecks (WS5)", () => {
+  const CHROME_VERSION = /Google Chrome --version$/
+  const base = { mini: "eve", repo: { path: "/Users/eve/polads" }, pluginRoot: "/p", slack: { allowedUsers: ["U0EXAMPLE"] } }
+  const on = (over: Record<string, unknown> = {}) =>
+    ConfigSchema.parse({
+      ...base,
+      usertest: {
+        enabled: true, previewEnvironment: "Preview – example", previewHost: "^app-[a-z0-9-]+\\.vercel\\.app$", stagingOrigin: "https://staging.example.com",
+        personas: [{ id: "customer", email: "customer@example.test" }], ...over,
+      },
+    })
+  const lines = async (config: ReturnType<typeof on>, chrome: string, over: Partial<DoctorDeps> = {}) =>
+    (await userTestChecks(deps({ nodeVersion: "22.12.0", ...over }, [[CHROME_VERSION, { stdout: chrome }]]), config)).map((c) => `${c.level} ${c.name}: ${c.detail}`)
+
+  it("says nothing while the browser test is off", async () => {
+    expect(await userTestChecks(deps(), ConfigSchema.parse(base))).toEqual([])
+  })
+
+  it("wants Chrome 149 or newer, the pinned browser tool and Node 22.12", async () => {
+    secret(".config/agentd/usertest.env", "TEST_LOGIN_SECRET=x\n")
+    expect(await lines(on(), "Google Chrome 153.0.1.2\n")).toEqual([
+      "ok browser test Chrome: Chrome 153",
+      "ok browser test tool: chrome-devtools-mcp 1.9.0",
+      "ok browser test node: 22.12.0",
+      `ok browser test secrets: ${join(home, ".config/agentd/usertest.env")}`,
+    ])
+    expect((await lines(on(), "Google Chrome 148.0.1.2\n"))[0]).toMatch(/^fail browser test Chrome: Chrome 148 is older than 149/)
+    expect((await lines(on(), ""))[0]).toMatch(/^fail browser test Chrome: no Google Chrome at /)
+    expect(await lines(on(), "Google Chrome 153.0.1.2\n", { nodeVersion: "20.18.1" })).toContain("fail browser test node: Node 20.18.1: the browser test needs Node 22.12 or newer")
+    // chrome-devtools-mcp 1.9.0's engines start at 22.12 on Node 22.
+    expect(await lines(on(), "Google Chrome 153.0.1.2\n", { nodeVersion: "22.11.0" })).toContain("fail browser test node: Node 22.11.0: the browser test needs Node 22.12 or newer")
+    expect(await lines(on(), "Google Chrome 153.0.1.2\n", { nodeVersion: "24.1.0" })).toContain("ok browser test node: 24.1.0")
+  })
+
+  it("warns, and fails nothing, without the secrets file or a persona: the test then runs signed out", async () => {
+    const got = await lines(on({ personas: [] }), "Google Chrome 153.0.1.2\n")
+    expect(got).toContain(`warn browser test secrets: ${join(home, ".config/agentd/usertest.env")} is missing: the browser test runs signed out, and cannot open a protected preview`)
+    expect(got).toContain("warn browser test personas: none: every browser test runs as a visitor who is not signed in")
+    expect(got.filter((l) => l.startsWith("fail"))).toEqual([])
+  })
+
+  it("refuses a secrets file other users can read", async () => {
+    secret(".config/agentd/usertest.env", "TEST_LOGIN_SECRET=x\n", 0o644)
+    expect(await lines(on(), "Google Chrome 153.0.1.2\n")).toContainEqual(expect.stringMatching(/^fail browser test secrets: .*chmod 600/))
+  })
+
+  it("is part of the doctor's list once config.json turns it on", async () => {
+    writeFileSync(paths.config, JSON.stringify({ ...JSON.parse(readFileSync(paths.config, "utf8")), usertest: on().usertest }))
+    const names = (await doctorChecks(deps({}, [[CHROME_VERSION, { stdout: "Google Chrome 153.0.1.2\n" }]]))).map((c) => c.name)
+    expect(names).toEqual(expect.arrayContaining(["browser test Chrome", "browser test tool", "browser test node", "browser test secrets"]))
   })
 })
