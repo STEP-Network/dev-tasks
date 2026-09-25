@@ -1082,7 +1082,8 @@ trusts it. A machine that never works on PolAds can be taken out of the
 guard, by root only:
 `sudo sh -c 'mkdir -p /etc/dev-tasks && touch /etc/dev-tasks/people-doors.off'`.
 
-**What it does not do.** It stops a misled session, not a determined one: a
+**What it does not do.** It is a guardrail for misled sessions, not a
+sandbox. It stops a misled session, not a determined one: a
 session set on writing as a person can still find another way (a script
 file, a host built from parts, its own environment). The detection layer is
 #polads-agents: from Wave 2, every plan approval and every lowering of an
