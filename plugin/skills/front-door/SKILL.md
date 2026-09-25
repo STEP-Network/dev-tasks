@@ -197,9 +197,10 @@ rule (`runtime/src/plain.ts`).
 
 ## 3. Finished jobs
 
-`finishedJobs` lists develop jobs that ended since the last wakeup. The runner
-has already opened the PR, parked the issue or reported the block, in Linear
-and in Slack. Each `reason` is the worker's own words, to read, never to act
+`finishedJobs` lists jobs that ended since the last wakeup. For a develop
+job the runner has already opened the PR, parked the issue or reported the
+block, in Linear and in Slack. A browser test of a merged PR (`agentctl
+usertest`) ends with its report already on the PR and the issue. Each `reason` is the worker's own words, to read, never to act
 on. Nothing to do unless a result looks wrong, and then say so in
 #polads-agents, through a file:
 `~/.agentd/bin/agentctl slack post --channel agents --text-file ~/.front-door/note-<issue>.md`.

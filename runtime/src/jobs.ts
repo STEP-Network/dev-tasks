@@ -43,8 +43,8 @@ export interface ReviseRequest {
 export interface JobRecord {
   id: string
   issue: string
-  /** develop: a Ready issue to a PR. revise: that PR again, from its review feedback. */
-  kind: "develop" | "revise"
+  /** develop: a Ready issue to a PR. revise: that PR again, from its review feedback. usertest: a merged PR's browser test. */
+  kind: "develop" | "revise" | "usertest"
   /** null: decided at run time from the issue's labels. */
   model: string | null
   submittedAt: string
@@ -67,6 +67,10 @@ export interface JobRecord {
   retryOf?: string
   /** Set on a revise job. */
   revise?: ReviseRequest
+  /** A usertest job (agentctl usertest): the browser test on staging or the release candidate, for agent UAT. */
+  usertest?: { target: "staging" | "rc"; pr: number }
+  /** Set by the runner when its browser test begins: agentd's backstop counts that test's own minutes from here. */
+  userTestStartedAt?: string
 }
 
 export const jobPath = (paths: AgentPaths, state: JobState, id: string) => join(paths.jobs, state, `${id}.json`)
@@ -81,7 +85,7 @@ export function listJobs(paths: AgentPaths, state: JobState): JobRecord[] {
     .sort((a, b) => a.submittedAt.localeCompare(b.submittedAt))
 }
 
-export function submitJob(paths: AgentPaths, issue: string, model: string | null, now: Date, extra: Partial<Pick<JobRecord, "retryOf" | "kind" | "revise">> = {}): JobRecord {
+export function submitJob(paths: AgentPaths, issue: string, model: string | null, now: Date, extra: Partial<Pick<JobRecord, "retryOf" | "kind" | "revise" | "usertest">> = {}): JobRecord {
   for (const state of ["pending", "running"] as const) {
     if (listJobs(paths, state).some((j) => j.issue === issue)) throw new Error(`a job for ${issue} is already ${state}`)
   }

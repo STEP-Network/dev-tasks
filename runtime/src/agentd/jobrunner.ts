@@ -58,6 +58,10 @@ export const EARLY_DEATH_MINUTES = 10
  * Until it does, the runner is preparing, and that has its own allowance.
  */
 function deadline(job: JobRecord, startedAt: number, config: AgentConfig): number {
+  // The browser test at the end of a job has its own minutes: waiting for the preview, then the session (WS5).
+  if (job.userTestStartedAt) {
+    return Date.parse(job.userTestStartedAt) + (config.usertest.previewWaitMinutes + config.usertest.wallClockMinutes + FINISH_GRACE_MINUTES) * 60_000
+  }
   if (job.sessionStartedAt) return Date.parse(job.sessionStartedAt) + (config.worker.wallClockMinutes + FINISH_GRACE_MINUTES) * 60_000
   return startedAt + PREP_ALLOWANCE_MINUTES * 60_000
 }
@@ -162,18 +166,23 @@ export function superviseJobs(deps: JobRunnerDeps): void {
     if (liveness === "gone") {
       const reason = !job.killRequestedAt
         ? "the worker process died before reporting"
-        : job.sessionStartedAt
-          ? `the worker overran its wall clock of ${deps.config.worker.wallClockMinutes} minutes and was stopped`
-          : `the worker was still preparing its worktree after ${PREP_ALLOWANCE_MINUTES} minutes and was stopped`
+        : job.userTestStartedAt
+          ? `the browser test ran past its ${deps.config.usertest.previewWaitMinutes + deps.config.usertest.wallClockMinutes} minutes and was stopped`
+          : job.sessionStartedAt
+            ? `the worker overran its wall clock of ${deps.config.worker.wallClockMinutes} minutes and was stopped`
+            : `the worker was still preparing its worktree after ${PREP_ALLOWANCE_MINUTES} minutes and was stopped`
       // A reboot or a stop is no sign that the next worker will die too.
-      const lostEarly = !beforeBoot && !job.killRequestedAt && now.getTime() - startedAt < EARLY_DEATH_MINUTES * 60_000
+      // A browser test job claims nothing, so its early death is no sign about the issue or the mini.
+      const lostEarly = !beforeBoot && !job.killRequestedAt && job.kind !== "usertest" && now.getTime() - startedAt < EARLY_DEATH_MINUTES * 60_000
       const said = endBlocked(
         deps,
         job,
         reason,
         startedAt,
-        `Anything I committed stays on this mini, and my next try at ${job.issue} starts from it. ` +
-          `If I had taken the issue, I let it go after ${deps.config.claims.ttlHours} hours unless someone takes it first.`,
+        job.kind === "usertest"
+          ? "A browser test changes nothing, so nothing is left behind."
+          : `Anything I committed stays on this mini, and my next try at ${job.issue} starts from it. ` +
+              `If I had taken the issue, I let it go after ${deps.config.claims.ttlHours} hours unless someone takes it first.`,
         lostEarly,
       )
       if (said) deps.log.warn("worker gone without reporting", { issue: job.issue, jobId: job.id, pid: job.pid, reason })

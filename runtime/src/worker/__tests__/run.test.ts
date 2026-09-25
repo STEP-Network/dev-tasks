@@ -1,6 +1,6 @@
 import type { Options } from "@anthropic-ai/claude-agent-sdk"
 import { spawnSync } from "node:child_process"
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { describe, expect, it } from "vitest"
@@ -46,6 +46,7 @@ function setup(
     failOn?: string[]
     exec?: Array<[RegExp, Partial<ExecResult>]>
     worker?: Record<string, unknown>
+    usertest?: Record<string, unknown>
     /** One message list per SDK session, for a runner that asks again. */
     sessions?: SdkMessage[][]
     job?: Parameters<typeof submitJob>[4]
@@ -56,7 +57,7 @@ function setup(
   mkdirSync(join(repo, ".claude"), { recursive: true })
   writeFileSync(join(repo, ".claude", "project-config.json"), JSON.stringify({ git: { autoMergePolicy: { staging: "auto-after-checks-and-review" } } }))
   const paths = agentPaths(home)
-  const config = ConfigSchema.parse({ mini: "eve", repo: { path: repo }, pluginRoot: "/Users/eve/dev-tasks/plugin", slack: { allowedUsers: ["UNATE"] }, worker: opts.worker })
+  const config = ConfigSchema.parse({ mini: "eve", repo: { path: repo }, pluginRoot: "/Users/eve/dev-tasks/plugin", slack: { allowedUsers: ["UNATE"] }, worker: opts.worker, usertest: opts.usertest })
   const fake = fakeTracker([issue({ id: "STEP-7", title: "Fix the date", labels: ["polads", "agent-ready"], ...opts.issueOver })], undefined, opts.failOn)
   const f = fakeExec([
     ...(opts.exec ?? []),
@@ -733,6 +734,74 @@ describe("modelFor, checkPlugins and checkBilling", () => {
     expect(checkBilling("none")).toBeNull()
     expect(checkBilling(undefined)).toBeNull()
     for (const source of ["ANTHROPIC_API_KEY", "apiKeyHelper", "/login managed key"]) expect(checkBilling(source), source).toMatch(/would bill an API key/)
+  })
+})
+
+describe("a usertest job (WS5)", () => {
+  const merged = { url: PR, headRefOid: "e".repeat(40), labels: [{ name: "approval/look" }], state: "MERGED", headRefName: "STEP-7-fix-the-date", title: "fix: the date (STEP-7)" }
+  const view = [
+    [/gh pr view 12 /, { stdout: JSON.stringify(merged) }],
+    [/gh pr diff 12 /, { stdout: "components/account/Profile.tsx\n" }],
+  ] as Array<[RegExp, Partial<ExecResult>]>
+
+  it("reads the merged PR, runs the browser test without claiming the issue or a worker session, and ends done with its verdict", async () => {
+    // The browser test is off in this config, so the test ends as soon as it starts.
+    const { deps, job, fake, f, q, paths } = setup({ job: { kind: "usertest", usertest: { target: "staging", pr: 12 } }, exec: view })
+    expect(await runJob(deps, job.id)).toMatchObject({ status: "done", reason: "browser test: skipped, the browser test is off on this mini", prUrl: PR, minutes: 40 })
+    expect(fake.called("claimIssue")).toEqual([])
+    expect(q.seen).toEqual([])
+    expect(f.lines().filter((l) => l.startsWith("gh pr "))).toEqual([
+      "gh pr view 12 --repo STEP-Network/v0-politiske-annoncer --json url,headRefOid,labels,state,headRefName,title",
+      "gh pr diff 12 --repo STEP-Network/v0-politiske-annoncer --name-only",
+    ])
+    expect(listJobs(paths, "done")[0]).toMatchObject({ kind: "usertest", userTestStartedAt: "2026-09-24T09:40:00.000Z" })
+    // The report's minutes for a PR leave browser tests out by this.
+    expect(readFileSync(join(paths.logs, "ledger.jsonl"), "utf8")).toContain('"type":"worker.end","issue":"STEP-7","kind":"usertest"')
+  })
+
+  it("says on the issue that the test did not run, so nobody waits for a report", async () => {
+    const { deps, job, fake } = setup({ job: { kind: "usertest", usertest: { target: "staging", pr: 12 } }, exec: view })
+    await runJob(deps, job.id)
+    const said = fake.called("comment") as Array<[string, string]>
+    expect(said).toHaveLength(1)
+    expect(said[0][0]).toBe("STEP-7")
+    expect(said[0][1]).toBe("## Browser test by eve: Did not run\n\nthe browser test is off on this mini\n\nNothing needed from you.")
+  })
+
+  it("tests only a merged PR of its own issue", async () => {
+    for (const [pr, why] of [
+      [{ ...merged, state: "OPEN" }, "the PR is not merged yet, so staging does not have it"],
+      [{ ...merged, headRefName: "STEP-8-other", title: "fix: another thing (STEP-8)" }, "the PR is not STEP-7's"],
+    ] as const) {
+      const { deps, job } = setup({ job: { kind: "usertest", usertest: { target: "staging", pr: 12 } }, exec: [[/gh pr view 12 /, { stdout: JSON.stringify(pr) }], view[1]] })
+      expect(await runJob(deps, job.id)).toMatchObject({ status: "skipped", reason: why })
+    }
+  })
+
+  it("ends skipped, never lost, when the browser test's secrets file is open to others", async () => {
+    const { deps, job, paths } = setup({ job: { kind: "usertest", usertest: { target: "staging", pr: 12 } }, exec: view, usertest: { enabled: true, previewEnvironment: "Preview – example", previewHost: "^app-[a-z0-9-]+\\.vercel\\.app$", stagingOrigin: "https://staging.example.com" } })
+    mkdirSync(join(paths.home, ".config", "agentd"), { recursive: true })
+    writeFileSync(join(paths.home, ".config", "agentd", "usertest.env"), "TEST_LOGIN_SECRET=x\n", { mode: 0o644 })
+    const result = await runJob(deps, job.id)
+    expect(result.status).toBe("skipped")
+    expect(result.reason).toMatch(/^the browser test could not start: .*usertest\.env/)
+    expect(listJobs(paths, "done")).toHaveLength(1)
+  })
+
+  it("runs, and says so on the issue, even when the main checkout's history is rewritten: a browser test uses no worktree", async () => {
+    const { deps, job, paths, fake } = setup({ job: { kind: "usertest", usertest: { target: "staging", pr: 12 } }, exec: view })
+    mkdirSync(join(deps.config.repo.path, ".git"), { recursive: true })
+    writeFileSync(join(deps.config.repo.path, ".git", "shallow"), "x")
+    expect(await runJob(deps, job.id)).toMatchObject({ status: "done", reason: "browser test: skipped, the browser test is off on this mini" })
+    expect(existsSync(paths.pauseFile)).toBe(false)
+    expect(fake.called("comment")).toHaveLength(1)
+  })
+
+  it("ends skipped, never lost, when the job has no PR or gh cannot read it", async () => {
+    const none = setup({ job: { kind: "usertest" } })
+    expect(await runJob(none.deps, none.job.id)).toMatchObject({ status: "skipped", reason: "a usertest job without its PR" })
+    const unreadable = setup({ job: { kind: "usertest", usertest: { target: "staging", pr: 12 } }, exec: [[/gh pr view/, { code: 1 }]] })
+    expect(await runJob(unreadable.deps, unreadable.job.id)).toMatchObject({ status: "skipped", reason: "gh could not read the PR" })
   })
 })
 

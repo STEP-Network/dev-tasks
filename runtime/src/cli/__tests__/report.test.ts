@@ -95,6 +95,8 @@ describe("summariseLedger", () => {
     const events = [
       { at: "2026-09-20T09:00:00.000Z", type: "worker.end", status: "done", minutes: 99, costUsd: 9 },
       { at: "2026-09-24T09:00:00.000Z", type: "worker.end", status: "done", minutes: 30, costUsd: 2.5 },
+      // A browser test opens no PR: its minutes are not a PR's (WS5).
+      { at: "2026-09-24T09:10:00.000Z", type: "worker.end", kind: "usertest", status: "done", minutes: 2, costUsd: 0 },
       { at: "2026-09-24T10:00:00.000Z", type: "worker.end", status: "blocked", minutes: 90, costUsd: 15 },
       { at: "2026-09-24T09:00:00.000Z", type: "pr.opened", issue: "STEP-7" },
       { at: "2026-09-24T09:00:00.000Z", type: "report.corrected", issue: "STEP-7", problem: "checklist" },
@@ -111,7 +113,7 @@ describe("summariseLedger", () => {
     ]
     expect(summariseLedger(events, new Date("2026-09-23T00:00:00.000Z"), [], NOW).split("\n")).toEqual([
       "since 2026-09-23",
-      "jobs: 2 (done 1, blocked 1)",
+      "jobs: 3 (done 2, blocked 1)",
       "PRs opened: 1, median job minutes for a PR: 30",
       "reports asked for again: 1, gone out with self-check gaps: 2, titled from commits: 3, revise rounds: 2",
       "estimated spend: USD 17.50",

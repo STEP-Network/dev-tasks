@@ -1,8 +1,8 @@
 /**
  * agentctl: the agent mini's local control, for the front door (tick, ack,
- * job submit, ask, slack post and reply), a person on the machine (status,
- * report, retro, pause, resume, retry, doctor, probe-sandbox, probe-hooks --scripted) and
- * the rehearsal (probe-hooks). One line of output per call: JSON, or text for
+ * job submit, usertest, ask, slack post and reply), a person on the machine (status,
+ * report, retro, pause, resume, retry, doctor, probe-sandbox, probe-hooks --scripted,
+ * probe-browser) and the rehearsal (probe-hooks). One line of output per call: JSON, or text for
  * status, report, doctor and the free probes. Usage errors exit 64, anything
  * else 1.
  * Installed as ~/.agentd/bin/agentctl (runtime/templates/shim.sh), which runs
@@ -28,6 +28,7 @@ import { readUsage } from "../usage.ts"
 import { frontDoorAlive, lastTickAt, readFrontDoorState } from "../agentd/frontdoor.ts"
 import { realExec, type Exec } from "../worker/git.ts"
 import { probeHooks } from "../worker/probe.ts"
+import { formatBrowserProbe, probeBrowser } from "../usertest/probe.ts"
 import { checkBilling, checkPlugins, type QueryFn } from "../worker/run.ts"
 import { parseCli, UsageError } from "./args.ts"
 import { doctorChecks, formatDoctor } from "./doctor.ts"
@@ -198,6 +199,23 @@ export async function run(argv: string[], out: (line: string) => void, overrides
       }
       throw new UsageError("usage: agentctl job submit --issue STEP-n [--model m] | agentctl job list")
     }
+    case "usertest": {
+      // The browser test on staging, for agent UAT (review-uat). Its PR says what changed.
+      const issue = issueFlag()
+      const prFlag = need("pr")
+      if (!/^\d+$/.test(prFlag) || Number(prFlag) <= 0) throw new UsageError("--pr must be the merged PR's number")
+      const pr = Number(prFlag)
+      const target = flags.target === undefined ? "staging" : flags.target
+      if (target !== "staging" && target !== "rc") throw new UsageError("--target is staging or rc")
+      print(submitJob(paths, issue, null, now(), { kind: "usertest", usertest: { target, pr } }))
+      return 0
+    }
+    case "probe-browser": {
+      // Free and changes nothing: the real Chrome and the pinned browser tool, with no model.
+      const probe = formatBrowserProbe(await probeBrowser(loadConfig(paths)))
+      print(probe.text)
+      return probe.ok ? 0 : 1
+    }
     case "retry": {
       // A blocked job again, on its issue's branch: prepareWorktree carries the
       // commits on, and the runner takes the issue On hold. A person decides
@@ -208,6 +226,7 @@ export async function run(argv: string[], out: (line: string) => void, overrides
       const old = readJson<JobRecord>(jobPath(paths, "done", id))
       if (!old) throw new Error(`no finished job ${id}: agentctl job list shows the last ten`)
       if (old.result?.status !== "blocked") throw new Error(`${id} ended ${old.result?.status ?? "without a result"}: only a blocked job is retried`)
+      if (old.kind === "usertest") throw new Error(`${id} is a browser test, not work on the issue: agentctl usertest --issue ${old.issue} --pr ${old.usertest?.pr ?? "<number>"} queues it again`)
       print(submitJob(paths, old.issue, old.model, now(), { retryOf: old.id }))
       return 0
     }
@@ -468,7 +487,7 @@ export async function run(argv: string[], out: (line: string) => void, overrides
     }
     default:
       throw new UsageError(
-        "usage: agentctl <tick|ack|job|ask|decide|instruct|slack|pause|resume|retry|status|report|retro|doctor|probe-hooks|probe-sandbox> (see runtime/src/cli/agentctl.ts)",
+        "usage: agentctl <tick|ack|job|usertest|ask|decide|instruct|slack|pause|resume|retry|status|report|retro|doctor|probe-hooks|probe-sandbox|probe-browser> (see runtime/src/cli/agentctl.ts)",
       )
   }
 }

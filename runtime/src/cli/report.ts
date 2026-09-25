@@ -104,7 +104,8 @@ export function summariseLedger(events: LedgerLine[], since: Date, lessons: Less
   const ends = of("worker.end")
   const byStatus = new Map<string, number>()
   for (const e of ends) byStatus.set(String(e.status), (byStatus.get(String(e.status)) ?? 0) + 1)
-  const doneMinutes = ends.filter((e) => e.status === "done" && typeof e.minutes === "number").map((e) => e.minutes as number)
+  // A browser test job opens no PR (WS5).
+  const doneMinutes = ends.filter((e) => e.status === "done" && e.kind !== "usertest" && typeof e.minutes === "number").map((e) => e.minutes as number)
   const spend = ends.reduce((sum, e) => sum + (typeof e.costUsd === "number" ? e.costUsd : 0), 0)
   const asked = of("question.asked")
   const answered = of("answer.applied")

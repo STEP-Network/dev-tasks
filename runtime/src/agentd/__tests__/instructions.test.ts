@@ -114,6 +114,13 @@ describe("actOnInstructions (STEP-3285)", () => {
     await actOnInstructions(deps)
     expect(listJobs(paths, "pending")).toEqual([expect.objectContaining({ issue: "STEP-7", model: "opus", retryOf: blocked.id })])
     expect(outbox()[0].text).toBe("I am trying STEP-7 again from where I stopped (last time: I finished without writing down what I did).\nNothing needed from you.")
+    // A browser test that stopped is not work on the issue to try again.
+    const tested = setup()
+    const ut = submitJob(tested.paths, "STEP-7", null, new Date("2026-09-25T07:00:00.000Z"), { kind: "usertest", usertest: { target: "staging", pr: 12 } })
+    moveJob(tested.paths, ut.id, "pending", "done", { endedAt: "2026-09-25T07:30:00.000Z", result: { status: "blocked", reason: "x", prUrl: null, branch: null, costUsd: null, turns: null, minutes: 5 } })
+    tested.say("retry")
+    await actOnInstructions(tested.deps)
+    expect(listJobs(tested.paths, "pending")).toEqual([])
     const none = setup()
     none.say("retry")
     await actOnInstructions(none.deps)

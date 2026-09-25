@@ -37,6 +37,7 @@ import { denyBannedBash, denyWorkerPaths, ENV_TEMPLATE, workerEnv, workerToolDen
 import { SMALL_CHANGE_FILES, clause, toOutcome, type Outcome, type ResultMessageLike } from "./outcome.ts"
 import { buildReviseBrief, finalizeRevise, gatherFeedback } from "./revise.ts"
 import { checkBilling, checkPlugins, runSession, type QueryFn, type SdkMessage } from "./session.ts"
+import { runUserTestJob } from "./usertest-step.ts"
 
 // Moved to session.ts, which the browser test shares: every import from here keeps working.
 export { checkBilling, checkPlugins, runSession, type QueryFn, type SdkMessage, type SessionEnd } from "./session.ts"
@@ -316,13 +317,16 @@ export async function runJob(deps: RunDeps, jobId: string): Promise<JobResult> {
   }
   const finish = (result: JobResult, extra: Partial<JobRecord> = {}): JobResult => {
     moveJob(paths, jobId, "running", "done", { endedAt: deps.now().toISOString(), result, ...extra })
-    appendLedger(paths, { type: "worker.end", issue: job.issue, ...result }, deps.now())
+    appendLedger(paths, { type: "worker.end", issue: job.issue, kind: job.kind, ...result }, deps.now())
     if (result.status === "blocked") {
       learn([{ mini: config.mini, issue: job.issue, pr: result.prUrl, category: "blocked", source: "runner", text: result.reason, key: `blocked:${jobId}` }])
     }
     return result
   }
   const nothing = { prUrl: null, branch: null, costUsd: null, turns: null, minutes: 0 }
+  // A merged PR's browser test (agentctl usertest): no claim, no worktree and
+  // no worker session, so a rewritten history below is nothing to it.
+  if (job.kind === "usertest") return runUserTestJob(deps, job, finish)
 
   // 0. A graft or a shallow list in the repository can hide what a branch
   // changes (prepareWorktree refuses it too). It is the mini's to fix, not the
