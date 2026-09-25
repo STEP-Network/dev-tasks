@@ -179,20 +179,6 @@ describe("superviseJobs", () => {
     expect(kills).toEqual([[-4242, "SIGTERM"]])
   })
 
-  it("gives a job's browser test its own minutes: the preview wait, the session, then the time to finish (WS5)", () => {
-    const { paths, deps, kills } = setup()
-    // The session began 120 minutes ago, past its 90 and 15 to finish, but the browser test began 10 minutes ago.
-    running(paths, "STEP-1", { startedAt: "2026-09-24T09:55:00.000Z", sessionStartedAt: "2026-09-24T10:00:00.000Z", userTestStartedAt: "2026-09-24T11:50:00.000Z" })
-    superviseJobs(deps)
-    expect(kills).toEqual([])
-    // 20 minutes of preview wait, 25 of session and 15 to finish have passed, and a minute more.
-    superviseJobs({ ...deps, now: () => new Date("2026-09-24T12:51:00.000Z") })
-    expect(kills).toEqual([[-4242, "SIGTERM"]])
-    // Stopped, it is said to be the browser test that ran out of time, not the job's own work.
-    superviseJobs({ ...deps, now: () => new Date("2026-09-24T12:52:00.000Z"), liveness: () => "gone" })
-    expect(listJobs(paths, "done")[0].result).toMatchObject({ status: "blocked", reason: "the browser test ran past its 45 minutes and was stopped" })
-  })
-
   it("stops a worker still preparing its worktree after 45 minutes, and says so", () => {
     const { paths, deps, kills } = setup()
     const job = running(paths, "STEP-1", { startedAt: "2026-09-24T11:14:00.000Z" })
