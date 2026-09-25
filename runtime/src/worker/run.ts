@@ -325,6 +325,9 @@ export async function runJob(deps: RunDeps, jobId: string): Promise<JobResult> {
     return result
   }
   const nothing = { prUrl: null, branch: null, costUsd: null, turns: null, minutes: 0 }
+  // A merged PR's browser test (agentctl usertest): no claim, no worktree and
+  // no worker session, so a rewritten history below is nothing to it.
+  if (job.kind === "usertest") return runUserTestJob(deps, job, finish)
 
   // 0. A graft or a shallow list in the repository can hide what a branch
   // changes (prepareWorktree refuses it too). It is the mini's to fix, not the
@@ -343,8 +346,6 @@ export async function runJob(deps: RunDeps, jobId: string): Promise<JobResult> {
     )
     return finish({ ...nothing, status: "skipped", reason: why })
   }
-  // A merged PR's browser test (agentctl usertest): no claim, no worktree and no worker session.
-  if (job.kind === "usertest") return runUserTestJob(deps, job, finish)
 
   // 1. read, skip or claim. Linear failing here ends the job the ordinary way,
   // as skipped and marked linearFailed (the digest waits before offering the

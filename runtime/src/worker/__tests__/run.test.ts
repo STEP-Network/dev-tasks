@@ -1,5 +1,5 @@
 import type { Options } from "@anthropic-ai/claude-agent-sdk"
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { describe, expect, it } from "vitest"
@@ -810,6 +810,15 @@ describe("a usertest job (WS5)", () => {
     expect(result.status).toBe("skipped")
     expect(result.reason).toMatch(/^the browser test could not start: .*usertest\.env/)
     expect(listJobs(paths, "done")).toHaveLength(1)
+  })
+
+  it("runs, and says so on the issue, even when the main checkout's history is rewritten: a browser test uses no worktree", async () => {
+    const { deps, job, paths, fake } = setup({ job: { kind: "usertest", usertest: { target: "staging", pr: 12 } }, exec: view })
+    mkdirSync(join(deps.config.repo.path, ".git"), { recursive: true })
+    writeFileSync(join(deps.config.repo.path, ".git", "shallow"), "x")
+    expect(await runJob(deps, job.id)).toMatchObject({ status: "done", reason: "browser test: skipped, the browser test is off on this mini" })
+    expect(existsSync(paths.pauseFile)).toBe(false)
+    expect(fake.called("comment")).toHaveLength(1)
   })
 
   it("ends skipped, never lost, when the job has no PR or gh cannot read it", async () => {

@@ -12,16 +12,23 @@ const result = (over: Partial<UserTestResult> = {}): UserTestResult => ({
 })
 
 describe("verdictOf", () => {
+  const saved = ["main-01.png"]
   it("sends blockers and major findings back, never minor ones alone", () => {
-    expect(verdictOf(result())).toBe("findings")
-    expect(verdictOf(result({ findings: [{ ...result().findings[0], severity: "minor" }] }))).toBe("pass")
-    expect(verdictOf(result({ status: "blocked" }))).toBe("error")
-    expect(verdictOf(null)).toBe("error")
+    expect(verdictOf(result(), saved)).toBe("findings")
+    expect(verdictOf(result({ findings: [{ ...result().findings[0], severity: "minor" }] }), saved)).toBe("pass")
+    expect(verdictOf(result({ status: "blocked" }), saved)).toBe("error")
+    expect(verdictOf(null, saved)).toBe("error")
   })
 
   it("trusts no verdict from a test that saved no screenshot: a session without a browser can still say pass", () => {
-    expect(verdictOf(result({ status: "pass", findings: [], screenshots: [] }))).toBe("error")
-    expect(verdictOf(result({ screenshots: [] }))).toBe("error")
+    expect(verdictOf(result({ status: "pass", findings: [], screenshots: [] }), saved)).toBe("error")
+    expect(verdictOf(result({ screenshots: [] }), saved)).toBe("error")
+  })
+
+  it("counts only screenshots that are really in the shots folder, not the report's word for them", () => {
+    expect(verdictOf(result({ status: "pass", findings: [] }), [])).toBe("error")
+    expect(verdictOf(result({ status: "pass", findings: [], screenshots: [{ file: "/elsewhere/main-01.png", caption: "x" }] }), saved)).toBe("pass")
+    expect(verdictOf(result({ status: "pass", findings: [], screenshots: [{ file: "made-up.png", caption: "x" }] }), saved)).toBe("error")
   })
 })
 
@@ -42,10 +49,10 @@ describe("neutralise", () => {
   })
 
   it("writes no link, image or autolink of the page's", () => {
-    expect(neutralise("[the fix](https://evil.example/x)")).toBe("\\[the fix\\]\\(https:\u200b//evil.example/x\\)")
-    expect(neutralise("![ok](https://evil.example/pixel.png)")).toBe("\\!\\[ok\\]\\(https:\u200b//evil.example/pixel.png\\)")
+    expect(neutralise("[the fix](https://evil.example/x)")).toBe("\\[the fix\\]\\(https:\u200b//evil.\u200bexample/x\\)")
+    expect(neutralise("![ok](https://evil.example/pixel.png)")).toBe("\\!\\[ok\\]\\(https:\u200b//evil.\u200bexample/pixel.\u200bpng\\)")
     // A Linear profile URL would mention its person.
-    expect(neutralise("see https://linear.app/acme/profiles/someone")).toBe("see https:\u200b//linear.app/acme/profiles/someone")
+    expect(neutralise("see https://linear.app/acme/profiles/someone")).toBe("see https:\u200b//linear.\u200bapp/acme/profiles/someone")
   })
 
   it("keeps each piece of text on one line, so it adds no heading, list item or table cell", () => {
@@ -58,6 +65,26 @@ describe("neutralise", () => {
     expect(neutralise("`x` *y* _z_ ~w~")).toBe("\\`x\\` \\*y\\* \\_z\\_ \\~w\\~")
     expect(neutralise("a & b &lt;")).toBe("a &amp; b &amp;lt,")
     expect(neutralise("a – b — c")).not.toMatch(/[–—]/)
+  })
+
+  it("writes no www. autolink, and no bare Linear profile link", () => {
+    const www = neutralise("see www.evil.example/x")
+    expect(www).not.toContain("www.evil")
+    expect(www).toBe("see www.\u200bevil.\u200bexample/x")
+    expect(neutralise("linear.app/acme/profiles/someone")).not.toContain("linear.app")
+  })
+
+  it("writes no math, and no issue or PR reference", () => {
+    expect(neutralise("costs $5 and $6")).toBe("costs \\$5 and \\$6")
+    for (const ref of ["#12", "GH-12", "owner/repo#12"]) expect(neutralise(`see ${ref}`)).not.toMatch(/#\d|GH-\d/)
+  })
+
+  it("starts no list or rule with the text's first characters", () => {
+    expect(neutralise("- item")).toBe("\\- item")
+    expect(neutralise("+ item")).toBe("\\+ item")
+    expect(neutralise("1. first")).toBe("1\\. first")
+    expect(neutralise("2) second")).toBe("2\\) second")
+    expect(neutralise("---")).toBe("\\---")
   })
 
   it("cuts a long text short", () => {
@@ -117,7 +144,7 @@ describe("reportMarkdown", () => {
     expect(text).toContain("| Sign \\| up | problem |")
     expect(text).not.toMatch(/(?<!\\)`/)
     expect(text).not.toContain("https://evil.example")
-    expect(text).toContain("![a\\]\\(https:\u200b//evil.example/x.png\\) \\!\\[b](https://github.com/example/repo/blob/c/main-01.png?raw=true)")
+    expect(text).toContain("![a\\]\\(https:\u200b//evil.\u200bexample/x.\u200bpng\\) \\!\\[b](https://github.com/example/repo/blob/c/main-01.png?raw=true)")
   })
 
   it("says why screenshots stay on the mini, as the caller knows it", () => {

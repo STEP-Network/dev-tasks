@@ -172,7 +172,8 @@ export function superviseJobs(deps: JobRunnerDeps): void {
             ? `the worker overran its wall clock of ${deps.config.worker.wallClockMinutes} minutes and was stopped`
             : `the worker was still preparing its worktree after ${PREP_ALLOWANCE_MINUTES} minutes and was stopped`
       // A reboot or a stop is no sign that the next worker will die too.
-      const lostEarly = !beforeBoot && !job.killRequestedAt && now.getTime() - startedAt < EARLY_DEATH_MINUTES * 60_000
+      // A browser test job claims nothing, so its early death is no sign about the issue or the mini.
+      const lostEarly = !beforeBoot && !job.killRequestedAt && job.kind !== "usertest" && now.getTime() - startedAt < EARLY_DEATH_MINUTES * 60_000
       const said = endBlocked(
         deps,
         job,
