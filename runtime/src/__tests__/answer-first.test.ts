@@ -184,7 +184,10 @@ describe("a Try plan is approved by the recorder alone (review, 2026-09-25)", ()
     expect(planTransition({ labels: ["plan-to-approve"] }, {})).toEqual({ removeLabels: ["plan-to-approve"] })
     // Written out, "Build it as planned" says the same as a yes to it.
     expect(planTransition({ labels: ["plan-to-approve"] }, { words: "build it as planned." })).toEqual({ removeLabels: ["plan-to-approve"], addLabels: ["plan-approved"] })
-    expect(planTransition({ labels: ["plan-to-approve"] }, { decided: { agreed: false, text: "Build it as planned" } })).toEqual({ removeLabels: ["plan-to-approve"], addLabels: ["plan-approved"] })
+    // Never how the front door worded their decision: only a yes, or their own words.
+    expect(planTransition({ labels: ["plan-to-approve"] }, { decided: { agreed: false, text: "Build it as planned" } })).toEqual({ removeLabels: ["plan-to-approve"] })
+    expect(planTransition({ labels: ["plan-to-approve"] }, { decided: { agreed: false, text: "Build it as planned" }, words: "sure, go on" })).toEqual({ removeLabels: ["plan-to-approve"] })
+    expect(planTransition({ labels: ["plan-to-approve"] }, { decided: { agreed: false, text: "build the plan" }, words: "Build it as planned" })).toEqual({ removeLabels: ["plan-to-approve"], addLabels: ["plan-approved"] })
     expect(planTransition({ labels: ["plan-to-approve"] }, { words: "Build it as planned, but blue" })).toEqual({ removeLabels: ["plan-to-approve"] })
     expect(planTransition({ labels: ["approval/try"] }, { decided: { agreed: true, recommendation: "Build it as planned" } })).toEqual({})
   })
