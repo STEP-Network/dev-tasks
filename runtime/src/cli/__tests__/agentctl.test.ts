@@ -6,6 +6,7 @@ import { agentPaths } from "../../config.ts"
 import { listNew, putOnce, writeJsonAtomic } from "../../fsq.ts"
 import { listJobs, moveJob, submitJob } from "../../jobs.ts"
 import { fakeExec, fakeTracker, issue } from "../../__tests__/fakes.ts"
+import { BOARD, fakeMonday, fakePeople, GROUPS, NEEDS_COLUMNS, REQ, REQUEST_COLUMNS, REQUEST_GROUPS } from "../../monday/__tests__/fake-monday.ts"
 import { parseCli, run, UsageError, type AgentctlDeps } from "../agentctl.ts"
 
 const NOW = new Date("2026-09-24T12:00:00.000Z")
@@ -36,6 +37,63 @@ function deps(over: Partial<AgentctlDeps> = {}): Partial<AgentctlDeps> {
   const fake = fakeTracker([issue({ id: "STEP-1", labels: ["polads", "agent-ready"] })])
   return { tracker: () => fake.tracker, exec: fakeExec().exec, now: () => NOW, env: {}, isTTY: () => true, ...over }
 }
+
+describe("agentctl monday migrate (Wave 2 Task 11)", () => {
+  function migrating(enabled = false) {
+    mkdirSync(root, { recursive: true })
+    writeFileSync(
+      join(root, "config.json"),
+      JSON.stringify({
+        mini: "eve", repo: { path: "/Users/eve/polads" }, pluginRoot: "/Users/eve/dev-tasks/plugin", slack: { allowedUsers: ["UADA"] },
+        bridges: { monday: { enabled, people: [{ id: "111", name: "Ada" }], defaultPerson: "111", requests: { boardId: REQ, columns: REQUEST_COLUMNS } } },
+      }),
+    )
+    const monday = fakeMonday(undefined, null, { [BOARD]: GROUPS, [REQ]: REQUEST_GROUPS })
+    const column = (id: string) => ({ id, title: id, type: "text" })
+    monday.columnsOf(BOARD, [column("name"), ...Object.values(NEEDS_COLUMNS).map(column)])
+    monday.columnsOf(REQ, [column("name"), ...Object.values(REQUEST_COLUMNS).map(column)])
+    const fake = fakeTracker([])
+    const { people } = fakePeople(fake.issues)
+    const d: Partial<AgentctlDeps> = { tracker: () => fake.tracker, people: () => people, mondayApi: () => monday.api, exec: fakeExec().exec, now: () => NOW, env: {}, isTTY: () => true }
+    return { monday, d }
+  }
+
+  it("prints the plan and moves nothing without --apply", async () => {
+    const { monday, d } = migrating()
+    const a = monday.request("111", "Export notices", undefined, "g_req")
+    expect(await run(["monday", "migrate"], out, d)).toBe(0)
+    expect(JSON.parse(printed.at(-1)!)).toMatchObject({ plan: { moves: [{ itemId: a, from: "Requests", to: "active" }] }, apply: "run again with --apply to do it" })
+    expect(monday.called("moveItemToBoard")).toEqual([])
+  })
+
+  it("moves with --apply, prints the snapshot, and exits 1 when anything failed", async () => {
+    const { monday, d } = migrating()
+    const a = monday.request("111", "Export notices", undefined, "g_req")
+    expect(await run(["monday", "migrate", "--apply"], out, d)).toBe(0)
+    const result = JSON.parse(printed.at(-1)!)
+    expect(result).toMatchObject({ moved: [a], failed: [] })
+    expect(existsSync(result.snapshot)).toBe(true)
+    monday.request("111", "Another", undefined, "g_req")
+    monday.broken.add("moveItemToBoard")
+    expect(await run(["monday", "migrate", "--apply"], out, d)).toBe(1)
+  })
+
+  it("reverses from a snapshot file", async () => {
+    const { monday, d } = migrating()
+    const a = monday.request("111", "Export notices", undefined, "g_req")
+    await run(["monday", "migrate", "--apply"], out, d)
+    const snapshot = JSON.parse(printed.at(-1)!).snapshot
+    expect(await run(["monday", "migrate", "--reverse", snapshot], out, d)).toBe(0)
+    expect(JSON.parse(printed.at(-1)!)).toMatchObject({ restored: [a], failed: [] })
+    expect(monday.boardOf(a)).toBe(BOARD)
+  })
+
+  it("refuses --apply with --reverse, and a subcommand it does not know", async () => {
+    const { d } = migrating()
+    await expect(run(["monday", "migrate", "--apply", "--reverse", "x.json"], out, d)).rejects.toThrow(UsageError)
+    await expect(run(["monday", "sync"], out, d)).rejects.toThrow(/usage: agentctl monday migrate/)
+  })
+})
 
 describe("parseCli", () => {
   it("splits the command, its words and its flags", () => {

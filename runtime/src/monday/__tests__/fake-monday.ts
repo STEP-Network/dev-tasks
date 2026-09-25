@@ -131,6 +131,7 @@ export function fakeMonday(
     },
     async moveItemToBoard(boardId, groupId, itemId, mapping) {
       record("moveItemToBoard", [boardId, groupId, itemId, mapping])
+      if (broken.has("moveItemToBoard")) throw new Error("Monday: gave up after 3 attempts (status 503)")
       const item = find(itemId)
       const moved: MondayItem["columns"] = {}
       for (const { source, target } of mapping) if (target && item.columns[source]) moved[target] = item.columns[source]
@@ -217,6 +218,11 @@ export function fakePeople(issues: Map<string, TrackerIssue>, extra: Record<stri
       const c = byUuid(child)
       const p = byUuid(parent)
       if (c && p) parentOf.set(c.id, p.id)
+    },
+    async openIssuesFiledFromSlack() {
+      return [...issues.values()]
+        .filter((i) => i.description.includes("Filed from Slack by") && !["Released", "Canceled", "Duplicate"].includes(i.state) && !parentOf.has(i.id))
+        .map(view)
     },
     async slackRequests() {
       return [...issues.values()]

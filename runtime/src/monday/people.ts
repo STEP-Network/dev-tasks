@@ -59,6 +59,8 @@ export interface PeopleView {
   childrenOf(anchorUuids: string[]): Promise<Map<string, PeopleIssue[]>>
   /** Open, parentless Slack asks (intake/slack) not filed from the board: each gets one request item (Wave 2). */
   slackRequests(): Promise<PeopleIssue[]>
+  /** Open, parentless issues the Slack intake filed before intake/slack (the migration labels them, Task 11). */
+  openIssuesFiledFromSlack(): Promise<PeopleIssue[]>
 }
 
 export const NEEDS_LABELS = ["needs-human", "human-todo", "awaiting-answer"]
@@ -210,6 +212,14 @@ export function createPeopleView(request: LinearRequest = linearRequest): People
       const byParent = new Map<string, PeopleIssue[]>()
       for (const child of found) if (child.parent) byParent.set(child.parent, [...(byParent.get(child.parent) ?? []), child])
       return byParent
+    },
+
+    async openIssuesFiledFromSlack() {
+      return all(
+        `description: { contains: $filed }, state: { type: { nin: ["completed", "canceled", "duplicate"] } }, parent: { null: true }`,
+        ", $filed: String!",
+        { filed: "Filed from Slack by" },
+      )
     },
 
     async slackRequests() {
