@@ -889,7 +889,11 @@ What it does:
   parked issue moves on. So "hold off" on another mini's issue pauses
   nothing here. The State goes to Waiting on agent, then Done once Linear
   no longer needs a person. Words are acted on once, even when Monday fails
-  after Linear has them.
+  after Linear has them. The Recommendation column (Wave 2) is input too:
+  where this mini asked no question on the issue, a plain "yes" agrees to
+  what the column says, so write in it only what a yes should mean. A plain
+  "yes" to a plan with nothing to agree to is asked back and records
+  nothing. A person who writes out "Build it as planned" approves it.
 - **Test day.** Every issue in Waiting for UAT that carries this mini's
   product label (`repo.product`, `polads` on Eve), as a Check with the "You
   must check" steps of its latest Agent UAT review (its acceptance criteria

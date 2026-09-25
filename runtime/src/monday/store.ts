@@ -37,6 +37,8 @@ export interface ItemRecord {
   handled: string[]
   /** When the item last asked (its body posted, or a second answer asked back): the first answer after it counts (spec 6). */
   askedAt?: string
+  /** The request item its Request column links to (Wave 2): written once, and again only when it changes. */
+  requestItem?: string
   /** Words Linear keeps refusing, by id: when it first did. After a day the bridge gives up and says so. */
   failing?: Record<string, string>
   /**

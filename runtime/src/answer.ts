@@ -17,7 +17,8 @@
  * both apply one.
  */
 
-import { closeSync, mkdirSync, openSync, rmSync, statSync, writeSync } from "node:fs"
+import { randomUUID } from "node:crypto"
+import { closeSync, mkdirSync, openSync, readFileSync, rmSync, statSync, utimesSync, writeSync } from "node:fs"
 import { join } from "node:path"
 
 import type { AgentConfig, AgentPaths } from "./config.ts"
@@ -135,9 +136,11 @@ export function secondAnswerText(first: RecordedAnswer): string {
  * words, and approves nothing: only this, never text on the issue, makes
  * /refine build a Try plan.
  */
-export function planTransition(issue: Pick<TrackerIssue, "labels">, a: Pick<PersonAnswer, "decided">): { addLabels?: string[]; removeLabels?: string[] } {
+export function planTransition(issue: Pick<TrackerIssue, "labels">, a: { decided?: Decided; words?: string }): { addLabels?: string[]; removeLabels?: string[] } {
   if (!issue.labels.includes("plan-to-approve")) return {}
-  const approved = a.decided?.agreed === true && a.decided.recommendation.trim().toLowerCase() === PLAN_RECOMMENDATION.toLowerCase()
+  // A yes to it, or the person's own words saying it: never how the front door worded their decision.
+  const said = a.decided?.agreed ? a.decided.recommendation : (a.words ?? "")
+  const approved = answerCore(said) === answerCore(PLAN_RECOMMENDATION)
   return approved ? { removeLabels: ["plan-to-approve"], addLabels: ["plan-approved"] } : { removeLabels: ["plan-to-approve"] }
 }
 
@@ -173,32 +176,38 @@ export interface Recorded {
   first?: RecordedAnswer
 }
 
-const LOCK_WAIT_MS = 30_000
-/** Held longer than this, the lock's holder died mid-answer: what it guards is one Linear read and one write. */
-const LOCK_STALE_MS = 120_000
+/**
+ * The answer lock's timings. waitMs: how long a second answer waits for the
+ * first. staleMs: a lock not touched for this long is a holder that died.
+ * beatMs: how often a live holder touches its lock, however long Linear
+ * takes. Tests shorten them.
+ */
+export const ANSWER_LOCK = { waitMs: 30_000, staleMs: 120_000, beatMs: 20_000 }
 
 /**
  * Runs `fn` holding the issue's answer lock (state/answer-locks), created
  * with O_EXCL: the Slack door (agentctl decide) and the Monday bridge each
  * read the issue and then write it, so without it both could apply an answer.
- * Throws when another holder keeps it past LOCK_WAIT_MS: the bridge tries
- * again next poll, and the front door says so.
+ * Throws when another holder keeps it past waitMs: the bridge tries again
+ * next poll, and the front door says so. The lock holds this holder's own
+ * token: it touches the lock while it works, and removes only its own.
  */
 async function oneAnswerAtATime<T>(paths: AgentPaths, issue: string, fn: () => Promise<T>): Promise<T> {
   const dir = join(paths.state, "answer-locks")
   mkdirSync(dir, { recursive: true })
   const lock = join(dir, `${safeKey(issue)}.lock`)
-  const deadline = Date.now() + LOCK_WAIT_MS
+  const token = `${process.pid}:${randomUUID()}`
+  const deadline = Date.now() + ANSWER_LOCK.waitMs
   for (;;) {
     try {
       const fd = openSync(lock, "wx")
-      writeSync(fd, String(process.pid))
+      writeSync(fd, token)
       closeSync(fd)
       break
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error
       try {
-        if (Date.now() - statSync(lock).mtimeMs > LOCK_STALE_MS) rmSync(lock, { force: true })
+        if (Date.now() - statSync(lock).mtimeMs > ANSWER_LOCK.staleMs) rmSync(lock, { force: true })
       } catch {
         // Released between the open and the stat.
       }
@@ -206,10 +215,25 @@ async function oneAnswerAtATime<T>(paths: AgentPaths, issue: string, fn: () => P
       await new Promise((resolve) => setTimeout(resolve, 100))
     }
   }
+  const beat = setInterval(() => {
+    try {
+      const now = new Date()
+      utimesSync(lock, now, now)
+    } catch {
+      // Gone: nothing to keep fresh.
+    }
+  }, ANSWER_LOCK.beatMs)
+  beat.unref()
   try {
     return await fn()
   } finally {
-    rmSync(lock, { force: true })
+    clearInterval(beat)
+    try {
+      // Only its own: a lock taken over from it is the new holder's.
+      if (readFileSync(lock, "utf8") === token) rmSync(lock, { force: true })
+    } catch {
+      // Gone already.
+    }
   }
 }
 
