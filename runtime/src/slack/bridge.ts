@@ -25,7 +25,6 @@ import { ack, countIn, entryPath, fail, listNew, putOnce, readJson, safeKey, wri
 import { appendLedger, createLogger, redact, type Logger } from "../log.ts"
 import { enqueueSlack, type ChannelKey } from "../outbox.ts"
 import { releasePidLock, takePidLock } from "../pidlock.ts"
-import { isCorrection, recordLessons } from "../retro/lessons.ts"
 import { assertLinearKeyFile, loadSlackSecrets } from "../secrets.ts"
 import { onQueue } from "../select.ts"
 import { issueForThread, saveThread, threadFor } from "../threads.ts"
@@ -36,6 +35,7 @@ import { isSlackTrouble, slackErrorCode, startOutbox, type SendContext, type Sla
 import { fromSlack, intakeIssue, mentionedUsers } from "./text.ts"
 import { frontDoorUp, lastTickAt } from "../agentd/frontdoor.ts"
 import { NOTHING_NEEDED } from "../plain.ts"
+import { noteCorrection } from "../answer.ts"
 
 export interface BridgeWeb extends SlackWeb {
   userName(userId: string): Promise<string>
@@ -195,16 +195,7 @@ function fileInstruction(deps: BridgeDeps, key: string, entry: Omit<InstructionE
  * cannot be written never stops the reply's own handling.
  */
 function learnCorrection(deps: BridgeDeps, said: { issue: string | null; channel: string; ts: string; who: string; text: string }): void {
-  if (!isCorrection(said.text)) return
-  try {
-    recordLessons(
-      deps.paths,
-      [{ mini: deps.config.mini, issue: said.issue, pr: null, category: "correction", source: "slack", who: said.who, text: said.text, key: `correction:${said.channel}:${said.ts}` }],
-      deps.now(),
-    )
-  } catch (error) {
-    deps.log.warn("lesson not recorded", { issue: said.issue, error: String(error) })
-  }
+  noteCorrection({ paths: deps.paths, mini: deps.config.mini, now: deps.now, log: deps.log }, { issue: said.issue, source: "slack", key: `correction:${said.channel}:${said.ts}`, who: said.who, text: said.text })
 }
 
 /** How long an intake or an answer Linear keeps refusing waits in the inbox before the bridge gives up and says so. */

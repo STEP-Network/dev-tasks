@@ -21,7 +21,7 @@ import { putOnce } from "../fsq.ts"
 import { listJobs, readWatchedPrs } from "../jobs.ts"
 import { appendLedger } from "../log.ts"
 import { openDecisions } from "../agentd/decisions.ts"
-import { agreedTo, recordAnswer } from "../answer.ts"
+import { agreedTo, noteCorrection, recordAnswer } from "../answer.ts"
 import { lastQuestion } from "../outbox.ts"
 import { instructionFor, type Action, type MondayInstructionEntry } from "../slack/instruction.ts"
 import type { Tracker } from "../tracker.ts"
@@ -51,12 +51,14 @@ export function ownsWork(paths: AgentPaths, issue: string): boolean {
 }
 
 export async function routeWords(
-  deps: { paths: AgentPaths; tracker: Tracker },
+  deps: { paths: AgentPaths; tracker: Tracker; mini: string },
   input: { issue: string; request: boolean; itemId: string; who: { id: string; name: string }; words: Words; now: Date },
 ): Promise<Routed> {
   const { paths, tracker } = deps
   const { issue, words, who, now } = input
   const current = await tracker.readIssue(issue)
+  // "No, do X" on the board is a lesson for the weekly retro, as in Slack (STEP-3290), answer or instruction alike.
+  noteCorrection({ paths, mini: deps.mini, now: () => now }, { issue, source: "monday", key: `correction:monday:${words.id}`, who: who.name, text: words.text })
   const said = !input.request && ownsWork(paths, issue) ? instructionFor(words.text, current) : null
   // A plain yes to a question that recommended something is that recommendation, as in Slack (STEP-3293 review).
   const decided = said ? null : agreedTo(words.text, lastQuestion(paths, issue)?.text, current)

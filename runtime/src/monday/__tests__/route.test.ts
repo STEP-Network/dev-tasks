@@ -12,6 +12,8 @@ import { agentPaths } from "../../config.ts"
 import { enqueueSlack } from "../../outbox.ts"
 import { withRecommendation } from "../../plain.ts"
 import { saveThread, threadFor } from "../../threads.ts"
+import { recordPr } from "../../jobs.ts"
+import { readLessons } from "../../retro/lessons.ts"
 import { fakeTracker, issue } from "../../__tests__/fakes.ts"
 import { routeWords } from "../route.ts"
 
@@ -23,7 +25,7 @@ function setup(labels = ["agent-ready", "awaiting-answer", "polads"]) {
   mkdirSync(paths.state, { recursive: true })
   const fake = fakeTracker([issue({ id: "STEP-7", state: "On hold", labels, description: "Brief" })])
   const say = (text: string, id = "U1") =>
-    routeWords({ paths, tracker: fake.tracker }, { issue: "STEP-7", request: false, itemId: "I1", who: { id: "M1", name: "Nate" }, words: { id, text, updateId: id, threadId: null, permalink: null }, now: NOW })
+    routeWords({ paths, tracker: fake.tracker, mini: "eve" }, { issue: "STEP-7", request: false, itemId: "I1", who: { id: "M1", name: "Nate" }, words: { id, text, updateId: id, threadId: null, permalink: null }, now: NOW })
   return { paths, fake, say }
 }
 
@@ -56,6 +58,20 @@ describe("routeWords: answers on the Monday board (STEP-3293 re-review)", () => 
     saveThread(paths, { issue: "STEP-7", channelId: "CQ", ts: "1700.1", permalink: null, createdAt: NOW.toISOString(), lastQuestionAt: NOW.toISOString(), lastQuestion: QUESTION, openQuestions: 2 })
     await say("use the publication date, and leave the footer")
     expect(threadFor(paths, "STEP-7")?.openQuestions).toBe(0)
+  })
+
+  it("keeps a \"no, do X\" as one lesson for the weekly retro, answer or instruction, however often the board shows it (STEP-3290)", async () => {
+    const { paths, say } = setup()
+    await say("no, use the signing date, not the publication date", "U1")
+    await say("no, use the signing date, not the publication date", "U1")
+    await say("use the publication date", "U2")
+    // With a PR of this mini's, "don't merge" words are an instruction: still one lesson.
+    recordPr(paths, { issue: "STEP-7", url: "https://github.com/STEP-Network/v0-politiske-annoncer/pull/1679", openedAt: NOW.toISOString() })
+    await say("don't merge it, fix the test first", "U3")
+    expect(readLessons(paths)).toEqual([
+      expect.objectContaining({ mini: "eve", category: "correction", source: "monday", issue: "STEP-7", who: "Nate", text: "no, use the signing date, not the publication date", key: "correction:monday:U1" }),
+      expect.objectContaining({ category: "correction", source: "monday", text: "don't merge it, fix the test first", key: "correction:monday:U3" }),
+    ])
   })
 
   it("never turns a yes on a person's to-do into agreement: it means they will do it", async () => {

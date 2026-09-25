@@ -4,10 +4,14 @@
  * Monday board (monday/route.ts). One function records both, so an answer
  * reads the same on the issue and moves it the same way, and a bare "yes" is
  * never recorded bare: it is recorded as the recommendation it agreed to.
+ * Words that say the mini got something wrong become a lesson for the weekly
+ * retro, from either place (noteCorrection).
  */
 
 import type { AgentPaths } from "./config.ts"
+import type { Logger } from "./log.ts"
 import { recommendationOf } from "./plain.ts"
+import { isCorrection, recordLessons } from "./retro/lessons.ts"
 import { answerTransition, appendAnswer } from "./slack/text.ts"
 import { threadFor, saveThread } from "./threads.ts"
 import type { Tracker, TrackerIssue } from "./tracker.ts"
@@ -75,4 +79,23 @@ export async function recordAnswer(
   const thread = threadFor(deps.paths, a.issue)
   if (thread?.openQuestions) saveThread(deps.paths, { ...thread, openQuestions: 0 })
   return { movedTo: move.state ?? null, recorded }
+}
+
+/**
+ * A person's words that say the mini got something wrong ("no, do X"): a
+ * lesson for the weekly retro (STEP-3290), from Slack or the Monday board,
+ * whatever the words go on to be (an answer, an instruction, a question
+ * back). Once per message: `key` names it. Its words are data. A lesson that
+ * cannot be written never stops the words' own handling.
+ */
+export function noteCorrection(
+  deps: { paths: AgentPaths; mini: string; now: () => Date; log?: Pick<Logger, "warn"> },
+  said: { issue: string | null; source: "slack" | "monday"; key: string; who: string; text: string },
+): void {
+  if (!isCorrection(said.text)) return
+  try {
+    recordLessons(deps.paths, [{ mini: deps.mini, issue: said.issue, pr: null, category: "correction", source: said.source, who: said.who, text: said.text, key: said.key }], deps.now())
+  } catch (error) {
+    deps.log?.warn("lesson not recorded", { issue: said.issue, error: String(error) })
+  }
 }

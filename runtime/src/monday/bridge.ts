@@ -322,7 +322,7 @@ export function createMondayBridge(deps: MondayBridgeDeps): MondayBridge {
 
   /** Words on a Needs you or a request item, through the one router (route.ts). */
   async function answer(rec: ItemRecord, item: MondayItem, who: Person, words: Words, pass: Pass): Promise<void> {
-    const routed = await routeWords({ paths, tracker }, { issue: rec.issue, request: rec.kind === "request", itemId: item.id, who, words, now: pass.now })
+    const routed = await routeWords({ paths, tracker, mini: deps.config.mini }, { issue: rec.issue, request: rec.kind === "request", itemId: item.id, who, words, now: pass.now })
     mark(rec, words.id)
     // agentd answers an instruction itself, once it has acted (agentd/instructions.ts).
     if (routed.to === "issue") reply(item.id, words, say.answered(who.name, routed.movedTo), pass.now)
