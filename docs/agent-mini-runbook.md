@@ -754,9 +754,12 @@ What it does:
   nothing here. The State goes to Waiting on agent, then Done once Linear
   no longer needs a person. Words are acted on once, even when Monday fails
   after Linear has them.
-- **Test day.** Every issue in Waiting for UAT, as a Check with the "You
+- **Test day.** Every issue in Waiting for UAT that carries this mini's
+  product label (`repo.product`, `polads` on Eve), as a Check with the "You
   must check" steps of its latest Agent UAT review (its acceptance criteria
-  when there is no review). A reply starting PASS or FAIL is recorded as
+  when there is no review). Another product's issues (dev-tasks, say) cannot
+  be tried on the test site, so they get no item, and one made for them
+  before is archived at the next poll, with nothing said on it. A reply starting PASS or FAIL is recorded as
   review-uat records a person's verdict (its Step 10 and
   `references/linear-io.md`). PASS: a comment naming the person, then
   Approved, and for a `UAT fix:` its parent back to Agent UAT once none of

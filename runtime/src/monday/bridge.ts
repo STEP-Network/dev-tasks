@@ -18,8 +18,9 @@
  *     while the issue is On hold, and Done once it is released.
  *  3. Needs you and Test day. One item per Linear id: this mini's open
  *     decisions, needs-human, and a question or to-do an issue is On hold
- *     for, in Needs you; Waiting for UAT in Test day, with the steps to
- *     check. When Linear no longer needs a person, the item moves to Done.
+ *     for, in Needs you; this mini's product's Waiting for UAT in Test day,
+ *     with the steps to check (another product's is archived). When Linear
+ *     no longer needs a person, the item moves to Done.
  *  4. Done items are archived after archiveAfterDays.
  *  5. Replies queued for the board (agentd's answers to an instruction, and
  *     the bridge's own) are posted, with a like on the person's update.
@@ -535,7 +536,11 @@ export function createMondayBridge(deps: MondayBridgeDeps): MondayBridge {
 
   async function needs(pass: Pass): Promise<void> {
     const linear = await people.needsYou()
-    const uat = await people.waitingForUat()
+    // Test day is what a person can try on the test site: this mini's product, and no other's.
+    const product = deps.config.repo.product
+    const waiting = await people.waitingForUat()
+    const uat = waiting.filter((i) => i.labels.includes(product))
+    const elsewhere = new Set(waiting.filter((i) => !i.labels.includes(product)).map((i) => `uat-${i.id}`))
     // This mini's open questions, the newest per issue.
     const decisions = new Map(openDecisions(paths).map((d) => [d.issue, d]))
     const known = new Map(linear.map((i) => [i.id, i]))
@@ -559,7 +564,25 @@ export function createMondayBridge(deps: MondayBridgeDeps): MondayBridge {
         log.error("monday item not written", { key: need.key, error: message(error) })
       }
     }
-    for (const rec of recs) if (!wanted.has(rec.key) && rec.state !== "Done") await resolve(rec, pass, null)
+    for (const rec of recs) {
+      if (elsewhere.has(rec.key)) await dropElsewhere(rec, pass)
+      else if (!wanted.has(rec.key) && rec.state !== "Done") await resolve(rec, pass, null)
+    }
+  }
+
+  /**
+   * A Test day item made for another product's issue (before Test day kept to
+   * one product): archived at once, with nothing said on it. Nobody was asked
+   * to do anything there, so there is nothing to close.
+   */
+  async function dropElsewhere(rec: ItemRecord, pass: Pass): Promise<void> {
+    try {
+      if (pass.byId.has(rec.itemId)) await api.archiveItem(rec.itemId)
+      dropRecord(paths, rec.key)
+      log.info("monday Test day item archived: another product's issue", { issue: rec.issue, item: rec.itemId })
+    } catch (error) {
+      log.warn("monday Test day item not archived yet", { issue: rec.issue, item: rec.itemId, error: message(error) })
+    }
   }
 
   // 4. Archive --------------------------------------------------------------

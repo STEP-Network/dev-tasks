@@ -535,6 +535,40 @@ describe("the Monday bridge: test day (STEP-3289)", () => {
     })
   }
 
+  it("puts in Test day only what this mini's product ships to the test site", async () => {
+    const { bridge, monday } = setup([
+      issue({ id: "STEP-7", title: "Fix the date", state: "Waiting for UAT", labels: ["polads"] }),
+      issue({ id: "STEP-8", title: "Machine profiles for the plugin", state: "Waiting for UAT", labels: ["dev-tasks"] }),
+      issue({ id: "STEP-9", title: "No product named", state: "Waiting for UAT", labels: [] }),
+    ])
+    await bridge.sync()
+    expect(monday.called("createItem").map((c) => c[2])).toEqual(["Try it on the test site: Fix the date"])
+  })
+
+  it("archives a Test day item it made for another product at the next poll, and says nothing on it", async () => {
+    const { bridge, monday, fake, paths, later } = setup([
+      issue({ id: "STEP-7", title: "Fix the date", state: "Waiting for UAT", labels: ["polads"] }),
+      issue({ id: "STEP-8", title: "Machine profiles for the plugin", state: "Waiting for UAT", labels: ["polads"] }),
+    ])
+    await bridge.sync()
+    const other = monday.item(/Machine profiles/)!
+    const updates = monday.items.get(other.id)!.updates.length
+    // As an item made before Test day kept to one product: the issue is another product's.
+    fake.issues.set("STEP-8", { ...fake.issues.get("STEP-8")!, labels: ["dev-tasks"] })
+    const writesBefore = monday.writes().length
+    later(8)
+    await bridge.sync()
+    expect(monday.called("archiveItem")).toEqual([[other.id]])
+    expect(monday.writes().slice(writesBefore).map((c) => c.method)).toEqual(["archiveItem"])
+    expect(monday.called("postUpdate").filter((c) => c[0] === other.id)).toHaveLength(updates)
+    expect(readRecords(paths).map((r) => r.issue)).toEqual(["STEP-7"])
+    // And it stays gone: the issue is not put back on the board.
+    later(8)
+    await bridge.sync()
+    expect(monday.called("createItem")).toHaveLength(2)
+    expect(monday.item(/Machine profiles/)).toBeUndefined()
+  })
+
   it("puts an issue waiting for UAT in Test day as a Check, with the exact steps in its body", async () => {
     const { bridge, monday, texts } = uat()
     await bridge.sync()
