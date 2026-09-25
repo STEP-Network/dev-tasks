@@ -29,14 +29,49 @@ exec >&2
 #       project-config.git.protectedBranches[] (default: main staging master
 #       production prod). No marker bypass. Set list to [] to disable.
 # Input: JSON on stdin with tool_input.command
+#
+# Fail closed (STEP-3354): a check that cannot run blocks the command, never
+# lets it through. No python3 or jq, input that is not the payload, a project
+# config that is there but unreadable, a git error, a snippet that fails or
+# prints no verdict: each blocks, saying why. Each Python snippet prints an
+# explicit verdict (OK, MISSING_KEYS, INCOMPLETE, END), and anything else is
+# a failure. Only a config file that is absent means "not configured".
+
+# Blocks the command, from the hook's own shell or from a $(...) inside it,
+# whose caller then ends with `|| exit 2`: the reason goes to stderr either way.
+fail_closed() {
+  echo "BLOCKED: bash-guard could not check this command: $1" >&2
+  echo "Nothing was run. A person needs to fix what the check needs (python3, jq, git, the project config) first." >&2
+  exit 2
+}
+
+# The value at a jq path of project-config.json, or nothing when the file is
+# absent. A file that is there but cannot be read (no jq, bad JSON) blocks:
+# a gate it configures must not quietly turn off.
+guard_config() {
+  local path out
+  path="$(_project_config_path)"
+  [ -f "$path" ] || return 0
+  command -v jq >/dev/null 2>&1 || fail_closed "jq is not on PATH, so it cannot read $path"
+  out=$(jq -r "($1) // empty" "$path" 2>&1) || fail_closed "it cannot read $path: $(printf '%s' "$out" | head -n 1)"
+  printf '%s' "$out"
+}
 
 # Read tool input from stdin (consumed once)
 INPUT=$(cat)
 
-# Extract the command from JSON
-ACTUAL_CMD=$(echo "$INPUT" | python3 -c "import sys,json; print(json.load(sys.stdin).get('tool_input',{}).get('command',''))" 2>/dev/null)
+# Extract the command from JSON. An empty command runs nothing; input that is
+# not a Bash payload, or no python3, blocks.
+command -v python3 >/dev/null 2>&1 || fail_closed "python3 is not on PATH, so it cannot read the command"
+ACTUAL_CMD=$(printf '%s' "$INPUT" | python3 -c "
+import sys, json
+command = json.load(sys.stdin)['tool_input']['command']
+if not isinstance(command, str):
+    raise SystemExit('the command is not text')
+sys.stdout.write(command)
+" 2>/dev/null) || fail_closed "the hook's input is not a Bash command it can read"
 if [ -z "$ACTUAL_CMD" ]; then
-  exit 0  # Can't parse input, don't block
+  exit 0
 fi
 
 # Resolve project root. Prefer the agent's actual cwd from the hook payload —
@@ -78,14 +113,14 @@ if profile_is agent; then
 
 # Resolve i18n config once for sections (d) and (e). Both are dormant unless
 # project-config.i18n.enabled = true.
-I18N_ENABLED=$(read_project_config '.i18n.enabled')
-I18N_DEFAULT_LOCALE=$(read_project_config '.i18n.defaultLocale')
+I18N_ENABLED=$(guard_config '.i18n.enabled') || exit 2
+I18N_DEFAULT_LOCALE=$(guard_config '.i18n.defaultLocale') || exit 2
 [ -z "$I18N_DEFAULT_LOCALE" ] && I18N_DEFAULT_LOCALE="en"
-I18N_MESSAGES_GLOB=$(read_project_config '.i18n.messagesGlob')
+I18N_MESSAGES_GLOB=$(guard_config '.i18n.messagesGlob') || exit 2
 [ -z "$I18N_MESSAGES_GLOB" ] && I18N_MESSAGES_GLOB="messages/*.json"
 I18N_MESSAGES_DIR=$(dirname "$I18N_MESSAGES_GLOB")
-I18N_LOCALES_CSV=$(read_project_config '.i18n.locales | join(",")')
-I18N_PARITY_MODE=$(read_project_config '.i18n.parityHookMode')
+I18N_LOCALES_CSV=$(guard_config '(.i18n.locales // []) | join(",")') || exit 2
+I18N_PARITY_MODE=$(guard_config '.i18n.parityHookMode') || exit 2
 [ -z "$I18N_PARITY_MODE" ] && I18N_PARITY_MODE="block"
 
 # (d) i18n locale parity: if committing and the configured default-locale file is staged
@@ -93,8 +128,10 @@ I18N_PARITY_MODE=$(read_project_config '.i18n.parityHookMode')
 #     Only checks newly added keys — pre-existing gaps don't block.
 if echo "$ACTUAL_CMD" | grep -q "git commit" && [ "$I18N_ENABLED" = "true" ]; then
   DEFAULT_FILE="${I18N_MESSAGES_DIR}/${I18N_DEFAULT_LOCALE}.json"
-  EN_STAGED=$(cd "$PROJECT_ROOT" && git diff --cached --name-only -- "$DEFAULT_FILE" 2>/dev/null)
+  EN_STAGED=$(cd "$PROJECT_ROOT" && git diff --cached --name-only -- "$DEFAULT_FILE" 2>&1) \
+    || fail_closed "git could not list the staged files: $(printf '%s' "$EN_STAGED" | head -n 1)"
   if [ -n "$EN_STAGED" ]; then
+    # Python's own errors join its output: anything but a verdict on the first line blocks.
     I18N_RESULT=$(cd "$PROJECT_ROOT" && I18N_MESSAGES_DIR="$I18N_MESSAGES_DIR" I18N_DEFAULT_LOCALE="$I18N_DEFAULT_LOCALE" python3 -c "
 import json, glob, os, sys, subprocess, re
 
@@ -102,16 +139,22 @@ messages_dir = os.environ.get('I18N_MESSAGES_DIR', 'messages')
 default_locale = os.environ.get('I18N_DEFAULT_LOCALE', 'en')
 default_path = os.path.join(messages_dir, default_locale + '.json')
 if not os.path.exists(default_path):
+    # Staged as deleted: no key is added.
+    print('OK')
     sys.exit(0)
 
+# A git command that fails stops the check: its error is the output, and no verdict.
+def git(*args):
+    r = subprocess.run(['git', *args], capture_output=True, text=True)
+    if r.returncode != 0:
+        raise SystemExit('git ' + ' '.join(args) + ' failed: ' + r.stderr.strip())
+    return r.stdout
+
 # Keys on the added lines of the staged diff of the default-locale file
-# (lines starting with +, excluding the +++ header), against HEAD or `against`.
+# (lines starting with +, excluding the +++ header), against HEAD or the given commit.
 # Match JSON keys like: \"keyName\": ...
 def added(*against):
-    diff = subprocess.run(
-        ['git', 'diff', '--cached', '-U0', '--end-of-options', *against, '--', default_path],
-        capture_output=True, text=True
-    ).stdout
+    diff = git('diff', '--cached', '-U0', '--end-of-options', *against, '--', default_path)
     keys = set()
     for line in diff.split('\n'):
         if line.startswith('+') and not line.startswith('+++'):
@@ -125,11 +168,11 @@ def added(*against):
 # Only a commit id (sha1 or sha256): any other line is no merge, as one that
 # starts with a dash would reach git diff as an option (--output= writes a file).
 def merged_in():
-    path = subprocess.run(['git', 'rev-parse', '--git-path', 'MERGE_HEAD'], capture_output=True, text=True).stdout.strip()
+    path = git('rev-parse', '--git-path', 'MERGE_HEAD').strip()
     try:
         with open(path) as f:
             line = f.readline().strip()
-    except OSError:
+    except FileNotFoundError:
         return None
     return line if re.fullmatch(r'[0-9a-f]{40}([0-9a-f]{24})?', line) else None
 
@@ -165,11 +208,15 @@ if missing:
     print('\n'.join(missing))
 else:
     print('OK')
-" 2>/dev/null)
+" 2>&1)
+    I18N_VERDICT=$(printf '%s\n' "$I18N_RESULT" | head -n 1)
+    if [ "$I18N_VERDICT" != "OK" ] && [ "$I18N_VERDICT" != "MISSING_KEYS" ]; then
+      fail_closed "the i18n locale parity check did not finish: $(printf '%s\n' "$I18N_RESULT" | tail -n 1)"
+    fi
 
-    if echo "$I18N_RESULT" | grep -q "MISSING_KEYS"; then
-      LOCALE_COUNT=$(read_project_config '.i18n.locales | length')
-      [ -z "$LOCALE_COUNT" ] && LOCALE_COUNT="all configured"
+    if [ "$I18N_VERDICT" = "MISSING_KEYS" ]; then
+      LOCALE_COUNT=$(guard_config '(.i18n.locales // []) | length') || exit 2
+      { [ -z "$LOCALE_COUNT" ] || [ "$LOCALE_COUNT" = "0" ]; } && LOCALE_COUNT="all configured"
       echo "BLOCKED: i18n locale parity check failed."
       echo ""
       echo "New keys added to ${I18N_MESSAGES_DIR}/${I18N_DEFAULT_LOCALE}.json are missing from other locale files:"
@@ -187,9 +234,10 @@ fi
 #     parityHookMode controls behavior: "block" exits 2, "warn" prints to stderr,
 #     "off" skips entirely. Default "block".
 if echo "$ACTUAL_CMD" | grep -q "git commit" && [ "$I18N_ENABLED" = "true" ] && [ "$I18N_PARITY_MODE" != "off" ]; then
-  I18N_STAGED=$(cd "$PROJECT_ROOT" && git diff --cached --name-only -- "$I18N_MESSAGES_GLOB" 2>/dev/null)
+  I18N_STAGED=$(cd "$PROJECT_ROOT" && git diff --cached --name-only -- "$I18N_MESSAGES_GLOB" 2>&1) \
+    || fail_closed "git could not list the staged locale files: $(printf '%s' "$I18N_STAGED" | head -n 1)"
   if [ -n "$I18N_STAGED" ]; then
-    DEFAULT_BASE_BRANCH=$(read_project_config '.git.defaultBase')
+    DEFAULT_BASE_BRANCH=$(guard_config '.git.defaultBase') || exit 2
     [ -z "$DEFAULT_BASE_BRANCH" ] && DEFAULT_BASE_BRANCH="main"
     I18N_COMPLETENESS=$(cd "$PROJECT_ROOT" && I18N_MESSAGES_DIR="$I18N_MESSAGES_DIR" I18N_LOCALES_CSV="$I18N_LOCALES_CSV" I18N_BASE_BRANCH="$DEFAULT_BASE_BRANCH" python3 -c "
 import subprocess, os, sys, re
@@ -206,29 +254,38 @@ if not locales_csv:
 all_locales = sorted([l.strip() for l in locales_csv.split(',') if l.strip()])
 expected = len(all_locales)
 
+# A git command that fails stops the check: its error is the output, and no verdict.
+def git(*args):
+    r = subprocess.run(['git', *args], capture_output=True, text=True)
+    if r.returncode != 0:
+        raise SystemExit('git ' + ' '.join(args) + ' failed: ' + r.stderr.strip())
+    return r.stdout
+
+# The base as this checkout has it: the local branch, else origin's copy.
+# Neither is no base to compare with, and stops the check.
+def base_ref():
+    for ref in (base_branch, 'origin/' + base_branch):
+        if subprocess.run(['git', 'rev-parse', '-q', '--verify', '--end-of-options', ref + '^{commit}'], capture_output=True).returncode == 0:
+            return ref
+    raise SystemExit('the base branch ' + base_branch + ' is not in this checkout, locally or on origin')
+
 # Branch diff: committed changes since divergence from base
-branch_diff = subprocess.run(
-    ['git', 'diff', '--name-only', f'{base_branch}...HEAD', '--', messages_dir + '/'],
-    capture_output=True, text=True
-).stdout.strip().split('\n')
+branch_diff = git('diff', '--name-only', base_ref() + '...HEAD', '--', messages_dir + '/').strip().split('\n')
 
 # Staged changes (about to be committed). A merge commit's own are the files
 # that differ from both parents (STEP-3348).
 def staged_names(*against):
-    return subprocess.run(
-        ['git', 'diff', '--cached', '--name-only', '--end-of-options', *against, '--', messages_dir + '/'],
-        capture_output=True, text=True
-    ).stdout.strip().split('\n')
+    return git('diff', '--cached', '--name-only', '--end-of-options', *against, '--', messages_dir + '/').strip().split('\n')
 
 # The commit a merge in progress merges in, from the file git writes for one:
 # never the name, which a branch can take (STEP-3351). Only a commit id: any
 # other line is no merge, as one that starts with a dash would be an option.
 def merged_in():
-    path = subprocess.run(['git', 'rev-parse', '--git-path', 'MERGE_HEAD'], capture_output=True, text=True).stdout.strip()
+    path = git('rev-parse', '--git-path', 'MERGE_HEAD').strip()
     try:
         with open(path) as f:
             line = f.readline().strip()
-    except OSError:
+    except FileNotFoundError:
         return None
     return line if re.fullmatch(r'[0-9a-f]{40}([0-9a-f]{24})?', line) else None
 
@@ -257,9 +314,13 @@ print('INCOMPLETE')
 print(f'Branch has {len(all_modified)}/{expected} locale files modified (committed + staged)')
 print(f'Modified: {\", \".join(sorted(all_modified))}')
 print(f'Missing ({len(missing)}): {\", \".join(missing)}')
-" 2>/dev/null)
+" 2>&1)
+    I18N_VERDICT=$(printf '%s\n' "$I18N_COMPLETENESS" | head -n 1)
+    if [ "$I18N_VERDICT" != "OK" ] && [ "$I18N_VERDICT" != "INCOMPLETE" ]; then
+      fail_closed "the i18n completeness check did not finish: $(printf '%s\n' "$I18N_COMPLETENESS" | tail -n 1)"
+    fi
 
-    if echo "$I18N_COMPLETENESS" | grep -q "INCOMPLETE"; then
+    if [ "$I18N_VERDICT" = "INCOMPLETE" ]; then
       if [ "$I18N_PARITY_MODE" = "block" ]; then
         echo "BLOCKED: i18n completeness check failed."
         echo ""
@@ -286,69 +347,118 @@ fi
 # main staging master production prod). No marker bypass — direct push to
 # these branches must go through a PR. Server-side GitHub branch protection
 # is the unforgeable complement; this hook stops bypass at the local layer.
-if echo "$ACTUAL_CMD" | grep -q "git push"; then
-  # Distinguish three cases:
-  #   key absent (or .git absent)        → use default list
-  #   key explicitly [] (or [null])      → gate disabled
-  #   key set to ["a", "b", ...]         → use that list
-  PROTECTED_RAW=$(read_project_config '((.git // {}).protectedBranches // "__DEFAULT__") | if type == "string" then . else join(" ") end')
+# Any command with the words git and push: the parse below finds each real push, behind global options (git -C dir push) too.
+if printf '%s' "$ACTUAL_CMD" | grep -qw git && printf '%s' "$ACTUAL_CMD" | grep -qw push; then
+  # The list:
+  #   no project config at all            → default list
+  #   key absent (or .git absent)         → default list
+  #   key explicitly [] (or [null])       → gate disabled
+  #   key set to ["a", "b", ...]          → that list
+  #   a config there but unreadable       → blocked (fail closed)
+  if [ -f "$(_project_config_path)" ]; then
+    PROTECTED_RAW=$(guard_config '((.git // {}).protectedBranches // "__DEFAULT__") | if type == "string" then . else join(" ") end') || exit 2
+  else
+    PROTECTED_RAW="__DEFAULT__"
+  fi
   if [ "$PROTECTED_RAW" = "__DEFAULT__" ]; then
     PROTECTED_BRANCHES="main staging master production prod"
   else
     PROTECTED_BRANCHES="$PROTECTED_RAW"  # may be empty string → gate disabled
   fi
 
-  # Parse target ref. Forms: `git push`, `git push origin`, `git push origin BRANCH`,
-  # `git push -u origin BRANCH`, `git push origin SRC:DST`, `git push origin :DST`,
-  # `git push --delete origin BRANCH`, `git push origin HEAD:DST`.
-  TARGET_REF=$(echo "$ACTUAL_CMD" | python3 -c "
-import sys, shlex
-raw = sys.stdin.read().strip()
-try:
-    parts = shlex.split(raw)
-except ValueError:
-    parts = raw.split()
-try:
-    push_idx = parts.index('push')
-except ValueError:
-    print(''); sys.exit(0)
-rest = [p for p in parts[push_idx+1:] if not p.startswith('-')]
-target = ''
-if len(rest) >= 2:
-    refspec = rest[1]
-    target = refspec.split(':')[-1] if ':' in refspec else refspec
-elif len(rest) == 1 and ':' in rest[0]:
-    target = rest[0].split(':')[-1]
-if target in ('HEAD', ''):
-    target = ''
-print(target)
-" 2>/dev/null)
+  # Every branch the command pushes to, one per line, then END (STEP-3354):
+  # every git push in it, every refspec of each (SRC:DST, :DST, +DST,
+  # refs/heads/DST), and the remote's word too, since an option's value can
+  # shift it. @current is the branch checked out (no refspec, or HEAD), @all a
+  # push of every branch (--all, --mirror, --branches). A command it cannot
+  # read (an unclosed quote, no python3) gives no END, and the push is refused.
+  PUSH_TARGETS=$(printf '%s' "$ACTUAL_CMD" | python3 -c "
+import sys, os, shlex
+lexer = shlex.shlex(sys.stdin.read(), posix=True, punctuation_chars=True)
+lexer.whitespace_split = True
+tokens = list(lexer)
+VALUE_OPTIONS = {'-o', '--push-option', '--repo', '--receive-pack', '--exec'}
+GLOBAL_VALUE_OPTIONS = {'-C', '-c'}
+segments, segment = [], []
+for t in tokens:
+    if set(t) <= set(';&|()'):
+        segments.append(segment)
+        segment = []
+    else:
+        segment.append(t)
+segments.append(segment)
+targets = []
+for seg in segments:
+    for g, word in enumerate(seg):
+        if os.path.basename(word) != 'git':
+            continue
+        i, skip = g + 1, False
+        while i < len(seg) and (skip or seg[i].startswith('-')):
+            skip = not skip and seg[i] in GLOBAL_VALUE_OPTIONS
+            i += 1
+        if i >= len(seg) or seg[i] != 'push':
+            continue
+        args, skip = [], False
+        for t in seg[i + 1:]:
+            if skip:
+                skip = False
+            elif t in VALUE_OPTIONS:
+                skip = True
+            elif t in ('--all', '--mirror', '--branches'):
+                targets.append('@all')
+            elif not t.startswith('-'):
+                args.append(t)
+        if len(args) < 2:
+            targets.append('@current')
+        for spec in args:
+            dst = spec.split(':')[-1].lstrip('+')
+            if dst.startswith('refs/heads/'):
+                dst = dst[len('refs/heads/'):]
+            targets.append('@current' if dst in ('HEAD', '') else dst)
+print('\n'.join(targets + ['END']))
+" 2>&1)
+  [ "$(printf '%s\n' "$PUSH_TARGETS" | tail -n 1)" = "END" ] \
+    || fail_closed "it cannot tell which branches this push goes to: $(printf '%s\n' "$PUSH_TARGETS" | tail -n 1)"
 
-  if [ -z "$TARGET_REF" ]; then
-    TARGET_REF=$(cd "$PROJECT_ROOT" && git rev-parse --abbrev-ref HEAD 2>/dev/null)
+  TARGET_REF=""
+  while IFS= read -r target; do
+    case "$target" in
+      END|"") continue ;;
+      @all)
+        if [ -n "$PROTECTED_BRANCHES" ]; then
+          echo "BLOCKED: A push of every branch includes the protected ones ($PROTECTED_BRANCHES)."
+          echo "Push the one feature branch by name, and open a PR for it."
+          exit 2
+        fi
+        continue
+        ;;
+      @current)
+        target=$(cd "$PROJECT_ROOT" && git rev-parse --abbrev-ref HEAD 2>&1) \
+          || fail_closed "git could not name the branch this push goes to: $target"
+        ;;
+    esac
+    for protected in $PROTECTED_BRANCHES; do
+      [ "$target" = "$protected" ] && TARGET_REF="$target" && break 2
+    done
+  done <<EOF
+$PUSH_TARGETS
+EOF
+
+  if [ -n "$TARGET_REF" ]; then
+    echo "BLOCKED: Direct push to protected branch '$TARGET_REF' is forbidden."
+    echo ""
+    echo "Protected branches (from project-config.git.protectedBranches[]):"
+    echo "  $PROTECTED_BRANCHES"
+    echo ""
+    echo "All changes to protected branches must land via a Pull Request:"
+    echo "  1. Push to a feature branch: git push origin feat/<slug>"
+    echo "  2. Open a PR with /ship (typecheck + traceable PR + auto-merge)"
+    echo "  3. Bot review + CI complete, then merge via the PR"
+    echo ""
+    echo "Server-side complement: configure GitHub branch protection on '$TARGET_REF'"
+    echo "to enforce this at the platform level (prevents bypass via direct git push)."
+    exit 2
   fi
-  TARGET_REF="${TARGET_REF#refs/heads/}"
-  # Strip force-push `+` prefix (e.g. `git push origin +main`) — otherwise an
-  # agent bypasses gate (f) by prepending `+` to the refspec.
-  TARGET_REF="${TARGET_REF#+}"
-
-  for protected in $PROTECTED_BRANCHES; do
-    if [ "$TARGET_REF" = "$protected" ]; then
-      echo "BLOCKED: Direct push to protected branch '$TARGET_REF' is forbidden."
-      echo ""
-      echo "Protected branches (from project-config.git.protectedBranches[]):"
-      echo "  $PROTECTED_BRANCHES"
-      echo ""
-      echo "All changes to protected branches must land via a Pull Request:"
-      echo "  1. Push to a feature branch: git push origin feat/<slug>"
-      echo "  2. Open a PR with /ship (typecheck + traceable PR + auto-merge)"
-      echo "  3. Bot review + CI complete, then merge via the PR"
-      echo ""
-      echo "Server-side complement: configure GitHub branch protection on '$TARGET_REF'"
-      echo "to enforce this at the platform level (prevents bypass via direct git push)."
-      exit 2
-    fi
-  done
 fi
 
 # (c) SHA-scoped pre-push gate: if command contains 'git push', check marker + SHA.
@@ -361,7 +471,7 @@ if echo "$ACTUAL_CMD" | grep -q "git push"; then
   # NOTE: deliberately NOT `.git.prePushMarker // true` — jq's `//` treats a
   # literal `false` the same as `null`/absent, so that form always evaluates to
   # `true` and the opt-out could never fire. Use an explicit null check instead.
-  PREPUSH_MARKER=$(read_project_config '(.git.prePushMarker | if . == null then true else . end) | tostring')
+  PREPUSH_MARKER=$(guard_config '(.git.prePushMarker | if . == null then true else . end) | tostring') || exit 2
   if [ "$PREPUSH_MARKER" != "false" ]; then
     BRANCH=$(cd "$PROJECT_ROOT" && git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "unknown")
     SAFE_BRANCH=$(echo "$BRANCH" | tr '/' '-')

@@ -44,6 +44,9 @@ describe("hooks.json conditions", () => {
       "Bash(git branch -D*)",
       "Bash(git commit *)",
       "Bash(git push *)",
+      // A push behind a global option, `git -C dir push origin main`, is still gate (f)'s (STEP-3354).
+      "Bash(git -C *)",
+      "Bash(git -c *)",
     ])
   })
 
