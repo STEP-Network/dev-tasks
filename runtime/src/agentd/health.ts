@@ -1,8 +1,8 @@
 /**
  * agentd's slower duties, each small and testable:
- *   the PR watcher: a red required check on a worker's PR goes to the
- *     issue's Slack thread, once per head commit, so auto-merge never waits
- *     in silence (review-respond is a later phase)
+ *   the PR watcher: review feedback on a PR this mini opened brings a
+ *     revise job, an infrastructure failure a full CI re-run, and what
+ *     neither fixes goes to the issue's Slack thread (revise.ts)
  *   the Linear-down notice (spec 12: after 15 minutes, and when it is back)
  *   the health verdict behind the Sentry cron check-in (the dead-man switch:
  *     if the mini is off, the missing check-in is the alert)
@@ -22,40 +22,12 @@ import { existsSync, readdirSync, readFileSync, renameSync, rmSync, statSync } f
 import { join } from "node:path"
 import type { AgentConfig, AgentPaths } from "../config.ts"
 import { listNew } from "../fsq.ts"
-import { forgetWatchedPr, listJobs, readWatchedPrs, updateWatchedPr } from "../jobs.ts"
+import { forgetWatchedPr, listJobs, readWatchedPrs } from "../jobs.ts"
 import { appendLedger, type Logger } from "../log.ts"
-import { enqueueSlack } from "../outbox.ts"
 import { git, isDirty, removeWorktree, type Exec } from "../worker/git.ts"
+import { PR_FIELDS, reviseOwnPr, type OwnPrView } from "./revise.ts"
 
-export interface PrCheck {
-  __typename?: string
-  name?: string
-  context?: string
-  conclusion?: string | null
-  state?: string | null
-  status?: string | null
-}
-
-export interface PrView {
-  url: string
-  state: string
-  headRefOid: string
-  statusCheckRollup: PrCheck[]
-  /** Set while auto-merge is armed. */
-  autoMergeRequest?: unknown
-}
-
-const RED = new Set(["FAILURE", "CANCELLED", "TIMED_OUT", "ACTION_REQUIRED", "ERROR", "STARTUP_FAILURE"])
 const GH_TIMEOUT_MS = 2 * 60_000
-
-export function prAttention(view: PrView, required: readonly string[]): { closed: boolean; failing: string[] } {
-  if (view.state !== "OPEN") return { closed: true, failing: [] }
-  const failing = view.statusCheckRollup
-    .filter((c) => required.includes(c.name ?? c.context ?? ""))
-    .filter((c) => RED.has(String(c.conclusion ?? c.state ?? "").toUpperCase()))
-    .map((c) => c.name ?? c.context ?? "?")
-  return { closed: false, failing: [...new Set(failing)].sort() }
-}
 
 /** The PolAds checks a PR needs, from the main checkout's project config (agentd keeps it on origin's base). */
 export function requiredChecks(repo: string): string[] {
@@ -72,32 +44,18 @@ export async function watchPrs(deps: { exec: Exec; paths: AgentPaths; config: Ag
   if (!required.length) deps.log.warn("no required checks in the project config: the PR watcher reports nothing red", { repo: deps.config.repo.path })
   for (const pr of readWatchedPrs(deps.paths)) {
     try {
-      const r = await deps.exec("gh", ["pr", "view", pr.url, "--json", "url,state,headRefOid,statusCheckRollup,autoMergeRequest"], { timeoutMs: GH_TIMEOUT_MS })
+      const r = await deps.exec("gh", ["pr", "view", pr.url, "--json", PR_FIELDS], { timeoutMs: GH_TIMEOUT_MS })
       if (r.code !== 0) {
         deps.log.warn("gh pr view failed", { url: pr.url, stderr: r.stderr.trim() })
         continue
       }
-      const view = JSON.parse(r.stdout) as PrView
-      const { closed, failing } = prAttention(view, required)
-      if (closed) {
+      const view = JSON.parse(r.stdout) as OwnPrView
+      if (view.state !== "OPEN") {
         appendLedger(deps.paths, { type: "pr.closed", issue: pr.issue, url: pr.url, state: view.state }, deps.now())
         forgetWatchedPr(deps.paths, pr.url)
         continue
       }
-      const signature = `${view.headRefOid}:${failing.join(",")}`
-      if (!failing.length || pr.notified === signature) continue
-      const merge = view.autoMergeRequest ? "Auto-merge waits until it is green." : "It cannot merge until it is green."
-      enqueueSlack(
-        deps.paths,
-        {
-          kind: "issue",
-          issue: pr.issue,
-          text: `PR ${pr.url}: ${failing.join(", ")} failed on ${view.headRefOid.slice(0, 7)}. ${merge} A person needs to look.`,
-          question: false,
-        },
-        deps.now(),
-      )
-      updateWatchedPr(deps.paths, { ...pr, notified: signature })
+      await reviseOwnPr(deps, pr, view, required)
     } catch (error) {
       // One PR's bad answer must not stop the watch of the others.
       deps.log.warn("PR not checked", { url: pr.url, error: error instanceof Error ? error.message : String(error) })

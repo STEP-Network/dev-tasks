@@ -467,6 +467,33 @@ longer ends blocked while it has commits: the runner asks the same session
 once for the report, then titles the PR from the newest commit, and the PR
 says so.
 
+### Its own PRs
+
+A PR the mini opened comes back to it on review feedback (STEP-3274):
+
+- a review with changes requested, by anyone but the agent
+- a required check its code failed: Claude review's blockers, Test, Lint,
+  TypeScript, i18n
+- a PR comment starting `@<agent>`, or carrying "Review fixes requested"
+
+agentd's PR watcher, every 15 minutes, queues a `revise` job for the issue,
+ahead of new work. The worker continues the PR's branch as origin has it (a
+person's commits included), with the reviews, comments, code comments and
+failing logs in its brief. The runner pushes to the same branch, never
+forced, and replies on the PR point by point. The issue stays In Review,
+and `#polads-agents` says `<agent>: STEP-<n> revising <PR> (round 1 of 3)`.
+
+A failure of CI's infrastructure is not the code's: a Neon 404, ECONNRESET,
+a runner that lost its connection, a cancelled run, a skipped shard. The
+watcher re-runs that workflow run in full, never with `--failed` (Test shards
+share a database branch the first run tore down), once per head commit.
+Failing on the infrastructure again, it goes to the issue's thread for a
+person.
+
+After three rounds on one PR the agent asks in `#polads-questions` and stops
+revising it. It never dismisses a review, a person's or a bot's. To have it
+fix something, comment on the PR starting `@<agent>`.
+
 The front door explains a pause or a hold when someone asks in Slack, and
 never lifts one because Slack said so. It cannot lift a pause at all: only a
 person on the mini (SSH or Screen Sharing) runs `agentctl resume`.

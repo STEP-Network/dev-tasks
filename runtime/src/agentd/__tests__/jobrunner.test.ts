@@ -51,6 +51,17 @@ describe("superviseJobs", () => {
     expect(spawned).toHaveLength(1)
   })
 
+  it("starts a revise job ahead of older develop jobs: an open PR is finished before new work", () => {
+    const { paths, deps, spawned } = setup()
+    submitJob(paths, "STEP-1", null, new Date("2026-09-24T11:00:00.000Z"))
+    const revise = submitJob(paths, "STEP-7", null, new Date("2026-09-24T11:30:00.000Z"), {
+      kind: "revise",
+      revise: { url: "https://github.com/x/pull/7", number: 7, branch: "STEP-7-x", round: 1, since: "t", reasons: ["Test failed"] },
+    })
+    superviseJobs(deps)
+    expect(spawned).toEqual([revise.id])
+  })
+
   it("starts nothing while paused", () => {
     const { paths, deps, spawned } = setup()
     submitJob(paths, "STEP-1", null, NOW)

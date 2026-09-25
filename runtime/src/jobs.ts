@@ -24,10 +24,25 @@ export interface JobResult {
   minutes: number | null
 }
 
+/** A revise job's PR, and what brought it back (agentd/revise.ts). */
+export interface ReviseRequest {
+  url: string
+  number: number
+  /** The PR's head branch, which the worker continues from origin. */
+  branch: string
+  /** 1 to MAX_REVISE_ROUNDS. */
+  round: number
+  /** Feedback newer than this is the round's to answer: the PR's opening, or the last round. */
+  since: string
+  /** What brought it back, in a few words each, for Slack and the brief. */
+  reasons: string[]
+}
+
 export interface JobRecord {
   id: string
   issue: string
-  kind: "develop"
+  /** develop: a Ready issue to a PR. revise: that PR again, from its review feedback. */
+  kind: "develop" | "revise"
   /** null: decided at run time from the issue's labels. */
   model: string | null
   submittedAt: string
@@ -48,6 +63,8 @@ export interface JobRecord {
   reported?: boolean
   /** A blocked job a person retried (agentctl retry): the runner takes its issue On hold, and the branch's commits carry on. */
   retryOf?: string
+  /** Set on a revise job. */
+  revise?: ReviseRequest
 }
 
 export const jobPath = (paths: AgentPaths, state: JobState, id: string) => join(paths.jobs, state, `${id}.json`)
@@ -62,7 +79,7 @@ export function listJobs(paths: AgentPaths, state: JobState): JobRecord[] {
     .sort((a, b) => a.submittedAt.localeCompare(b.submittedAt))
 }
 
-export function submitJob(paths: AgentPaths, issue: string, model: string | null, now: Date, extra: Pick<JobRecord, "retryOf"> = {}): JobRecord {
+export function submitJob(paths: AgentPaths, issue: string, model: string | null, now: Date, extra: Partial<Pick<JobRecord, "retryOf" | "kind" | "revise">> = {}): JobRecord {
   for (const state of ["pending", "running"] as const) {
     if (listJobs(paths, state).some((j) => j.issue === issue)) throw new Error(`a job for ${issue} is already ${state}`)
   }
@@ -137,6 +154,11 @@ export interface WatchedPr {
   openedAt: string
   /** `<head sha>:<failing checks>` last reported, so one failure is reported once. */
   notified?: string
+  /** Review feedback acted on (review:<id>, comment:<id>, check:<head>:<name>), and the revise rounds so far. */
+  revise?: { rounds: number; handled: string[]; lastRoundAt?: string; asked?: boolean }
+  /** Runs re-run in full for an infra failure, as <head>:<runId>, and failing checks' verdicts at the head, as <head>:<name>. */
+  reruns?: string[]
+  infra?: Record<string, boolean>
 }
 
 /**

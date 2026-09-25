@@ -5,11 +5,12 @@ import { join } from "node:path"
 import { describe, expect, it } from "vitest"
 import { agentPaths, ConfigSchema } from "../../config.ts"
 import { listNew, putOnce } from "../../fsq.ts"
-import { moveJob, readWatchedPrs, recordPr, submitJob } from "../../jobs.ts"
+import { listJobs, moveJob, readWatchedPrs, recordPr, submitJob, updateWatchedPr } from "../../jobs.ts"
 import type { Logger } from "../../log.ts"
 import { realExec, type Exec } from "../../worker/git.ts"
 import { fakeExec } from "../../__tests__/fakes.ts"
-import { cleanup, Every, healthStatus, inboxStuck, linearDownNotice, prAttention, refreshCheckout, sentryCheckInUrl, watchPrs } from "../health.ts"
+import { cleanup, Every, healthStatus, inboxStuck, linearDownNotice, refreshCheckout, sentryCheckInUrl, watchPrs } from "../health.ts"
+import { failingRequired, planRevision, PR_FIELDS } from "../revise.ts"
 
 const quiet: Logger = { info() {}, warn() {}, error() {} }
 const NOW = new Date("2026-09-24T12:00:00.000Z")
@@ -18,27 +19,34 @@ const REQUIRED = ["Lint", "TypeScript (no-emit)", "Test", "Vercel – v0-politis
 const GIT = "git --no-replace-objects -c core.hooksPath=/dev/null -c core.fsmonitor=false"
 const SHA = "0123456789abcdef0123456789abcdef01234567"
 
-describe("prAttention", () => {
-  it("names only the required checks that are red, from check runs and status contexts", () => {
+describe("failingRequired", () => {
+  it("names the required checks that are red, from check runs and status contexts, and skipped shards of one", () => {
     const view = {
-      url: "u", state: "OPEN", headRefOid: "abc1234def",
+      url: "u", number: 1, state: "OPEN", headRefName: "STEP-7-x", headRefOid: "abc1234def",
       statusCheckRollup: [
-        { __typename: "CheckRun", name: "Claude review", conclusion: "FAILURE" },
+        { __typename: "CheckRun", name: "Claude review", conclusion: "FAILURE", detailsUrl: "https://github.com/x/actions/runs/11/job/22" },
         { __typename: "CheckRun", name: "Lint", conclusion: "SUCCESS" },
         { __typename: "CheckRun", name: "Corridor advisory", conclusion: "FAILURE" },
         { __typename: "StatusContext", context: "Vercel – v0-politiske-annoncer", state: "ERROR" },
         { __typename: "CheckRun", name: "Test", conclusion: null, status: "IN_PROGRESS" },
+        { __typename: "CheckRun", name: "Test (2/4)", conclusion: "SKIPPED" },
+        // A required check skipped by its own paths filter is not a shard: nothing to re-run.
+        { __typename: "CheckRun", name: "i18n", conclusion: "SKIPPED" },
       ],
     }
-    expect(prAttention(view, REQUIRED)).toEqual({ closed: false, failing: ["Claude review", "Vercel – v0-politiske-annoncer"] })
-    expect(prAttention({ ...view, state: "MERGED" }, REQUIRED)).toEqual({ closed: true, failing: [] })
+    expect(failingRequired(view, REQUIRED)).toEqual([
+      { name: "Claude review", conclusion: "FAILURE", job: { runId: "11", jobId: "22" }, skippedShard: false },
+      { name: "Test (2/4)", conclusion: "SKIPPED", job: null, skippedShard: true },
+      { name: "Vercel – v0-politiske-annoncer", conclusion: "ERROR", job: null, skippedShard: false },
+    ])
   })
 })
 
-describe("watchPrs", () => {
+describe("watchPrs, and the revise loop (STEP-3274)", () => {
   const PR1 = "https://github.com/x/pull/1"
   const PR2 = "https://github.com/x/pull/2"
   const PR3 = "https://github.com/x/pull/3"
+  const SLUG = "STEP-Network/v0-politiske-annoncer"
 
   function setup() {
     const paths = agentPaths(mkdtempSync(join(tmpdir(), "agentd-prs-")))
@@ -48,45 +56,175 @@ describe("watchPrs", () => {
     const config = ConfigSchema.parse({ mini: "eve", repo: { path: repo }, pluginRoot: "/p", slack: { allowedUsers: ["UNATE"] } })
     return { paths, config }
   }
+  const green = [{ name: "Test", conclusion: "SUCCESS", detailsUrl: "https://github.com/x/actions/runs/111/job/222" }]
   const view = (url: string, over: Record<string, unknown> = {}) =>
-    JSON.stringify({ url, state: "OPEN", headRefOid: "abc1234def", statusCheckRollup: [{ name: "Claude review", conclusion: "FAILURE" }], autoMergeRequest: { enabledAt: "t" }, ...over })
-  const posts = (paths: ReturnType<typeof agentPaths>) => listNew<{ kind: string; issue: string; text: string; question: boolean }>(paths.outbox).map((e) => e.payload)
+    JSON.stringify({
+      url, number: Number(url.split("/").pop()), state: "OPEN", headRefName: "STEP-7-fix-the-date", headRefOid: "abc1234def",
+      author: { login: "eve-polads" }, reviews: [], comments: [], statusCheckRollup: green, autoMergeRequest: { enabledAt: "t" }, ...over,
+    })
+  const redTest = [{ name: "Test", conclusion: "FAILURE", detailsUrl: "https://github.com/x/actions/runs/111/job/222" }]
+  const outbox = (paths: ReturnType<typeof agentPaths>) => listNew<{ kind: string; issue?: string; channel?: string; text: string; question?: boolean }>(paths.outbox).map((e) => e.payload)
+  const watch = (paths: ReturnType<typeof agentPaths>, config: ReturnType<typeof ConfigSchema.parse>, responses: Array<[RegExp, Record<string, unknown>]>) => {
+    const f = fakeExec(responses as never)
+    return { f, run: () => watchPrs({ exec: f.exec, paths, config, now: () => NOW, log: quiet }) }
+  }
 
-  it("posts a red check to the issue's thread once per head commit, and forgets merged PRs", async () => {
+  it("brings one revise job for a review with changes requested, ahead of nothing else, and only once", async () => {
     const { paths, config } = setup()
     recordPr(paths, { issue: "STEP-7", url: PR1, openedAt: "2026-09-24T10:00:00.000Z" })
-    recordPr(paths, { issue: "STEP-8", url: PR2, openedAt: "2026-09-24T10:05:00.000Z" })
-    const f = fakeExec([[/pull\/1 /, { stdout: view(PR1) }], [/pull\/2 /, { stdout: view(PR2, { state: "MERGED", statusCheckRollup: [] }) }]])
-    const deps = { exec: f.exec, paths, config, now: () => NOW, log: quiet }
-    await watchPrs(deps)
-    await watchPrs(deps)
-    expect(posts(paths)).toHaveLength(1)
-    expect(posts(paths)[0]).toMatchObject({
-      kind: "issue",
-      issue: "STEP-7",
-      question: false,
-      text: "PR https://github.com/x/pull/1: Claude review failed on abc1234. Auto-merge waits until it is green. A person needs to look.",
-    })
-    expect(readWatchedPrs(paths).map((p) => p.issue)).toEqual(["STEP-7"])
+    const review = { id: "R1", author: { login: "nate" }, state: "CHANGES_REQUESTED", body: "Rename the token helper.", submittedAt: "2026-09-24T11:00:00.000Z" }
+    const w = watch(paths, config, [[/pull\/1 /, { stdout: view(PR1, { reviews: [review] }) }]])
+    await w.run()
+    await w.run()
+    expect(listJobs(paths, "pending")).toEqual([
+      expect.objectContaining({
+        issue: "STEP-7",
+        kind: "revise",
+        revise: { url: PR1, number: 1, branch: "STEP-7-fix-the-date", round: 1, since: "2026-09-24T10:00:00.000Z", reasons: ["changes requested by nate"] },
+      }),
+    ])
+    expect(outbox(paths)).toEqual([expect.objectContaining({ kind: "post", channel: "agents", text: `STEP-7 revising ${PR1} (round 1 of 3): changes requested by nate` })])
+    expect(readWatchedPrs(paths)[0].revise).toEqual({ rounds: 1, handled: ["review:R1"], lastRoundAt: NOW.toISOString() })
   })
 
-  it("reports again on a new head commit, and says when auto-merge is not armed", async () => {
+  it("brings a revise job for a required check the code failed, and reads the failed job's log to know", async () => {
     const { paths, config } = setup()
     recordPr(paths, { issue: "STEP-7", url: PR1, openedAt: "t" })
-    await watchPrs({ exec: fakeExec([[/pull\/1 /, { stdout: view(PR1) }]]).exec, paths, config, now: () => NOW, log: quiet })
-    await watchPrs({ exec: fakeExec([[/pull\/1 /, { stdout: view(PR1, { headRefOid: "fedcba98", autoMergeRequest: null }) }]]).exec, paths, config, now: () => NOW, log: quiet })
-    expect(posts(paths).map((p) => p.text)).toEqual([
-      "PR https://github.com/x/pull/1: Claude review failed on abc1234. Auto-merge waits until it is green. A person needs to look.",
-      "PR https://github.com/x/pull/1: Claude review failed on fedcba9. It cannot merge until it is green. A person needs to look.",
+    const w = watch(paths, config, [
+      [/pull\/1 /, { stdout: view(PR1, { statusCheckRollup: redTest }) }],
+      [/run view --job 222/, { stdout: "FAIL lib/token.test.ts\n  expect(received).toBe(expected)\n" }],
+    ])
+    await w.run()
+    expect(listJobs(paths, "pending")).toEqual([expect.objectContaining({ kind: "revise", revise: expect.objectContaining({ reasons: ["Test failed"] }) })])
+    expect(w.f.lines()).toContain(`gh run view --job 222 --repo ${SLUG} --log-failed`)
+    expect(w.f.lines().some((l) => l.startsWith("gh run rerun"))).toBe(false)
+  })
+
+  it("re-runs a whole CI run the infrastructure failed, never --failed, once per head, and then asks a person", async () => {
+    const { paths, config } = setup()
+    recordPr(paths, { issue: "STEP-7", url: PR1, openedAt: "t" })
+    const neon = "Error: Neon API responded 404 Not Found for branch preview/pr-1\n"
+    const w = watch(paths, config, [
+      [/pull\/1 /, { stdout: view(PR1, { statusCheckRollup: redTest }) }],
+      [/run view --job 222/, { stdout: neon }],
+    ])
+    await w.run()
+    expect(w.f.lines().filter((l) => l.startsWith("gh run rerun"))).toEqual([`gh run rerun 111 --repo ${SLUG}`])
+    expect(w.f.lines().some((l) => l.includes("--failed"))).toBe(false)
+    expect(listJobs(paths, "pending")).toEqual([])
+    expect(outbox(paths).map((p) => p.text)).toEqual([`STEP-7: CI on ${PR1} failed on its infrastructure, not the code. Re-running it in full.`])
+    // The verdict is kept for the head: the log is not read again.
+    await w.run()
+    expect(w.f.lines().filter((l) => l.startsWith("gh run view"))).toHaveLength(1)
+    expect(w.f.lines().filter((l) => l.startsWith("gh run rerun"))).toHaveLength(1)
+    // Still failing on the infrastructure at that head after the re-run: a person looks, once.
+    await w.run()
+    expect(outbox(paths).filter((p) => p.kind === "issue").map((p) => p.text)).toEqual([
+      `PR ${PR1}: Test failed on abc1234, on the infrastructure again after a full re-run. Auto-merge waits until it is green. A person needs to look.`,
     ])
   })
 
-  it("asks gh with the mini's own login: the URL and fields only, never a token", async () => {
+  it("re-runs for ECONNRESET, a cancelled run and a skipped shard, and brings no job for them", async () => {
+    for (const [rollup, log] of [
+      [redTest, "npm ERR! network read ECONNRESET\n"],
+      [[{ name: "Lint", conclusion: "CANCELLED", detailsUrl: "https://github.com/x/actions/runs/333/job/444" }], null],
+      [[{ name: "Test (3/4)", conclusion: "SKIPPED", detailsUrl: "https://github.com/x/actions/runs/555/job/666" }], null],
+    ] as const) {
+      const { paths, config } = setup()
+      recordPr(paths, { issue: "STEP-7", url: PR1, openedAt: "t" })
+      const w = watch(paths, config, [
+        [/pull\/1 /, { stdout: view(PR1, { statusCheckRollup: rollup }) }],
+        [/run view --job/, { stdout: log ?? "" }],
+      ])
+      await w.run()
+      expect(w.f.lines().filter((l) => l.startsWith("gh run rerun")), JSON.stringify(rollup)).toHaveLength(1)
+      // A cancelled run and a skipped shard say it without a log.
+      if (log === null) expect(w.f.lines().some((l) => l.startsWith("gh run view"))).toBe(false)
+      expect(listJobs(paths, "pending")).toEqual([])
+    }
+  })
+
+  it("brings a revise job for a comment addressed to the agent, and never for its own or an unaddressed one", async () => {
     const { paths, config } = setup()
     recordPr(paths, { issue: "STEP-7", url: PR1, openedAt: "t" })
-    const f = fakeExec([[/pull\/1 /, { stdout: view(PR1, { statusCheckRollup: [] }) }]])
-    await watchPrs({ exec: f.exec, paths, config, now: () => NOW, log: quiet })
-    expect(f.lines()).toEqual([`gh pr view ${PR1} --json url,state,headRefOid,statusCheckRollup,autoMergeRequest`])
+    const comments = [
+      { id: "C1", author: { login: "eve-polads" }, body: "@eve note to self" },
+      { id: "C2", author: { login: "nate" }, body: "Looks good." },
+      { id: "C3", author: { login: "nate" }, body: "@eve please use the publication date" },
+      { id: "C4", author: { login: "orchestrator" }, body: "Review fixes requested: the migration is missing." },
+      { id: "C5", author: { login: "kris" }, body: "cc @eve for later" },
+    ]
+    await watch(paths, config, [[/pull\/1 /, { stdout: view(PR1, { comments }) }]]).run()
+    expect(listJobs(paths, "pending")).toEqual([
+      expect.objectContaining({ kind: "revise", revise: expect.objectContaining({ reasons: ["a comment from nate", "a comment from orchestrator"] }) }),
+    ])
+    expect(readWatchedPrs(paths)[0].revise?.handled).toEqual(["comment:C3", "comment:C4"])
+  })
+
+  it("stops after three rounds, asks once in #polads-questions, and brings no fourth", async () => {
+    const { paths, config } = setup()
+    recordPr(paths, { issue: "STEP-7", url: PR1, openedAt: "t" })
+    updateWatchedPr(paths, { issue: "STEP-7", url: PR1, openedAt: "t", revise: { rounds: 3, handled: ["review:R1"], lastRoundAt: "t2" } })
+    const reviews = [{ id: "R4", author: { login: "nate" }, state: "CHANGES_REQUESTED", body: "Still wrong." }]
+    const w = watch(paths, config, [[/pull\/1 /, { stdout: view(PR1, { reviews }) }]])
+    await w.run()
+    await w.run()
+    // Newer feedback after the question brings neither a job nor a second question.
+    const later = [...reviews, { id: "R5", author: { login: "kris" }, state: "CHANGES_REQUESTED", body: "And this." }]
+    await watch(paths, config, [[/pull\/1 /, { stdout: view(PR1, { reviews: later }) }]]).run()
+    expect(listJobs(paths, "pending")).toEqual([])
+    expect(outbox(paths)).toEqual([
+      expect.objectContaining({
+        kind: "issue",
+        issue: "STEP-7",
+        question: true,
+        text: `PR ${PR1} still has review feedback after 3 revise rounds (changes requested by nate). I have stopped revising it: a person decides what happens next.`,
+      }),
+    ])
+  })
+
+  it("counts the rounds: a fourth piece of feedback after three rounds is asked about, not revised", async () => {
+    const { paths, config } = setup()
+    recordPr(paths, { issue: "STEP-7", url: PR1, openedAt: "t" })
+    for (const [i, id] of ["R1", "R2", "R3", "R4"].entries()) {
+      const reviews = [{ id, author: { login: "nate" }, state: "CHANGES_REQUESTED", body: "Again." }]
+      const exec = fakeExec([[/pull\/1 /, { stdout: view(PR1, { reviews }) }]]).exec
+      await watchPrs({ exec, paths, config, now: () => new Date(NOW.getTime() + i * 60 * 60_000), log: quiet })
+      // Each round's job ends before the next feedback comes.
+      for (const job of listJobs(paths, "pending")) moveJob(paths, job.id, "pending", "done", { result: { status: "done", reason: "revised", prUrl: PR1, branch: null, costUsd: null, turns: null, minutes: 1 } })
+    }
+    expect(listJobs(paths, "done").map((j) => j.revise?.round)).toEqual([1, 2, 3])
+    expect(outbox(paths).filter((p) => p.question)).toHaveLength(1)
+  })
+
+  it("brings no second job while one for the issue is pending or running, and keeps the feedback for later", async () => {
+    const { paths, config } = setup()
+    recordPr(paths, { issue: "STEP-7", url: PR1, openedAt: "t" })
+    const reviews = [{ id: "R1", author: { login: "nate" }, state: "CHANGES_REQUESTED", body: "Rename it." }]
+    const busy = submitJob(paths, "STEP-7", null, NOW)
+    const warnings: string[] = []
+    const log: Logger = { ...quiet, warn: (message) => void warnings.push(message) }
+    const exec = fakeExec([[/pull\/1 /, { stdout: view(PR1, { reviews }) }]]).exec
+    await watchPrs({ exec, paths, config, now: () => NOW, log })
+    expect(warnings).toEqual([])
+    const w = watch(paths, config, [[/pull\/1 /, { stdout: view(PR1, { reviews }) }]])
+    expect(listJobs(paths, "pending").map((j) => j.kind)).toEqual(["develop"])
+    expect(readWatchedPrs(paths)[0].revise).toBeUndefined()
+    moveJob(paths, busy.id, "pending", "done")
+    await w.run()
+    expect(listJobs(paths, "pending").map((j) => j.kind)).toEqual(["revise"])
+  })
+
+  it("forgets merged PRs, asks gh with the URL and fields only, and never dismisses a review", async () => {
+    const { paths, config } = setup()
+    recordPr(paths, { issue: "STEP-7", url: PR1, openedAt: "2026-09-24T10:00:00.000Z" })
+    recordPr(paths, { issue: "STEP-8", url: PR2, openedAt: "2026-09-24T10:05:00.000Z" })
+    const reviews = [{ id: "R1", author: { login: "nate" }, state: "CHANGES_REQUESTED", body: "x" }]
+    const w = watch(paths, config, [[/pull\/1 /, { stdout: view(PR1, { reviews }) }], [/pull\/2 /, { stdout: view(PR2, { state: "MERGED" }) }]])
+    await w.run()
+    expect(readWatchedPrs(paths).map((p) => p.issue)).toEqual(["STEP-7"])
+    expect(w.f.lines().filter((l) => l.startsWith("gh pr view"))).toEqual([`gh pr view ${PR1} --json ${PR_FIELDS}`, `gh pr view ${PR2} --json ${PR_FIELDS}`])
+    expect(w.f.lines().some((l) => /dismiss|pr review|--token|GH_TOKEN/.test(l))).toBe(false)
   })
 
   it("keeps watching a PR gh could not read, and one bad answer does not stop the others", async () => {
@@ -94,14 +232,14 @@ describe("watchPrs", () => {
     recordPr(paths, { issue: "STEP-7", url: PR1, openedAt: "2026-09-24T10:00:00.000Z" })
     recordPr(paths, { issue: "STEP-8", url: PR2, openedAt: "2026-09-24T10:05:00.000Z" })
     recordPr(paths, { issue: "STEP-9", url: PR3, openedAt: "2026-09-24T10:10:00.000Z" })
-    const f = fakeExec([
+    const reviews = [{ id: "R1", author: { login: "nate" }, state: "CHANGES_REQUESTED", body: "x" }]
+    await watch(paths, config, [
       [/pull\/1 /, { code: 1, stderr: "HTTP 502" }],
       [/pull\/2 /, { stdout: "not json" }],
-      [/pull\/3 /, { stdout: view(PR3) }],
-    ])
-    await watchPrs({ exec: f.exec, paths, config, now: () => NOW, log: quiet })
+      [/pull\/3 /, { stdout: view(PR3, { reviews, headRefName: "STEP-9-x" }) }],
+    ]).run()
     expect(readWatchedPrs(paths).map((p) => p.issue)).toEqual(["STEP-7", "STEP-8", "STEP-9"])
-    expect(posts(paths).map((p) => p.issue)).toEqual(["STEP-9"])
+    expect(listJobs(paths, "pending").map((j) => j.issue)).toEqual(["STEP-9"])
   })
 
   it("loses no PR the runner records while it works", async () => {
@@ -109,16 +247,48 @@ describe("watchPrs", () => {
     const { paths, config } = setup()
     recordPr(paths, { issue: "STEP-7", url: PR1, openedAt: "2026-09-24T10:00:00.000Z" })
     recordPr(paths, { issue: "STEP-8", url: PR2, openedAt: "2026-09-24T10:05:00.000Z" })
+    const reviews = [{ id: "R1", author: { login: "nate" }, state: "CHANGES_REQUESTED", body: "x" }]
     const exec: Exec = async (_cmd, args) => {
       // The runner, meanwhile, opens a PR for STEP-9.
       if (args.includes(PR1)) recordPr(paths, { issue: "STEP-9", url: PR3, openedAt: "2026-09-24T10:10:00.000Z" })
-      return { code: 0, stdout: args.includes(PR2) ? view(PR2, { state: "MERGED" }) : view(PR1), stderr: "" }
+      return { code: 0, stdout: args.includes(PR2) ? view(PR2, { state: "MERGED" }) : view(PR1, { reviews }), stderr: "" }
     }
     await watchPrs({ exec, paths, config, now: () => NOW, log: quiet })
-    expect(readWatchedPrs(paths).map((p) => [p.issue, p.notified ?? null])).toEqual([
-      ["STEP-7", "abc1234def:Claude review"],
+    expect(readWatchedPrs(paths).map((p) => [p.issue, p.revise?.rounds ?? null])).toEqual([
+      ["STEP-7", 1],
       ["STEP-9", null],
     ])
+  })
+})
+
+describe("planRevision", () => {
+  const pr = { issue: "STEP-7", url: "u", openedAt: "t" }
+  const base = { url: "u", number: 1, state: "OPEN", headRefName: "STEP-7-x", headRefOid: "h1", author: { login: "eve-polads" }, statusCheckRollup: [] }
+  const ctx = { mini: "eve", required: REQUIRED, infra: {} }
+
+  it("never counts an approval, a comment review, or feedback already handled", () => {
+    const reviews = [
+      { id: "A", author: { login: "nate" }, state: "APPROVED" },
+      { id: "B", author: { login: "claude" }, state: "COMMENTED", body: "BLOCKER: x" },
+      { id: "C", author: { login: "nate" }, state: "CHANGES_REQUESTED" },
+      { id: "D", author: { login: "eve-polads" }, state: "CHANGES_REQUESTED" },
+    ]
+    expect(planRevision({ ...base, reviews }, { ...pr, revise: { rounds: 1, handled: ["review:C"] } }, ctx)).toEqual({ kind: "none" })
+    expect(planRevision({ ...base, reviews }, pr, ctx)).toEqual({ kind: "revise", handled: ["review:C"], reasons: ["changes requested by nate"] })
+  })
+
+  it("counts a check at a new head again, and mixes code and infra failures into one revision", () => {
+    const rollup = [
+      { name: "Test", conclusion: "FAILURE", detailsUrl: "https://github.com/x/actions/runs/1/job/2" },
+      { name: "Lint", conclusion: "FAILURE", detailsUrl: "https://github.com/x/actions/runs/3/job/4" },
+    ]
+    const handled = { ...pr, revise: { rounds: 1, handled: ["check:h1:Test"] } }
+    expect(planRevision({ ...base, statusCheckRollup: rollup }, handled, { ...ctx, infra: { Lint: true } })).toEqual({ kind: "rerun", runs: ["3"] })
+    expect(planRevision({ ...base, headRefOid: "h2", statusCheckRollup: rollup }, handled, { ...ctx, infra: { Lint: true } })).toEqual({
+      kind: "revise",
+      handled: ["check:h2:Test"],
+      reasons: ["Test failed"],
+    })
   })
 })
 

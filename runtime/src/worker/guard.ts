@@ -32,6 +32,7 @@ const BANS: Array<{ re: RegExp; reason: string }> = [
   // name the rule for the ordinary spelling.
   { re: /(^|[\s;&|(])git\s+push\b/, reason: "Workers never push. The launcher pushes your commits after you report." },
   { re: /(^|[\s;&|(])gh\s+pr\s+(create|merge)\b/, reason: "Workers never open or merge PRs. The launcher opens the PR and arms auto-merge." },
+  { re: /(^|[\s;&|(])gh\s+pr\s+review\b|\/dismissals\b/, reason: "Workers never review a PR or dismiss a review: a person's or a bot's review decision stands." },
   { re: /--admin\b/, reason: "--admin is banned outright (spec section 11)." },
   // A path segment `.config` (so not jest.config.ts) and a `.env` file name
   // (so not process.env) other than the template. The sandbox refuses the

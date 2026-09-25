@@ -20,6 +20,17 @@ describe("workerBashDenial", () => {
     }
   })
 
+  it("refuses a PR review, and dismissing one, however it is asked (STEP-3274)", () => {
+    for (const command of [
+      "gh pr review 12 --approve",
+      "cd /x && gh  pr review --request-changes -b no",
+      "gh api -X PUT repos/x/pulls/1/reviews/2/dismissals -f message=stale",
+    ]) {
+      expect(workerBashDenial(command), command).toMatch(/never review a PR or dismiss a review/)
+    }
+    expect(workerBashDenial("gh pr view 12 --json reviews")).toBeNull()
+  })
+
   it("refuses a command that names ~/.config or a .env file", () => {
     for (const command of [
       "cat ~/.config/linear/.env",

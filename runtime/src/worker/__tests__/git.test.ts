@@ -79,6 +79,14 @@ describe("prepareWorktree", () => {
     expect(f.lines().at(-1)).toBe(`${GIT} -C ${WT} checkout -B STEP-7-fix-the-date refs/heads/STEP-7-fix-the-date`)
   })
 
+  it("takes origin's branch for a revise job, a person's pushes included, whatever a local branch holds (STEP-3274)", async () => {
+    const f = fakeExec([[...PRESENT], [...LOCAL], [/rev-list --count refs\/heads/, { stdout: "3\n" }]])
+    expect(await prepareWorktree(f.exec, { ...OPTS, fromOrigin: true })).toEqual({ path: WT, resumed: true })
+    expect(f.lines().at(-1)).toBe(`${GIT} -C ${WT} checkout -B STEP-7-fix-the-date origin/STEP-7-fix-the-date`)
+    const gone = fakeExec([[...ABSENT]])
+    await expect(prepareWorktree(gone.exec, { ...OPTS, fromOrigin: true })).rejects.toThrow("origin has no branch STEP-7-fix-the-date to revise")
+  })
+
   it("weighs local commits against origin's copy of the branch too", async () => {
     const ahead = fakeExec([[...PRESENT], [...LOCAL], [/rev-list --count refs\/heads/, { stdout: "1\n" }]])
     await prepareWorktree(ahead.exec, OPTS)

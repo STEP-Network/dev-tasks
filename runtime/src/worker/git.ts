@@ -86,6 +86,8 @@ export interface WorktreeOptions {
   worktreesDir: string
   branch: string
   base: string
+  /** A revise job: the branch as origin has it, since a person may have pushed to the PR. */
+  fromOrigin?: boolean
 }
 
 /** What a person must look at before a worker may continue, as opposed to a step that failed. The message is the reason. */
@@ -103,6 +105,10 @@ async function startPoint(exec: Exec, o: WorktreeOptions): Promise<string> {
   if (remote.code !== 0 && remote.code !== 2) throw failed(`git ls-remote --exit-code --heads origin ${o.branch}`, remote)
   const onOrigin = remote.code === 0
   if (onOrigin) await mustGit(exec, ["-C", o.repo, "fetch", "origin", o.branch])
+  if (o.fromOrigin) {
+    if (!onOrigin) throw new WorktreeRefused(`origin has no branch ${o.branch} to revise`)
+    return `origin/${o.branch}`
+  }
   const local = await git(exec, ["-C", o.repo, "rev-parse", "--verify", "--quiet", `refs/heads/${o.branch}`])
   if (local.code === 0) {
     const elsewhere = [`origin/${o.base}`, ...(onOrigin ? [`origin/${o.branch}`] : [])]
