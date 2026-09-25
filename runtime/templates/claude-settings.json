@@ -46,6 +46,10 @@
       "mcp__github__rerun_workflow_run",
       "mcp__github__rerun_failed_jobs",
       "mcp__github__cancel_workflow_run",
+      "mcp__github__delete_repository",
+      "mcp__github__create_pull_request_with_copilot",
+      "mcp__github__assign_copilot_to_issue",
+      "mcp__github__request_copilot_review",
       "mcp__plugin_github_github__merge_pull_request",
       "mcp__plugin_github_github__push_files",
       "mcp__plugin_github_github__create_or_update_file",
@@ -69,7 +73,11 @@
       "mcp__plugin_github_github__run_workflow",
       "mcp__plugin_github_github__rerun_workflow_run",
       "mcp__plugin_github_github__rerun_failed_jobs",
-      "mcp__plugin_github_github__cancel_workflow_run"
+      "mcp__plugin_github_github__cancel_workflow_run",
+      "mcp__plugin_github_github__delete_repository",
+      "mcp__plugin_github_github__create_pull_request_with_copilot",
+      "mcp__plugin_github_github__assign_copilot_to_issue",
+      "mcp__plugin_github_github__request_copilot_review"
     ]
   },
   "sandbox": {

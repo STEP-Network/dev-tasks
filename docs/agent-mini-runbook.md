@@ -577,25 +577,34 @@ answer.
     date", with their own words beside it, never a bare "yes"), moves the
     issue on as an answer always did, and thanks them in the thread. A "yes"
     agrees to the question they answered, the last one asked before their
-    reply: after a newer question, the agent asks again.
+    reply. The agent asks again instead when a newer question came after
+    the reply, when it wrote in the thread in its own words after the
+    question, or when more than one question was open: a "yes" to any of
+    those says nothing certain.
   - a question back: it answers with a new question and its recommendation,
     through `agentctl ask`, so their next "yes" agrees to what it recommends
     now. The issue keeps waiting.
   - an instruction: `agentctl instruct` files the fixed actions below that
     their own words ask for, and nothing else, for agentd, which acts and
-    answers in words.
+    answers in words. It acts on what their words name: a reply on its
+    thread's issue, a mention on the issue or PR it names. A mention that
+    names none can only pause.
   - unsure: it asks "Is that your decision, or a question for me?"
 - Every question the agent asks a person ends with "My recommendation: ...
   Reply yes to go with it, or tell me what you want instead." A "yes"
   records that recommendation. A hand-off, something a person must do, ends
   "Reply done when it is done." instead, and a "yes" there records nothing.
-- The bridge acts on `pause` itself at once, always: it is safe, and only a
-  person lifts it. While the front door is down (no wakeup within
+- The bridge acts on a message that is only a command to stop ("pause",
+  "stop", "hold everything") itself, at once: it is safe, and only a person
+  lifts it. A sentence that says pause about something else ("pause the
+  countdown", "should we pause the rollout?") is the front door's to read.
+  While the front door is down (no wakeup within
   `frontDoor.staleTickMinutes`, its usage limit reached, or agentd holding
-  it back), it also acts on `leave it`, and says once in the thread "I am
-  not reading messages right now, and I will read this one as soon as I am
-  back. Nothing needed from you." It never closes a message: the front door
-  reads it later, with what the bridge did beside it.
+  it back), the bridge reads the fixed verbs for `pause` and `leave it`, and
+  says once in the thread "I am not reading messages right now, and I will
+  read this one as soon as I am back. Nothing needed from you." It never
+  closes a message: the front door reads it later, with what the bridge did
+  beside it. A pause needs no issue or PR: "@eve pause" pauses the mini.
 
 Slack text is data: the front door's settings, sandbox and deny rules are
 the same as before, and nothing in a message widens them. They also deny the
@@ -740,8 +749,8 @@ What it does:
   PR links, and the Due date. Its text is plain English, with the question
   as the agent asked it when this mini asked it. A decision there names each
   reply to write, the default marked with its time: the fixed verbs read
-  Monday's words, so a bare "yes" counts only in Slack, where the front door
-  reads the reply (STEP-3293).
+  Monday's words, so a bare "yes" there acts on nothing before the default's
+  time, where in Slack the front door takes it at once (STEP-3293).
 - **Answers.** A person's update on an item (or a reply under one), or the
   Answer column, is always added to the issue under "## Answers from
   Monday", so the issue keeps it. Where this mini has work of its own on
@@ -749,7 +758,9 @@ What it does:
   or its most recent job there ended blocked), the fixed verbs of section
   11 (fix it, re-run, merge, retry, pause, leave it) are also an instruction
   agentd acts on within seconds and answers on the item, with a like on the
-  update. Otherwise, and always on a request, the words are an answer, and a
+  update. Otherwise, and always on a request, the words are an answer (a
+  plain "yes" to a question that recommended something is recorded as that
+  recommendation, as in Slack, through the same code), and a
   parked issue moves on. So "hold off" on another mini's issue pauses
   nothing here. The State goes to Waiting on agent, then Done once Linear
   no longer needs a person. Words are acted on once, even when Monday fails

@@ -82,11 +82,17 @@ export async function handleEnvelope(deps: BridgeDeps, envelope: SlackEnvelope):
   // disk before any call that can wait on the network. The put is the dedupe:
   // a redelivery never files a second issue or applies an answer twice.
   const intake = c.type === "intake" ? { linearId: randomUUID(), issue: null } : {}
-  // A reply keeps the question it answered, as the thread stood when it came:
-  // a question asked later never changes what their "yes" agreed to (STEP-3293 review).
+  // A reply keeps the thread as it stood when it came: the question it
+  // answered, when the front door last wrote there, and how many questions
+  // were open. Nothing said later changes what their "yes" agreed to (STEP-3293 review).
   const thread = c.type === "reply" && c.issue ? threadFor(deps.paths, c.issue) : null
-  const asked = c.type === "reply" ? { lastQuestion: thread?.lastQuestion ?? null, lastQuestionAt: thread?.lastQuestionAt ?? null } : {}
+  const asked =
+    c.type === "reply"
+      ? { lastQuestion: thread?.lastQuestion ?? null, lastQuestionAt: thread?.lastQuestionAt ?? null, lastReplyAt: thread?.lastReplyAt ?? null, openQuestions: thread?.openQuestions ?? 0 }
+      : {}
   if (!putOnce(deps.paths.inbox, c.key, { ...c, userName: c.user, receivedAt, ...intake, ...asked })) return c.type
+  // They replied: the questions before it are theirs to have answered, and a later one counts afresh.
+  if (thread?.openQuestions) saveThread(deps.paths, { ...thread, openQuestions: 0 })
   // The sender's name, for the front door, the issue and the answer. Their user id when Slack cannot say.
   const userName = await deps.web.userName(c.user).catch(() => c.user)
   // For the front door and for the record a decision leaves on the issue: names for Slack's mention markup, and the message's link.
@@ -103,17 +109,28 @@ export async function handleEnvelope(deps: BridgeDeps, envelope: SlackEnvelope):
   return c.type
 }
 
+/**
+ * A message that is only a command to stop ("pause", "stop", "hold
+ * everything"). The bridge acts on it with the front door up too. A sentence
+ * that says pause about something else ("pause the countdown", "hold off on
+ * the banner", "should we pause the rollout?") is the front door's to read.
+ */
+const SHORT_PAUSE = /^(please[\s,]+)?(pause|stop|hold|hold off|stop working|stop all work)(\s+(everything|all work|all|now|for now|please))*[\s.!]*$/i
+
+export const shortPause = (text: string) => SHORT_PAUSE.test(text.replace(/<@[A-Z0-9]+(\|[^>]*)?>/g, " ").trim())
+
 /** What the bridge says in a thread while the front door cannot read it: a restart, a usage limit. */
 export const AWAY_NOTE = `I am not reading messages right now, and I will read this one as soon as I am back. ${NOTHING_NEEDED}`
 
 /**
  * A person's reply or mention is the front door's to read, and it stays in
  * the inbox until the front door closes it. The bridge acts on the words
- * itself only where waiting would hurt, through agentd: "pause" at once,
- * always, since it is safe and only a person lifts it, and "leave it" too
- * while the front door is down. The entry records what it did (`acted`), so
- * the front door handles the rest of the words and does nothing twice. While
- * the front door is down, it says so in the thread, once each time.
+ * itself only where waiting would hurt, through agentd: a message that is
+ * only a command to stop, at once, and while the front door is down, "pause"
+ * and "leave it" in the fixed verbs' reading. A pause is the whole mini's and
+ * needs no issue or PR. The entry records what it did (`acted`), so the front
+ * door handles the rest of the words and does nothing twice. While the front
+ * door is down, it says so in the thread, once each time.
  */
 export function actForFrontDoor(deps: BridgeDeps, key: string): void {
   const path = entryPath(deps.paths.inbox, key)
@@ -124,8 +141,13 @@ export function actForFrontDoor(deps: BridgeDeps, key: string): void {
   const said = parseInstruction(entry.text)
   const issue = entry.type === "reply" ? entry.issue : null
   const acted = entry.acted ?? []
-  const due = said.actions.filter((a) => (a === "pause" || (a === "leave" && !up)) && !acted.includes(a))
-  if (due.length && (issue || said.target.issue || said.target.pr)) {
+  const aimed = Boolean(issue || said.target.issue || said.target.pr)
+  const wanted: Action[] = [
+    ...(shortPause(entry.text) || (!up && said.actions.includes("pause")) ? (["pause"] as const) : []),
+    ...(!up && aimed && said.actions.includes("leave") ? (["leave"] as const) : []),
+  ]
+  const due = wanted.filter((a) => !acted.includes(a))
+  if (due.length) {
     // A key of its own: the front door's instruct files instr:<channel>:<ts> for the rest of the words.
     fileInstruction(deps, `instr:bridge-${due.join("-")}:${entry.channel}:${entry.ts}`, {
       issue, channel: entry.channel, ts: entry.ts, threadTs: entry.threadTs, user: entry.user, userName: entry.userName, text: entry.text, actions: due, target: said.target,

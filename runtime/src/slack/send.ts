@@ -9,7 +9,7 @@ import type { AgentPaths } from "../config.ts"
 import { ack, fail, listNew } from "../fsq.ts"
 import { appendLedger, redact, type Logger } from "../log.ts"
 import type { ChannelKey, OutboxMessage } from "../outbox.ts"
-import { saveThread, threadFor, type ThreadRecord } from "../threads.ts"
+import { issueForThread, saveThread, threadFor, type ThreadRecord } from "../threads.ts"
 import { prefixed } from "./text.ts"
 
 /** The Web API calls a send makes. Tests pass a fake. */
@@ -62,10 +62,15 @@ export async function sendOutboxMessage(ctx: SendContext, msg: OutboxMessage, po
       await ctx.web.postMessage({ channel: ctx.channelIds[msg.channel], text: say(msg.text) })
       posted()
       return {}
-    case "reply":
+    case "reply": {
       await ctx.web.postMessage({ channel: msg.channelId, thread_ts: msg.threadTs, text: say(msg.text) })
       posted()
+      // The front door's own words in an issue's thread: a yes after them may answer those, not the question (decide.ts).
+      const issue = msg.frontDoor ? issueForThread(ctx.paths, msg.channelId, msg.threadTs) : null
+      const thread = issue ? threadFor(ctx.paths, issue) : null
+      if (thread) saveThread(ctx.paths, { ...thread, lastReplyAt: ctx.now().toISOString() })
       return {}
+    }
     case "react":
       await ctx.web.react(msg.channelId, msg.ts, msg.name).catch((error: unknown) => {
         // Already there is what the message asked for.
@@ -79,7 +84,7 @@ export async function sendOutboxMessage(ctx: SendContext, msg: OutboxMessage, po
       if (existing) {
         await ctx.web.postMessage({ channel: existing.channelId, thread_ts: existing.ts, text: say(msg.text) })
         posted()
-        const thread = msg.question ? { ...existing, lastQuestionAt: nowIso, lastQuestion: msg.text } : existing
+        const thread = msg.question ? { ...existing, lastQuestionAt: nowIso, lastQuestion: msg.text, openQuestions: (existing.openQuestions ?? 0) + 1 } : existing
         if (msg.question) saveThread(ctx.paths, thread)
         return existing.permalink ? {} : linkThread(ctx, thread)
       }
@@ -90,7 +95,7 @@ export async function sendOutboxMessage(ctx: SendContext, msg: OutboxMessage, po
       // The message is out: nothing below may throw. The thread is recorded
       // before any call that can wait, so a restart replies in it, where a
       // second thread would leave answers in the first one unread.
-      const thread = { issue: msg.issue, channelId: channel, ts, permalink: null, createdAt: nowIso, lastQuestionAt: msg.question ? nowIso : null, lastQuestion: msg.question ? msg.text : null }
+      const thread = { issue: msg.issue, channelId: channel, ts, permalink: null, createdAt: nowIso, lastQuestionAt: msg.question ? nowIso : null, lastQuestion: msg.question ? msg.text : null, openQuestions: msg.question ? 1 : 0 }
       saveThread(ctx.paths, thread)
       posted()
       return linkThread(ctx, thread)

@@ -152,8 +152,11 @@ An intake event also has `issue`, the Triage issue the bridge already filed.
     me?" and ack it. Their next reply comes back to you.
   - Anything else (thanks, an update): reply if it needs one, and ack it.
 - **A mention that asks for one of the fixed actions** on a PR (`@eve fix
-  #1679 and merge`): `agentctl instruct --key <key> --actions revise,merge
-  --target #1679` (or `--target STEP-<n>`).
+  #1679 and merge`): `agentctl instruct --key <key> --actions revise,merge`.
+  The target is what their words name, and `--target`, if you give it, must
+  be that same one. A mention that names no issue or PR is a pause or a
+  question for them: ask which they mean. A reply acts on its own thread's
+  issue: words that name another issue or PR are a question for them too.
 
 Reply by writing the reply to `~/.front-door/reply-<threadTs>.md` (above), then:
 

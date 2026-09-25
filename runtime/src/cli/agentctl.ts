@@ -246,16 +246,16 @@ export async function run(argv: string[], out: (line: string) => void, overrides
       // A person's reply the front door read as one of the fixed actions: agentd acts on it and replies (agentd/instructions.ts).
       const entry = personEntry(paths, need("key"))
       const named = need("actions").split(",").map((a) => a.trim()).filter(Boolean)
-      const target: InstructionEntry["target"] = {}
-      const aimed = typeof flags.target === "string" ? flags.target : undefined
-      if (aimed !== undefined) {
-        if (ISSUE_RE.test(aimed)) target.issue = aimed
-        else if (/^#?\d{2,6}$/.test(aimed)) target.pr = Number(aimed.replace("#", ""))
-        else throw new UsageError(`--target must be STEP-<n> or #<number>, got ${aimed}`)
+      const aimed: InstructionEntry["target"] = {}
+      const given = typeof flags.target === "string" ? flags.target : undefined
+      if (given !== undefined) {
+        if (ISSUE_RE.test(given)) aimed.issue = given
+        else if (/^#?\d{2,6}$/.test(given)) aimed.pr = Number(given.replace("#", ""))
+        else throw new UsageError(`--target must be STEP-<n> or #<number>, got ${given}`)
       }
       try {
-        // Only what their words ask for, or "default": a plain yes to agentd's decision takes the reply it recommended.
-        const actions: Action[] = actionsAsked(paths, entry, named, target)
+        // Only what their words ask for, on what they name, or "default": a plain yes to agentd's decision takes the reply it recommended.
+        const { actions, target }: { actions: Action[]; target: InstructionEntry["target"] } = actionsAsked(paths, entry, named, aimed)
         const filed = fileInstructionFor(paths, entry, actions, target, now())
         print(filed ? { filed: filed.key, actions: filed.actions } : { filed: null, doneByBridge: entry.acted ?? [] })
       } catch (error) {
@@ -281,7 +281,7 @@ export async function run(argv: string[], out: (line: string) => void, overrides
         if (text.includes(RECOMMENDATION_LEAD)) {
           throw new UsageError("a reply that recommends something is a question: post it with agentctl ask --issue <id> --text-file <question> --recommendation-file <recommendation>, so a yes agrees to it")
         }
-        print({ queued: enqueueSlack(paths, { kind: "reply", channelId, threadTs, text }, now()) })
+        print({ queued: enqueueSlack(paths, { kind: "reply", channelId, threadTs, text, frontDoor: true }, now()) })
         spend()
         return 0
       }

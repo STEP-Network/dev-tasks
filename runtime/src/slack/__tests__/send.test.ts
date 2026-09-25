@@ -66,6 +66,20 @@ describe("sendOutboxMessage", () => {
     expect(threadFor(ctx.paths, "STEP-7")?.lastQuestion).toMatch(/^Which date\?/)
     await sendOutboxMessage(ctx, { kind: "issue", issue: "STEP-7", text: "And the label?\n\nMy recommendation: keep it. Reply yes to go with it, or tell me what you want instead.", question: true })
     expect(threadFor(ctx.paths, "STEP-7")?.lastQuestion).toMatch(/^And the label\?/)
+    // Two questions, and no reply between: a yes would not say which (STEP-3293 re-review).
+    expect(threadFor(ctx.paths, "STEP-7")?.openQuestions).toBe(2)
+  })
+
+  it("records when the front door wrote in an issue's thread in its own words, and nothing for anyone else's reply (STEP-3293 re-review)", async () => {
+    const { ctx } = context()
+    await sendOutboxMessage(ctx, { kind: "issue", issue: "STEP-7", text: "Which date?", question: true })
+    await sendOutboxMessage(ctx, { kind: "reply", channelId: "CQ", threadTs: "9001.1", text: "Paused: no new job starts." })
+    expect(threadFor(ctx.paths, "STEP-7")?.lastReplyAt).toBeUndefined()
+    await sendOutboxMessage(ctx, { kind: "reply", channelId: "CQ", threadTs: "9001.1", text: "I would go with the submission date now.", frontDoor: true })
+    expect(threadFor(ctx.paths, "STEP-7")?.lastReplyAt).toBe("2026-09-24T08:00:00.000Z")
+    // A thread that is no issue's is left alone.
+    await sendOutboxMessage(ctx, { kind: "reply", channelId: "CAG", threadTs: "1900.1", text: "Working on STEP-7.", frontDoor: true })
+    expect(threadFor(ctx.paths, "STEP-7")?.lastReplyAt).toBe("2026-09-24T08:00:00.000Z")
   })
 
   it("fetches and stores a thread's link on its next message when it had none", async () => {

@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { describe, expect, it } from "vitest"
@@ -144,6 +144,22 @@ describe("actOnInstructions (STEP-3285)", () => {
     await actOnInstructions(deps)
     expect(listJobs(paths, "pending")).toHaveLength(1)
     expect(outbox().filter((m) => m.kind === "reply").at(-1)?.text).toBe(`Already on it: job ${job.id} is queued.`)
+  })
+
+  it("pauses on a plain '@eve pause', which names no PR: a pause is the whole mini's (STEP-3293 re-review)", async () => {
+    const { deps, paths, say, outbox } = setup()
+    say("<@UBOT> pause", { issue: null, target: {} })
+    await actOnInstructions(deps)
+    expect(existsSync(paths.pauseFile)).toBe(true)
+    expect(outbox().filter((m) => m.kind === "reply").map((m) => m.text)).toEqual(["Paused: no new job starts, and a running one finishes. A person lifts it on the mini with agentctl resume."])
+    // With more than a pause and no PR, it pauses and asks which PR for the rest.
+    rmSync(paths.pauseFile)
+    say("<@UBOT> pause and fix it", { issue: null, target: {} })
+    await actOnInstructions(deps)
+    expect(existsSync(paths.pauseFile)).toBe(true)
+    expect(outbox().filter((m) => m.kind === "reply").at(-1)?.text).toBe(
+      "Paused: no new job starts, and a running one finishes. A person lifts it on the mini with agentctl resume.\nI could not tell which PR you mean. Name it (STEP-<n>, #<number> or its link): I act only on PRs this mini opened.",
+    )
   })
 
   it("finds a mentioned PR of this mini's by number, and asks which PR when it cannot tell", async () => {

@@ -20,6 +20,13 @@ export interface ThreadRecord {
   lastQuestionAt: string | null
   /** The last question the mini asked in the thread, as posted: what a reply of "yes" agrees to (STEP-3293). */
   lastQuestion?: string | null
+  /**
+   * When the front door last wrote in the thread in its own words (agentctl
+   * slack reply): a yes after that may answer what it said, not the question.
+   */
+  lastReplyAt?: string | null
+  /** Questions the mini posted since a person last replied or answered: a yes to more than one says nothing. */
+  openQuestions?: number
 }
 
 const fileFor = (paths: AgentPaths, issue: string) => join(paths.threads, `${issue}.json`)

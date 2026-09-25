@@ -297,16 +297,54 @@ describe("replies in a thread the mini owns (STEP-3293)", () => {
     expect(listNew(paths.outbox)).toEqual([])
   })
 
-  it("act on pause at once, even with the front door up, and leave the message for it with what they did (STEP-3293 review)", async () => {
-    // A pause is safe, and only a person lifts it: it never waits for a front door stuck at its usage limit.
+  it("act at once on a message that is only a command to stop, even with the front door up, and leave the message for it (STEP-3293 re-review)", async () => {
+    // A pause is safe, and only a person lifts it: a plain "stop" never waits for a front door stuck at its usage limit.
     const { deps, paths } = setup([PARKED])
     up(paths)
-    await handleEnvelope(deps, reply("1700.5", "pause, and fix the failing test when you are back"))
+    await handleEnvelope(deps, reply("1700.5", "pause"))
+    await handleEnvelope(deps, reply("1700.6", "Hold everything."))
+    await handleEnvelope(deps, reply("1700.7", "stop"))
     await retryPending(deps)
-    expect(instructions(paths)).toEqual([["instr:bridge-pause:CQ:1700.5", ["pause"]]])
-    // The rest of the words, "fix the failing test", are the front door's: the message stays open.
-    expect(replies(paths)).toEqual([expect.objectContaining({ key: "msg:CQ:1700.5", acted: ["pause"] })])
+    expect(instructions(paths)).toEqual([
+      ["instr:bridge-pause:CQ:1700.5", ["pause"]],
+      ["instr:bridge-pause:CQ:1700.6", ["pause"]],
+      ["instr:bridge-pause:CQ:1700.7", ["pause"]],
+    ])
+    expect(replies(paths).map((p) => p.acted)).toEqual([["pause"], ["pause"], ["pause"]])
     expect(listNew(paths.outbox)).toEqual([])
+  })
+
+  it("never pause the mini on a sentence that says pause about something else, while the front door is up (STEP-3293 re-review)", async () => {
+    const { deps, paths } = setup([PARKED])
+    up(paths)
+    await handleEnvelope(deps, reply("1700.5", "Yes, pause the countdown during the blackout period"))
+    await handleEnvelope(deps, reply("1700.6", "hold off on the banner until legal replies"))
+    await handleEnvelope(deps, reply("1700.7", "should we pause the rollout?"))
+    await handleEnvelope(deps, reply("1700.8", "pause, and fix the failing test when you are back"))
+    await retryPending(deps)
+    expect(instructions(paths)).toEqual([])
+    expect(replies(paths).map((p) => p.acted)).toEqual([undefined, undefined, undefined, undefined])
+  })
+
+  it("keep the rest of the words for the front door when the bridge paused while it was down (STEP-3293 review)", async () => {
+    const { deps, paths } = setup([PARKED])
+    down(paths)
+    await handleEnvelope(deps, reply("1700.5", "pause, and fix the failing test when you are back"))
+    expect(instructions(paths)).toEqual([["instr:bridge-pause:CQ:1700.5", ["pause"]]])
+    // "fix the failing test" is the front door's: the message stays open.
+    expect(replies(paths)).toEqual([expect.objectContaining({ key: "msg:CQ:1700.5", acted: ["pause"] })])
+  })
+
+  it("keep how the thread stood: when the front door last wrote there, and how many questions were open, and count afresh after it (STEP-3293 re-review)", async () => {
+    const { deps, paths } = setup([PARKED])
+    up(paths)
+    saveThread(paths, {
+      issue: "STEP-7", channelId: "CQ", ts: "1700.1", permalink: null, createdAt: "2026-09-24T07:00:00.000Z",
+      lastQuestionAt: "2026-09-24T07:30:00.000Z", lastQuestion: "Q?", lastReplyAt: "2026-09-24T07:40:00.000Z", openQuestions: 2,
+    })
+    await handleEnvelope(deps, reply("1700.5", "yes"))
+    expect(replies(paths)[0]).toMatchObject({ lastReplyAt: "2026-09-24T07:40:00.000Z", openQuestions: 2 })
+    expect(threadFor(paths, "STEP-7")?.openQuestions).toBe(0)
   })
 
   it("while the front door is down: pause and leave act through agentd, nothing is closed, and each thread hears once (STEP-3293 review)", async () => {
@@ -420,18 +458,25 @@ describe("mentions that name a PR (STEP-3293)", () => {
     up(upNow.paths)
     await handleEnvelope(upNow.deps, at("1950.1", "<@UBOT> fix <https://github.com/STEP-Network/v0-politiske-annoncer/pull/1679|#1679> and merge"))
     await handleEnvelope(upNow.deps, at("1950.4", "<@UBOT> leave #1680 to me, I'll take it"))
-    expect(payloads(upNow.paths).map((p) => p.type)).toEqual(["mention", "mention"])
+    // A plain "@eve pause" names no PR, and needs none: a pause is the whole mini's (STEP-3293 re-review).
+    await handleEnvelope(upNow.deps, at("1950.5", "<@UBOT> pause"))
+    expect(payloads(upNow.paths).filter((p) => p.type === "instruction")).toEqual([
+      expect.objectContaining({ type: "instruction", issue: null, threadTs: "1950.5", actions: ["pause"], target: {} }),
+    ])
     const downNow = setup()
     down(downNow.paths)
     await handleEnvelope(downNow.deps, at("1950.2", "<@UBOT> pause #1679"))
     await handleEnvelope(downNow.deps, at("1950.3", "<@UBOT> pause for a bit"))
-    expect(payloads(downNow.paths).filter((p) => p.type === "instruction")).toEqual([
-      expect.objectContaining({ type: "instruction", issue: null, threadTs: "1950.2", actions: ["pause"], target: { pr: 1679 } }),
+    await handleEnvelope(downNow.deps, at("1950.6", "<@UBOT> leave it, I'll take it"))
+    expect(payloads(downNow.paths).filter((p) => p.type === "instruction").map((p) => [p.ts, p.actions, p.target]).sort()).toEqual([
+      ["1950.2", ["pause"], { pr: 1679 }],
+      ["1950.3", ["pause"], {}],
     ])
-    // Both stay for the front door: the first with what the bridge did, the second, naming no issue or PR, as it came.
+    // All stay for the front door, with what the bridge did beside them. A leave that names nothing is the front door's to ask about.
     expect(payloads(downNow.paths).filter((p) => p.type === "mention").map((p) => [p.ts, (p as { acted?: string[] }).acted])).toEqual([
       ["1950.2", ["pause"]],
-      ["1950.3", undefined],
+      ["1950.3", ["pause"]],
+      ["1950.6", undefined],
     ])
   })
 })

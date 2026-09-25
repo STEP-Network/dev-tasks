@@ -106,11 +106,24 @@ async function act(deps: InstructionDeps, entry: AnyInstructionEntry): Promise<s
   const who = entry.userName || entry.user
   const where = entry.monday ? "on the Monday board" : "in Slack"
   const { issue, pr } = findPr(paths, entry)
-  if (!issue) {
-    return [`I could not tell which PR you mean. Name it (STEP-<n>, #<number> or its link): I act only on PRs this mini opened.`]
-  }
   const lines: string[] = []
   const actions = ORDER.filter((a) => entry.actions.includes(a))
+  // A pause is the whole mini's: it needs no PR, so "@eve pause" pauses (STEP-3293 review).
+  if (actions.includes("pause")) {
+    if (existsSync(paths.pauseFile)) {
+      lines.push("This mini is paused already. A person lifts it on the mini with agentctl resume.")
+    } else {
+      const reason = `asked by ${who} ${where}`
+      mkdirSync(paths.root, { recursive: true })
+      writeFileSync(paths.pauseFile, JSON.stringify({ at: now.toISOString(), reason }))
+      appendLedger(paths, { type: "paused", reason }, now)
+      lines.push("Paused: no new job starts, and a running one finishes. A person lifts it on the mini with agentctl resume.")
+    }
+  }
+  if (!actions.some((a) => a !== "pause")) return lines
+  if (!issue) {
+    return [...lines, `I could not tell which PR you mean. Name it (STEP-<n>, #<number> or its link): I act only on PRs this mini opened.`]
+  }
   let view: (OwnPrView & { baseRefName?: string }) | null = null
   const open = async () => {
     if (!pr) return null
@@ -120,17 +133,6 @@ async function act(deps: InstructionDeps, entry: AnyInstructionEntry): Promise<s
   let revising = false
 
   for (const action of actions) {
-    if (action === "pause") {
-      if (existsSync(paths.pauseFile)) {
-        lines.push("This mini is paused already. A person lifts it on the mini with agentctl resume.")
-      } else {
-        const reason = `asked by ${who} ${where}`
-        mkdirSync(paths.root, { recursive: true })
-        writeFileSync(paths.pauseFile, JSON.stringify({ at: now.toISOString(), reason }))
-        appendLedger(paths, { type: "paused", reason }, now)
-        lines.push("Paused: no new job starts, and a running one finishes. A person lifts it on the mini with agentctl resume.")
-      }
-    }
     if (action === "leave") {
       lines.push(pr ? `Leaving ${pr.url} to a person. I will not touch it until someone asks.` : `Leaving ${issue} to a person.`)
     }

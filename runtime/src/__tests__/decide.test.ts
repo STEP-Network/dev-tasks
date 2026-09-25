@@ -127,10 +127,15 @@ async function deliver(at: Date): Promise<void> {
 }
 const rmOutbox = (key: string) => ack(paths.outbox, key)
 
-/** A reply as the bridge files it now: with the question the thread stood at (slack/bridge.ts). */
+/** A reply as the bridge files it now: with the thread as it stood (slack/bridge.ts), which then counts its questions afresh. */
 function filedReply(ts: string, text: string, at: Date): string {
   const thread = threadFor(paths, "STEP-7")
-  return reply(ts, text, { receivedAt: at.toISOString(), lastQuestion: thread?.lastQuestion ?? null, lastQuestionAt: thread?.lastQuestionAt ?? null })
+  const key = reply(ts, text, {
+    receivedAt: at.toISOString(), lastQuestion: thread?.lastQuestion ?? null, lastQuestionAt: thread?.lastQuestionAt ?? null,
+    lastReplyAt: thread?.lastReplyAt ?? null, openQuestions: thread?.openQuestions ?? 0,
+  })
+  if (thread) saveThread(paths, { ...thread, openQuestions: 0 })
+  return key
 }
 
 describe("a question back (STEP-3293 review)", () => {
@@ -168,6 +173,46 @@ describe("a question back (STEP-3293 review)", () => {
     const old = reply("1700.12", "yes", { receivedAt: later(1).toISOString() })
     await expect(go(["decide", "--key", old, "--agree"])).rejects.toThrow(/a new question went to the STEP-7 thread after this reply/)
     expect(fake.called("updateIssue")).toEqual([])
+  })
+})
+
+describe("a yes that says nothing certain (STEP-3293 re-review)", () => {
+  const later = (minutes: number) => new Date(NOW.getTime() + minutes * 60_000)
+
+  it("refuses to agree when the front door wrote in the thread after the question: a recommendation in other words", async () => {
+    // The reviewer's residual, turned round: a paraphrased recommendation in slack reply passes, and a later yes used to record the old one.
+    const { fake, go } = ctl()
+    const file = join(paths.root, "reply.md")
+    writeFileSync(file, "Given the legal rule I would now go with the submission date instead. Say yes and I will use it.\n")
+    expect(await go(["slack", "reply", "--channel", "CQ", "--thread", "1700.1", "--text-file", file])).toBe(0)
+    await deliver(later(1))
+    expect(threadFor(paths, "STEP-7")?.lastReplyAt).toBe(later(1).toISOString())
+    const yes = filedReply("1700.30", "yes", later(2))
+    await expect(go(["decide", "--key", yes, "--agree"])).rejects.toThrow(/I wrote in the STEP-7 thread after that question, so their yes may answer what I said there/)
+    expect(fake.called("updateIssue")).toEqual([])
+    // Asked again as a question, the next yes agrees to it.
+    expect(await go(["ask", "--issue", "STEP-7", "--text", "Shall I use the submission date?", "--recommendation", "use the submission date"])).toBe(0)
+    await deliver(later(3))
+    const again = filedReply("1700.31", "yes", later(4))
+    expect(await go(["decide", "--key", again, "--agree"])).toBe(0)
+    expect(fake.issues.get("STEP-7")!.description).toContain("Nate agreed with the recommendation: use the submission date.")
+  })
+
+  it("refuses to agree when more than one question was open: /refine asks in one question", async () => {
+    const { fake, go } = ctl()
+    expect(await go(["ask", "--issue", "STEP-7", "--text", "Which date?", "--recommendation", "the publication date"])).toBe(0)
+    expect(await go(["ask", "--issue", "STEP-7", "--text", "And the footer?", "--recommendation", "leave the footer"])).toBe(0)
+    await deliver(later(1))
+    expect(threadFor(paths, "STEP-7")?.openQuestions).toBe(2)
+    const yes = filedReply("1700.32", "yes", later(2))
+    await expect(go(["decide", "--key", yes, "--agree"])).rejects.toThrow(/2 questions were open in the STEP-7 thread when they replied, so a yes does not say which/)
+    expect(fake.called("updateIssue")).toEqual([])
+    // Their reply counted the questions afresh: one question now, and a yes agrees to it.
+    expect(await go(["ask", "--issue", "STEP-7", "--text", "Publication date, footer left as it is?", "--recommendation", "the publication date, and the footer as it is"])).toBe(0)
+    await deliver(later(3))
+    expect(await go(["decide", "--key", filedReply("1700.33", "yes", later(4)), "--agree"])).toBe(0)
+    // An answer leaves no question open.
+    expect(threadFor(paths, "STEP-7")?.openQuestions).toBe(0)
   })
 })
 
@@ -223,8 +268,54 @@ describe("agentctl instruct", () => {
     const other = reply("1700.12", "do the thing")
     await expect(go(["instruct", "--key", other, "--actions", "deploy"])).rejects.toThrow(/deploy is not an action agentd takes/)
     putOnce(paths.inbox, "msg:CAG:1900.1", { type: "mention", key: "msg:CAG:1900.1", issue: null, channel: "CAG", ts: "1900.1", threadTs: "1900.1", user: "UNATE", userName: "Nate", text: "<@UBOT> merge it", receivedAt: NOW.toISOString() })
-    await expect(go(["instruct", "--key", "msg:CAG:1900.1", "--actions", "merge"])).rejects.toThrow(/names no issue or PR/)
-    expect(await go(["instruct", "--key", "msg:CAG:1900.1", "--actions", "merge", "--target", "#1679"])).toBe(0)
+    await expect(go(["instruct", "--key", "msg:CAG:1900.1", "--actions", "merge"])).rejects.toThrow(/Nate's words name no issue or PR for merge: ask them which/)
+    // The front door cannot pick the PR for them (STEP-3293 re-review).
+    await expect(go(["instruct", "--key", "msg:CAG:1900.1", "--actions", "merge", "--target", "#1679"])).rejects.toThrow(/Nate's words name no issue or PR, so there is no target to give/)
+    putOnce(paths.inbox, "msg:CAG:1900.3", { type: "mention", key: "msg:CAG:1900.3", issue: null, channel: "CAG", ts: "1900.3", threadTs: "1900.3", user: "UNATE", userName: "Nate", text: "<@UBOT> merge #1679", receivedAt: NOW.toISOString() })
+    expect(await go(["instruct", "--key", "msg:CAG:1900.3", "--actions", "merge"])).toBe(0)
+    expect(listNew<{ key: string; target?: unknown }>(paths.inbox).map((e) => e.payload).find((p) => p.key === "instr:CAG:1900.3")?.target).toEqual({ pr: 1679 })
+  })
+
+  it("takes the target from the person's words, never from the front door (STEP-3293 re-review)", async () => {
+    // The reviewer's proofs, turned round.
+    const { go } = ctl("In Review", ["polads", "agent-ready"])
+    recordPr(paths, { issue: "STEP-7", url: PR, openedAt: NOW.toISOString() })
+    const mention = (ts: string, text: string) => {
+      const key = `msg:CAG:${ts}`
+      putOnce(paths.inbox, key, { type: "mention", key, issue: null, channel: "CAG", ts, threadTs: ts, user: "UNATE", userName: "Nate", text, receivedAt: NOW.toISOString() })
+      return key
+    }
+    await expect(go(["instruct", "--key", mention("1901.1", "<@UBOT> please merge it"), "--actions", "merge", "--target", "#1704"])).rejects.toThrow(/name no issue or PR/)
+    // A different kind of target is compared too.
+    await expect(go(["instruct", "--key", mention("1901.2", "<@UBOT> merge STEP-7"), "--actions", "merge", "--target", "#1704"])).rejects.toThrow(/Nate named STEP-7, so the target must be that/)
+    await expect(go(["instruct", "--key", mention("1901.3", "<@UBOT> merge https://github.com/STEP-Network/polads/pull/1704"), "--actions", "merge", "--target", "STEP-9"])).rejects.toThrow(/Nate named #1704, so the target must be that/)
+    // A reply acts on its thread's issue: other words are a question for them.
+    await expect(go(["instruct", "--key", reply("1901.4", "merge STEP-9 instead"), "--actions", "merge"])).rejects.toThrow(/Nate named STEP-9 in the STEP-7 thread: ask them which they mean/)
+    await expect(go(["instruct", "--key", reply("1901.5", "merge #1704"), "--actions", "merge"])).rejects.toThrow(/Nate named #1704, which is not STEP-7's PR/)
+    await expect(go(["instruct", "--key", reply("1901.6", "merge it"), "--actions", "merge", "--target", "#1704"])).rejects.toThrow(/the target is this thread's, STEP-7/)
+    expect(listNew<{ type: string }>(paths.inbox).map((e) => e.payload).filter((p) => p.type === "instruction")).toEqual([])
+    // Its own PR, named, is fine.
+    expect(await go(["instruct", "--key", reply("1901.7", "merge #1679"), "--actions", "merge"])).toBe(0)
+    // And a plain "@eve pause" needs no target at all: a pause is the whole mini's.
+    expect(await go(["instruct", "--key", mention("1901.8", "<@UBOT> pause everything"), "--actions", "pause"])).toBe(0)
+    const filed = listNew<{ key: string; type: string; actions?: string[]; target?: unknown }>(paths.inbox).map((e) => e.payload).filter((p) => p.type === "instruction")
+    expect(Object.fromEntries(filed.map((p) => [p.key, [p.actions, p.target]]))).toEqual({
+      "instr:CQ:1901.7": [["merge"], { pr: 1679 }],
+      "instr:CAG:1901.8": [["pause"], {}],
+    })
+  })
+
+  it("takes agentd's default only for a yes to a decision asked before it (STEP-3293 re-review)", async () => {
+    const { go } = ctl("In Review", ["polads", "agent-ready"])
+    const early = reply("1902.1", "yes", { receivedAt: new Date(NOW.getTime() - 60_000).toISOString() })
+    const config = ConfigSchema.parse(JSON.parse(readFileSync(paths.config, "utf8")))
+    askDecision(paths, config, {
+      id: "infra-STEP-7-late", issue: "STEP-7", url: PR, question: "The checks failed again for no reason of the code's.",
+      options: [{ reply: "re-run", does: "have me start them once more" }, { reply: "leave it", does: "leave the PR to a person" }],
+      defaultReply: "re-run", defaultAction: { kind: "rerun", runs: ["111"] },
+    }, NOW)
+    await expect(go(["instruct", "--key", early, "--actions", "default"])).rejects.toThrow(/agentd asked its question in STEP-7 after this reply, so their yes was not to it/)
+    expect(await go(["instruct", "--key", reply("1902.2", "yes"), "--actions", "default"])).toBe(0)
   })
 
   it("files only what the person's own words ask for, never more (STEP-3293 review)", async () => {

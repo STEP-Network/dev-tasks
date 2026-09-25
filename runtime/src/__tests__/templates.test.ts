@@ -59,7 +59,7 @@ describe("templates/claude-settings.json, the front door's settings", () => {
   it("denies the GitHub MCP server's write tools, by either name it may carry (STEP-3293 review)", () => {
     // Slack words reach the front door as a prompt now. It writes to GitHub
     // through nothing: agentd opens, fixes and merges PRs. Reads stay.
-    const writes = ["merge_pull_request", "push_files", "create_or_update_file", "delete_file", "create_branch", "create_pull_request", "update_pull_request", "update_pull_request_branch", "pull_request_review_write", "create_and_submit_pull_request_review", "add_comment_to_pending_review", "add_issue_comment", "add_reply_to_pull_request_comment", "update_issue_comment", "issue_write", "create_issue", "update_issue", "sub_issue_write", "create_repository", "fork_repository", "run_workflow", "rerun_workflow_run", "rerun_failed_jobs", "cancel_workflow_run"]
+    const writes = ["merge_pull_request", "push_files", "create_or_update_file", "delete_file", "create_branch", "create_pull_request", "update_pull_request", "update_pull_request_branch", "pull_request_review_write", "create_and_submit_pull_request_review", "add_comment_to_pending_review", "add_issue_comment", "add_reply_to_pull_request_comment", "update_issue_comment", "issue_write", "create_issue", "update_issue", "sub_issue_write", "create_repository", "fork_repository", "run_workflow", "rerun_workflow_run", "rerun_failed_jobs", "cancel_workflow_run", "delete_repository", "create_pull_request_with_copilot", "assign_copilot_to_issue", "request_copilot_review"]
     for (const server of ["mcp__github__", "mcp__plugin_github_github__"]) {
       for (const tool of writes) expect(rendered.permissions.deny, `${server}${tool}`).toContain(`${server}${tool}`)
     }

@@ -143,11 +143,13 @@ Phase 0, put the new one under `## Original` in the brief, `## Answers from
 Slack` and `## Answers from Monday` included, and weigh the new answers
 before you choose below.
 
-If a product decision or an ambiguity the code cannot settle remains, ask,
-one question per file and call (they share the issue's thread), then park it.
-Write the question to `~/.front-door/ask-STEP-<n>.md`, and the answer you
-recommend, in a few plain words, to `~/.front-door/rec-STEP-<n>.md`. A reply
-of "yes" agrees to it, so recommend something you would build. Then:
+If a product decision or an ambiguity the code cannot settle remains, ask
+everything in one question, with one recommendation that covers all of it,
+then park it. A "yes" agrees to one recommendation, so a second question in
+the thread before they answer makes their "yes" say nothing: agentctl then
+refuses to record it. Write the question to `~/.front-door/ask-STEP-<n>.md`,
+and the answer you recommend, in a few plain words, to
+`~/.front-door/rec-STEP-<n>.md`. Recommend something you would build. Then:
 
 ```bash
 ~/.agentd/bin/agentctl ask --issue STEP-<n> --text-file ~/.front-door/ask-STEP-<n>.md --recommendation-file ~/.front-door/rec-STEP-<n>.md

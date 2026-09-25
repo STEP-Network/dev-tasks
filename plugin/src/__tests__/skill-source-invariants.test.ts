@@ -253,6 +253,11 @@ describe("/refine", () => {
     expect(source).not.toMatch(/manageSubtasks|parentId/)
   })
 
+  it("asks everything in one question with one recommendation, since a yes agrees to one (STEP-3293 re-review)", () => {
+    expect(source).toMatch(/ask\s+everything in one question, with one recommendation that covers all of it/)
+    expect(source).not.toMatch(/one question per file and call/)
+  })
+
   it("re-reads the issue right before it writes, and keeps the answers people gave", () => {
     // The bridge appends answers to the description from another process: a
     // brief built from the first read would drop one that arrived meanwhile.
@@ -409,6 +414,9 @@ describe("/front-door: talking with the agent in Slack (STEP-3293)", () => {
     expect(source).toMatch(/Never put a recommendation in `agentctl slack reply`/)
     expect(source).toContain("~/.agentd/bin/agentctl instruct --key <key> --actions revise,merge")
     expect(source).toMatch(/naming only the actions their own words ask for/)
+    // The target is the person's too (STEP-3293 re-review).
+    expect(source).toMatch(/The target is what their words name, and `--target`, if you give it, must\s+be that same one/)
+    expect(source).not.toContain("--target #1679` (or `--target STEP-<n>`)")
     // A yes on a person's to-do means they will do it.
     expect(source).toMatch(/\*\*On an issue waiting on a person's hands\*\* \(`human-todo`\): a "yes"\s+means they will do it, so ack it\./)
     expect(source).toMatch(/\*\*Unsure\*\* which it is: reply "Is that your decision, or a question for\s+me\?" and ack it\./)
