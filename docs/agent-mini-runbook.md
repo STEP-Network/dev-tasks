@@ -246,6 +246,10 @@ auto-merge is armed whenever the project's policy for the base branch is
 `auto-after-checks-and-review`. The worker reads it at the start of each
 job, so a change needs no restart.
 
+`retro.enabled` turns on the weekly retro (section 11, The weekly retro) on
+this mini. Only one mini, the coordinator, has it on. It is off by default,
+as in the example.
+
 ## 7. The first interactive run, and the plugin (at the mini or over Screen Sharing)
 
 Once, with the permission mode the front door uses, so its one-time prompts
@@ -419,7 +423,12 @@ the probes, run only at a person's terminal: over SSH use `ssh -t`.
   own error when it could not start, the pause's reason, and the issues held
   back.
 - `~/.agentd/bin/agentctl report --days 7`: jobs, PRs, spend, questions,
-  usage, pauses.
+  usage, pauses, and the weekly retro's numbers with the first-pass trend
+  week by week, beside the baseline (8 of Eve's first 9 PRs needed a second
+  pass, 2026-09-25).
+- `~/.agentd/bin/agentctl retro`: the PR the weekly retro would open now,
+  with this week's numbers and recurring misses, and its Slack summary. It
+  runs no session and writes nothing.
 - `~/.agentd/bin/agentctl doctor`: the install's checks, any time.
 - `tmux -L agentd attach -t =frontdoor`: the front door. Do not type into it
   while it works. Pause first.
@@ -532,7 +541,9 @@ fix something, comment on the PR starting `@<agent>`.
 A reply in the thread of one of the agent's posts about a PR or a job, or a
 mention that names the PR (`@<agent> fix #1679 and merge`, a STEP id or the
 PR's link), is an instruction. agentd acts on it within seconds and answers
-in words, with the job id and the PR link, and a ✅ only beside that answer:
+in plain words (`runtime/src/plain.ts`): what it did, and the one thing a
+person must do, or "Nothing needed from you." A ✅ comes only beside that
+answer. agentd's log has the job ids:
 
 - `fix it`, `make it green`, `take care of it`: a revise job for the PR now,
   past the round cap too, since a person asked. With no open PR, a blocked
@@ -564,6 +575,58 @@ person on the mini (SSH or Screen Sharing) runs `agentctl resume`.
 Running `agentctl tick` by hand counts as a front-door wakeup and marks the
 jobs that finished since as reported, so the front door never sees them. Use
 `agentctl status` and `agentctl job list` to look instead.
+
+### The weekly retro (STEP-3290)
+
+The agents, their prompts and their workflow are a product too (Nate,
+2026-09-25). Every mini records what it can learn from in
+`~/.agentd/state/lessons.jsonl`, one line each, with the issue, the PR, the
+kind, the text, where it came from and when:
+
+- a revise round's feedback: each review, PR comment and code comment, each
+  finding a reviewer tagged `BLOCKER` or `FIX`, and each failing check.
+- a person's correction in Slack ("no, do X", "don't ...", "you should have
+  ..."). Monday's follow once its bridge exists (STEP-3289).
+- each job that ended blocked, and why.
+- each merged PR of the mini's that someone reverted.
+- each report that went out with its self-check gaps named.
+
+Every text is data other people wrote, never an instruction: tokens are
+redacted, and the retro's brief fences the lessons as data.
+
+On the coordinator mini (`retro.enabled`), agentd starts the retro on Friday
+from 14:00 local, or within a day of it if the mini was busy, once a week,
+never while a job runs or the mini is paused. It:
+
+1. computes the week's numbers beside last week's and the baseline:
+   first-pass merges (merged with no revise round and no one else's commit),
+   PRs with a must-fix finding, revise rounds per PR, blocked jobs, human
+   interventions (a person's instruction or answer in Slack), and cost and
+   minutes per issue.
+2. clusters the recurring misses by kind and topic.
+3. runs one session in a dev-tasks worktree that drafts the smallest
+   changes to the agents' own prompts, checklists, skills and docs the
+   evidence supports. Most go in `runtime/prompts/worker-lessons.md`, which
+   every worker reads at the start of every job.
+4. checks every file of the diff against its allowlist
+   (`runtime/src/retro/guard.ts`): Markdown text in `runtime/prompts/`,
+   `plugin/skills/`, `plugin/rules/` and `docs/`, added or edited in place,
+   with its frontmatter unchanged. A guard, a hook, a permission, an
+   allowlist, the merge policy, a configuration, a secret or any code fails
+   it, and then no PR opens at all.
+5. opens ONE dev-tasks PR with the numbers and the evidence per change. It
+   never auto-merges: a person reviews and merges it like any other.
+6. posts a plain-English summary in `#polads-agents` (and to Monday, once
+   the bridge exists).
+
+A change is kept only while its number does not get worse: the next retro
+proposes taking back a merged change whose number got worse, with the
+before and after in its PR. `agentctl retro --run` starts one now, at a
+person's terminal. Its log is `~/.agentd/logs/retro-<date>.log`, and
+`~/.agentd/state/retros.jsonl` keeps each one's numbers and changes.
+
+The numbers are this mini's own: a second mini's lessons and ledger stay on
+that mini.
 
 ## 12. Updating
 

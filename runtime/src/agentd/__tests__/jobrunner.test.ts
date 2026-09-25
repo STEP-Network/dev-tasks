@@ -7,6 +7,7 @@ import { agentPaths, ConfigSchema } from "../../config.ts"
 import { listNew, writeJsonAtomic } from "../../fsq.ts"
 import { heldBackIssues, listJobs, moveJob, submitJob, updateJob } from "../../jobs.ts"
 import type { Logger } from "../../log.ts"
+import { readLessons } from "../../retro/lessons.ts"
 import { superviseJobs, workerLiveness, type JobRunnerDeps } from "../jobrunner.ts"
 
 const quiet: Logger = { info() {}, warn() {}, error() {} }
@@ -84,11 +85,13 @@ describe("superviseJobs", () => {
     superviseJobs(deps)
     expect(listJobs(paths, "done")[0].result).toMatchObject({ status: "blocked", reason: "the worker process died before reporting", minutes: 30 })
     const [notice] = outbox(paths)
-    expect(notice).toMatch(/^STEP-1: the worker process died before reporting\./)
+    expect(notice).toMatch(/^STEP-1: I had to stop: my run stopped unexpectedly\./)
     // Its commits are not pushed from here: they stay on the local branch, where the next run starts from them.
-    expect(notice).toMatch(/stays on this mini's local branch/)
-    expect(notice).toMatch(/released after 6 hours/)
+    expect(notice).toMatch(/Anything I committed stays on this mini, and my next try at STEP-1 starts from it\./)
+    expect(notice).toMatch(/I let it go after 6 hours unless someone takes it first/)
     expect(spawned).toHaveLength(1)
+    // A lesson for the weekly retro (STEP-3290), in agentd's own words.
+    expect(readLessons(paths)).toEqual([expect.objectContaining({ category: "blocked", source: "agentd", issue: "STEP-1", text: "the worker process died before reporting" })])
   })
 
   it("treats a job that started before the last boot as dead, even if its pid is in use again", () => {
@@ -119,7 +122,7 @@ describe("superviseJobs", () => {
     superviseJobs({ ...deps, liveness: () => "gone" })
     expect(listJobs(paths, "done")[0].result).toMatchObject({ status: "blocked", reason: "the worker overran its wall clock of 90 minutes and was stopped" })
     expect(outbox(paths)).toHaveLength(1)
-    expect(outbox(paths)[0]).toMatch(/^STEP-1: the worker overran its wall clock of 90 minutes and was stopped\./)
+    expect(outbox(paths)[0]).toMatch(/^STEP-1: I had to stop: I ran out of time \(90 minutes\)\./)
   })
 
   it("counts the wall clock from the session's start, so a slow worktree never cuts a session or its finish short", () => {
@@ -210,7 +213,7 @@ describe("superviseJobs", () => {
     superviseJobs(deps)
     expect(listJobs(paths, "running")).toEqual([])
     expect(listJobs(paths, "done")[0].result).toMatchObject({ status: "blocked", reason: "the worker could not be started: could not start the worker for STEP-1-20260924110000" })
-    expect(outbox(paths)[0]).toMatch(/^STEP-1: the worker could not be started/)
+    expect(outbox(paths)[0]).toMatch(/^STEP-1: I had to stop: my run could not start\./)
   })
 })
 
@@ -227,13 +230,13 @@ describe("two early losses in a row", () => {
     lose(paths, "STEP-1", "2026-09-24T11:50:00.000Z", "2026-09-24T11:55:00.000Z")
     superviseJobs(deps)
     expect(heldBackIssues(paths)).toEqual(new Set())
-    expect(outbox(paths)[0]).not.toMatch(/held back from new jobs/)
+    expect(outbox(paths)[0]).not.toMatch(/will not try it again by myself/)
     lose(paths, "STEP-1", "2026-09-24T11:56:00.000Z", "2026-09-24T11:57:00.000Z")
     superviseJobs({ ...deps, now: () => new Date("2026-09-24T12:01:00.000Z") })
     expect(heldBackIssues(paths)).toEqual(new Set(["STEP-1"]))
     expect(outbox(paths)).toHaveLength(2)
     expect(outbox(paths)[1]).toMatch(
-      /Its last two workers died within 10 minutes of starting or never started, so STEP-1 is held back from new jobs until a person runs it by hand \(agentctl job submit --issue STEP-1\)\. Look for STEP-1 in ~\/\.agentd\/logs\/worker\.log and agentd\.log, and in its worker-STEP-1-\*\.log files for a crash before the worker's own log started\.$/,
+      /My last two tries at STEP-1 both stopped within 10 minutes of starting, so I will not try it again by myself\. A person can start it by hand once the cause is fixed \(agentctl job submit --issue STEP-1\)\. For them: look for STEP-1 in ~\/\.agentd\/logs\.$/,
     )
     // The mini is not paused: other issues go on.
     expect(existsSync(paths.pauseFile)).toBe(false)
@@ -257,15 +260,15 @@ describe("two early losses in a row", () => {
     // One notice per loss: the pause is said in the second, never in a post of its own, and no hold is.
     const posts = outbox(paths)
     expect(posts).toHaveLength(2)
-    expect(posts[0]).not.toMatch(/paused|held back from new jobs/)
-    expect(posts[1]).toMatch(/^STEP-2: the worker process died before reporting\. .* It follows an early loss on STEP-1, and two issues lost the same way point at this mini rather than the issues: /)
+    expect(posts[0]).not.toMatch(/paused myself|will not try it again/)
+    expect(posts[1]).toMatch(/^STEP-2: I had to stop: my run stopped unexpectedly\. .* This is the second issue in a row where I stopped right after starting \(STEP-1, then STEP-2\), which points at a problem on this mini rather than the issues\. /)
     expect(
       posts[1].endsWith(
-        `The mini is paused, and no issue stays held back for these losses. Look for ${first.id} and ${second.id} in ~/.agentd/logs/worker.log and agentd.log, ` +
-          `and in worker-${first.id}.log and worker-${second.id}.log for a crash before the worker's own log started. Run agentctl resume once it is fixed.`,
+        `I paused myself. A person needs to look at the mini, fix it, then resume me. ` +
+          `For them: look for ${first.id} and ${second.id} in ~/.agentd/logs, and check that ~/.config/agentd/claude.env is chmod 600 and the SDK is installed.`,
       ),
     ).toBe(true)
-    expect(posts[1]).not.toMatch(/held back from new jobs/)
+    expect(posts[1]).not.toMatch(/will not try it again by myself/)
 
     // Both losses were the mini's. After a resume, one more loss neither pauses again nor holds an issue back.
     rmSync(paths.pauseFile)
@@ -273,7 +276,7 @@ describe("two early losses in a row", () => {
     superviseJobs({ ...deps, now: () => new Date("2026-09-24T12:06:00.000Z") })
     expect(existsSync(paths.pauseFile)).toBe(false)
     expect(heldBackIssues(paths)).toEqual(new Set())
-    expect(outbox(paths).at(-1)).not.toMatch(/paused|held back from new jobs/)
+    expect(outbox(paths).at(-1)).not.toMatch(/paused myself|will not try it again/)
   })
 
   it("after a hold that a fault of the mini follows, count nothing from before the pause", () => {
@@ -298,7 +301,7 @@ describe("two early losses in a row", () => {
     lose(other.paths, "STEP-3", "2026-09-24T12:01:00.000Z", "2026-09-24T12:02:00.000Z")
     superviseJobs({ ...other.deps, now: () => new Date("2026-09-24T12:05:00.000Z") })
     expect(existsSync(other.paths.pauseFile)).toBe(false)
-    expect(outbox(other.paths).at(-1)).not.toMatch(/paused|held back from new jobs/)
+    expect(outbox(other.paths).at(-1)).not.toMatch(/paused myself|will not try it again/)
     // One early loss on STEP-1 after the resume does not hold it again with its first loss from before.
     const same = brokenMini()
     lose(same.paths, "STEP-1", "2026-09-24T12:01:00.000Z", "2026-09-24T12:02:00.000Z")

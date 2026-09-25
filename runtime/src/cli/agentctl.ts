@@ -1,7 +1,7 @@
 /**
  * agentctl: the agent mini's local control, for the front door (tick, ack,
  * job submit, ask, slack post and reply), a person on the machine (status,
- * report, pause, resume, retry, doctor, probe-sandbox, probe-hooks --scripted) and
+ * report, retro, pause, resume, retry, doctor, probe-sandbox, probe-hooks --scripted) and
  * the rehearsal (probe-hooks). One line of output per call: JSON, or text for
  * status, report, doctor and the free probes. Usage errors exit 64, anything
  * else 1.
@@ -27,6 +27,10 @@ import { checkBilling, checkPlugins, type QueryFn } from "../worker/run.ts"
 import { parseCli, UsageError } from "./args.ts"
 import { doctorChecks, formatDoctor } from "./doctor.ts"
 import { statusReport, summariseLedger, type StatusInput } from "./report.ts"
+import { spawnRetroProcess } from "../agentd/jobrunner.ts"
+import { noFyi } from "../retro/fyi.ts"
+import { readLessons } from "../retro/lessons.ts"
+import { localParts, readRetroState, runRetro, writeRetroState } from "../retro/retro.ts"
 import { probeWorkerHooks, recordHooksProbe, workerClaudePath } from "./hooks-probe.ts"
 import { probeFrontDoorSandbox, recordSandboxProbe } from "./sandbox-probe.ts"
 
@@ -65,6 +69,7 @@ const DEFAULTS: AgentctlDeps = {
 }
 
 const message = (error: unknown) => (error instanceof Error ? error.message : String(error))
+const quietLog = { info: () => {}, warn: () => {}, error: () => {} }
 
 export async function run(argv: string[], out: (line: string) => void, overrides: Partial<AgentctlDeps> = {}): Promise<number> {
   const deps = { ...DEFAULTS, ...overrides }
@@ -272,7 +277,29 @@ export async function run(argv: string[], out: (line: string) => void, overrides
           return []
         }
       })
-      print(summariseLedger(events, new Date(now().getTime() - days * 86_400_000)))
+      print(summariseLedger(events, new Date(now().getTime() - days * 86_400_000), readLessons(paths), now()))
+      return 0
+    }
+    case "retro": {
+      // The weekly retro (STEP-3290). Plain: a dry run, which prints the PR
+      // body the retro would open and its Slack summary, and runs no session,
+      // no git and no Slack. --run starts the real one now, at a person's terminal.
+      const config = loadConfig(paths)
+      const slot = localParts(now(), config.queue.timeZone).date
+      if (flags.run === true) {
+        if (deps.env.AGENTD_FRONT_DOOR === "1" || !deps.isTTY()) throw new Error("agentctl retro --run is for a person at a terminal on the mini (ssh -t, or Screen Sharing), not for the front door")
+        const state = readRetroState(paths)
+        if (state?.slot === slot && !state.endedAt) throw new Error(`the retro for ${slot} is running already (pid ${state.pid ?? "unknown"})`)
+        const pid = spawnRetroProcess(paths, RUNTIME_DIR)(slot)
+        writeRetroState(paths, { slot, startedAt: now().toISOString(), pid })
+        print({ started: slot, pid, log: join(paths.logs, `retro-${slot}.log`) })
+        return 0
+      }
+      const noSession: QueryFn = () => {
+        throw new Error("a dry run runs no session")
+      }
+      const r = await runRetro({ paths, config, exec: deps.exec, query: noSession, now, log: quietLog, fyi: noFyi, claudeToken: null }, { slot, dryRun: true })
+      print([r.body, "", "## Slack, once it has run", "", r.summary].join("\n"))
       return 0
     }
     case "doctor": {
@@ -348,7 +375,7 @@ export async function run(argv: string[], out: (line: string) => void, overrides
     }
     default:
       throw new UsageError(
-        "usage: agentctl <tick|ack|job|ask|slack|pause|resume|retry|status|report|doctor|probe-hooks|probe-sandbox> (see runtime/src/cli/agentctl.ts)",
+        "usage: agentctl <tick|ack|job|ask|slack|pause|resume|retry|status|report|retro|doctor|probe-hooks|probe-sandbox> (see runtime/src/cli/agentctl.ts)",
       )
   }
 }

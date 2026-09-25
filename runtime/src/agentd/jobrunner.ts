@@ -24,6 +24,8 @@ import { heldBackIssues, jobPath, listJobs, moveJob, updateJob, type JobRecord }
 import { appendLedger, type Logger } from "../log.ts"
 import { enqueueSlack } from "../outbox.ts"
 import { commandOf } from "../pidlock.ts"
+import { plainReason } from "../plain.ts"
+import { recordLessons } from "../retro/lessons.ts"
 
 /** A job's worker: still running ("ours"), not ("gone"), or ps could not say ("unknown"). */
 export type Liveness = "ours" | "gone" | "unknown"
@@ -93,23 +95,27 @@ function endBlocked(deps: JobRunnerDeps, job: JobRecord, reason: string, started
   })
   if (!moved) return false
   appendLedger(deps.paths, { type: "worker.end", issue: job.issue, status: "blocked", reason }, now)
+  try {
+    recordLessons(deps.paths, [{ mini: deps.config.mini, issue: job.issue, pr: job.revise?.url ?? null, category: "blocked", source: "agentd", text: reason, key: `blocked:${job.id}` }], now)
+  } catch (error) {
+    deps.log.warn("lesson not recorded", { issue: job.issue, error: String(error) })
+  }
   // What the second early loss in a row means is said once, in the notice of that loss itself.
   let more = ""
   if (miniFault && previous) {
     updateJob(deps.paths, "done", previous.id, { miniFault: true })
     pauseForMiniFault(deps, [previous, job], now)
     more =
-      ` It follows an early loss on ${previous.issue}, and two issues lost the same way point at this mini rather than the issues: ` +
-      `a broken install, a secrets file the runner refuses (~/.config/agentd/claude.env must be chmod 600), or a missing SDK. ` +
-      `The mini is paused, and no issue stays held back for these losses. Look for ${previous.id} and ${job.id} in ~/.agentd/logs/worker.log and agentd.log, ` +
-      `and in worker-${previous.id}.log and worker-${job.id}.log for a crash before the worker's own log started. Run agentctl resume once it is fixed.`
+      ` This is the second issue in a row where I stopped right after starting (${previous.issue}, then ${job.issue}), which points at a problem on this mini rather than the issues. ` +
+      `I paused myself. A person needs to look at the mini, fix it, then resume me. ` +
+      `For them: look for ${previous.id} and ${job.id} in ~/.agentd/logs, and check that ~/.config/agentd/claude.env is chmod 600 and the SDK is installed.`
   } else if (lostEarly && heldBackIssues(deps.paths).has(job.issue)) {
     more =
-      ` Its last two workers died within ${EARLY_DEATH_MINUTES} minutes of starting or never started, so ${job.issue} is held back from new jobs until a person runs it by hand (agentctl job submit --issue ${job.issue}). ` +
-      `Look for ${job.issue} in ~/.agentd/logs/worker.log and agentd.log, and in its worker-${job.issue}-*.log files for a crash before the worker's own log started.`
+      ` My last two tries at ${job.issue} both stopped within ${EARLY_DEATH_MINUTES} minutes of starting, so I will not try it again by myself. ` +
+      `A person can start it by hand once the cause is fixed (agentctl job submit --issue ${job.issue}). For them: look for ${job.issue} in ~/.agentd/logs.`
     deps.log.error("issue held back after two early losses", { issue: job.issue, jobId: job.id })
   }
-  enqueueSlack(deps.paths, { kind: "post", channel: "agents", text: `${job.issue}: ${reason}. ${notice}${more}` }, now)
+  enqueueSlack(deps.paths, { kind: "post", channel: "agents", text: `${job.issue}: I had to stop: ${plainReason(reason)}. ${notice}${more}` }, now)
   return true
 }
 
@@ -166,8 +172,8 @@ export function superviseJobs(deps: JobRunnerDeps): void {
         job,
         reason,
         startedAt,
-        `Anything it committed stays on this mini's local branch, where the next run of ${job.issue} here starts from it. ` +
-          `If it had claimed the issue, the claim is released after ${deps.config.claims.ttlHours} hours unless someone takes the issue first.`,
+        `Anything I committed stays on this mini, and my next try at ${job.issue} starts from it. ` +
+          `If I had taken the issue, I let it go after ${deps.config.claims.ttlHours} hours unless someone takes it first.`,
         lostEarly,
       )
       if (said) deps.log.warn("worker gone without reporting", { issue: job.issue, jobId: job.id, pid: job.pid, reason })
@@ -224,6 +230,23 @@ export function workerLiveness(pid: number, jobId: string, ps?: string): Livenes
   if (command === undefined) return "unknown"
   const args = command?.trim().split(/\s+/) ?? []
   return args.some((a) => a.endsWith("worker/run.ts")) && args.includes(jobId) ? "ours" : "gone"
+}
+
+/** Starts the weekly retro (retro/run.ts) for a slot, detached like a worker, logging to retro-<slot>.log. */
+export function spawnRetroProcess(paths: AgentPaths, runtimeDir: string): (slot: string) => number {
+  return (slot) => {
+    mkdirSync(paths.logs, { recursive: true })
+    const out = openSync(join(paths.logs, `retro-${slot}.log`), "a")
+    try {
+      const child = spawn(process.execPath, ["--import", "tsx", join(runtimeDir, "src", "retro", "run.ts"), slot], { cwd: runtimeDir, detached: true, stdio: ["ignore", out, out] })
+      child.on("error", () => {})
+      child.unref()
+      if (!child.pid) throw new Error(`could not start the retro for ${slot}`)
+      return child.pid
+    } finally {
+      closeSync(out)
+    }
+  }
 }
 
 export function spawnWorkerProcess(paths: AgentPaths, runtimeDir: string): (jobId: string) => number {

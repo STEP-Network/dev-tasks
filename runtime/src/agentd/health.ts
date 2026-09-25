@@ -51,7 +51,12 @@ export async function watchPrs(deps: { exec: Exec; paths: AgentPaths; config: Ag
       }
       const view = JSON.parse(r.stdout) as OwnPrView
       if (view.state !== "OPEN") {
-        appendLedger(deps.paths, { type: "pr.closed", issue: pr.issue, url: pr.url, state: view.state }, deps.now())
+        // For the weekly retro's first-pass measure (STEP-3290): how many rounds it took, and whether anyone else committed to it.
+        appendLedger(
+          deps.paths,
+          { type: "pr.closed", issue: pr.issue, url: pr.url, state: view.state, rounds: pr.revise?.rounds ?? 0, otherCommits: await othersCommits(deps.exec, pr.url) },
+          deps.now(),
+        )
         forgetWatchedPr(deps.paths, pr.url)
         continue
       }
@@ -60,6 +65,20 @@ export async function watchPrs(deps: { exec: Exec; paths: AgentPaths; config: Ag
       // One PR's bad answer must not stop the watch of the others.
       deps.log.warn("PR not checked", { url: pr.url, error: error instanceof Error ? error.message : String(error) })
     }
+  }
+}
+
+/** The PR's commits by anyone but its author (the mini), or null when gh cannot say. */
+export async function othersCommits(exec: Exec, url: string): Promise<number | null> {
+  const r = await exec("gh", ["pr", "view", url, "--json", "author,commits"], { timeoutMs: GH_TIMEOUT_MS })
+  if (r.code !== 0) return null
+  try {
+    const v = JSON.parse(r.stdout) as { author?: { login?: string }; commits?: Array<{ authors?: Array<{ login?: string }> }> }
+    const author = v.author?.login
+    if (!author) return null
+    return (v.commits ?? []).filter((c) => !(c.authors ?? []).some((a) => a.login === author)).length
+  } catch {
+    return null
   }
 }
 

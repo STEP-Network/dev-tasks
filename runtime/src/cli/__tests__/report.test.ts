@@ -109,7 +109,7 @@ describe("summariseLedger", () => {
       { at: "2026-09-24T10:40:00.000Z", type: "answer.applied", issue: "STEP-8" },
       { at: "2026-09-24T11:00:00.000Z", type: "usage", fiveHourPct: 20, sevenDayPct: 44 },
     ]
-    expect(summariseLedger(events, new Date("2026-09-23T00:00:00.000Z")).split("\n")).toEqual([
+    expect(summariseLedger(events, new Date("2026-09-23T00:00:00.000Z"), [], NOW).split("\n")).toEqual([
       "since 2026-09-23",
       "jobs: 2 (done 1, blocked 1)",
       "PRs opened: 1, median job minutes for a PR: 30",
@@ -118,11 +118,14 @@ describe("summariseLedger", () => {
       "questions: 1 asked, 1 answered, median answer 40 min",
       "front door starts: 0, claims released: 0, pauses: 0",
       "latest usage: 5h 20 percent, 7d 44 percent",
+      "first-pass merges: none. Baseline: 1 of 9 (11 percent) on 2026-09-25: 8 of Eve's first 9 PRs needed a second pass",
+      "PRs with a must-fix finding: none, revise rounds per PR: n/a, blocked jobs: 1, human interventions: 1, per issue: n/a",
+      "first-pass trend: week to 2026-09-03: none merged, week to 2026-09-10: none merged, week to 2026-09-17: none merged, week to 2026-09-24: none merged",
     ])
   })
 
   it("says none when nothing happened", () => {
-    expect(summariseLedger([], new Date("2026-09-23T00:00:00.000Z")).split("\n")).toEqual([
+    expect(summariseLedger([], new Date("2026-09-23T00:00:00.000Z"), [], NOW).split("\n")).toEqual([
       "since 2026-09-23",
       "jobs: 0 (none)",
       "PRs opened: 0, median job minutes for a PR: n/a",
@@ -131,6 +134,9 @@ describe("summariseLedger", () => {
       "questions: 0 asked, 0 answered, median answer n/a",
       "front door starts: 0, claims released: 0, pauses: 0",
       "latest usage: none recorded",
+      "first-pass merges: none. Baseline: 1 of 9 (11 percent) on 2026-09-25: 8 of Eve's first 9 PRs needed a second pass",
+      "PRs with a must-fix finding: none, revise rounds per PR: n/a, blocked jobs: 0, human interventions: 0, per issue: n/a",
+      "first-pass trend: week to 2026-09-03: none merged, week to 2026-09-10: none merged, week to 2026-09-17: none merged, week to 2026-09-24: none merged",
     ])
   })
 })
