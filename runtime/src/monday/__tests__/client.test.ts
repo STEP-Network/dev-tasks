@@ -43,6 +43,7 @@ describe("the Monday API client (STEP-3289)", () => {
       { errors: [{ message: "Complexity budget exhausted, query cost 30001 budget remaining 29958 out of 10000000" }] },
       { error_code: "DAILY_LIMIT_EXCEEDED", error_message: "Daily limit exceeded" },
       { errors: [{ message: "Rate Limit Exceeded", extensions: { code: "RATE_LIMIT_EXCEEDED" } }] },
+      { errors: [{ message: "Something went wrong", extensions: { code: "INTERNAL_SERVER_ERROR" } }] },
     ]) {
       const error = await createMondayApi(TOKEN, { fetch: fakeFetch([{ json }]).f, sleep: noSleep }).me().catch((e: Error) => e)
       expect(error).toBeInstanceOf(Error)

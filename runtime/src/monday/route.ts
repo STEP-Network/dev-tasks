@@ -5,19 +5,19 @@
  *
  * They are an instruction for agentd (the STEP-3285 verbs, slack/instruction.ts)
  * only where this mini has work of its own on the issue: a PR it opened and
- * still watches, an open question it asked, or its last job there ended
- * blocked. A request is never one. Everything else is an answer, added to the
- * issue under "## Answers from Monday", and a parked issue moves on. So "fix
- * the date" on a request, or "hold off" on another mini's issue, reaches the
- * issue as words and moves nothing on this mini.
+ * still watches, an open question it asked, or its most recent job there
+ * ended blocked. A request is never one. Either way the words are added to
+ * the issue under "## Answers from Monday", so the issue keeps them. Only an
+ * answer moves a parked issue on: an instruction is agentd's to act on. So
+ * "fix the date" on a request, or "hold off" on another mini's issue,
+ * reaches the issue as words and moves nothing on this mini.
  */
 
 import type { AgentPaths } from "../config.ts"
 import { putOnce } from "../fsq.ts"
-import { readWatchedPrs } from "../jobs.ts"
+import { listJobs, readWatchedPrs } from "../jobs.ts"
 import { appendLedger } from "../log.ts"
 import { openDecisions } from "../agentd/decisions.ts"
-import { lastBlocked } from "../agentd/instructions.ts"
 import { instructionFor, type Action, type MondayInstructionEntry } from "../slack/instruction.ts"
 import { answerTransition, appendAnswer } from "../slack/text.ts"
 import type { Tracker } from "../tracker.ts"
@@ -34,9 +34,16 @@ export interface Words {
 
 export type Routed = { to: "agentd"; actions: Action[] } | { to: "issue"; movedTo: string | null }
 
+/** Whether the issue's most recent job on this mini, running, queued or done, is one that ended blocked. */
+function blockedNow(paths: AgentPaths, issue: string): boolean {
+  const jobs = (["running", "pending", "done"] as const).flatMap((state) => listJobs(paths, state)).filter((j) => j.issue === issue)
+  const latest = jobs.sort((a, b) => a.submittedAt.localeCompare(b.submittedAt)).at(-1)
+  return latest?.result?.status === "blocked"
+}
+
 /** Whether this mini has work of its own on the issue that the fixed verbs act on. */
 export function ownsWork(paths: AgentPaths, issue: string): boolean {
-  return readWatchedPrs(paths).some((p) => p.issue === issue) || openDecisions(paths, issue).length > 0 || lastBlocked(paths, issue) !== null
+  return readWatchedPrs(paths).some((p) => p.issue === issue) || openDecisions(paths, issue).length > 0 || blockedNow(paths, issue)
 }
 
 export async function routeWords(
@@ -47,6 +54,11 @@ export async function routeWords(
   const { issue, words, who, now } = input
   const current = await tracker.readIssue(issue)
   const said = !input.request && ownsWork(paths, issue) ? instructionFor(words.text, current) : null
+  const description = appendAnswer(current.description, { ts: words.id, userName: who.name, text: words.text, permalink: words.permalink }, "monday")
+  // An instruction leaves the issue where it is: agentd acts on it.
+  const move = said ? {} : answerTransition(current)
+  const patch = { ...(description !== current.description ? { description } : {}), ...move }
+  if (Object.keys(patch).length) await tracker.updateIssue(issue, patch)
   if (said) {
     const key = `instr:monday:${words.id}`
     const entry: MondayInstructionEntry = {
@@ -57,9 +69,6 @@ export async function routeWords(
     if (putOnce(paths.inbox, key, entry)) appendLedger(paths, { type: "instruction.received", issue, actions: said.actions, via: "monday" }, now)
     return { to: "agentd", actions: said.actions }
   }
-  const description = appendAnswer(current.description, { ts: words.id, userName: who.name, text: words.text, permalink: words.permalink }, "monday")
-  const move = answerTransition(current)
-  await tracker.updateIssue(issue, { ...(description !== current.description ? { description } : {}), ...move })
   appendLedger(paths, { type: "answer.applied", issue, movedTo: move.state ?? null, via: "monday" }, now)
   return { to: "issue", movedTo: move.state ?? null }
 }

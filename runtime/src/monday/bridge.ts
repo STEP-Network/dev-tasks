@@ -6,11 +6,13 @@
  * when the account's daily API calls would not stretch to that (apiShare):
  *
  *  1. Words first. A configured person's update on an item (or a reply under
- *     one), or their Answer column, goes through routeWords (route.ts): an
- *     instruction for agentd where this mini has work of its own on the
- *     issue, else an answer added to the issue, which moves a parked issue
- *     on. The item's State becomes Waiting on agent. On a Test day item only
- *     PASS or FAIL counts, and records the UAT verdict as review-uat does.
+ *     one), or their Answer column, goes through routeWords (route.ts): added
+ *     to the issue always, and an instruction for agentd too where this mini
+ *     has work of its own on the issue, else an answer that moves a parked
+ *     issue on. They are marked handled once Linear has them, so they are
+ *     acted on once. The item's State becomes Waiting on agent. On a Test day
+ *     item only PASS or FAIL counts, and records the UAT verdict as
+ *     review-uat does.
  *  2. Requests. A person's new item in Requests becomes a Linear Triage
  *     issue, linked both ways, and moves to Agents working on. It is Blocked
  *     while the issue is On hold, and Done once it is released.
@@ -69,6 +71,8 @@ const DAY = 24 * 60 * MINUTE
 /** How far back the Answer column's history is read again, so a change logged late is not missed. */
 const OVERLAP_MS = 5 * MINUTE
 const WORDS_MAX = 4000
+/** Free, Basic and Standard's daily API calls (developer.monday.com, Rate limits): what the bridge assumes when Monday does not say. */
+const SMALLEST_PLAN_CALLS = 1000
 
 type GroupKey = "needsYou" | "testDay" | "requests" | "working" | "done"
 
@@ -130,7 +134,7 @@ export function createMondayBridge(deps: MondayBridgeDeps): MondayBridge {
   let checked = false
   let refused: string | null = null
   /** The account's API calls a day, and when they were last read: the plan decides them, so once a day is enough. */
-  let limit: { calls: number | null; readAt: number } | null = null
+  let limit: { calls: number; readAt: number } | null = null
 
   /** The token's own user, once: an admin's token, or one of the people's, and the bridge does nothing at all. */
   async function allowed(): Promise<boolean> {
@@ -152,7 +156,7 @@ export function createMondayBridge(deps: MondayBridgeDeps): MondayBridge {
 
   function pollEveryMs(): number {
     const floor = cfg!.pollMinutes * MINUTE
-    if (!limit?.calls) return floor
+    if (!limit) return floor
     // One read a poll, within apiShare of what the whole account may call in a day.
     return Math.max(floor, Math.ceil(DAY / MINUTE / (limit.calls * cfg!.apiShare)) * MINUTE)
   }
@@ -161,13 +165,19 @@ export function createMondayBridge(deps: MondayBridgeDeps): MondayBridge {
     if (limit && now.getTime() - limit.readAt < DAY) return
     const before = pollEveryMs()
     let calls: number | null = null
+    let why = "monday gave no number"
     try {
       calls = await api.dailyLimit()
     } catch (error) {
-      once("daily-limit", () => log.warn("monday did not say the account's daily API limit, so the board is read every pollMinutes", { error: message(error) }))
+      why = message(error)
+    }
+    if (!calls) {
+      // Unknown, it is the smallest plan's: too slow a poll costs minutes, too fast a one the whole account's API for the day.
+      once("daily-limit", () => log.warn(`monday did not say the account's daily API limit, so the bridge assumes ${SMALLEST_PLAN_CALLS} (the smallest plan)`, { error: why }))
+      calls = SMALLEST_PLAN_CALLS
     }
     limit = { calls, readAt: now.getTime() }
-    if (pollEveryMs() !== before || calls) log.info("monday poll", { dailyLimit: calls, everyMinutes: pollEveryMs() / MINUTE })
+    if (pollEveryMs() !== before) log.info("monday poll", { dailyLimit: calls, everyMinutes: pollEveryMs() / MINUTE })
   }
 
   /** A reply on the item: under the person's thread, with a like beside it only when it says the thing was done. */
@@ -279,9 +289,9 @@ export function createMondayBridge(deps: MondayBridgeDeps): MondayBridge {
     const words: Words = { ...raw, text: truncateChars(redact(raw.text).trim(), WORDS_MAX) }
     if (!words.text) return mark(rec, words.id)
     try {
+      // Each marks the words handled once their Linear write has landed: whatever fails after, they are never routed twice.
       if (rec.kind === "uat") await verdict(rec, item, who, words, pass)
       else await answer(rec, item, who, words, pass)
-      mark(rec, words.id)
     } catch (error) {
       if (isIssueGone(error)) {
         reply(item.id, words, say.gone(rec.issue), pass.now, false)
@@ -294,19 +304,29 @@ export function createMondayBridge(deps: MondayBridgeDeps): MondayBridge {
         return mark(rec, words.id)
       }
       if (!first) rec.failing = { ...rec.failing, [words.id]: pass.now.toISOString() }
-      if (words.updateId === null) rec.retry = { ...rec.retry, [words.id]: { userId: who.id, text: raw.text } }
+      if (words.updateId === null) rec.retry = { ...rec.retry, [words.id]: { userId: who.id, text: words.text } }
       save(rec)
       log.warn("monday words not acted on yet", { issue: rec.issue, item: item.id, error: message(error) })
+    }
+  }
+
+  /** What follows words already recorded in Linear: a failure is logged, never a reason to hear them again. */
+  async function after(what: string, rec: ItemRecord, fn: () => Promise<void>): Promise<void> {
+    try {
+      await fn()
+    } catch (error) {
+      log.warn(`monday ${what} failed after the words were recorded`, { issue: rec.issue, error: message(error) })
     }
   }
 
   /** Words on a Needs you or a request item, through the one router (route.ts). */
   async function answer(rec: ItemRecord, item: MondayItem, who: Person, words: Words, pass: Pass): Promise<void> {
     const routed = await routeWords({ paths, tracker }, { issue: rec.issue, request: rec.kind === "request", itemId: item.id, who, words, now: pass.now })
+    mark(rec, words.id)
     // agentd answers an instruction itself, once it has acted (agentd/instructions.ts).
     if (routed.to === "issue") reply(item.id, words, say.answered(who.name, routed.movedTo), pass.now)
     // A request's State follows its issue in Linear (requests below).
-    if (rec.kind !== "request") await setState(rec, "Waiting on agent")
+    if (rec.kind !== "request") await after("state", rec, () => setState(rec, "Waiting on agent"))
   }
 
   /**
@@ -319,15 +339,22 @@ export function createMondayBridge(deps: MondayBridgeDeps): MondayBridge {
    */
   async function verdict(rec: ItemRecord, item: MondayItem, who: Person, words: Words, pass: Pass): Promise<void> {
     const m = /^\s*(pass|fail)\b[\s:.,!-]*/i.exec(words.text)
-    if (!m) return void reply(item.id, words, say.onlyVerdicts(), pass.now, false)
+    if (!m) {
+      reply(item.id, words, say.onlyVerdicts(), pass.now, false)
+      return mark(rec, words.id)
+    }
     const current = await tracker.readIssue(rec.issue)
-    if (current.state !== "Waiting for UAT") return void reply(item.id, words, say.notWaiting(), pass.now, false)
+    if (current.state !== "Waiting for UAT") {
+      reply(item.id, words, say.notWaiting(), pass.now, false)
+      return mark(rec, words.id)
+    }
     const seen = words.text.slice(m[0].length).trim()
     const where = words.permalink ?? item.url
     if (m[1].toLowerCase() === "pass") {
       await tracker.comment(rec.issue, `UAT PASS from ${who.name} on the Monday board (${where})${seen ? `: ${seen}` : "."}`)
       await tracker.updateIssue(rec.issue, { state: "Approved" })
-      if (current.title.startsWith("UAT fix:")) await closeTheLoop(current.id, who)
+      mark(rec, words.id)
+      if (current.title.startsWith("UAT fix:")) await after("closing the loop", rec, () => closeTheLoop(current.id, who))
       reply(item.id, words, say.passed(who.name), pass.now)
     } else {
       // Named by the person's update, so a retry after a crash finds this issue rather than filing a second.
@@ -351,6 +378,7 @@ export function createMondayBridge(deps: MondayBridgeDeps): MondayBridge {
       await people.adoptFix(sub.uuid, current.uuid, current.priority)
       await tracker.comment(rec.issue, `UAT FAIL from ${who.name} on the Monday board (${where}). The fix is tracked in ${sub.id}.`)
       await tracker.updateIssue(rec.issue, { state: "Needs Correction" })
+      mark(rec, words.id)
       reply(item.id, words, say.failed(who.name, sub.id), pass.now)
     }
     appendLedger(paths, { type: "uat.verdict", issue: rec.issue, verdict: m[1].toLowerCase(), by: who.name, via: "monday" }, pass.now)
@@ -550,22 +578,21 @@ export function createMondayBridge(deps: MondayBridgeDeps): MondayBridge {
   async function drain(): Promise<void> {
     const waiting = listNew<MondayReply & { queuedAt: string }>(mondayOutbox(paths))
     if (!waiting.length || !(await allowed())) return
-    // In order per item: one item's trouble holds back only that item's later replies.
-    const held = new Set<string>()
     for (const { key, payload } of waiting) {
-      if (held.has(payload.itemId)) continue
       try {
         await api.postUpdate(payload.itemId, toHtml(`${agentLabel}: ${payload.text}`), payload.threadId)
       } catch (error) {
-        // Refused (the item is gone, say): it would be refused again. Out of reach: it waits, for a day at most.
-        if (error instanceof MondayRefused || deps.now().getTime() - Date.parse(payload.queuedAt) > DAY) {
+        const stale = deps.now().getTime() - Date.parse(payload.queuedAt) > DAY
+        // Refused (the item is gone, say): it would be refused again, and the others go on.
+        if (error instanceof MondayRefused || stale) {
           fail(mondayOutbox(paths), key)
           log.error("monday reply given up", { item: payload.itemId, error: message(error) })
-          continue
+        } else {
+          log.warn("monday reply not posted yet", { item: payload.itemId, error: message(error) })
         }
-        held.add(payload.itemId)
-        log.warn("monday reply not posted yet", { item: payload.itemId, error: message(error) })
-        continue
+        if (error instanceof MondayRefused) continue
+        // Out of reach is Monday, not this item: every reply waits for the next loop, in order, and agentd goes on.
+        return
       }
       ack(mondayOutbox(paths), key)
       // The board's ✅, beside the words.

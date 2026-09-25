@@ -672,15 +672,17 @@ What it does:
   PR links, and the Due date. Its text is plain English, with the question
   as the agent asked it when this mini asked it.
 - **Answers.** A person's update on an item (or a reply under one), or the
-  Answer column, goes one of two ways. Where this mini has work of its own
-  on the issue (a PR it opened and still watches, an open decision it asked,
-  or a job of its that ended blocked), the fixed verbs of section 11 (fix
-  it, re-run, merge, retry, pause, leave it) become an instruction agentd
-  acts on within seconds and answers on the item, with a like on the
-  update. Everything else, and every word on a request, is added to the
-  issue under "## Answers from Monday", and a parked issue moves on. So
-  "hold off" on another mini's issue pauses nothing here. The State goes to
-  Waiting on agent, then Done once Linear no longer needs a person.
+  Answer column, is always added to the issue under "## Answers from
+  Monday", so the issue keeps it. Where this mini has work of its own on
+  the issue (a PR it opened and still watches, an open decision it asked,
+  or its most recent job there ended blocked), the fixed verbs of section
+  11 (fix it, re-run, merge, retry, pause, leave it) are also an instruction
+  agentd acts on within seconds and answers on the item, with a like on the
+  update. Otherwise, and always on a request, the words are an answer, and a
+  parked issue moves on. So "hold off" on another mini's issue pauses
+  nothing here. The State goes to Waiting on agent, then Done once Linear
+  no longer needs a person. Words are acted on once, even when Monday fails
+  after Linear has them.
 - **Test day.** Every issue in Waiting for UAT, as a Check with the "You
   must check" steps of its latest Agent UAT review (its acceptance criteria
   when there is no review). A reply starting PASS or FAIL is recorded as
@@ -726,8 +728,9 @@ history together), plus a write for each change. The bridge reads the
 account's own limit once a day (`platform_api { daily_limit }`) and polls
 no more often than `apiShare` (20 percent) of it allows: every 2 minutes
 on Pro and Enterprise (720 calls a day of 10,000), every 8 minutes on
-Basic or Standard (180 of 1,000). When Monday does not say, it polls every
-`pollMinutes`, and `monday.log` says so once.
+Basic or Standard (180 of 1,000). When Monday does not say, it assumes the
+smallest plan (1,000, every 8 minutes), and `monday.log` says so once. While
+Monday is out of reach, replies wait, in order, and agentd goes on.
 
 ### Turning it on (Nate)
 
@@ -742,11 +745,23 @@ Basic or Standard (180 of 1,000). When Monday does not say, it polls every
    ```
 
    The bridge refuses an admin's token, and the token of any of the people.
+   Check the token once, live, before turning the bridge on: the user must
+   not be an admin, and Monday should name the account's daily limit. The
+   token goes to curl on stdin, never in its arguments:
+
+   ```bash
+   ( . ~/.config/agentd/monday.env; printf 'header = "Authorization: %s"\n' "$MONDAY_API_TOKEN" ) \
+     | curl -s --config - https://api.monday.com/v2 -H 'Content-Type: application/json' -H 'API-Version: 2025-10' \
+       -d '{"query":"query { me { is_admin } platform_api { daily_limit { base total } } }"}'
+   ```
+
+   Expect `"is_admin":false` and a `total`. Without a `total`, the bridge
+   assumes 1,000 calls a day and reads the board every 8 minutes.
 2. The people's Monday user ids: the number at the end of each person's
    Monday profile link.
-3. In Linear, the labels `intake/monday` and `needs-human`. Without
-   `intake/monday` requests are still filed, unlabelled, and `monday.log`
-   says so once.
+3. In Linear, the labels `intake/monday` and `needs-human` (both made on
+   2026-09-25). Without `intake/monday` requests are still filed,
+   unlabelled, and `monday.log` says so once.
 4. In `~/.agentd/config.json` on the coordinator mini:
 
    ```json
@@ -754,9 +769,9 @@ Basic or Standard (180 of 1,000). When Monday does not say, it polls every
      "monday": {
        "enabled": true,
        "people": [
-         { "id": "<Nate's id>", "name": "Nate", "linearEmail": "nate@polads.eu" },
+         { "id": "<Nate's id>", "name": "Nate", "linearEmail": "<his Linear email>" },
          { "id": "<Kristoffer's id>", "name": "Kristoffer", "linearEmail": "<his Linear email>" },
-         { "id": "<Tomas's id>", "name": "Tomas", "linearEmail": "<his Linear email>" }
+         { "id": "<Tomas's id>", "name": "Tomas" }
        ],
        "defaultPerson": "<Nate's id>",
        "agentLabels": ["Eve", "Bob"]
@@ -764,9 +779,13 @@ Basic or Standard (180 of 1,000). When Monday does not say, it polls every
    }
    ```
 
-   `agentLabels` names the Agent column's labels for the agents' Linear
-   accounts, so an issue another agent holds shows its name. Left out, only
-   this mini's own label (`agentLabel`, its name capitalised) is used.
+   The ids and emails stay out of this repository, which is public: the
+   orchestrator has them. A person without a Linear account (Tomas, for
+   now) has no `linearEmail`, and gets items only as the default person or
+   by hand. `agentLabels` names the Agent column's labels for the agents'
+   Linear accounts, so an issue another agent holds shows its name. Left
+   out, only this mini's own label (`agentLabel`, its name capitalised) is
+   used.
    Everything else defaults to the board as it was built on 2026-09-25: the
    board and column ids, the group names (Needs you, Test day, Requests,
    Agents working on, Done), `pollMinutes` 2, `apiShare` 0.2,

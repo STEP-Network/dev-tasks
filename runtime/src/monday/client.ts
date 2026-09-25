@@ -92,7 +92,7 @@ const MAX_PAGES = 20
 const ID_RE = /^\d+$/
 const COLUMN_RE = /^[a-z0-9_]+$/
 /** Monday's limits, which it reports as GraphQL errors too: the minute, the day, the complexity budget, concurrency. */
-const LIMIT_RE = /rate.?limit|daily.?limit|complexity|concurren|maxConcurrency|timeout|internal server error/i
+const LIMIT_RE = /rate.?limit|daily.?limit|complexity|concurren|maxConcurrency|timeout|internal.?server.?error/i
 
 const ITEM_FIELDS = `
   id name url created_at creator_id

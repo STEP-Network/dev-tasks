@@ -2,7 +2,7 @@ import { existsSync, mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { describe, expect, it } from "vitest"
-import { agentPaths, ConfigSchema } from "../../config.ts"
+import { agentPaths, ConfigSchema, type AgentPaths } from "../../config.ts"
 import { countIn, listNew } from "../../fsq.ts"
 import type { Logger } from "../../log.ts"
 import { enqueueSlack } from "../../outbox.ts"
@@ -10,7 +10,7 @@ import type { MondayInstructionEntry } from "../../slack/instruction.ts"
 import type { TrackerIssue } from "../../tracker.ts"
 import { fakeTracker, issue } from "../../__tests__/fakes.ts"
 import { askDecision } from "../../agentd/decisions.ts"
-import { recordPr } from "../../jobs.ts"
+import { moveJob, recordPr, submitJob } from "../../jobs.ts"
 import { createMondayBridge } from "../bridge.ts"
 import { MondayRefused, type ColumnChange, type MondayApi, type MondayItem } from "../client.ts"
 import type { PeopleIssue, PeopleView } from "../people.ts"
@@ -39,6 +39,8 @@ function fakeMonday(me = { id: AGENT, name: "PolAds agents", isAdmin: false }, d
   const calls: Array<{ method: string; args: unknown[] }> = []
   /** Items Monday cannot be reached for, as in an outage: their updates fail, and are not refused. */
   const down = new Set<string>()
+  /** Calls Monday cannot be reached for at all, by method. */
+  const broken = new Set<string>()
   let next = 1000
   let clock = T0
   const record = (method: string, args: unknown[]) => calls.push({ method, args })
@@ -78,6 +80,7 @@ function fakeMonday(me = { id: AGENT, name: "PolAds agents", isAdmin: false }, d
     },
     async setColumns(boardId, itemId, values) {
       record("setColumns", [boardId, itemId, values])
+      if (broken.has("setColumns")) throw new Error("Monday: gave up after 3 attempts (status 503)")
       setValues(find(itemId), values)
     },
     async moveItem(itemId, groupId) {
@@ -104,6 +107,7 @@ function fakeMonday(me = { id: AGENT, name: "PolAds agents", isAdmin: false }, d
     items,
     calls,
     down,
+    broken,
     called: (method: string) => calls.filter((c) => c.method === method).map((c) => c.args),
     writes: () => calls.filter((c) => !["me", "readBoard", "dailyLimit"].includes(c.method)),
     at: (t: Date) => {
@@ -216,7 +220,7 @@ function setup(seed: TrackerIssue[] = [], opts: SetupOptions = {}) {
   }
   const inbox = () => listNew<MondayInstructionEntry>(paths.inbox).map((e) => e.payload)
   const texts = (itemId: string) => monday.items.get(itemId)?.updates.map((u) => u.text) ?? []
-  return { paths, config, fake, monday, adopted, bridge, later, inbox, logged, texts, failOn }
+  return { paths, config, fake, monday, people, adopted, bridge, later, inbox, logged, texts, failOn }
 }
 
 const stateOf = (item: MondayItem | undefined) => item?.columns[COL.state]?.text
@@ -376,6 +380,7 @@ describe("the Monday bridge: answers (STEP-3289)", () => {
     // Read once: the next poll neither appends it again nor reads its "merge" as an instruction now the question is gone.
     expect(fake.called("updateIssue")).toHaveLength(1)
     expect(inbox()).toEqual([])
+    expect(monday.called("postUpdate").filter((c) => /I added your answer/.test(String(c[1])))).toHaveLength(1)
   })
 
   it("reads the Answer column as the person who wrote it, and answers with a new update", async () => {
@@ -392,6 +397,7 @@ describe("the Monday bridge: answers (STEP-3289)", () => {
     later(2)
     await bridge.sync()
     expect(fake.called("updateIssue")).toHaveLength(1)
+    expect(monday.called("postUpdate").filter((c) => /I added your answer/.test(String(c[1])))).toHaveLength(1)
   })
 
   it("ignores anyone not on the allowlist: their updates, their Answer column and their requests", async () => {
@@ -685,23 +691,25 @@ describe("the Monday bridge: when Linear is down (STEP-3289 review)", () => {
 })
 
 describe("the Monday bridge: replies (STEP-3289 review)", () => {
-  it("holds back only the replies of an item Monday cannot be reached for, in order, and drops a reply Monday refuses at once", async () => {
+  it("drops a reply Monday refuses at once, and stops for the loop when Monday is out of reach, every reply kept in order", async () => {
     const { bridge, monday, paths } = setup([issue({ id: "STEP-7", state: "On hold", labels: ["human-todo"] }), issue({ id: "STEP-8", state: "On hold", labels: ["human-todo"] })])
     await bridge.sync()
     const [a, b] = readRecords(paths).map((r) => r.itemId)
     monday.down.add(a)
+    enqueueMonday(paths, { itemId: "9999", threadId: null, text: "for a deleted item", like: null }, T0)
     enqueueMonday(paths, { itemId: a, threadId: null, text: "first for a", like: null }, T0)
     enqueueMonday(paths, { itemId: a, threadId: null, text: "second for a", like: null }, T0)
-    enqueueMonday(paths, { itemId: "9999", threadId: null, text: "for a deleted item", like: null }, T0)
     enqueueMonday(paths, { itemId: b, threadId: null, text: "for b", like: null }, T0)
     await bridge.drain()
     const posted = () => monday.called("postUpdate").filter((c) => String(c[1]).startsWith("Eve: ")).map((c) => `${c[0]} ${c[1]}`)
-    expect(posted()).toEqual([`${a} Eve: first for a`, `9999 Eve: for a deleted item`, `${b} Eve: for b`])
+    // Out of reach is Monday's, not one item's: nothing after it is tried this loop, so agentd is not held up.
+    expect(posted()).toEqual([`9999 Eve: for a deleted item`, `${a} Eve: first for a`])
     expect(countIn(mondayOutbox(paths), "failed")).toBe(1)
-    expect(countIn(mondayOutbox(paths), "new")).toBe(2)
+    expect(countIn(mondayOutbox(paths), "new")).toBe(3)
     monday.down.delete(a)
     await bridge.drain()
     expect(monday.items.get(a)!.updates.map((u) => u.text).filter((t) => t.startsWith("Eve: "))).toEqual(["Eve: first for a", "Eve: second for a"])
+    expect(monday.items.get(b)!.updates.map((u) => u.text).filter((t) => t.startsWith("Eve: "))).toEqual(["Eve: for b"])
     expect(countIn(mondayOutbox(paths), "new")).toBe(0)
   })
 
@@ -780,17 +788,21 @@ describe("the Monday bridge: the account's daily API calls (STEP-3289 review)", 
     expect(narrow.bridge.pollEveryMs()).toBe(15 * 60_000)
   })
 
-  it("reads the limit once a day, and polls every pollMinutes, saying so once, when Monday does not tell it", async () => {
+  it("reads the limit once a day, and assumes the smallest plan's, saying so once, when Monday does not tell it", async () => {
     const s = setup([], { dailyLimit: new Error("Monday: Field 'platform_api' doesn't exist") })
     await s.bridge.sync()
     s.later(2)
     await s.bridge.sync()
     expect(s.monday.called("dailyLimit")).toHaveLength(1)
-    expect(s.bridge.pollEveryMs()).toBe(2 * 60_000)
+    // 1,000 calls a day (Free, Basic, Standard): every 8 minutes.
+    expect(s.bridge.pollEveryMs()).toBe(8 * 60_000)
     s.later(24 * 60 + 1)
     await s.bridge.sync()
     expect(s.monday.called("dailyLimit")).toHaveLength(2)
     expect(s.logged.filter((l) => /daily API limit/.test(l.msg))).toHaveLength(1)
+    const silent = setup([], { dailyLimit: null })
+    await silent.bridge.sync()
+    expect(silent.bridge.pollEveryMs()).toBe(8 * 60_000)
   })
 })
 
@@ -803,5 +815,90 @@ describe("the Monday bridge: agents on the board (STEP-3289 review)", () => {
     const both = setup([issue({ id: "STEP-7", state: "On hold", labels: ["awaiting-answer"] })], { extra, monday: { agentLabels: ["Eve", "Bob"] } })
     await both.bridge.sync()
     expect(both.monday.called("createItem")[0][3]).toMatchObject({ [COL.agent]: { labels: ["Bob"] } })
+  })
+})
+
+describe("the Monday bridge: words sent to agentd stay on the issue too (STEP-3289 final review)", () => {
+  const blockedJob = (paths: AgentPaths) => {
+    const job = submitJob(paths, "STEP-7", null, new Date("2026-09-25T07:00:00.000Z"))
+    moveJob(paths, job.id, "pending", "done", { endedAt: "2026-09-25T07:30:00.000Z", result: { status: "blocked", reason: "no PR title", prUrl: null, branch: null, costUsd: null, turns: null, minutes: 5 } })
+  }
+
+  it("keeps an instruction's words on the issue, and leaves a parked issue where it is for agentd to act", async () => {
+    const { bridge, monday, fake, later, inbox, paths } = setup([issue({ id: "STEP-7", state: "On hold", labels: ["needs-human", "agent-ready"], description: "Goal." })])
+    blockedJob(paths)
+    await bridge.sync()
+    const item = monday.item(/Needs a person/)!
+    later(1)
+    const said = monday.says(item.id, NATE, "retry it please")
+    later(2)
+    await bridge.sync()
+    expect(inbox()).toEqual([expect.objectContaining({ issue: "STEP-7", actions: ["retry"] })])
+    expect(fake.issues.get("STEP-7")).toMatchObject({ state: "On hold", description: expect.stringContaining(`<!-- monday:${said} -->\n**Nate** `) })
+  })
+
+  it("counts a blocked job only while it is the issue's most recent one", async () => {
+    const { bridge, monday, fake, later, inbox, paths } = setup([issue({ id: "STEP-7", state: "On hold", labels: ["needs-human", "agent-ready"], description: "Goal." })])
+    blockedJob(paths)
+    // A newer job since: the blocked one is history, so "retry" is only words.
+    submitJob(paths, "STEP-7", null, new Date("2026-09-25T08:00:00.000Z"))
+    await bridge.sync()
+    later(1)
+    monday.says(monday.item(/Needs a person/)!.id, NATE, "retry it please")
+    later(2)
+    await bridge.sync()
+    expect(inbox()).toEqual([])
+    expect(fake.issues.get("STEP-7")).toMatchObject({ state: "Ready", description: expect.stringContaining("retry it please") })
+  })
+})
+
+describe("the Monday bridge: words are routed once (STEP-3289 final review)", () => {
+  it("never routes the same words twice when Monday fails after the Linear write", async () => {
+    const { bridge, monday, fake, later } = setup([issue({ id: "STEP-7", state: "On hold", labels: ["human-todo"], description: "Do the DNS." })])
+    await bridge.sync()
+    const item = monday.item(/job for a person/)!
+    later(1)
+    monday.says(item.id, NATE, "Done, the record is in.")
+    monday.broken.add("setColumns")
+    later(2)
+    await bridge.sync()
+    later(2)
+    await bridge.sync()
+    expect(fake.called("updateIssue")).toHaveLength(1)
+    expect(fake.issues.get("STEP-7")!.description.match(/the record is in/g)).toHaveLength(1)
+    expect(monday.called("postUpdate").filter((c) => /I added your answer/.test(String(c[1])))).toHaveLength(1)
+  })
+
+  it("records a PASS once when closing the loop fails after it", async () => {
+    const { bridge, monday, fake, later, people, logged } = setup([
+      issue({ id: "STEP-5", title: "Fix the date", state: "Needs Correction", labels: ["polads"] }),
+      issue({ id: "STEP-8", title: "UAT fix: the date", state: "Waiting for UAT", labels: ["polads", "bug"] }),
+    ], { parents: { "STEP-8": "STEP-5" } })
+    people.parentOf = async () => {
+      throw new Error("Linear: gave up after 6 attempts (last status 503)")
+    }
+    await bridge.sync()
+    const item = monday.item(/UAT fix: the date/)!
+    later(1)
+    monday.says(item.id, NATE, "PASS")
+    later(2)
+    await bridge.sync()
+    later(2)
+    await bridge.sync()
+    expect(fake.called("comment").filter((c) => c[0] === "STEP-8")).toHaveLength(1)
+    expect(fake.issues.get("STEP-8")!.state).toBe("Approved")
+    expect(logged.some((l) => l.level === "warn" && /closing the loop failed after the words were recorded/.test(l.msg))).toBe(true)
+  })
+
+  it("keeps a refused Answer column change redacted on the record", async () => {
+    const { bridge, monday, later, failOn, paths } = setup([issue({ id: "STEP-7", state: "On hold", labels: ["human-todo"] })])
+    await bridge.sync()
+    failOn.push("updateIssue")
+    later(1)
+    monday.answers(monday.item(/job for a person/)!.id, NATE, "the key is xoxb-1-2-abc")
+    later(2)
+    await bridge.sync()
+    const [kept] = readRecords(paths).flatMap((r) => Object.values(r.retry ?? {}))
+    expect(kept.text).toBe("the key is [redacted]")
   })
 })

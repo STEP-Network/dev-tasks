@@ -209,8 +209,7 @@ async function act(deps: InstructionDeps, entry: AnyInstructionEntry): Promise<s
   return lines.length ? lines : [`I read that as an instruction for ${issue}, but found nothing to do.`]
 }
 
-/** The issue's last finished job, when it ended blocked: what "retry" takes up again. */
-export function lastBlocked(paths: AgentPaths, issue: string): JobRecord | null {
+function lastBlocked(paths: AgentPaths, issue: string): JobRecord | null {
   const done = listJobs(paths, "done").filter((j) => j.issue === issue && j.endedAt)
   const last = done.sort((a, b) => a.endedAt!.localeCompare(b.endedAt!)).at(-1)
   return last?.result?.status === "blocked" ? last : null
