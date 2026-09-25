@@ -352,7 +352,7 @@ describe("agentctl verdict (Wave 2)", () => {
   it("verdict records a person's PASS from their own words, answers in the thread and acks it", async () => {
     writeConfig()
     const { fake, deps: d } = waiting()
-    const key = replyEntry("PASS works on my phone")
+    const key = replyEntry("PASS, works on my phone")
     expect(await run(["verdict", "--key", key], out, d)).toBe(0)
     expect(fake.issues.get("STEP-7")!.state).toBe("Approved")
     expect(fake.called("comment")).toEqual([["STEP-7", "UAT PASS from Ada in Slack (https://x.slack.com/archives/CQ/p1790330410000100): works on my phone"]])
@@ -378,7 +378,7 @@ describe("agentctl verdict (Wave 2)", () => {
     const { fake, deps: d } = waiting()
     const key = replyEntry("looks good")
     await expect(run(["verdict", "--key", key], out, d)).rejects.toThrow(UsageError)
-    await expect(run(["verdict", "--key", key], out, d)).rejects.toThrow(/do not start with PASS or FAIL, so they are not a verdict/)
+    await expect(run(["verdict", "--key", key], out, d)).rejects.toThrow(/are not a verdict: PASS or FAIL, alone or followed by punctuation and what they saw/)
     const mention = "msg:CAG:1790330500.000100"
     putOnce(agentPaths().inbox, mention, { type: "mention", key: mention, channel: "CAG", ts: "1790330500.000100", user: "UADA", userName: "Ada", text: "PASS", receivedAt: NOW.toISOString() })
     await expect(run(["verdict", "--key", mention], out, d)).rejects.toThrow(/not a reply in an issue's thread/)
@@ -390,7 +390,7 @@ describe("agentctl verdict (Wave 2)", () => {
     writeConfig()
     const { fake, deps: d } = waiting()
     fake.issues.set("STEP-7", { ...fake.issues.get("STEP-7")!, state: "Approved" })
-    expect(await run(["verdict", "--key", replyEntry("FAIL it broke")], out, d)).toBe(0)
+    expect(await run(["verdict", "--key", replyEntry("FAIL: it broke")], out, d)).toBe(0)
     expect(outbox()).toEqual([expect.objectContaining({ kind: "reply", text: "This change is no longer waiting for a test, so I did not record your verdict. Nothing needed from you." })])
     expect(listNew(agentPaths().inbox)).toEqual([])
   })

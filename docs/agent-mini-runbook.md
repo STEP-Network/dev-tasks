@@ -867,7 +867,8 @@ What it does:
   must check" steps of its latest Agent UAT review (its acceptance criteria
   when there is no review). Another product's issues (dev-tasks, say) cannot
   be tried on the test site, so they get no item, and one made for them
-  before is archived at the next poll, with nothing said on it. A reply starting PASS or FAIL is recorded as
+  before is archived at the next poll, with nothing said on it. A reply that is PASS or FAIL, alone or followed by punctuation and what
+  the person saw ("FAIL: the date is wrong", never "pass me the link"), is recorded as
   review-uat records a person's verdict (its Step 10 and
   `references/linear-io.md`). PASS: a comment naming the person, then
   Approved, and for a `UAT fix:` its parent back to Agent UAT once none of

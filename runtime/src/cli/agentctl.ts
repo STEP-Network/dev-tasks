@@ -283,7 +283,9 @@ export async function run(argv: string[], out: (line: string) => void, overrides
       const who = entry.userName || entry.user
       const verdict = parseVerdict(entry.readableText ?? entry.text, look)
       if (!verdict) {
-        throw new UsageError(`${who}'s words do not start with PASS or FAIL${look ? ', "looks good" or "change"' : ""}, so they are not a verdict: answer them in the thread`)
+        throw new UsageError(
+          `${who}'s words are not a verdict: PASS or FAIL, alone or followed by punctuation and what they saw${look ? ', "looks good", or "change:" and what should change' : ""}. Answer them in the thread`,
+        )
       }
       const out = await recordVerdict(
         { paths, tracker, people: deps.people(), product: loadConfig(paths).repo.product, now },
