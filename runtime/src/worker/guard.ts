@@ -26,6 +26,9 @@ export const AGENT_CONFIG = /^(\.claude\/hooks(\/|$)|\.claude\/settings[^/]*\.js
 /** PolAds's tracked template holds no secret, and git stats every tracked file, so it is the one .env file allowed. */
 export const ENV_TEMPLATE = ".env.example"
 
+const WHOLESALE =
+  "Resolve a merge conflict hunk by hunk, keeping both sides' intent: never take one side for the whole merge, a directory or several files. Taking one side of a single named file (a lockfile) is allowed."
+
 const BANS: Array<{ re: RegExp; reason: string }> = [
   // The sandbox's network allowlist (npm's registry only) is what stops a push
   // written some other way (`git -C x push`, a path to the binary): these
@@ -34,6 +37,15 @@ const BANS: Array<{ re: RegExp; reason: string }> = [
   { re: /(^|[\s;&|(])gh\s+pr\s+(create|merge)\b/, reason: "Workers never open or merge PRs. The launcher opens the PR and arms auto-merge." },
   { re: /(^|[\s;&|(])gh\s+pr\s+review\b|\/dismissals\b/, reason: "Workers never review a PR or dismiss a review: a person's or a bot's review decision stands." },
   { re: /--admin\b/, reason: "--admin is banned outright (spec section 11)." },
+  // A PR that clashes with its base is merged, never rebased (STEP-3340): a
+  // rebase rewrites commits origin has, which a push that is never forced
+  // cannot send. And a clash is resolved hunk by hunk, never by taking one
+  // side of the whole merge (here) or of more than one file (takesOneSideWholesale).
+  { re: /(^|[\s;&|(])git\s+rebase\b/, reason: "Workers never rebase: a PR's branch takes its base by a merge, and the launcher never force-pushes." },
+  {
+    re: /(^|[\s;&|(])git\s+merge\b[^;&|]*\s(-s\s*ours|--strategy[= ]ours|-X\s*(ours|theirs)|--strategy-option[= ](ours|theirs))\b/,
+    reason: WHOLESALE,
+  },
   // A path segment `.config` (so not jest.config.ts) and a `.env` file name
   // (so not process.env) other than the template. The sandbox refuses the
   // read itself: this says why.
@@ -41,8 +53,30 @@ const BANS: Array<{ re: RegExp; reason: string }> = [
   { re: /(^|[\s'"=:(<>|;&/])\.env(?!\.example(?![\w.-]))/, reason: SECRETS },
 ]
 
+/**
+ * A `git checkout` or `git restore` with --ours or --theirs that takes one
+ * side of more than one named file: several paths, a directory, a glob, the
+ * whole tree, or paths a command substitution picks. One file named with its
+ * extension is allowed (a lockfile): `src` or `.github` may be a directory.
+ */
+function takesOneSideWholesale(command: string): boolean {
+  for (const m of command.matchAll(/(^|[\s;&|(])git\s+(checkout|restore)\b/g)) {
+    const rest = command.slice(m.index + m[0].length)
+    if (!/^[^;&|\n]*\s--(ours|theirs)\b/.test(rest)) continue
+    // A substitution may hold a pipe of its own: judge it before cutting at one.
+    if (/^[^;&\n]*(\$\(|`)/.test(rest)) return true
+    const paths = rest.split(/[;&|\n]/)[0].trim().split(/\s+/).filter((t) => t && !t.startsWith("-"))
+    if (paths.length !== 1) return true
+    const path = paths[0].replace(/^(["'])(.*)\1$/, "$2")
+    const name = path.split("/").pop() ?? ""
+    if (/[*?[\]]/.test(path) || path.startsWith(":") || !/.\.[^.]+$/.test(name)) return true
+  }
+  return false
+}
+
 export function workerBashDenial(command: string): string | null {
   for (const ban of BANS) if (ban.re.test(command)) return ban.reason
+  if (takesOneSideWholesale(command)) return WHOLESALE
   return null
 }
 

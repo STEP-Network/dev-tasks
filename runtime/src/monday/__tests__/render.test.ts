@@ -85,7 +85,7 @@ describe("the board's words (plain English)", () => {
     const lines = [
       say.answered("Nate", "Ready"), say.answered("Nate", "Refining"), say.answered("Nate", null), say.filed("Nate", "STEP-9"),
       say.released("STEP-9"), say.closed("STEP-9"), say.passed("Nate"), say.failed("Nate", "STEP-10"), say.onlyVerdicts(),
-      say.notWaiting(), say.gone("STEP-9"), say.refused("STEP-9"), say.onlyVerdicts(true), say.sameAnswer("Ben", "Ada"),
+      say.notWaiting(), say.gone("STEP-9"), say.refused("STEP-9"), say.onlyVerdicts(true), say.sameAnswer("Ben", "Ada"), say.planYes("Ada"),
       say.filedRequest("Ada", "STEP-12"), say.askedInSlack("Ben", "A CSV export, please"), say.askedInSlack("Someone", ""),
       say.onRequestsBoard("STEP-20", "https://step.monday.com/boards/777/pulses/2"), say.stage("STEP-10", "Building", "1 of 2 done"), say.stage("STEP-10", "Released", "2 of 2 done"),
       say.stage("STEP-10", "Declined", ""), say.stage("STEP-10", "Plan to approve", ""), say.stage("STEP-10", "Ready to test", "2 of 2 done, out with the next release"),
