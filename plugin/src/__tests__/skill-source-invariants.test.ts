@@ -467,8 +467,9 @@ describe("/refine sets the approval class", () => {
 
   it("asks a person to approve the plan for Try work before it is Ready", () => {
     expect(source).toMatch(/Try work waits for a person's OK on the plan/)
-    // The park that asks for the OK carries the class.
-    expect(source).toMatch(/park the issue as above,\s+with `--add-label approval\/try` in the same update/)
+    // The park that asks for the OK carries the class, and only when that is the class set or kept: never over a person's lower one.
+    expect(source).toMatch(/park the issue\s+as above, with `--add-label approval\/try` in the same update when the class\s+you set or kept is `approval\/try`/)
+    expect(source).toMatch(/Try work is\s+an issue whose class, set or kept in Phase 4, is `approval\/try`: one a person\s+keeps at `approval\/look` or `approval\/auto` is not, whatever the rules say\./)
   })
 
   it("keeps a class the issue already has exactly as it is: a person may have set it", () => {
