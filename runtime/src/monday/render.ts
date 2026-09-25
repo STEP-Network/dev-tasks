@@ -181,6 +181,11 @@ export const say = {
   filed: (name: string, id: string) => `Thanks, ${name}. I filed this for the agents as ${id}. It moves to Done when the change is released. ${NOTHING_NEEDED}`,
   /** On the Requests board, where Stage says how far it has come. */
   filedRequest: (name: string, id: string) => `Thanks, ${name}. I filed this for the agents as ${id}. Its Stage shows how far it has come. ${NOTHING_NEEDED}`,
+  /** A Slack request's item, the first time: who asked, and what (spec 4). */
+  askedInSlack: (name: string, about: string) =>
+    `${name} asked for this in Slack${about ? `: ${about}${/[.!?]$/.test(about) ? "" : "."}` : "."} I keep this item up to date from Linear.`,
+  /** The request's Slack thread, once its item exists. */
+  onRequestsBoard: (id: string, url: string) => `${id} is on the Monday Requests board: ${url}. I will post its progress in this thread. ${NOTHING_NEEDED}`,
   /** A request's new Stage (spec 4), once, on its item and in its Slack thread. */
   stage: (id: string, stage: Stage, progress: string) =>
     stage === "Released"

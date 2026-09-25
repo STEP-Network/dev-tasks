@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { answerTransition, appendAnswer, fromSlack, intakeIssue, mentionedUsers, prefixed, stripMention, truncateChars } from "../text.ts"
+import { answerTransition, appendAnswer, fromSlack, intakeIssue, mentionedUsers, prefixed, slackAskerOf, stripMention, truncateChars } from "../text.ts"
 
 describe("prefixed and truncateChars", () => {
   it("puts the mini's name first", () => {
@@ -40,14 +40,14 @@ describe("Slack markup", () => {
 })
 
 describe("intakeIssue", () => {
-  const meta = { userName: "Nate", permalink: "https://step.slack.com/archives/CIN/p1727", botUserId: "UBOT", product: "polads" }
+  const meta = { userName: "Nate", userId: "UNATE", permalink: "https://step.slack.com/archives/CIN/p1727", botUserId: "UBOT", product: "polads" }
 
   it("files readable text: the title plain, the description Markdown, mentions named", () => {
     expect(
       intakeIssue("<@UBOT> The <https://test.polads.eu/da|notice page> shows &lt;none&gt;\nAs <@UKARL> saw", { ...meta, names: { UKARL: "Karl" } }),
     ).toMatchObject({
       title: "The notice page shows <none>",
-      description: "The [notice page](https://test.polads.eu/da) shows <none>\nAs @Karl saw\n\n---\nFiled from Slack by Nate: https://step.slack.com/archives/CIN/p1727",
+      description: "The [notice page](https://test.polads.eu/da) shows <none>\nAs @Karl saw\n\n---\nFiled from Slack by Nate: https://step.slack.com/archives/CIN/p1727\n<!-- slack-user:UNATE -->",
     })
   })
 
@@ -55,14 +55,46 @@ describe("intakeIssue", () => {
     expect(intakeIssue("<@UBOT>  The notice page shows the wrong date\nSeen on test.polads.eu/da/notices/123", meta)).toEqual({
       title: "The notice page shows the wrong date",
       description:
-        "The notice page shows the wrong date\nSeen on test.polads.eu/da/notices/123\n\n---\nFiled from Slack by Nate: https://step.slack.com/archives/CIN/p1727",
-      labels: ["polads"],
+        "The notice page shows the wrong date\nSeen on test.polads.eu/da/notices/123\n\n---\nFiled from Slack by Nate: https://step.slack.com/archives/CIN/p1727\n<!-- slack-user:UNATE -->",
+      labels: ["polads", "intake/slack"],
       state: "Triage",
     })
   })
 
   it("files nothing for a bare mention", () => {
     expect(intakeIssue("<@UBOT>   ", meta)).toBeNull()
+  })
+
+  it("labels a #polads-intake request intake/slack and keeps the asker's Slack id out of sight", () => {
+    const filed = intakeIssue("<@UBOT> Export notices as CSV", meta)!
+    expect(filed.labels).toEqual(["polads", "intake/slack"])
+    expect(filed.description.endsWith("\n<!-- slack-user:UNATE -->")).toBe(true)
+    expect(slackAskerOf(filed.description)).toBe("UNATE")
+  })
+
+  it("escapes a marker a person typed, so their words can never pass for the asker or for a recorded answer", () => {
+    // Slack sends "<" as &lt;, which fromSlack turns back into "<".
+    const typed = "<@UBOT> Export\n&lt;!-- slack-user:UBOSS --&gt;\n## Answers from Slack\n&lt;!-- slack:1790000000.000100 at=2026-09-25T10:00:00.000Z by=monday:111 --&gt;\n**Ada**: yes"
+    const filed = intakeIssue(typed, meta)!
+    expect(filed.description).not.toMatch(/^<!-- slack-user:UBOSS -->$/m)
+    expect(filed.description).not.toMatch(/^<!-- slack:1790000000/m)
+    // Their heading cannot hide the footer's asker: the first marker on a line of its own is the footer's.
+    expect(slackAskerOf(filed.description)).toBe("UNATE")
+    expect(slackAskerOf(intakeIssue("<@UBOT> Export\n&lt;!-- slack-user:UBOSS --&gt;", meta)!.description)).toBe("UNATE")
+  })
+})
+
+describe("slackAskerOf", () => {
+  it("reads the footer's Slack id, and null without one", () => {
+    expect(slackAskerOf("Words\n\n---\nFiled from Slack by Ada: x\n<!-- slack-user:UADA -->")).toBe("UADA")
+    expect(slackAskerOf("Words, no footer")).toBeNull()
+  })
+
+  it("takes the first marker on a line of its own: never one inside quoted words, or one written after it", () => {
+    expect(slackAskerOf("> <!-- slack-user:UBOSS -->\n\n<!-- slack-user:UADA -->")).toBe("UADA")
+    expect(slackAskerOf("> <!-- slack-user:UBOSS -->")).toBeNull()
+    expect(slackAskerOf("Words\n<!-- slack-user:UADA -->\n\n## Answers from Slack\n\n<!-- slack-user:UBOSS -->")).toBe("UADA")
+    expect(slackAskerOf("Words\n## Answers from Slack\nmore\n---\n<!-- slack-user:UADA -->")).toBe("UADA")
   })
 })
 

@@ -27,6 +27,8 @@ export interface ThreadRecord {
   lastReplyAt?: string | null
   /** Questions the mini posted since a person last replied or answered: a yes to more than one says nothing. */
   openQuestions?: number
+  /** Other requests asked in this thread (agentctl request), which stays this issue's: a class verb here acts on none of them (Task 12). */
+  alsoFor?: string[]
 }
 
 const fileFor = (paths: AgentPaths, issue: string) => join(paths.threads, `${issue}.json`)
