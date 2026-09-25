@@ -69,3 +69,8 @@ export function prLink(url: string): string {
   const ref = prRef(url)
   return ref === url ? url : `<${url}|${ref}>`
 }
+
+/** Slack's `<url|label>` links as "label (url)", for a reply that goes somewhere else: the Monday board. */
+export function plainLinks(text: string): string {
+  return text.replace(/<(https?:\/\/[^|>\s]+)\|([^>]+)>/g, "$2 ($1)")
+}

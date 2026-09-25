@@ -13,6 +13,10 @@
  *           project's policy for the PR's base allow it, else why not
  *   leave   nothing: the PR is left to a person
  * Any of them answers the issue's open question (agentd/decisions.ts).
+ *
+ * The Monday bridge files the same instructions from a person's words on the
+ * board (STEP-3289), and they are answered on the board's item, with a like
+ * on the person's update where Slack gets the ✅.
  */
 
 import { existsSync, mkdirSync, writeFileSync } from "node:fs"
@@ -20,16 +24,17 @@ import type { AgentConfig, AgentPaths } from "../config.ts"
 import { ack, listNew } from "../fsq.ts"
 import { listJobs, readWatchedPrs, submitJob, updateWatchedPr, type JobRecord, type WatchedPr } from "../jobs.ts"
 import { appendLedger, type Logger } from "../log.ts"
+import { enqueueMonday } from "../monday/store.ts"
 import { enqueueSlack } from "../outbox.ts"
-import { NOTHING_NEEDED, plainReason, prLink } from "../plain.ts"
-import type { Action, InstructionEntry } from "../slack/instruction.ts"
+import { NOTHING_NEEDED, plainLinks, plainReason, prLink } from "../plain.ts"
+import type { Action, AnyInstructionEntry, InstructionEntry } from "../slack/instruction.ts"
 import type { Exec } from "../worker/git.ts"
 import { mergeMode, readAutoMergePolicy } from "../worker/run.ts"
 import { closeDecision, openDecisions } from "./decisions.ts"
 import { requiredChecks } from "./health.ts"
 import { failingRequired, MAX_REVISE_ROUNDS, type OwnPrView } from "./revise.ts"
 
-export type { InstructionEntry }
+export type { AnyInstructionEntry, InstructionEntry }
 
 export interface InstructionDeps {
   exec: Exec
@@ -45,7 +50,7 @@ const ORDER: Action[] = ["pause", "leave", "revise", "rerun", "retry", "merge"]
 
 /** Every instruction in the inbox: act, reply in its thread, and mark it handled. */
 export async function actOnInstructions(deps: InstructionDeps): Promise<void> {
-  for (const { key, payload } of listNew<InstructionEntry>(deps.paths.inbox)) {
+  for (const { key, payload } of listNew<AnyInstructionEntry>(deps.paths.inbox)) {
     if (payload.type !== "instruction") continue
     let lines: string[]
     try {
@@ -55,9 +60,15 @@ export async function actOnInstructions(deps: InstructionDeps): Promise<void> {
       deps.log.warn("instruction failed", { key, error: String(error) })
     }
     const now = deps.now()
-    enqueueSlack(deps.paths, { kind: "reply", channelId: payload.channel, threadTs: payload.threadTs, text: lines.join("\n") }, now)
-    // A ✅ beside the words, never instead of them.
-    enqueueSlack(deps.paths, { kind: "react", channelId: payload.channel, ts: payload.ts, name: "white_check_mark" }, now)
+    if (payload.monday) {
+      // Words from the Monday board are answered there (STEP-3289), with a like beside them, and links as Monday shows them.
+      const { itemId, updateId, threadId } = payload.monday
+      enqueueMonday(deps.paths, { itemId, threadId, text: plainLinks(lines.join("\n")), like: updateId }, now)
+    } else {
+      enqueueSlack(deps.paths, { kind: "reply", channelId: payload.channel, threadTs: payload.threadTs, text: lines.join("\n") }, now)
+      // A ✅ beside the words, never instead of them.
+      enqueueSlack(deps.paths, { kind: "react", channelId: payload.channel, ts: payload.ts, name: "white_check_mark" }, now)
+    }
     ack(deps.paths.inbox, key)
     const issue = payload.issue ?? payload.target.issue
     appendLedger(deps.paths, { type: "instruction", ...(issue ? { issue } : {}), actions: payload.actions, by: payload.userName }, now)
@@ -65,7 +76,7 @@ export async function actOnInstructions(deps: InstructionDeps): Promise<void> {
 }
 
 /** The watched PR the instruction means: the thread's issue, a named issue, or a named PR of this mini's. */
-function findPr(paths: AgentPaths, entry: InstructionEntry): { issue: string | null; pr: WatchedPr | null } {
+function findPr(paths: AgentPaths, entry: AnyInstructionEntry): { issue: string | null; pr: WatchedPr | null } {
   const watched = readWatchedPrs(paths)
   const byNumber = (n: number) => watched.find((p) => Number(p.url.split("/").pop()) === n) ?? null
   const issue = entry.issue ?? entry.target.issue ?? null
@@ -90,10 +101,11 @@ async function viewPr(deps: InstructionDeps, url: string): Promise<OwnPrView & {
 const busyJob = (paths: AgentPaths, issue: string): JobRecord | null =>
   [...listJobs(paths, "running"), ...listJobs(paths, "pending")].find((j) => j.issue === issue) ?? null
 
-async function act(deps: InstructionDeps, entry: InstructionEntry): Promise<string[]> {
+async function act(deps: InstructionDeps, entry: AnyInstructionEntry): Promise<string[]> {
   const { paths, config } = deps
   const now = deps.now()
   const who = entry.userName || entry.user
+  const where = entry.monday ? "on the Monday board" : "in Slack"
   const { issue, pr } = findPr(paths, entry)
   if (!issue) {
     return [`I could not tell which PR you mean, so I did nothing. Please name it: STEP-<n>, #<number> or its link. I only act on PRs I opened.`]
@@ -113,7 +125,7 @@ async function act(deps: InstructionDeps, entry: InstructionEntry): Promise<stri
       if (existsSync(paths.pauseFile)) {
         lines.push("I am paused already, so nothing changed. To carry on, a person lifts the pause on the mini.")
       } else {
-        const reason = `asked by ${who} in Slack`
+        const reason = `asked by ${who} ${where}`
         mkdirSync(paths.root, { recursive: true })
         writeFileSync(paths.pauseFile, JSON.stringify({ at: now.toISOString(), reason }))
         appendLedger(paths, { type: "paused", reason }, now)
@@ -135,7 +147,7 @@ async function act(deps: InstructionDeps, entry: InstructionEntry): Promise<stri
           kind: "revise",
           revise: {
             url: v.url, number: v.number, branch: v.headRefName, round, since: pr.revise?.lastRoundAt ?? pr.openedAt,
-            reasons: [`asked by ${who} in Slack`], instruction: entry.text,
+            reasons: [`asked by ${who} ${where}`], instruction: entry.text,
           },
         })
         updateWatchedPr(paths, { ...pr, revise: { rounds: round, handled: pr.revise?.handled ?? [], lastRoundAt: now.toISOString(), asked: pr.revise?.asked } })

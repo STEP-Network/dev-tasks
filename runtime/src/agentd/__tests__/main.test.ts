@@ -213,6 +213,23 @@ describe("runDuties", () => {
     await runDuties(d, freshMemo())
     expect(problems.flat()).toContain("the main checkout has local changes, so it is no longer kept on origin's base")
   })
+
+  it("polls the Monday board every pollMinutes where it is on, and posts its replies in every pass between (STEP-3289)", async () => {
+    const ran: string[] = []
+    const monday = { sync: async () => void ran.push("sync"), drain: async () => void ran.push("drain"), pollEveryMs: () => 2 * 60_000 }
+    const config = ConfigSchema.parse({ ...CONFIG, bridges: { monday: { enabled: true, people: [{ id: 1, name: "Nate" }], defaultPerson: 1 } } })
+    const { d, advance } = duties({ config, monday })
+    await runDuties(d, freshMemo())
+    advance(1)
+    await runDuties(d, freshMemo())
+    advance(1)
+    await runDuties(d, freshMemo())
+    expect(ran).toEqual(["sync", "drain", "sync"])
+    // Off, agentd has no bridge to call.
+    const off = duties()
+    await runDuties(off.d, freshMemo())
+    expect(off.d.monday).toBeUndefined()
+  })
 })
 
 describe("killGroup", () => {
@@ -239,6 +256,22 @@ describe("starting agentd", () => {
     expect(checkLocal(agentPaths(h), "eve")).toMatchObject({ config: { mini: "eve" }, sentryUrl: null })
     secret(join(h, ".config", "agentd", "agentd.env"), "SENTRY_CRON_URL=https://o1.ingest.de.sentry.io/api/2/cron/eve-mini/k/\n")
     expect(checkLocal(agentPaths(h), "eve").sentryUrl).toBe("https://o1.ingest.de.sentry.io/api/2/cron/eve-mini/k/")
+    expect(checkLocal(agentPaths(h), "eve").mondayToken).toBeNull()
+  })
+
+  it("reads the Monday token only where the Monday bridge is on, and will not start without it (STEP-3289)", () => {
+    const h = home("eve")
+    secret(join(h, ".config", "linear", ".env"), "LINEAR_API_KEY=lin_api_test\n")
+    writeFileSync(join(h, ".agentd", "config.json"), JSON.stringify({ ...CONFIG, bridges: { monday: { enabled: true, people: [{ id: 1, name: "Nate" }], defaultPerson: 1 } } }))
+    expect(() => checkLocal(agentPaths(h), "eve")).toThrow(/monday\.env is missing/)
+    const token = ["eyJhbGciOiJIUzI1NiJ9", "eyJ0aWQiOjEyMzQ1Njc4OX0", "c2lnbmF0dXJlLXRlc3Q"].join(".")
+    secret(join(h, ".config", "agentd", "monday.env"), `MONDAY_API_TOKEN=${token}\n`)
+    expect(checkLocal(agentPaths(h), "eve").mondayToken).toBe(token)
+    chmodSync(join(h, ".config", "agentd", "monday.env"), 0o644)
+    expect(() => checkLocal(agentPaths(h), "eve")).toThrow(/chmod 600/)
+    // Off, a token lying around is never read.
+    writeFileSync(join(h, ".agentd", "config.json"), JSON.stringify({ ...CONFIG, bridges: { monday: { enabled: false, people: [{ id: 1, name: "Nate" }], defaultPerson: 1 } } }))
+    expect(checkLocal(agentPaths(h), "eve").mondayToken).toBeNull()
   })
 
   it("as a process, records the refusal in agentd.json and exits 0 so launchd leaves it stopped", () => {

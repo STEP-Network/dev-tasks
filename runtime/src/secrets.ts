@@ -5,6 +5,10 @@
  *   ~/.config/agentd/slack.env   SLACK_BOT_TOKEN, SLACK_APP_TOKEN   (the bridge only)
  *   ~/.config/agentd/agentd.env  SENTRY_CRON_URL, optional   (agentd only)
  *   ~/.config/agentd/claude.env  CLAUDE_CODE_OAUTH_TOKEN, optional   (the worker only)
+ *   ~/.config/agentd/monday.env  MONDAY_API_TOKEN, the coordinator mini only   (agentd only)
+ *
+ * The Monday token is the agent's own Monday user's, with access to the one
+ * board (STEP-3289). It is never the admin's: the bridge refuses one.
  *
  * A file other users can read is refused, not warned about: the phase 0
  * rehearsal found the laptop's Linear file at 644, and a warning is what let
@@ -18,6 +22,7 @@ export const linearKeyPath = (home: string) => join(home, ".config", "linear", "
 export const slackSecretsPath = (home: string) => join(home, ".config", "agentd", "slack.env")
 export const agentdSecretsPath = (home: string) => join(home, ".config", "agentd", "agentd.env")
 export const claudeTokenPath = (home: string) => join(home, ".config", "agentd", "claude.env")
+export const mondaySecretsPath = (home: string) => join(home, ".config", "agentd", "monday.env")
 
 export function readSecretsFile(path: string): Record<string, string> {
   let mode: number
@@ -51,6 +56,12 @@ export function loadSlackSecrets(home: string): { botToken: string; appToken: st
     botToken: token(values, "SLACK_BOT_TOKEN", "xoxb-", path),
     appToken: token(values, "SLACK_APP_TOKEN", "xapp-", path),
   }
+}
+
+/** The Monday bridge's token (STEP-3289): a personal API token, which Monday issues as a JWT. */
+export function loadMondayToken(home: string): string {
+  const path = mondaySecretsPath(home)
+  return token(readSecretsFile(path), "MONDAY_API_TOKEN", "eyJ", path)
 }
 
 /** The dead-man switch is optional: no file means no check-ins. */

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { parseInstruction } from "../instruction.ts"
+import { instructionFor, parseInstruction } from "../instruction.ts"
 
 const actions = (text: string) => parseInstruction(text).actions
 
@@ -50,5 +50,16 @@ describe("parseInstruction (STEP-3285)", () => {
     expect(parseInstruction("<@UEVE> merge #1687").target).toEqual({ pr: 1687 })
     expect(parseInstruction("<@UEVE> merge PR 1689").target).toEqual({ pr: 1689 })
     expect(parseInstruction("<@UEVE> fix the login page").target).toEqual({})
+  })
+})
+
+describe("instructionFor (STEP-3285, shared with the Monday bridge in STEP-3289)", () => {
+  it("is an instruction when the words name an action and the issue waits on no person", () => {
+    expect(instructionFor("fix it and merge", { labels: ["polads"] })).toEqual({ actions: ["revise", "merge"], target: {} })
+    expect(instructionFor("thanks, looks good", { labels: ["polads"] })).toBeNull()
+  })
+
+  it("is an answer, whatever its words, when the issue waits on a question or a person's to-do", () => {
+    for (const label of ["awaiting-answer", "human-todo"]) expect(instructionFor("merge it", { labels: ["polads", label] })).toBeNull()
   })
 })

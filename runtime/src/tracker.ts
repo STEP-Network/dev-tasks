@@ -4,7 +4,9 @@
  * not go through resolveTracker().
  */
 export { createLinearTracker } from "../../plugin/src/tracker/linear.ts"
-export { branchNameFor, byPriorityThenAge } from "../../plugin/src/tracker/types.ts"
+/** The adapter's own transport (its key file, rate limit and retries), for the Monday bridge's reads the Tracker has no fields for (monday/people.ts). */
+export { linearRequest } from "../../plugin/src/tracker/linear-client.ts"
+export { branchNameFor, byPriorityThenAge, extractAcceptanceCriteria, LINEAR_TEAM_KEY } from "../../plugin/src/tracker/types.ts"
 export { assertNoSecretText, readTextFile } from "../../plugin/src/tracker/secrets-guard.ts"
 export type {
   ClaimRecord,
@@ -14,3 +16,8 @@ export type {
   TrackerIssue,
   TrackerUser,
 } from "../../plugin/src/tracker/types.ts"
+
+/** An error that says Linear has no such issue, in the adapter's own words (plugin/src/tracker/linear.ts). */
+export function isIssueGone(error: unknown): boolean {
+  return error instanceof Error && error.message.startsWith("Linear: no issue ")
+}

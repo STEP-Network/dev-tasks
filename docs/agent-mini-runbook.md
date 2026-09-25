@@ -19,9 +19,10 @@ launchd (<agent>'s GUI session, logged in automatically)
     tmux -L agentd, session "frontdoor"
       claude --resume ... "/loop /dev-tasks:front-door"   (cwd ~/polads)
     worker, one at a time, detached                    ~/dev-tasks/runtime/src/worker/run.ts
+    the Monday bridge, on the coordinator mini only    ~/dev-tasks/runtime/src/monday/bridge.ts
   eu.polads.slack-bridge  Socket Mode and the outbox  ~/dev-tasks/runtime/src/slack/bridge.ts
 state   ~/.agentd (config.json, queues, jobs, logs, PAUSE)
-secrets ~/.config/linear/.env, ~/.config/agentd/{slack,agentd,claude}.env, all chmod 600
+secrets ~/.config/linear/.env, ~/.config/agentd/{slack,agentd,claude,monday}.env, all chmod 600
 ```
 
 People talk to the agent in Slack. The front door answers, refines issues
@@ -218,7 +219,9 @@ chmod 600 ~/.config/agentd/claude.env
 No production secret ever goes on a mini: no `.env` file in the checkout, no
 `vercel env pull`, no `DATABASE_URL`, and no `MONDAY_API_KEY` (Monday is
 read-only for agents, and on the agent profile the plugin offers no Monday
-tools at all).
+tools at all). The one exception is the coordinator mini's board token,
+`~/.config/agentd/monday.env`, which only agentd reads ("The Monday board",
+near the end).
 
 ## 6. The configuration
 
@@ -727,6 +730,156 @@ was: `/dev`, `/preview` and `/ship` on their laptops.
 4. **Code**: nothing needs reverting for people. The runtime and the two
    skills only run on a mini. If a laptop flow broke on the plugin, go back
    to the previous plugin release.
+
+## The Monday board (the coordinator mini, STEP-3289)
+
+People live in Monday. Linear stays the engineering record, and the board
+(AI Workspace, board 5104953028) shows people what they need to see or do.
+Exactly one mini runs the Monday bridge, Eve's first: agentd reads the board
+every 2 minutes, or less often when the account's API calls would not
+stretch to that (below). No other mini turns it on, or every request would
+be filed twice.
+
+What it does:
+
+- **Needs you.** One item per Linear id for this mini's open decisions (the
+  questions agentd asks with a default, section 11), an issue labelled
+  `needs-human`, and an issue On hold for a worker's question
+  (`awaiting-answer`) or a person's to-do (`human-todo`). Each item has its
+  Kind, the Person (the issue's owner, else its requester, when they are one
+  of the people below, else the default person), the Agent, the Linear and
+  PR links, and the Due date. Its text is plain English, with the question
+  as the agent asked it when this mini asked it.
+- **Answers.** A person's update on an item (or a reply under one), or the
+  Answer column, is always added to the issue under "## Answers from
+  Monday", so the issue keeps it. Where this mini has work of its own on
+  the issue (a PR it opened and still watches, an open decision it asked,
+  or its most recent job there ended blocked), the fixed verbs of section
+  11 (fix it, re-run, merge, retry, pause, leave it) are also an instruction
+  agentd acts on within seconds and answers on the item, with a like on the
+  update. Otherwise, and always on a request, the words are an answer, and a
+  parked issue moves on. So "hold off" on another mini's issue pauses
+  nothing here. The State goes to Waiting on agent, then Done once Linear
+  no longer needs a person. Words are acted on once, even when Monday fails
+  after Linear has them.
+- **Test day.** Every issue in Waiting for UAT, as a Check with the "You
+  must check" steps of its latest Agent UAT review (its acceptance criteria
+  when there is no review). A reply starting PASS or FAIL is recorded as
+  review-uat records a person's verdict (its Step 10 and
+  `references/linear-io.md`). PASS: a comment naming the person, then
+  Approved, and for a `UAT fix:` its parent back to Agent UAT once none of
+  the parent's fixes is open. FAIL: a `UAT fix:` sub-issue with what they
+  saw (Ready, `bug`, `polads`, `agent`, the parent's priority), a comment
+  naming it, then Needs Correction. Nothing else counts on a Test day item.
+- **Requests.** A new item a person adds to Requests becomes a Linear Triage
+  issue labelled `intake/monday`, with their words quoted as written and a
+  link each way. The item moves to Agents working on (Blocked while the
+  issue is On hold), then to Done once the issue is released.
+- **Done** items are archived after 14 days. An item a person deletes is not
+  put back. An item that asks again starts with an empty Answer column.
+
+| Why a person is needed | Kind |
+|---|---|
+| a decision, a worker's question | Decision |
+| `needs-human` | Approval |
+| a person's to-do | Check |
+| Waiting for UAT | Check |
+| a request | Request |
+
+Only the Monday users in `bridges.monday.people` count. Anyone else's
+updates, answers and items are left alone, and so are the agent's own. Item
+text is data: it reaches an agent only as one of the fixed verbs, or quoted
+on the issue.
+
+Limits while one mini coordinates: a decision lives on the mini that asked
+it and sets no Linear label, so another mini's decisions do not reach the
+board at all. Another mini's worker questions and to-dos do, through their
+`awaiting-answer` and `human-todo` labels, without the question's words. An
+answer to another mini's issue goes onto that issue as words.
+
+**The API budget.** monday caps the API calls a whole account makes in a
+day, by plan: 1,000 on Free, Basic and Standard, 10,000 on Pro, 25,000 on
+Enterprise, reset at midnight UTC, and shared by everyone's API use, the
+plugin's Monday tools included ([monday.com API, Rate
+limits](https://developer.monday.com/api-reference/docs/rate-limits),
+"Daily call limit"). A poll is one call (the items and the Answer column's
+history together), plus a write for each change. The bridge reads the
+account's own limit once a day (`platform_api { daily_limit }`) and polls
+no more often than `apiShare` (20 percent) of it allows: every 2 minutes
+on Pro and Enterprise (720 calls a day of 10,000), every 8 minutes on
+Basic or Standard (180 of 1,000). When Monday does not say, it assumes the
+smallest plan (1,000, every 8 minutes), and `monday.log` says so once. While
+Monday is out of reach, replies wait, in order, and agentd goes on.
+
+### Turning it on (Nate)
+
+1. A Monday user for the agents, a member and never an admin, with access
+   to board 5104953028 only. Its personal API token (avatar, Developers, My
+   access tokens) goes on the coordinator mini as `<agent>`:
+
+   ```bash
+   read -rs MONDAY_TOKEN
+   (umask 077; printf 'MONDAY_API_TOKEN=%s\n' "$MONDAY_TOKEN" > ~/.config/agentd/monday.env); unset MONDAY_TOKEN
+   chmod 600 ~/.config/agentd/monday.env
+   ```
+
+   The bridge refuses an admin's token, and the token of any of the people.
+   Check the token once, live, before turning the bridge on: the user must
+   not be an admin, and Monday should name the account's daily limit. The
+   token goes to curl on stdin, never in its arguments:
+
+   ```bash
+   ( . ~/.config/agentd/monday.env; printf 'header = "Authorization: %s"\n' "$MONDAY_API_TOKEN" ) \
+     | curl -s --config - https://api.monday.com/v2 -H 'Content-Type: application/json' -H 'API-Version: 2025-10' \
+       -d '{"query":"query { me { is_admin } platform_api { daily_limit { base total } } }"}'
+   ```
+
+   Expect `"is_admin":false` and a `total`. Without a `total`, the bridge
+   assumes 1,000 calls a day and reads the board every 8 minutes.
+2. The people's Monday user ids: the number at the end of each person's
+   Monday profile link.
+3. In Linear, the labels `intake/monday` and `needs-human` (both made on
+   2026-09-25). Without `intake/monday` requests are still filed,
+   unlabelled, and `monday.log` says so once.
+4. In `~/.agentd/config.json` on the coordinator mini:
+
+   ```json
+   "bridges": {
+     "monday": {
+       "enabled": true,
+       "people": [
+         { "id": "<Nate's id>", "name": "Nate", "linearEmail": "<his Linear email>" },
+         { "id": "<Kristoffer's id>", "name": "Kristoffer", "linearEmail": "<his Linear email>" },
+         { "id": "<Tomas's id>", "name": "Tomas" }
+       ],
+       "defaultPerson": "<Nate's id>",
+       "agentLabels": ["Eve", "Bob"]
+     }
+   }
+   ```
+
+   The ids and emails stay out of this repository, which is public: the
+   orchestrator has them. A person without a Linear account (Tomas, for
+   now) has no `linearEmail`, and gets items only as the default person or
+   by hand. `agentLabels` names the Agent column's labels for the agents'
+   Linear accounts, so an issue another agent holds shows its name. Left
+   out, only this mini's own label (`agentLabel`, its name capitalised) is
+   used.
+   Everything else defaults to the board as it was built on 2026-09-25: the
+   board and column ids, the group names (Needs you, Test day, Requests,
+   Agents working on, Done), `pollMinutes` 2, `apiShare` 0.2,
+   `requestLabel` and `archiveAfterDays` 14. The bridge never creates a
+   label, so the Kind, State and Agent labels must exist on the board as
+   named.
+5. `~/.agentd/bin/agentctl doctor` (its `monday token` line), then restart
+   agentd: `launchctl kickstart -k gui/$(id -u)/eu.polads.agentd`. With the
+   bridge on and no token, agentd does not start, and `agentctl status`
+   says why.
+6. Watch `~/.agentd/logs/monday.log`. The first poll says how often the
+   board is read, and the first items appear within that.
+
+To turn it off: `"enabled": false`, and restart agentd. The items stay on
+the board as they are.
 
 ## Orchestrator access over SSH
 
