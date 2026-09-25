@@ -1049,6 +1049,16 @@ the preview and staging.
    `~/.agentd/bin/agentctl probe-browser`, which opens staging and shows that
    any other site is refused, on the real Chrome and with no model.
 
+### A merged PR's test on staging
+
+`~/.agentd/bin/agentctl usertest --issue STEP-n --pr <number>` queues the
+browser test of a merged PR on staging (`--target rc` once the release
+candidate exists), as a job of its own: no claim and no worktree. Staging is
+where a persona signs in, so this is where the signed-in journeys are
+walked. The report goes on the PR and the Linear issue, like a preview's.
+A persona whose `publishScreenshots` is false keeps its screenshots on the
+mini, under `~/.agentd/usertest/`.
+
 ## Orchestrator access over SSH
 
 The orchestrator (the Claude Code session that runs the agents' rollout)
