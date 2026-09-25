@@ -193,7 +193,9 @@ export function superviseJobs(deps: JobRunnerDeps): void {
     }
   }
   if (busy || existsSync(deps.paths.pauseFile)) return
-  const next = listJobs(deps.paths, "pending")[0]
+  // A revise job goes first: finishing a PR already open comes before new work.
+  const pending = listJobs(deps.paths, "pending")
+  const next = pending.find((j) => j.kind === "revise") ?? pending[0]
   if (!next) return
   if (!moveJob(deps.paths, next.id, "pending", "running", { startedAt: now.toISOString() })) return
   let pid: number

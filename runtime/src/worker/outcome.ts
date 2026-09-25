@@ -76,7 +76,13 @@ export function parseReport(value: unknown): WorkerReport | null {
 
 export function toOutcome(
   result: ResultMessageLike | null,
-  ctx: { abortedByClock: boolean; thrown: string | null; limits: { maxTurns: number; maxBudgetUsd: number; wallClockMinutes: number } },
+  ctx: {
+    abortedByClock: boolean
+    thrown: string | null
+    limits: { maxTurns: number; maxBudgetUsd: number; wallClockMinutes: number }
+    /** false for a revise job: its PR has a title already. */
+    requireTitle?: boolean
+  },
 ): Outcome {
   const base = { costUsd: result?.total_cost_usd ?? null, turns: result?.num_turns ?? null, sessionId: result?.session_id ?? null }
   const blocked = (reason: string, report: WorkerReport | null = null): Outcome => ({ status: "blocked", reason, report, ...base })
@@ -110,7 +116,9 @@ export function toOutcome(
       const report = parseReport(result.structured_output)
       if (!report) return { ...blocked("the worker ended without a valid report"), reportProblem: "report" }
       if (report.status === "done") {
-        return report.prTitle ? { status: "done", reason: "done", report, ...base } : { ...blocked("the report has no PR title", report), reportProblem: "prTitle" }
+        return report.prTitle || ctx.requireTitle === false
+          ? { status: "done", reason: "done", report, ...base }
+          : { ...blocked("the report has no PR title", report), reportProblem: "prTitle" }
       }
       if (report.status === "needs_input") {
         return report.question

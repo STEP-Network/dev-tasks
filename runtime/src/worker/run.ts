@@ -10,12 +10,16 @@
  *   4. finalize: push, PR, auto-merge, Linear, Slack
  *   5. move the job to done with its result, exactly once
  * A retry (agentctl retry) takes its issue On hold too, and prepareWorktree
- * carries the branch's commits on.
+ * carries the branch's commits on. A revise job (STEP-3274, agentd/revise.ts)
+ * claims nothing: it continues its open PR's branch from origin, with the
+ * review feedback in its brief, and finalizeRevise pushes to that branch and
+ * replies on the PR.
  */
 
 import type { Options } from "@anthropic-ai/claude-agent-sdk"
 import { existsSync, readFileSync, writeFileSync } from "node:fs"
 import { basename, join } from "node:path"
+import { requiredChecks } from "../agentd/health.ts"
 import { FINISH_GRACE_MINUTES } from "../agentd/jobrunner.ts"
 import { agentPaths, assertProfileMini, loadConfig, readProfileMini, type AgentConfig, type AgentPaths } from "../config.ts"
 import { readJson } from "../fsq.ts"
@@ -29,6 +33,7 @@ import { finalize, FinalizeFailed, type MergeMode } from "./finalize.ts"
 import { commitMessages, commitsAhead, historyRewrite, prepareWorktree, realExec, WorktreeRefused, type Exec } from "./git.ts"
 import { denyBannedBash, denyWorkerPaths, ENV_TEMPLATE, workerEnv, workerToolDenial } from "./guard.ts"
 import { clause, toOutcome, type Outcome, type ResultMessageLike } from "./outcome.ts"
+import { buildReviseBrief, finalizeRevise, gatherFeedback } from "./revise.ts"
 
 export type SdkMessage = { type: string; subtype?: string; [key: string]: unknown }
 /** The SDK's query(), narrowed to what the runner uses, so tests can pass a generator. */
@@ -342,40 +347,67 @@ export async function runJob(deps: RunDeps, jobId: string): Promise<JobResult> {
     log.warn(what, { issue: job.issue, error: message })
     return finish({ ...nothing, status: "skipped", reason: `${what}: ${message}` }, { linearFailed: true })
   }
+  const revise = job.kind === "revise" ? job.revise : undefined
+  if (job.kind === "revise" && !revise) return finish({ ...nothing, status: "skipped", reason: "a revise job without its PR" })
   let current: TrackerIssue
   let branch: string
-  try {
-    current = await tracker.readIssue(job.issue)
-    const me = await tracker.whoami()
-    // A retry picks up a blocked job, whose issue the runner put On hold.
-    const takes = job.retryOf ? ["Ready", "On hold", "In Progress"] : ["Ready"]
-    if (!takes.includes(current.state)) {
-      return finish({ ...nothing, status: "skipped", reason: `the issue is ${current.state}, not ${job.retryOf ? "Ready or On hold" : "Ready"}` })
+  if (revise) {
+    try {
+      current = await tracker.readIssue(job.issue)
+    } catch (error) {
+      return linearFailed("Linear failed before the revision", error)
     }
-    if (current.assigneeId && current.assigneeId !== me.id) return finish({ ...nothing, status: "skipped", reason: "someone else holds the issue" })
-    branch = branchNameFor(current.id, current.title)
-    const open = await exec("gh", ["pr", "list", "--repo", config.repo.slug, "--head", branch, "--state", "open", "--json", "url", "--jq", ".[0].url // empty"], { cwd: config.repo.path })
-    if (open.code === 0 && open.stdout.trim().startsWith("https://")) {
-      await tracker.updateIssue(current.id, { state: "In Review" })
-      return finish({ ...nothing, status: "skipped", reason: "a PR for this branch is already open", prUrl: open.stdout.trim(), branch })
+    const pr = await exec("gh", ["pr", "view", revise.url, "--json", "state"], { cwd: config.repo.path })
+    let state = ""
+    try {
+      state = pr.code === 0 ? String((JSON.parse(pr.stdout) as { state?: unknown }).state ?? "") : ""
+    } catch {
+      state = ""
     }
-  } catch (error) {
-    return linearFailed("Linear failed before the claim", error)
+    if (state !== "OPEN") {
+      return finish({ ...nothing, status: "skipped", reason: state ? `the PR is ${state.toLowerCase()}, so there is nothing to revise` : "gh could not read the PR", prUrl: revise.url })
+    }
+    branch = revise.branch
+  } else {
+    try {
+      current = await tracker.readIssue(job.issue)
+      const me = await tracker.whoami()
+      // A retry picks up a blocked job, whose issue the runner put On hold.
+      const takes = job.retryOf ? ["Ready", "On hold", "In Progress"] : ["Ready"]
+      if (!takes.includes(current.state)) {
+        return finish({ ...nothing, status: "skipped", reason: `the issue is ${current.state}, not ${job.retryOf ? "Ready or On hold" : "Ready"}` })
+      }
+      if (current.assigneeId && current.assigneeId !== me.id) return finish({ ...nothing, status: "skipped", reason: "someone else holds the issue" })
+      branch = branchNameFor(current.id, current.title)
+      const open = await exec("gh", ["pr", "list", "--repo", config.repo.slug, "--head", branch, "--state", "open", "--json", "url", "--jq", ".[0].url // empty"], { cwd: config.repo.path })
+      if (open.code === 0 && open.stdout.trim().startsWith("https://")) {
+        await tracker.updateIssue(current.id, { state: "In Review" })
+        return finish({ ...nothing, status: "skipped", reason: "a PR for this branch is already open", prUrl: open.stdout.trim(), branch })
+      }
+    } catch (error) {
+      return linearFailed("Linear failed before the claim", error)
+    }
   }
   let issue: TrackerIssue
-  try {
-    issue = await tracker.claimIssue(current.id, config.mini)
-  } catch (error) {
-    // The claim comment and the assignment come before the read-back, so the claim may have gone through.
-    enqueueSlack(
-      paths,
-      { kind: "post", channel: "agents", text: `${job.issue}: Linear failed while claiming it. If the claim went through, it is released after ${config.claims.ttlHours} hours unless someone takes the issue first.` },
-      deps.now(),
-    )
-    return linearFailed("Linear failed while claiming", error)
+  if (revise) {
+    issue = current
+  } else {
+    try {
+      issue = await tracker.claimIssue(current.id, config.mini)
+    } catch (error) {
+      // The claim comment and the assignment come before the read-back, so the claim may have gone through.
+      enqueueSlack(
+        paths,
+        { kind: "post", channel: "agents", text: `${job.issue}: Linear failed while claiming it. If the claim went through, it is released after ${config.claims.ttlHours} hours unless someone takes the issue first.` },
+        deps.now(),
+      )
+      return linearFailed("Linear failed while claiming", error)
+    }
   }
-  appendLedger(paths, { type: "claimed", issue: issue.id }, deps.now())
-  enqueueSlack(paths, { kind: "post", channel: "agents", text: `claimed ${issue.id} ${issue.title}` }, deps.now())
+  if (!revise) {
+    appendLedger(paths, { type: "claimed", issue: issue.id }, deps.now())
+    enqueueSlack(paths, { kind: "post", channel: "agents", text: `claimed ${issue.id} ${issue.title}` }, deps.now())
+  }
 
   const model = modelFor(issue, job, config)
   const limits = { maxTurns: config.worker.maxTurns, maxBudgetUsd: config.worker.maxBudgetUsd, wallClockMinutes: config.worker.wallClockMinutes }
@@ -383,13 +415,15 @@ export async function runJob(deps: RunDeps, jobId: string): Promise<JobResult> {
   const finishWith = async (worktree: string | null, outcome: Outcome): Promise<JobResult> => {
     let result: JobResult
     try {
-      const fin = await finalize({ exec, tracker, paths, config, issue, branch, worktree, merge, model, minutes: minutes(), now: deps.now }, outcome)
+      const fin = revise
+        ? await finalizeRevise({ exec, paths, config, issue, revise, worktree, now: deps.now }, outcome)
+        : await finalize({ exec, tracker, paths, config, issue, branch, worktree, merge, model, minutes: minutes(), now: deps.now }, outcome)
       result = { status: fin.status, reason: fin.reason, prUrl: fin.prUrl, branch, costUsd: outcome.costUsd, turns: outcome.turns, minutes: minutes() }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
       enqueueSlack(paths, { kind: "post", channel: "agents", text: `${issue.id}: finishing the job failed (${message}). A person needs to look.` }, deps.now())
       // A PR that opened before the failure is still this job's.
-      const prUrl = error instanceof FinalizeFailed ? error.prUrl : null
+      const prUrl = error instanceof FinalizeFailed ? error.prUrl : (revise?.url ?? null)
       result = { status: "blocked", reason: `finishing the job failed: ${message}`, prUrl, branch, costUsd: outcome.costUsd, turns: outcome.turns, minutes: minutes() }
     }
     // Outside the try: the job reaches done once, whatever finalize did (Review Focus 5).
@@ -400,7 +434,7 @@ export async function runJob(deps: RunDeps, jobId: string): Promise<JobResult> {
   // 2. the worktree
   let worktree: { path: string; resumed: boolean }
   try {
-    worktree = await prepareWorktree(exec, { repo: config.repo.path, worktreesDir: paths.worktrees, branch, base: config.repo.base })
+    worktree = await prepareWorktree(exec, { repo: config.repo.path, worktreesDir: paths.worktrees, branch, base: config.repo.base, fromOrigin: Boolean(revise) })
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
     return finishWith(null, blockedBefore(error instanceof WorktreeRefused ? message : `the worktree could not be prepared: ${message}`))
@@ -423,15 +457,20 @@ export async function runJob(deps: RunDeps, jobId: string): Promise<JobResult> {
   // agentd's backstop counts the wall clock from here, not from the spawn: preparing the worktree can take 20 minutes.
   const sessionStart = deps.now()
   updateJob(paths, "running", jobId, { sessionStartedAt: sessionStart.toISOString() })
-  log.info("worker session starting", { issue: issue.id, model, worktree: worktree.path, resumed: worktree.resumed, retryOf: job.retryOf ?? null })
-  const first = await runSession(deps.query, buildBrief(brief), options(), config.worker.wallClockMinutes)
-  let outcome = first.initProblem ? blockedBefore(first.initProblem) : toOutcome(first.result, { abortedByClock: first.abortedByClock, thrown: first.thrown, limits })
+  log.info("worker session starting", { issue: issue.id, model, worktree: worktree.path, resumed: worktree.resumed, retryOf: job.retryOf ?? null, revise: revise?.url ?? null })
+  const prompt = revise ? buildReviseBrief(brief, revise, await gatherFeedback(exec, config.repo.slug, revise, requiredChecks(config.repo.path))) : buildBrief(brief)
+  // A revise job's PR has its title: its report needs none.
+  const requireTitle = !revise
+  const first = await runSession(deps.query, prompt, options(), config.worker.wallClockMinutes)
+  let outcome = first.initProblem ? blockedBefore(first.initProblem) : toOutcome(first.result, { abortedByClock: first.abortedByClock, thrown: first.thrown, limits, requireTitle })
   log.info("worker session ended", { issue: issue.id, status: outcome.status, reason: outcome.reason, costUsd: outcome.costUsd, turns: outcome.turns })
 
   // A malformed report is a formatting miss, not a reason to strand finished
   // work. With commits ahead, the same session is asked for the report once,
   // then the PR is titled from the commits. With none, it stays blocked.
-  if (outcome.reportProblem && (await commitsAhead(exec, worktree.path, config.repo.base).catch(() => 0)) > 0) {
+  // A revise job's own commits are those past the PR's head on origin.
+  const since = revise ? revise.branch : config.repo.base
+  if (outcome.reportProblem && (await commitsAhead(exec, worktree.path, since).catch(() => 0)) > 0) {
     const problem = outcome.reportProblem
     let repaired: Outcome | null = null
     const budget = correctionMinutes(config.worker.wallClockMinutes, (deps.now().getTime() - sessionStart.getTime()) / 60_000)
@@ -440,7 +479,7 @@ export async function runJob(deps: RunDeps, jobId: string): Promise<JobResult> {
       again.resume = outcome.sessionId
       again.maxTurns = CORRECTION_TURNS
       const second = await runSession(deps.query, correctionPrompt(problem), again, budget)
-      const corrected = second.initProblem ? null : toOutcome(second.result, { abortedByClock: second.abortedByClock, thrown: second.thrown, limits })
+      const corrected = second.initProblem ? null : toOutcome(second.result, { abortedByClock: second.abortedByClock, thrown: second.thrown, limits, requireTitle })
       if (corrected?.report && !corrected.reportProblem) {
         repaired = { ...corrected, costUsd: add(outcome.costUsd, corrected.costUsd), turns: add(outcome.turns, corrected.turns) }
         appendLedger(paths, { type: "report.corrected", issue: issue.id, problem }, deps.now())
@@ -449,7 +488,7 @@ export async function runJob(deps: RunDeps, jobId: string): Promise<JobResult> {
       }
     }
     if (!repaired) {
-      repaired = await outcomeFromCommits(exec, worktree.path, config.repo.base, issue.id, outcome).catch((error: unknown) => {
+      repaired = await outcomeFromCommits(exec, worktree.path, since, issue.id, outcome).catch((error: unknown) => {
         log.warn("the commits could not be read", { issue: issue.id, error: String(error) })
         return null
       })

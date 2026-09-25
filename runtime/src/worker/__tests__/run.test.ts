@@ -45,7 +45,7 @@ function setup(
     worker?: Record<string, unknown>
     /** One message list per SDK session, for a runner that asks again. */
     sessions?: SdkMessage[][]
-    job?: { retryOf?: string }
+    job?: Parameters<typeof submitJob>[4]
   } = {},
 ) {
   const home = mkdtempSync(join(tmpdir(), "agentd-run-"))
@@ -308,6 +308,106 @@ describe("runJob", () => {
     const done = setup({ issueOver: { state: "Done" }, job: { retryOf: "STEP-7-20260925071840" } })
     expect(await runJob(done.deps, done.job.id)).toMatchObject({ status: "skipped", reason: "the issue is Done, not Ready or On hold" })
     expect(done.fake.called("claimIssue")).toEqual([])
+  })
+
+  describe("a revise job (STEP-3274)", () => {
+    const PR_URL = "https://github.com/STEP-Network/v0-politiske-annoncer/pull/1674"
+    const REVISE = {
+      url: PR_URL, number: 1674, branch: "STEP-7-fix-the-date", round: 1, since: "2026-09-24T10:00:00.000Z",
+      reasons: ["changes requested by nate", "Test failed"],
+    }
+    const VIEW = JSON.stringify({
+      author: { login: "eve-polads" },
+      headRefOid: "abc1234",
+      reviews: [
+        { id: "R0", author: { login: "nate" }, state: "COMMENTED", body: "An older point.", submittedAt: "2026-09-24T09:00:00.000Z" },
+        { id: "R1", author: { login: "nate" }, state: "CHANGES_REQUESTED", body: "Use the publication date.", submittedAt: "2026-09-24T11:00:00.000Z" },
+        { id: "R2", author: { login: "eve-polads" }, state: "COMMENTED", body: "Eve's own review note.", submittedAt: "2026-09-24T11:03:00.000Z" },
+      ],
+      comments: [{ id: "C1", author: { login: "eve-polads" }, body: "Eve's own earlier reply.", createdAt: "2026-09-24T11:05:00.000Z" }],
+      statusCheckRollup: [{ name: "Test", conclusion: "FAILURE", detailsUrl: "https://github.com/x/actions/runs/111/job/222" }],
+    })
+    const INLINE =
+      '{"user":"nate","path":"lib/notice.ts","line":12,"body":"This reads the wrong field.","created_at":"2026-09-24T11:01:00Z"}\n' +
+      '{"user":"eve-polads","path":"lib/x.ts","line":1,"body":"Eve on her own code.","created_at":"2026-09-24T11:02:00Z"}\n'
+    const REVISED: SdkMessage = { ...DONE, structured_output: { status: "done", summary: "Use the publication date: done, in lib/notice.ts.\nTest: fixed the assertion." } }
+    const answers = (over: Array<[RegExp, Partial<ExecResult>]> = []): Array<[RegExp, Partial<ExecResult>]> => [
+      ...over,
+      [/^gh pr view \S+ --json state$/, { stdout: '{"state":"OPEN"}' }],
+      [/^gh pr view \S+ --json author,reviews/, { stdout: VIEW }],
+      [/^gh api repos\/STEP-Network\/v0-politiske-annoncer\/pulls\/1674\/comments /, { stdout: INLINE }],
+      [/^gh run view --job 222 /, { stdout: "FAIL lib/notice.test.ts\n  expected 2026-09-01, got 2026-08-31\n" }],
+      [/ls-remote/, { code: 0 }],
+      [/rev-list --count origin\/STEP-7-fix-the-date\.\.HEAD/, { stdout: "1\n" }],
+    ]
+    const revising = (over: Parameters<typeof setup>[0] = {}) => {
+      const s = setup({ issueOver: { state: "In Review", assigneeId: "user-eve" }, job: { kind: "revise", revise: REVISE }, messages: [INIT, REVISED], exec: answers(), ...over })
+      writeFileSync(
+        join(s.deps.config.repo.path, ".claude", "project-config.json"),
+        JSON.stringify({ git: { autoMergePolicy: { staging: "auto-after-checks-and-review" } }, ci: { requiredChecks: ["Test"] } }),
+      )
+      return s
+    }
+
+    it("continues the PR's branch from origin, with the feedback in its brief, pushes to that branch and replies on the PR, claiming nothing", async () => {
+      const { deps, job, fake, f, q, paths, outbox } = revising()
+      expect(await runJob(deps, job.id)).toMatchObject({ status: "done", reason: "revised (round 1 of 3)", prUrl: PR_URL, branch: "STEP-7-fix-the-date" })
+      expect(fake.called("claimIssue")).toEqual([])
+      expect(fake.called("updateIssue")).toEqual([])
+      const lines = f.lines()
+      // As origin has it, a person's commits included.
+      expect(lines.some((l) => l.endsWith("checkout -B STEP-7-fix-the-date origin/STEP-7-fix-the-date"))).toBe(true)
+      expect(lines.some((l) => l.endsWith(" push -u origin HEAD:refs/heads/STEP-7-fix-the-date"))).toBe(true)
+      expect(lines.some((l) => / push .*(--force|\s-f\b|\+HEAD)/.test(l))).toBe(false)
+      expect(lines.some((l) => /^gh pr (create|merge|review)|dismiss|\s--failed\b/.test(l))).toBe(false)
+      const replyFile = join(paths.state, "pr-reply-STEP-7.md")
+      expect(lines).toContain(`gh pr comment ${PR_URL} --repo STEP-Network/v0-politiske-annoncer --body-file ${replyFile}`)
+      expect(readFileSync(replyFile, "utf8")).toBe(
+        "eve's revision, round 1 of 3:\n\nUse the publication date: done, in lib/notice.ts.\nTest: fixed the assertion.\n\n1 commit pushed to STEP-7-fix-the-date.\n",
+      )
+      const brief = q.seen[0].prompt
+      expect(brief).toMatch(/^# STEP-7: Fix the date \(revise, round 1 of 3\)/)
+      expect(brief).toContain(`The PR: ${PR_URL}, on branch STEP-7-fix-the-date.`)
+      expect(brief).toContain("- changes requested by nate\n- Test failed")
+      expect(brief).toContain("### nate, review, changes requested, 2026-09-24T11:00:00.000Z\n\nUse the publication date.")
+      expect(brief).toContain("### nate, lib/notice.ts:12, 2026-09-24T11:01:00Z\n\nThis reads the wrong field.")
+      expect(brief).toContain("### Test\n\n```\nFAIL lib/notice.test.ts\n  expected 2026-09-01, got 2026-08-31\n```")
+      // Older than the round, or the PR author's own: not feedback.
+      for (const text of ["An older point.", "Eve's own earlier reply.", "Eve on her own code.", "Eve's own review note."]) expect(brief).not.toContain(text)
+      expect(outbox()).toEqual([`STEP-7 revised ${PR_URL} (round 1 of 3): 1 commit pushed to STEP-7-fix-the-date`])
+    })
+
+    it("skips a revise job whose PR has closed meanwhile", async () => {
+      const { deps, job, q, f } = revising({ exec: answers([[/^gh pr view \S+ --json state$/, { stdout: '{"state":"MERGED"}' }]]) })
+      expect(await runJob(deps, job.id)).toMatchObject({ status: "skipped", reason: "the PR is merged, so there is nothing to revise", prUrl: PR_URL })
+      expect(q.seen).toEqual([])
+      expect(f.lines().some((l) => l.includes("worktree add"))).toBe(false)
+    })
+
+    it("replies without pushing when no point needed a change", async () => {
+      const { deps, job, f, paths, outbox } = revising({ exec: answers([[/rev-list --count origin\/STEP-7-fix-the-date\.\.HEAD/, { stdout: "0\n" }]]) })
+      expect(await runJob(deps, job.id)).toMatchObject({ status: "done" })
+      expect(f.lines().some((l) => l.includes(" push "))).toBe(false)
+      expect(readFileSync(join(paths.state, "pr-reply-STEP-7.md"), "utf8")).toContain("\n\nNo commit pushed.\n")
+      expect(outbox()).toEqual([`STEP-7 revised ${PR_URL} (round 1 of 3): replied, nothing to change`])
+    })
+
+    it("says on the PR and in the issue's thread when it could not finish the round", async () => {
+      const said: SdkMessage = { ...DONE, structured_output: { status: "blocked", summary: "The migration needs a person." } }
+      const { deps, job, f, paths, fake } = revising({ messages: [INIT, said] })
+      expect(await runJob(deps, job.id)).toMatchObject({ status: "blocked", reason: "The migration needs a person", prUrl: PR_URL })
+      expect(readFileSync(join(paths.state, "pr-reply-STEP-7.md"), "utf8")).toBe("eve could not finish this revision (round 1 of 3): The migration needs a person.\n\n1 commit pushed to STEP-7-fix-the-date.\n")
+      expect(f.lines().some((l) => l.endsWith(" push -u origin HEAD:refs/heads/STEP-7-fix-the-date"))).toBe(true)
+      const thread = listNew<{ kind: string; text: string; question: boolean }>(paths.outbox).map((e) => e.payload).find((p) => p.kind === "issue")
+      expect(thread).toMatchObject({ question: true, text: `blocked revising ${PR_URL}: The migration needs a person. A person needs to look.` })
+      expect(fake.called("updateIssue")).toEqual([])
+    })
+
+    it("refuses to revise a branch origin no longer has", async () => {
+      const { deps, job, q } = revising({ exec: answers([[/ls-remote/, { code: 2 }]]) })
+      expect(await runJob(deps, job.id)).toMatchObject({ status: "blocked", reason: "origin has no branch STEP-7-fix-the-date to revise" })
+      expect(q.seen).toEqual([])
+    })
   })
 
   it("skips without claiming when the issue is no longer Ready", async () => {
