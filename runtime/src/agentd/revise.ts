@@ -8,7 +8,8 @@
  *   - a failing required check whose failure is the code's (Claude review's
  *     blockers, Test, Lint, TypeScript, i18n)
  *   - a PR comment addressed to the agent: starting "@<mini>", or carrying
- *     "Review fixes requested" (the orchestrator's marker)
+ *     "Review fixes requested" (the orchestrator's marker), by a member,
+ *     owner or collaborator of the repository, and never by a [bot] account
  * Each counts once, by its id (a check by its head commit and name).
  *
  * A failure that is not the code's (a Neon 404, ECONNRESET, a runner that
@@ -60,7 +61,7 @@ export interface OwnPrView {
   headRefOid: string
   author?: PrActor
   reviews?: Array<{ id: string; author?: PrActor; state: string; body?: string; submittedAt?: string }>
-  comments?: Array<{ id: string; author?: PrActor; body?: string; createdAt?: string }>
+  comments?: Array<{ id: string; author?: PrActor; authorAssociation?: string; body?: string; createdAt?: string }>
   statusCheckRollup: PrRollupEntry[]
   autoMergeRequest?: unknown
 }
@@ -76,6 +77,23 @@ export const INFRA_RE =
 const SHARD_RE = /\(\s*\d+\s*\/\s*\d+\s*\)|\bshard\b/i
 
 const checkName = (c: PrRollupEntry) => c.name ?? c.context ?? ""
+
+/**
+ * Who may ask the agent for a change in a PR comment: someone with a hand in
+ * the repository (GitHub's author association), never a bot account. A
+ * comment is a way in for anyone who can comment, so it must come from someone
+ * the org trusts to change the code anyway.
+ *
+ * gh's `--json comments` gives a bot its bare login ("claude", "vercel") with
+ * the association NONE, so the association is what stops them there. The
+ * "[bot]" suffix is the REST API's spelling of the same accounts.
+ */
+const TRUSTED_ASSOCIATIONS = new Set(["MEMBER", "OWNER", "COLLABORATOR"])
+function trustedCommenter(c: { author?: PrActor; authorAssociation?: string }): boolean {
+  const login = c.author?.login ?? ""
+  return TRUSTED_ASSOCIATIONS.has(String(c.authorAssociation ?? "").toUpperCase()) && !/\[bot\]$/i.test(login)
+}
+
 /** A required check's shard: "Test (3/4)" is Test's. */
 const requiredBase = (name: string, required: readonly string[]) => required.find((r) => name === r || (name.startsWith(`${r} `) && SHARD_RE.test(name)))
 
@@ -132,7 +150,7 @@ export function planRevision(view: OwnPrView, pr: WatchedPr, ctx: { mini: string
     reasons.push(`changes requested by ${r.author!.login}`)
   }
   for (const c of view.comments ?? []) {
-    if (!others(c.author) || !addressed.test(c.body ?? "") || handled.has(`comment:${c.id}`)) continue
+    if (!others(c.author) || !trustedCommenter(c) || !addressed.test(c.body ?? "") || handled.has(`comment:${c.id}`)) continue
     ids.push(`comment:${c.id}`)
     reasons.push(`a comment from ${c.author!.login}`)
   }

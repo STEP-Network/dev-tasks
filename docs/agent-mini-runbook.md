@@ -485,7 +485,10 @@ A PR the mini opened comes back to it on review feedback (STEP-3274):
 - a review with changes requested, by anyone but the agent
 - a required check its code failed: Claude review's blockers, Test, Lint,
   TypeScript, i18n
-- a PR comment starting `@<agent>`, or carrying "Review fixes requested"
+- a PR comment starting `@<agent>`, or carrying "Review fixes requested", by
+  a member, owner or collaborator of the repository (GitHub's author
+  association). A bot's comment never counts, nor one from anyone else who
+  can comment. The Slack side has its own gate: `slack.allowedUsers`.
 
 agentd's PR watcher, every 15 minutes, queues a `revise` job for the issue,
 ahead of new work. The worker continues the PR's branch as origin has it (a
