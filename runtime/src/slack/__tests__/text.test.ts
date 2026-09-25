@@ -88,6 +88,20 @@ describe("appendAnswer", () => {
   })
 })
 
+describe("appendAnswer from the Monday board (STEP-3289)", () => {
+  const answer = { ts: "9001", userName: "Kristoffer", text: "Use the Danish word", permalink: "https://step.monday.com/boards/1/pulses/2/posts/9001" }
+
+  it("keeps Monday's answers under their own heading, one entry per update, and a second read changes nothing", () => {
+    const slack = appendAnswer("## Goal\n\nFix it.", { ts: "1727.9", userName: "Nate", text: "Yes", permalink: null })
+    const once = appendAnswer(slack, answer, "monday")
+    expect(once).toBe(`${slack}\n\n## Answers from Monday\n\n<!-- monday:9001 -->\n**Kristoffer** ([Monday](${answer.permalink})): Use the Danish word`)
+    expect(appendAnswer(once, answer, "monday")).toBe(once)
+    const twice = appendAnswer(once, { ...answer, ts: "log:77", permalink: null, text: "And the button" }, "monday")
+    expect(twice.match(/## Answers from Monday/g)).toHaveLength(1)
+    expect(twice.endsWith("<!-- monday:log:77 -->\n**Kristoffer**: And the button")).toBe(true)
+  })
+})
+
 describe("answerTransition", () => {
   it("returns a parked, agent-ready issue to Ready and drops awaiting-answer", () => {
     expect(answerTransition({ state: "On hold", labels: ["agent-ready", "awaiting-answer", "polads"] })).toEqual({

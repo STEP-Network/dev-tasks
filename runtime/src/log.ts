@@ -11,8 +11,9 @@ import type { AgentPaths } from "./config.ts"
 
 // Slack, Linear and Claude tokens, and GitHub's: the runner pushes with the
 // mini's own gh login (decision 5), and a remote URL in a git error can carry one.
+// And Monday's, a JWT, which the Monday bridge holds (STEP-3289).
 const TOKEN_RE =
-  /\b(xox[abpr]-[A-Za-z0-9-]+|xapp-[A-Za-z0-9-]+|lin_api_[A-Za-z0-9]+|sk-ant-[A-Za-z0-9_-]+|gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,})/g
+  /\b(xox[abpr]-[A-Za-z0-9-]+|xapp-[A-Za-z0-9-]+|lin_api_[A-Za-z0-9]+|sk-ant-[A-Za-z0-9_-]+|gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]+)/g
 
 export function redact(text: string): string {
   return text.replace(TOKEN_RE, "[redacted]")

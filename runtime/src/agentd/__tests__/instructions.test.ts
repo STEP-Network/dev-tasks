@@ -6,7 +6,8 @@ import { agentPaths, ConfigSchema } from "../../config.ts"
 import { listNew, putOnce } from "../../fsq.ts"
 import { listJobs, moveJob, readWatchedPrs, recordPr, submitJob, updateWatchedPr } from "../../jobs.ts"
 import type { Logger } from "../../log.ts"
-import { parseInstruction, type InstructionEntry } from "../../slack/instruction.ts"
+import { mondayOutbox } from "../../monday/store.ts"
+import { parseInstruction, type InstructionEntry, type MondayInstructionEntry } from "../../slack/instruction.ts"
 import type { ExecResult } from "../../worker/git.ts"
 import { fakeExec } from "../../__tests__/fakes.ts"
 import { askDecision, openDecisions } from "../decisions.ts"
@@ -166,5 +167,27 @@ describe("actOnInstructions (STEP-3285)", () => {
     say("leave it")
     await actOnInstructions(deps)
     expect(openDecisions(paths, "STEP-7")).toEqual([])
+  })
+
+  it("answers words from the Monday board on the item, with a like beside them, and nothing in Slack (STEP-3289)", async () => {
+    const { deps, paths, outbox } = setup()
+    const monday = (key: string, text: string, where: MondayInstructionEntry["monday"]) =>
+      putOnce(paths.inbox, key, {
+        type: "instruction", key, issue: "STEP-7", user: "111", userName: "Nate", text, ...parseInstruction(text),
+        receivedAt: NOW.toISOString(), monday: where,
+      } satisfies MondayInstructionEntry)
+    monday("instr_monday_9001", "fix it", { itemId: "555", updateId: "9002", threadId: "9001" })
+    await actOnInstructions(deps)
+    const [job] = listJobs(paths, "pending")
+    expect(job.revise?.reasons).toEqual(["asked by Nate on the Monday board"])
+    expect(outbox()).toEqual([])
+    const replies = () => listNew<{ itemId: string; threadId: string | null; text: string; like: string | null }>(mondayOutbox(paths)).map((e) => e.payload)
+    expect(replies()).toEqual([expect.objectContaining({ itemId: "555", threadId: "9001", like: "9002", text: `Revising ${PR} now: job ${job.id} (round 1).` })])
+    // The Answer column has no update to reply under or to like: a new update on the item.
+    monday("instr_monday_log_77", "pause", { itemId: "555", updateId: null, threadId: null })
+    await actOnInstructions(deps)
+    expect(replies()[1]).toMatchObject({ itemId: "555", threadId: null, like: null, text: expect.stringMatching(/^Paused: no new job starts/) })
+    expect(JSON.parse(readFileSync(paths.pauseFile, "utf8")).reason).toBe("asked by Nate on the Monday board")
+    expect(outbox()).toEqual([])
   })
 })

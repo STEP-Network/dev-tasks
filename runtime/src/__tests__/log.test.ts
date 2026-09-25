@@ -17,6 +17,11 @@ describe("redact", () => {
     expect(redact(`push to https://x-access-token:${classic}@github.com/STEP-Network/x.git failed`)).toBe("push to https://x-access-token:[redacted]@github.com/STEP-Network/x.git failed")
     expect(redact(`token ${fine}`)).toBe("token [redacted]")
   })
+
+  it("hides a Monday API token (STEP-3289)", () => {
+    const token = ["eyJhbGciOiJIUzI1NiJ9", "eyJ0aWQiOjEyMzQ1Njc4OX0", "c2lnbmF0dXJlLXRlc3Q"].join(".")
+    expect(redact(`Monday said no to ${token}.`)).toBe("Monday said no to [redacted].")
+  })
 })
 
 describe("createLogger and appendLedger", () => {
