@@ -65,6 +65,8 @@ export interface ItemRecord {
   written?: Record<string, string>
   /** The request's own Slack thread, when it came from Slack (Task 8). */
   slack?: { permalink: string }
+  /** A Slack request's item, not yet linked from Linear and told to its thread: false until the poll after it is made. */
+  announced?: boolean
 }
 
 const root = (paths: AgentPaths) => join(paths.state, "monday")

@@ -767,6 +767,7 @@ export function createMondayBridge(deps: MondayBridgeDeps): MondayBridge {
       if (asked) await part("request words", () => hearWords({ board: asked.board, groups: {}, byId: asked.byId, now }))
       if (!requestsBoard) await part("requests", () => requests(pass))
       else if (asked) await part("requests", () => requestsBoard.fromBoard(asked))
+      if (requestsBoard && asked) await part("slack requests", () => requestsBoard.adopt(asked))
       const linked = await part("needs", () => needs(pass))
       // Not without the needs: an item whose issue has a thread on another mini would get a second one.
       if (doors && linked) await part("threads", () => threads(pass, linked))

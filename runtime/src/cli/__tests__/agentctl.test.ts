@@ -349,6 +349,39 @@ describe("agentctl verdict (Wave 2)", () => {
   }
   const outbox = () => listNew<{ kind: string; text?: string; name?: string }>(agentPaths().outbox).map((e) => e.payload)
 
+  function mentionEntry(over: Record<string, unknown> = {}): string {
+    const key = "msg:CA:1790330500.000200"
+    putOnce(agentPaths().inbox, key, {
+      type: "mention", key, channel: "CA", ts: "1790330500.000200", threadTs: "1790330400.000100", user: "UADA", userName: "Ada",
+      text: "can we export notices as CSV?", readableText: "can we export notices as CSV?", permalink: "https://x.slack.com/archives/CA/p1790330500000200", receivedAt: NOW.toISOString(), ...over,
+    })
+    return key
+  }
+
+  it("request files a mention as a request, with its summary from a file and its type", async () => {
+    writeConfig()
+    const fake = fakeTracker([])
+    const summary = join(root, "ask.md")
+    writeFileSync(summary, "Ada wants a CSV export of notices.\n")
+    expect(await run(["request", "--key", mentionEntry(), "--title", "Export notices as CSV", "--text-file", summary, "--type", "feature"], out, deps({ tracker: () => fake.tracker }))).toBe(0)
+    const filed = [...fake.issues.values()][0]
+    expect(filed).toMatchObject({ title: "Export notices as CSV", labels: expect.arrayContaining(["intake/slack", "feature"]) })
+    expect(filed.description.startsWith("Ada wants a CSV export of notices.")).toBe(true)
+    expect(JSON.parse(printed.at(-1)!)).toMatchObject({ issue: filed.id, thread: "taken" })
+  })
+
+  it("request refuses an unknown type, a missing title, and a reply", async () => {
+    writeConfig()
+    const fake = fakeTracker([])
+    const d = deps({ tracker: () => fake.tracker })
+    const summary = join(root, "ask.md")
+    writeFileSync(summary, "A summary.")
+    await expect(run(["request", "--key", mentionEntry(), "--title", "T", "--text-file", summary, "--type", "epic"], out, d)).rejects.toThrow(/--type is feature, change, bug or question/)
+    await expect(run(["request", "--key", mentionEntry(), "--text-file", summary], out, d)).rejects.toThrow(/--title is required/)
+    await expect(run(["request", "--key", replyEntry("export please"), "--title", "T", "--text-file", summary], out, d)).rejects.toThrow(UsageError)
+    expect(fake.called("createIssue")).toEqual([])
+  })
+
   it("verdict records a person's PASS from their own words, answers in the thread and acks it", async () => {
     writeConfig()
     const { fake, deps: d } = waiting()

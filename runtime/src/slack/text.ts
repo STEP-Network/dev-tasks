@@ -51,8 +51,13 @@ export function fromSlack(text: string, names: Readonly<Record<string, string>> 
   return readable.replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&")
 }
 
+/** The label every Slack ask is filed with (Wave 2): the coordinator gives each open one its request item. */
+export const INTAKE_SLACK = "intake/slack"
+
 export interface IntakeMeta {
   userName: string
+  /** Their Slack member id, from the event: kept out of sight in the footer, for the request's Requester (slackAskerOf). */
+  userId: string
   permalink: string
   botUserId: string
   /** The other agents' bots: their names are no part of the request's title. */
@@ -72,12 +77,25 @@ export function intakeIssue(text: string, meta: IntakeMeta): CreateIssueInput | 
   const request = (meta.otherAgentBots ?? []).reduce((rest, bot) => stripMention(rest, bot), body)
   if (!request) return null
   const firstLine = request.split("\n").find((line) => line.trim())!.trim()
+  // Their words are not quoted here, so an HTML comment they typed is escaped: it can never pass for the asker's marker or a recorded answer's.
+  const words = fromSlack(body, meta.names).replace(/<!--/g, "&lt;!--")
   return {
     title: truncateChars(fromSlack(firstLine, meta.names, "plain"), 80),
-    description: `${fromSlack(body, meta.names)}\n\n---\nFiled from Slack by ${meta.userName}: ${meta.permalink}`,
-    labels: [meta.product],
+    description: `${words}\n\n---\nFiled from Slack by ${meta.userName}: ${meta.permalink}\n<!-- slack-user:${meta.userId} -->`,
+    labels: [meta.product, INTAKE_SLACK],
     state: "Triage",
   }
+}
+
+/**
+ * Who asked, as the footer keeps it: the Slack id in the last
+ * `<!-- slack-user:U… -->` line of its own before the answers begin. A
+ * person's words come before the footer, quoted or escaped, so a marker they
+ * typed is never the one read.
+ */
+export function slackAskerOf(description: string): string | null {
+  const head = description.split(/\n## Answers from /)[0]
+  return [...head.matchAll(/^<!-- slack-user:([UW][A-Z0-9]+) -->$/gm)].at(-1)?.[1] ?? null
 }
 
 export interface SlackAnswer {

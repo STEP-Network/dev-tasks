@@ -107,11 +107,17 @@ An intake event also has `issue`, the Triage issue the bridge already filed.
 - **mention**: someone asked you something. Answer in its thread. For "what
   are you working on", answer from the digest (`worker`, `pendingJobs`,
   `developBlockedBy`, `heldBack`, `usage`), and for the last day from
-  `agentctl report --days 1`. A request for new work is intake: write their
-  words, who asked and the Slack link to `~/.front-door/intake-<ts>.md`, file it
-  with `~/.agentd/bin/trackerctl create --title "<a short title in your own words>" --description-file ~/.front-door/intake-<ts>.md --label polads --state Triage`,
-  and say which STEP id it became. Refine it only when `queueMode` is `open`.
-  On the allowlist, add "A person decides when I work on it."
+  `agentctl report --days 1`.
+  A mention that asks for work or for a product decision (a feature, a
+  change, a bug, or a question about the product) is a request, whatever
+  channel it is in: write one plain line saying what they ask to
+  `~/.front-door/ask-<ts>.md`, then
+  `~/.agentd/bin/agentctl request --key <key> --title "<a short title in your own words>" --text-file ~/.front-door/ask-<ts>.md --type <feature|change|bug|question>`.
+  It files the issue with their own words quoted, answers in the thread and
+  acks; the Monday Requests board gets its item within minutes.
+  Refine it only when `queueMode` is `open`. A question about the agents
+  themselves ("what are you working on?", "why did you do that?") is no
+  request: answer it in the thread, and make no request.
 - **a mention with `filedBy`**: the request named another agent first, and
   that agent files it. File nothing. Answer only what is asked of you, in the
   same thread.

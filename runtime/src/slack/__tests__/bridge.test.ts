@@ -88,7 +88,8 @@ describe("intake", () => {
     await handleEnvelope(deps, mention("app_mention", "<@UBOT> The date is wrong on notices"))
     const created = fake.called("createIssue")
     expect(created).toHaveLength(1)
-    expect(created[0][0]).toMatchObject({ title: "The date is wrong on notices", state: "Triage", labels: ["polads"] })
+    // Labelled a Slack ask (Wave 2), with the asker from the event, never from their text.
+    expect(created[0][0]).toMatchObject({ title: "The date is wrong on notices", state: "Triage", labels: ["polads", "intake/slack"], description: expect.stringMatching(/\n<!-- slack-user:UNATE -->$/) })
     const [entry] = listNew<{ type: string; issue: string }>(paths.inbox)
     expect(entry.payload).toMatchObject({ type: "intake", issue: "STEP-901", userName: "Nate" })
     expect(threadFor(paths, "STEP-901")).toMatchObject({ channelId: "CIN", ts: "1800.1" })

@@ -7,6 +7,10 @@
  * Linear changes it, so a person's own edit stands. Each stage change is said
  * once, on the item and in the request's Slack thread. A released or
  * declined request is archived releasedDays later.
+ *
+ * Every Slack ask gets its item here too (spec 4, Task 8): each open,
+ * parentless intake/slack issue, whichever mini filed it. The poll after its
+ * item is made, Linear links the item and the ask's thread is told where it is.
  */
 
 import type { AgentConfig, AgentPaths } from "../config.ts"
@@ -15,7 +19,8 @@ import { enqueueSlack } from "../outbox.ts"
 import type { Tracker } from "../tracker.ts"
 import type { MondayApi, MondayBoard, MondayItem } from "./client.ts"
 import type { PeopleIssue, PeopleView } from "./people.ts"
-import { requestIssue, say } from "./render.ts"
+import { INTAKE_SLACK, slackAskerOf, truncateChars } from "../slack/text.ts"
+import { aboutText, requestIssue, say } from "./render.ts"
 import { classOf, progressText, requestGroup, requestStage, typeOf, weekOf, workDone, type RequestWork, type Stage } from "./stage.ts"
 import { dropRecord, readRecords, saveRecord, type ItemRecord } from "./store.ts"
 import { slackThreadOf } from "./threads.ts"
@@ -45,6 +50,16 @@ type Person = { id: string; name: string }
 const DAY = 86_400_000
 const message = (error: unknown) => (error instanceof Error ? error.message : String(error))
 const byCreated = <T extends { createdAt: string }>(a: T, b: T) => a.createdAt.localeCompare(b.createdAt)
+
+/** The URL a link column holds, from its value. */
+function linkUrl(column: { value: string | null } | undefined): string | null {
+  try {
+    const url = (JSON.parse(column?.value ?? "null") as { url?: unknown } | null)?.url
+    return typeof url === "string" ? url : null
+  } catch {
+    return null
+  }
+}
 
 /**
  * A person's new item as a Linear Triage issue, on either board: written down
@@ -154,6 +169,52 @@ export function createRequests(deps: RequestsDeps) {
     if (thread) enqueueSlack(paths, { kind: "reply", channelId: thread.channelId, threadTs: thread.threadTs, text }, now)
   }
 
+  /** Each open Slack ask without an item gets one, in Active (Task 8). */
+  async function adopt(pass: RequestsPass): Promise<void> {
+    const asks = await people.slackRequests()
+    if (!asks.length) return
+    const known = new Set(readRecords(paths).filter((r) => r.kind === "request").map((r) => r.issue))
+    for (const ask of asks) {
+      if (known.has(ask.id)) continue
+      try {
+        const asker = slackAskerOf(ask.description)
+        const named = asker ? cfg.people.find((p) => p.slackId === asker) : undefined
+        const requester = named ?? person.get(cfg.defaultPerson)!
+        const values: Record<string, unknown> = {
+          [c.linear]: { url: ask.url, text: ask.id },
+          [c.requester]: { personsAndTeams: [{ id: Number(requester.id), kind: "person" }] },
+          [c.stage]: { label: "New" },
+          ...(ask.slackThread ? { [c.slackThread]: { url: ask.slackThread, text: "Slack thread" } } : {}),
+        }
+        // The board is the record too: an item a crash left unrecorded is taken over, not made twice.
+        const found = pass.board.items.find((i) => linkUrl(i.columns[c.linear]) === ask.url)
+        const itemId = found?.id ?? (await api.createItem(rcfg.boardId, pass.groups.active, truncateChars(ask.title, 250), values))
+        const rec: ItemRecord = {
+          key: `request-${itemId}`, kind: "request", issue: ask.id, itemId, state: "Waiting on agent", bodyHash: null,
+          createdAt: pass.now.toISOString(), doneAt: null, handled: [], linked: true, stage: "New", announced: false,
+          ...(ask.slackThread ? { slack: { permalink: ask.slackThread } } : {}),
+          ...(found ? {} : { written: Object.fromEntries(Object.entries(values).map(([col, v]) => [col, JSON.stringify(v)])) }),
+        }
+        save(rec)
+        if (!found) {
+          deps.reply(itemId, say.askedInSlack(named?.name ?? "Someone", aboutText(ask.description)), pass.now)
+          appendLedger(paths, { type: "monday.item", issue: ask.id, kind: "request", via: INTAKE_SLACK }, pass.now)
+        }
+      } catch (error) {
+        log.warn("monday Slack request not given its item yet", { issue: ask.id, error: message(error) })
+      }
+    }
+  }
+
+  /** The poll after a Slack request's item is made (its link known from the board): Linear links it, and its thread is told once. */
+  async function announce(rec: ItemRecord, item: MondayItem, anchor: PeopleIssue, now: Date): Promise<void> {
+    await tracker.attachLink(anchor.id, item.url, "Monday request")
+    const thread = slackThreadOf(rec.slack?.permalink ?? anchor.slackThread)
+    if (thread) enqueueSlack(paths, { kind: "reply", channelId: thread.channelId, threadTs: thread.threadTs, text: say.onRequestsBoard(anchor.id, item.url) }, now)
+    rec.announced = true
+    save(rec)
+  }
+
   async function completeAnchor(anchor: PeopleIssue): Promise<void> {
     await tracker.comment(anchor.id, "Every task of this request is released or closed, so the request is done.")
     await tracker.updateIssue(anchor.id, { state: "Released" })
@@ -170,6 +231,10 @@ export function createRequests(deps: RequestsDeps) {
       try {
         // Filed, then stopped before its link was written: the link now.
         if (!rec.linked && anchor) await link(rec, item, anchor, pass.now)
+        // Linear refusing the link waits for the next poll, and holds nothing else up.
+        if (rec.announced === false && anchor) {
+          await announce(rec, item, anchor, pass.now).catch((error: unknown) => log.warn("monday request not announced yet", { issue: rec.issue, error: message(error) }))
+        }
         const work: RequestWork = { anchor, children: anchor ? (children.get(anchor.id) ?? []) : [] }
         const stage = requestStage(work)
         const progress = progressText(work, stage, typeOf(anchor?.labels ?? []) === "Question")
@@ -197,5 +262,5 @@ export function createRequests(deps: RequestsDeps) {
     }
   }
 
-  return { fromBoard, update, archive }
+  return { fromBoard, adopt, update, archive }
 }
