@@ -21,6 +21,14 @@ export function issue(over: Partial<TrackerIssue> & { id: string }): TrackerIssu
   }
 }
 
+/** A client-chosen issue id Linear accepts: a v4 UUID, with its variant bits (STEP-3323). */
+export const LINEAR_CLIENT_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+
+/** Throws what Linear answers for any other client id, so a fake refuses what the real API refuses. */
+export function assertLinearClientId(clientId: string | undefined): void {
+  if (clientId !== undefined && !LINEAR_CLIENT_ID.test(clientId)) throw new Error("Linear: Argument Validation Error: id must be a UUID")
+}
+
 /** An in-memory tracker that records every call. `failOn` makes named methods throw. */
 export function fakeTracker(seed: TrackerIssue[] = [], me: TrackerUser = EVE, failOn: string[] = []) {
   const issues = new Map(seed.map((i) => [i.id, i]))
@@ -61,6 +69,8 @@ export function fakeTracker(seed: TrackerIssue[] = [], me: TrackerUser = EVE, fa
     },
     async createIssue(input) {
       record("createIssue", [input])
+      // As Linear itself: a client id that is not a v4 UUID is refused (STEP-3323).
+      assertLinearClientId(input.clientId)
       // As the real adapter since dev-tasks #96: a create whose client id is taken reads that issue back.
       const taken = input.clientId ? [...issues.values()].find((i) => i.uuid === input.clientId) : undefined
       if (taken) return taken

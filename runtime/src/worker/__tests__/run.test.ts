@@ -1,4 +1,5 @@
 import type { Options } from "@anthropic-ai/claude-agent-sdk"
+import { spawnSync } from "node:child_process"
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -942,4 +943,23 @@ describe("sdkOptions", () => {
       `${WT}/.mcp.json`,
     ])
   })
+})
+
+describe("the worker's process", () => {
+  it("starts only as worker/run.ts, never inside another process whose file is also called run.ts (the weekly retro's)", () => {
+    // retro/run.ts imports this module: a job started there would exit that process within seconds.
+    const runtime = join(import.meta.dirname, "..", "..", "..")
+    const home = mkdtempSync(join(tmpdir(), "worker-guard-"))
+    const script = join(home, "retro", "run.ts")
+    mkdirSync(join(home, "retro"))
+    writeFileSync(script, `import ${JSON.stringify(join(runtime, "src", "worker", "run.ts"))}\nsetTimeout(() => console.log("still running"), 500)\n`)
+    const run = spawnSync(join(runtime, "node_modules", ".bin", "tsx"), [script, "2026-09-28"], {
+      cwd: home,
+      env: { PATH: process.env.PATH ?? "", HOME: home, AGENTD_HOME: join(home, ".agentd") },
+      encoding: "utf8",
+      timeout: 30_000,
+    })
+    expect(run.stdout.trim()).toBe("still running")
+    expect(run.status).toBe(0)
+  }, 30_000)
 })
