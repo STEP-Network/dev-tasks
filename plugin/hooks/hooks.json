@@ -2,6 +2,15 @@
   "hooks": {
     "PreToolUse": [
       {
+        "matcher": "mcp__.*([Mm]onday|MONDAY|[Ss]lack|SLACK|[Ll]inear|LINEAR|[Dd]ev[-_]?[Tt]asks|DEV[-_]?TASKS).*|Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/people-doors-guard.sh"
+          }
+        ]
+      },
+      {
         "matcher": "Edit|Write|MultiEdit|NotebookEdit",
         "hooks": [
           {
