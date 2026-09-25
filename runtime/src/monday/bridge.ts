@@ -40,7 +40,7 @@ import { createHash } from "node:crypto"
 import type { AgentConfig, AgentPaths } from "../config.ts"
 import { ack, fail, listNew } from "../fsq.ts"
 import { appendLedger, redact, type Logger } from "../log.ts"
-import { answerSaid, personKey, recordedAnswers, secondAnswerText } from "../answer.ts"
+import { answeredSince, answerSaid, personKey, recordedAnswers, secondAnswerText } from "../answer.ts"
 import { enqueueSlack, lastQuestion } from "../outbox.ts"
 import { prRef, recommendationOf } from "../plain.ts"
 import { openDecisions, questionText, type Decision } from "../agentd/decisions.ts"
@@ -630,7 +630,7 @@ export function createMondayBridge(deps: MondayBridgeDeps): MondayBridge {
     if (!issue || rec.answeredHere) return null
     if (rec.kind === "uat") return issue.state === "Approved" ? say.settled(issue.id, "approved") : issue.state === "Needs Correction" ? say.settled(issue.id, "sent back to be fixed") : null
     const since = rec.askedAt ?? rec.createdAt
-    const answer = recordedAnswers(issue.description).filter((a) => a.source === "slack" && a.applied && a.at !== null && a.at >= since).at(-1)
+    const answer = recordedAnswers(issue.description).filter((a) => a.source === "slack" && a.applied && a.at !== null && answeredSince(a.at, since)).at(-1)
     return answer ? say.mirrored(answer.who, "in Slack", answerSaid(answer.text)) : null
   }
 
