@@ -24,8 +24,8 @@ function setup(labels = ["agent-ready", "awaiting-answer", "polads"]) {
   const paths = agentPaths(mkdtempSync(join(tmpdir(), "agentd-route-")))
   mkdirSync(paths.state, { recursive: true })
   const fake = fakeTracker([issue({ id: "STEP-7", state: "On hold", labels, description: "Brief" })])
-  const say = (text: string, id = "U1") =>
-    routeWords({ paths, tracker: fake.tracker, mini: "eve" }, { issue: "STEP-7", request: false, itemId: "I1", who: { id: "M1", name: "Nate" }, words: { id, text, updateId: id, threadId: null, permalink: null }, now: NOW })
+  const say = (text: string, id = "U1", at: string | null = NOW.toISOString()) =>
+    routeWords({ paths, tracker: fake.tracker, mini: "eve" }, { issue: "STEP-7", request: false, itemId: "I1", who: { id: "M1", name: "Nate" }, words: { id, text, updateId: id, threadId: null, permalink: null, at }, now: NOW })
   return { paths, fake, say }
 }
 
@@ -72,6 +72,25 @@ describe("routeWords: answers on the Monday board (STEP-3293 re-review)", () => 
       expect.objectContaining({ mini: "eve", category: "correction", source: "monday", issue: "STEP-7", who: "Nate", text: "no, use the signing date, not the publication date", key: "correction:monday:U1" }),
       expect.objectContaining({ category: "correction", source: "monday", text: "don't merge it, fix the test first", key: "correction:monday:U3" }),
     ])
+  })
+
+  it("never takes words written before this mini's newest question as an answer to it, the rule Slack uses too (STEP-3293 final pass)", async () => {
+    // The reviewer's race, turned round: 09:10 Nate writes "yes" on the item, which shows the publication date.
+    // 09:12 the front door answers his Slack "why?" with a new recommendation. 09:15 the poll routes his 09:10 words.
+    const { paths, fake, say } = setup()
+    enqueueSlack(paths, { kind: "issue", issue: "STEP-7", text: QUESTION, question: true }, new Date("2026-09-25T09:00:00.000Z"))
+    const newer = withRecommendation("Given the legal rule, which date?", "use the submission date")
+    enqueueSlack(paths, { kind: "issue", issue: "STEP-7", text: newer, question: true }, new Date("2026-09-25T09:12:00.000Z"))
+    expect(await say("yes", "U1", "2026-09-25T09:10:00.000Z")).toEqual({ to: "newer-question", question: newer })
+    // No agreement, nothing recorded for a bare yes, and the issue waits for the newer answer.
+    expect(fake.issues.get("STEP-7")).toMatchObject({ state: "On hold", description: "Brief" })
+    // Words that say something stay on the issue, and still move nothing.
+    expect(await say("the publication date, whatever the rule says", "U2", "2026-09-25T09:11:00.000Z")).toEqual({ to: "newer-question", question: newer })
+    expect(fake.issues.get("STEP-7")).toMatchObject({ state: "On hold", description: expect.stringMatching(/\*\*Nate\*\*: the publication date, whatever the rule says$/) })
+    expect(fake.issues.get("STEP-7")!.description).not.toContain("agreed with the recommendation")
+    // Written after it, a yes agrees to the newer one.
+    expect(await say("yes", "U3", "2026-09-25T09:14:00.000Z")).toEqual({ to: "issue", movedTo: "Ready" })
+    expect(fake.issues.get("STEP-7")!.description).toContain("Nate agreed with the recommendation: use the submission date.")
   })
 
   it("never turns a yes on a person's to-do into agreement: it means they will do it", async () => {

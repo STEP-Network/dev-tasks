@@ -21,6 +21,15 @@ const POLITE = "(please|thanks|thank you)"
 /** Words that agree and say nothing else ("yes", "ok, go ahead", "yes please"): a decision needs what was decided. */
 export const BARE = new RegExp(`^\\s*(${POLITE}[\\s,.!]+)*${AGREE}([\\s,.!]+(${AGREE}|${POLITE}))*[\\s.!]*$`, "i")
 
+/**
+ * Whether a question went out after a person wrote (STEP-3293 final pass):
+ * their words never saw it, so a yes in them is not to it. Slack
+ * (decide.ts) and the Monday board (monday/route.ts) use this one rule.
+ */
+export function askedSince(questionAt: string | null | undefined, writtenAt: string | null | undefined): boolean {
+  return Boolean(questionAt && writtenAt && Date.parse(questionAt) > Date.parse(writtenAt))
+}
+
 /** What a person decided, when it is more than their own words. */
 export type Decided = { agreed: true; recommendation: string } | { agreed: false; text: string }
 

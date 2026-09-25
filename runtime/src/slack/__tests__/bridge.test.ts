@@ -322,7 +322,7 @@ describe("replies in a thread the mini owns (STEP-3293)", () => {
     up(paths)
     await handleEnvelope(deps, reply("1700.5", "pause"))
     await handleEnvelope(deps, reply("1700.6", "Hold everything."))
-    await handleEnvelope(deps, reply("1700.7", "stop"))
+    await handleEnvelope(deps, reply("1700.7", "stop everything, please"))
     await retryPending(deps)
     expect(instructions(paths)).toEqual([
       ["instr:bridge-pause:CQ:1700.5", ["pause"]],
@@ -333,25 +333,40 @@ describe("replies in a thread the mini owns (STEP-3293)", () => {
     expect(listNew(paths.outbox)).toEqual([])
   })
 
-  it("never pause the mini on a sentence that says pause about something else, while the front door is up (STEP-3293 re-review)", async () => {
+  for (const state of ["up", "down"] as const) {
+    it(`never pause or leave on words that are not a command, with the front door ${state} (STEP-3293 final pass)`, async () => {
+      // The reviewer's proofs, turned round: an answer that says pause paused the whole mini while the front door was down,
+      // and a one-word "Hold" or "stop" to "ship it now, or hold?" paused it while it was up.
+      const { deps, paths } = setup([PARKED])
+      if (state === "up") up(paths)
+      else down(paths)
+      const words = [
+        "Yes, pause the countdown during the blackout period",
+        "hold off on the banner until legal replies",
+        "should we pause the rollout?",
+        "pause, and fix the failing test when you are back",
+        "Hold",
+        "stop",
+        "I think you should leave it to Kristoffer, he knows that code",
+      ]
+      for (const [i, text] of words.entries()) await handleEnvelope(deps, reply(`1700.${10 + i}`, text))
+      await retryPending(deps)
+      expect(instructions(paths)).toEqual([])
+      expect(replies(paths).map((p) => p.acted)).toEqual(words.map(() => undefined))
+      // Down, they hear once that the front door reads them when it is back.
+      expect(outboxTexts(paths)).toEqual(state === "down" ? [AWAY_NOTE] : [])
+    })
+  }
+
+  it("never pause on a reply in a thread with a question open: \"pause\" may be its answer (STEP-3293 final pass)", async () => {
     const { deps, paths } = setup([PARKED])
     up(paths)
-    await handleEnvelope(deps, reply("1700.5", "Yes, pause the countdown during the blackout period"))
-    await handleEnvelope(deps, reply("1700.6", "hold off on the banner until legal replies"))
-    await handleEnvelope(deps, reply("1700.7", "should we pause the rollout?"))
-    await handleEnvelope(deps, reply("1700.8", "pause, and fix the failing test when you are back"))
-    await retryPending(deps)
+    saveThread(paths, { issue: "STEP-7", channelId: "CQ", ts: "1700.1", permalink: null, createdAt: "2026-09-24T07:00:00.000Z", lastQuestionAt: "2026-09-24T07:30:00.000Z", lastQuestion: "Ship it now, or pause?", openQuestions: 1 })
+    await handleEnvelope(deps, reply("1700.5", "pause"))
     expect(instructions(paths)).toEqual([])
-    expect(replies(paths).map((p) => p.acted)).toEqual([undefined, undefined, undefined, undefined])
-  })
-
-  it("keep the rest of the words for the front door when the bridge paused while it was down (STEP-3293 review)", async () => {
-    const { deps, paths } = setup([PARKED])
-    down(paths)
-    await handleEnvelope(deps, reply("1700.5", "pause, and fix the failing test when you are back"))
-    expect(instructions(paths)).toEqual([["instr:bridge-pause:CQ:1700.5", ["pause"]]])
-    // "fix the failing test" is the front door's: the message stays open.
-    expect(replies(paths)).toEqual([expect.objectContaining({ key: "msg:CQ:1700.5", acted: ["pause"] })])
+    // Their reply answered it: the next "pause" in the thread is a command again.
+    await handleEnvelope(deps, reply("1700.6", "pause"))
+    expect(instructions(paths)).toEqual([["instr:bridge-pause:CQ:1700.6", ["pause"]]])
   })
 
   it("keep how the thread stood: when the front door last wrote there, and how many questions were open, and count afresh after it (STEP-3293 re-review)", async () => {
@@ -484,17 +499,15 @@ describe("mentions that name a PR (STEP-3293)", () => {
     ])
     const downNow = setup()
     down(downNow.paths)
-    await handleEnvelope(downNow.deps, at("1950.2", "<@UBOT> pause #1679"))
-    await handleEnvelope(downNow.deps, at("1950.3", "<@UBOT> pause for a bit"))
+    await handleEnvelope(downNow.deps, at("1950.2", "<@UBOT> pause everything"))
+    // Not a command alone: the front door reads them when it is back (STEP-3293 final pass).
+    await handleEnvelope(downNow.deps, at("1950.3", "<@UBOT> pause #1679 for a bit"))
     await handleEnvelope(downNow.deps, at("1950.6", "<@UBOT> leave it, I'll take it"))
-    expect(payloads(downNow.paths).filter((p) => p.type === "instruction").map((p) => [p.ts, p.actions, p.target]).sort()).toEqual([
-      ["1950.2", ["pause"], { pr: 1679 }],
-      ["1950.3", ["pause"], {}],
-    ])
+    expect(payloads(downNow.paths).filter((p) => p.type === "instruction").map((p) => [p.ts, p.actions, p.target])).toEqual([["1950.2", ["pause"], {}]])
     // All stay for the front door, with what the bridge did beside them. A leave that names nothing is the front door's to ask about.
     expect(payloads(downNow.paths).filter((p) => p.type === "mention").map((p) => [p.ts, (p as { acted?: string[] }).acted])).toEqual([
       ["1950.2", ["pause"]],
-      ["1950.3", ["pause"]],
+      ["1950.3", undefined],
       ["1950.6", undefined],
     ])
   })

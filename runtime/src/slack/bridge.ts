@@ -68,6 +68,8 @@ type PersonEntry = Extract<Classified, { type: "reply" | "mention" }> & {
   receivedAt: string
   /** What the bridge did about the words itself (pause, leave), which the front door must not do again. */
   acted?: Action[]
+  /** On a reply: the questions open in the thread when it came. */
+  openQuestions?: number
 }
 
 export async function handleEnvelope(deps: BridgeDeps, envelope: SlackEnvelope): Promise<Classified["type"]> {
@@ -113,14 +115,23 @@ export async function handleEnvelope(deps: BridgeDeps, envelope: SlackEnvelope):
 }
 
 /**
- * A message that is only a command to stop ("pause", "stop", "hold
- * everything"). The bridge acts on it with the front door up too. A sentence
- * that says pause about something else ("pause the countdown", "hold off on
- * the banner", "should we pause the rollout?") is the front door's to read.
+ * A message that is only a command (STEP-3293 final pass): "pause", "pause
+ * everything", "stop everything", "hold everything", or "leave it", "I'll
+ * take it", with an optional "@eve" and "please". The bridge acts on these
+ * alone, the front door up or down. A sentence that says pause or leave about
+ * something else ("pause the countdown", "hold off on the banner", "should we
+ * pause the rollout?"), or a bare "stop" or "hold", is the front door's to
+ * read: the away note tells them it will be.
  */
-const SHORT_PAUSE = /^(please[\s,]+)?(pause|stop|hold|hold off|stop working|stop all work)(\s+(everything|all work|all|now|for now|please))*[\s.!]*$/i
+const POLITELY = "(please[\\s,]+)?"
+const TRAIL = "([\\s,]+(now|for now|please))*[\\s.!]*$"
+const SHORT_PAUSE = new RegExp(`^${POLITELY}(pause|pause everything|stop everything|hold everything)${TRAIL}`, "i")
+const LEAVE = "(leave (it|this|that)( to me)?|i'?ll (take|handle) (it|this|that))"
+const SHORT_LEAVE = new RegExp(`^${POLITELY}${LEAVE}([\\s,.!]+${LEAVE})*${TRAIL}`, "i")
+const bare = (text: string) => text.replace(/<@[A-Z0-9]+(\|[^>]*)?>/g, " ").trim()
 
-export const shortPause = (text: string) => SHORT_PAUSE.test(text.replace(/<@[A-Z0-9]+(\|[^>]*)?>/g, " ").trim())
+export const shortPause = (text: string) => SHORT_PAUSE.test(bare(text))
+export const shortLeave = (text: string) => SHORT_LEAVE.test(bare(text))
 
 /** What the bridge says in a thread while the front door cannot read it: a restart, a usage limit. */
 export const AWAY_NOTE = `I am not reading messages right now, and I will read this one as soon as I am back. ${NOTHING_NEEDED}`
@@ -128,12 +139,13 @@ export const AWAY_NOTE = `I am not reading messages right now, and I will read t
 /**
  * A person's reply or mention is the front door's to read, and it stays in
  * the inbox until the front door closes it. The bridge acts on the words
- * itself only where waiting would hurt, through agentd: a message that is
- * only a command to stop, at once, and while the front door is down, "pause"
- * and "leave it" in the fixed verbs' reading. A pause is the whole mini's and
- * needs no issue or PR. The entry records what it did (`acted`), so the front
- * door handles the rest of the words and does nothing twice. While the front
- * door is down, it says so in the thread, once each time.
+ * itself only where waiting would hurt, through agentd, and only on a message
+ * that is only a command: a pause at once, unless it replies in a thread with
+ * a question open, where "pause" may be the answer, and a leave while the
+ * front door is down. A pause is the whole mini's and needs no issue or PR.
+ * The entry records what it did (`acted`), so the front door handles the rest
+ * and does nothing twice. While the front door is down, it says so in the
+ * thread, once each time.
  */
 export function actForFrontDoor(deps: BridgeDeps, key: string): void {
   const path = entryPath(deps.paths.inbox, key)
@@ -145,9 +157,11 @@ export function actForFrontDoor(deps: BridgeDeps, key: string): void {
   const issue = entry.type === "reply" ? entry.issue : null
   const acted = entry.acted ?? []
   const aimed = Boolean(issue || said.target.issue || said.target.pr)
+  // "Ship it now, or pause?": with a question open in the thread, a pause may be the answer.
+  const answering = entry.type === "reply" && (entry.openQuestions ?? 0) > 0
   const wanted: Action[] = [
-    ...(shortPause(entry.text) || (!up && said.actions.includes("pause")) ? (["pause"] as const) : []),
-    ...(!up && aimed && said.actions.includes("leave") ? (["leave"] as const) : []),
+    ...(shortPause(entry.text) && !answering ? (["pause"] as const) : []),
+    ...(!up && aimed && shortLeave(entry.text) ? (["leave"] as const) : []),
   ]
   const due = wanted.filter((a) => !acted.includes(a))
   if (due.length) {

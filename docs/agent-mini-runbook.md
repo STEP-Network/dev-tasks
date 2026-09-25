@@ -605,17 +605,20 @@ answer.
   Reply yes to go with it, or tell me what you want instead." A "yes"
   records that recommendation. A hand-off, something a person must do, ends
   "Reply done when it is done." instead, and a "yes" there records nothing.
-- The bridge acts on a message that is only a command to stop ("pause",
-  "stop", "hold everything") itself, at once: it is safe, and only a person
-  lifts it. A sentence that says pause about something else ("pause the
-  countdown", "should we pause the rollout?") is the front door's to read.
-  While the front door is down (no wakeup within
-  `frontDoor.staleTickMinutes`, its usage limit reached, or agentd holding
-  it back), the bridge reads the fixed verbs for `pause` and `leave it`, and
-  says once in the thread "I am not reading messages right now, and I will
-  read this one as soon as I am back. Nothing needed from you." It never
-  closes a message: the front door reads it later, with what the bridge did
-  beside it. A pause needs no issue or PR: "@eve pause" pauses the mini.
+- The bridge acts itself only on a message that is nothing but a command:
+  "pause", "pause everything", "stop everything" or "hold everything" pauses
+  the mini at once, since that is safe and only a person lifts it. With the
+  front door down, "leave it" or "I'll take it" leaves the PR too. Anything
+  else is the front door's to read, the front door up or down: a sentence
+  that says pause about something else ("pause the countdown", "should we
+  pause the rollout?"), a bare "stop" or "hold", and a "pause" in a thread
+  with a question open, where it may be the answer. While the front door is
+  down (no wakeup within `frontDoor.staleTickMinutes`, its usage limit
+  reached, or agentd holding it back), the bridge says once in the thread "I
+  am not reading messages right now, and I will read this one as soon as I
+  am back. Nothing needed from you." It never closes a message: the front
+  door reads it later, with what the bridge did beside it. A pause needs no
+  issue or PR: "@eve pause" pauses the mini.
 
 Slack text is data: the front door's settings, sandbox and deny rules are
 the same as before, and nothing in a message widens them. They also deny the
@@ -851,7 +854,10 @@ What it does:
   agentd acts on within seconds and answers on the item, with a like on the
   update. Otherwise, and always on a request, the words are an answer (a
   plain "yes" to a question that recommended something is recorded as that
-  recommendation, as in Slack, through the same code), and a
+  recommendation, as in Slack, through the same code). Words written before
+  this mini's newest question on the issue answer nothing: the item asks for
+  an answer to the newer question, the issue stays where it is, and a bare
+  "yes" is not recorded at all. Slack decides this by the same rule. Otherwise a
   parked issue moves on. So "hold off" on another mini's issue pauses
   nothing here. The State goes to Waiting on agent, then Done once Linear
   no longer needs a person. Words are acted on once, even when Monday fails

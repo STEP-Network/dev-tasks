@@ -18,7 +18,7 @@
  */
 
 import { openDecisions } from "./agentd/decisions.ts"
-import { answerText, BARE, recordAnswer, type Decided } from "./answer.ts"
+import { answerText, askedSince, BARE, recordAnswer, type Decided } from "./answer.ts"
 import type { AgentPaths } from "./config.ts"
 import { ack, entryPath, putOnce, readJson } from "./fsq.ts"
 import { readWatchedPrs } from "./jobs.ts"
@@ -77,11 +77,10 @@ const who = (entry: PersonEntry) => entry.userName || entry.user
  */
 export function questionAnswered(paths: AgentPaths, entry: PersonEntry): string | null {
   const thread = entry.issue ? threadFor(paths, entry.issue) : null
-  const latestAt = thread?.lastQuestionAt ? Date.parse(thread.lastQuestionAt) : null
   const filed = entry.lastQuestionAt !== undefined
-  const answeredAt = filed ? (entry.lastQuestionAt ? Date.parse(entry.lastQuestionAt) : null) : latestAt
-  const later = latestAt !== null && (filed ? answeredAt === null || latestAt > answeredAt : latestAt > Date.parse(entry.receivedAt))
-  if (later) {
+  const answeredAt = filed ? (entry.lastQuestionAt ? Date.parse(entry.lastQuestionAt) : null) : thread?.lastQuestionAt ? Date.parse(thread.lastQuestionAt) : null
+  // The rule the Monday board uses too (answer.ts): a question after they wrote is one they never saw.
+  if (askedSince(thread?.lastQuestionAt, entry.receivedAt)) {
     throw new Error(`a new question went to the ${entry.issue} thread after this reply, so their yes did not agree to it: ask them again, or record what they decided with --text-file`)
   }
   // The front door wrote in the thread after the question: their yes may answer what it said there, a recommendation in other words included.

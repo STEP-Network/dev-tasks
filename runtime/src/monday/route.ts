@@ -21,7 +21,7 @@ import { putOnce } from "../fsq.ts"
 import { listJobs, readWatchedPrs } from "../jobs.ts"
 import { appendLedger } from "../log.ts"
 import { openDecisions } from "../agentd/decisions.ts"
-import { agreedTo, noteCorrection, recordAnswer } from "../answer.ts"
+import { agreedTo, askedSince, BARE, noteCorrection, recordAnswer } from "../answer.ts"
 import { lastQuestion } from "../outbox.ts"
 import { instructionFor, type Action, type MondayInstructionEntry } from "../slack/instruction.ts"
 import type { Tracker } from "../tracker.ts"
@@ -34,9 +34,15 @@ export interface Words {
   updateId: string | null
   threadId: string | null
   permalink: string | null
+  /** When they wrote it: the update's time, or the Answer column change's. null when Monday did not say. */
+  at: string | null
 }
 
-export type Routed = { to: "agentd"; actions: Action[] } | { to: "issue"; movedTo: string | null }
+export type Routed =
+  | { to: "agentd"; actions: Action[] }
+  | { to: "issue"; movedTo: string | null }
+  /** Written before this mini's newest question: not an answer to it, so the person is asked to answer that one. */
+  | { to: "newer-question"; question: string }
 
 /** Whether the issue's most recent job on this mini, running, queued or done, is one that ended blocked. */
 function blockedNow(paths: AgentPaths, issue: string): boolean {
@@ -60,8 +66,18 @@ export async function routeWords(
   // "No, do X" on the board is a lesson for the weekly retro, as in Slack (STEP-3290), answer or instruction alike.
   noteCorrection({ paths, mini: deps.mini, now: () => now }, { issue, source: "monday", key: `correction:monday:${words.id}`, who: who.name, text: words.text })
   const said = !input.request && ownsWork(paths, issue) ? instructionFor(words.text, current) : null
+  const asked = lastQuestion(paths, issue)
+  // Written before this mini's newest question, the words never saw it: the same rule as Slack (answer.ts).
+  // No agreement, no move. Their words stay on the issue unless they are only a yes, which says nothing now.
+  if (!said && asked && askedSince(asked.at, words.at)) {
+    if (!BARE.test(words.text)) {
+      await recordAnswer({ paths, tracker }, { issue, who: who.name, words: words.text, ts: words.id, permalink: words.permalink, source: "monday" }, { current, move: false })
+    }
+    appendLedger(paths, { type: "answer.before_question", issue, via: "monday" }, now)
+    return { to: "newer-question", question: asked.text }
+  }
   // A plain yes to a question that recommended something is that recommendation, as in Slack (STEP-3293 review).
-  const decided = said ? null : agreedTo(words.text, lastQuestion(paths, issue)?.text, current)
+  const decided = said ? null : agreedTo(words.text, asked?.text, current)
   // One recorder for Slack and Monday (answer.ts). An instruction leaves the issue where it is: agentd acts on it.
   const { movedTo } = await recordAnswer(
     { paths, tracker },
