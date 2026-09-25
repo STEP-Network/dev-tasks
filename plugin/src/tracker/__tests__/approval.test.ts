@@ -40,6 +40,10 @@ describe("approvalPatch", () => {
     expect(() => approvalPatch([], { addLabels: ["approval/look", "approval/try"] })).toThrow(LowersClass)
   })
 
+  it("drops an approval label from removeLabels: the class it adds stays on", () => {
+    expect(approvalPatch([], { addLabels: ["approval/try"], removeLabels: ["approval/try"] })).toEqual({ addLabels: ["approval/try"] })
+  })
+
   it("keeps the same class without touching other labels", () => {
     expect(approvalPatch(["approval/look"], { addLabels: ["approval/look"], removeLabels: ["awaiting-answer"] })).toEqual({
       addLabels: ["approval/look"],

@@ -63,7 +63,20 @@ describe("templates/claude-settings.json, the front door's settings", () => {
     for (const server of ["mcp__github__", "mcp__plugin_github_github__"]) {
       for (const tool of writes) expect(rendered.permissions.deny, `${server}${tool}`).toContain(`${server}${tool}`)
     }
-    expect(rendered.permissions.deny.filter((rule: string) => rule.startsWith("mcp__")).every((rule: string) => writes.some((tool) => rule.endsWith(`__${tool}`)))).toBe(true)
+    const github = rendered.permissions.deny.filter((rule: string) => /^mcp__(github|plugin_github_github)__/.test(rule))
+    expect(github.every((rule: string) => writes.some((tool) => rule.endsWith(`__${tool}`)))).toBe(true)
+  })
+
+  it("denies the Linear MCP server's write tools, by every name it may carry: trackerctl is the only way to change an issue (Wave 1)", () => {
+    // trackerctl never lowers an approval class. A Linear MCP write would go round it.
+    const writes = ["save_issue", "save_comment", "delete_comment", "create_issue_label", "save_issue_label", "retire_issue_label", "restore_issue_label", "save_project", "save_project_label", "retire_project_label", "restore_project_label", "save_milestone", "save_document", "save_status_update", "delete_status_update", "create_attachment", "create_attachment_from_upload", "prepare_attachment_upload", "delete_attachment", "share_issue", "unshare_issue", "save_release", "save_release_note", "merge_diff", "update_diff", "save_diff_comment", "delete_diff_comment", "resolve_diff_thread", "submit_diff_review", "mark_notification"]
+    for (const server of ["mcp__linear__", "mcp__linear-server__", "mcp__plugin_linear_linear__"]) {
+      for (const tool of writes) expect(rendered.permissions.deny, `${server}${tool}`).toContain(`${server}${tool}`)
+    }
+    // Reads stay: the front door reads issues through trackerctl, and may through the MCP.
+    const linear = rendered.permissions.deny.filter((rule: string) => /^mcp__(linear|linear-server|plugin_linear_linear)__/.test(rule))
+    expect(linear.every((rule: string) => writes.some((tool) => rule.endsWith(`__${tool}`)))).toBe(true)
+    expect(linear).not.toContain("mcp__linear-server__get_issue")
   })
 
   it("runs agentctl and trackerctl outside the sandbox, and gives sandboxed commands no network, no secret and one place to write", () => {

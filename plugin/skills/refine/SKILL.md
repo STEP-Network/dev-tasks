@@ -144,9 +144,15 @@ semicolons, no em or en dashes.
     refactors, infrastructure, text and translations, docs and the user
     guide, and `.claude/`. The agents approve it.
 
-  When in doubt, take the higher class. Keep a class the issue already has,
-  or raise it. Never lower one: only a person lowers a class, and trackerctl
-  refuses the update. If a person's answer asks for a lower class, keep the
+  A change that widens what agents may do is never Auto, even inside
+  `.claude/`: permissions and deny rules, blocking hooks, `CODEOWNERS`,
+  GitHub rulesets and `.github/workflows/`. Class it `approval/try`.
+
+  If the issue already has an approval label, keep it exactly as it is, even
+  when these rules give a higher one: a person may have set it. Set a class
+  only when it has none, and when in doubt, take the higher class. The CI
+  diff floor raises it when the code calls for more. Never lower one: only a
+  person lowers a class, and trackerctl refuses the update. If a person's answer asks for a lower class, keep the
   class, and reply in the thread in these words: "Only a person can lower the
   approval level. You can do it in Linear: open <the issue's link> and set
   the label approval/<class>." PolAds CI also raises a class the diff shows
@@ -185,9 +191,10 @@ Try work waits for a person's OK on the plan before it is built. Unless the
 answers under `## Answers from Slack` or `## Answers from Monday` already
 approve this plan, make that the question: "Here is the plan for STEP-<n>:
 <what changes for users, in two or three plain sentences>. Shall I build it?",
-with the recommendation "Build it as planned", and park the issue as above. A
-person's yes comes back as an answer in the description, and the next /refine
-makes it Ready. Auto and Look work goes Ready at once.
+with the recommendation "Build it as planned", and park the issue as above,
+with `--add-label approval/try` in the same update. A person's yes comes back
+as an answer in the description, and the next /refine makes it Ready. Auto
+and Look work goes Ready at once.
 
 Otherwise it is ready:
 

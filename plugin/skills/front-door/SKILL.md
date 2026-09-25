@@ -210,21 +210,21 @@ If `develop` is set, read the issue once (`~/.agentd/bin/trackerctl read <develo
 It carries `agent-ready`, so /refine judged it agent work.
 
 If the issue has no `approval/` label yet, give it one first, by the rules
-in /refine Phase 4, one Bash call:
+in /refine Phase 4. Try work needs a person's OK on the plan first, so if it
+needs `approval/try`, do not launch it: class it and send it back to
+refining in one Bash call, and the next wakeup's refine asks for the OK:
 
 ```bash
-~/.agentd/bin/trackerctl update <develop.id> --add-label approval/<auto, look or try>
+~/.agentd/bin/trackerctl update <develop.id> --add-label approval/try --state Refining --remove-label agent-ready
 ```
 
-If the class you gave it is `approval/try`, do not launch it: Try work needs
-a person's OK on the plan first. Send it back to refining instead, one Bash
-call, and the next wakeup's refine asks for the OK:
+For Auto or Look, one Bash call:
 
 ```bash
-~/.agentd/bin/trackerctl update <develop.id> --state Refining --remove-label agent-ready
+~/.agentd/bin/trackerctl update <develop.id> --add-label approval/<auto or look>
 ```
 
-Otherwise launch it:
+Then, and for an issue that already had its label, launch it:
 
 ```bash
 ~/.agentd/bin/agentctl job submit --issue <develop.id>

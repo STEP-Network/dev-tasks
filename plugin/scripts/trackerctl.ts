@@ -152,15 +152,6 @@ export function buildPatch(flags: ParsedArgs["flags"], readText: (path: string) 
 }
 
 /**
- * A text flag, given inline (`--description "..."`) or as a file
- * (`--description-file brief.md`), never both. An agent mini's skills pass
- * people's words through a file, where no shell expands them. Either way,
- * a secrets file and text that carries a key or a token are refused
- * (src/tracker/secrets-guard.ts): on a mini trackerctl runs outside the front
- * door's sandbox and can read the Linear key, so the sandbox cannot be what
- * keeps that key out of an issue.
- */
-/**
  * update's patch as it goes to Linear. An agent never lowers an approval class
  * (the human-agent flow spec, section 3), so a patch that touches one is
  * checked against the issue's labels first, and refused rather than written.
@@ -179,6 +170,15 @@ export async function runUpdate(
   return tracker.updateIssue(ref, await guardedPatch(tracker, ref, buildPatch(flags, readText)))
 }
 
+/**
+ * A text flag, given inline (`--description "..."`) or as a file
+ * (`--description-file brief.md`), never both. An agent mini's skills pass
+ * people's words through a file, where no shell expands them. Either way,
+ * a secrets file and text that carries a key or a token are refused
+ * (src/tracker/secrets-guard.ts): on a mini trackerctl runs outside the front
+ * door's sandbox and can read the Linear key, so the sandbox cannot be what
+ * keeps that key out of an issue.
+ */
 export function textFlag(
   flags: ParsedArgs["flags"],
   name: string,
