@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest"
 import { issue } from "../../__tests__/fakes.ts"
 import { ANSWERS_HEADING, appendAnswer } from "../../slack/text.ts"
-import { buildBrief, WORKER_RESULT_SCHEMA, workerRules, type BriefInput } from "../brief.ts"
+import { buildBrief, PLAIN_WORDS_RULE, WORKER_RESULT_SCHEMA, workerRules, type BriefInput } from "../brief.ts"
 
 const input: BriefInput = {
   mini: "eve",
@@ -84,6 +84,13 @@ describe("the self-check (STEP-3284)", () => {
 })
 
 describe("WORKER_RESULT_SCHEMA", () => {
+  it("has the worker write what reaches Slack in plain words, without the machinery's", () => {
+    const rules = workerRules(input)
+    expect(rules).toContain(PLAIN_WORDS_RULE)
+    expect(PLAIN_WORDS_RULE).toMatch(/plain words someone who does not write code follows.*the one thing you need.*self-check, checklist, siblings, report/)
+    expect((WORKER_RESULT_SCHEMA.properties.question as { description: string }).description).toMatch(/plain words someone who does not write code follows/)
+  })
+
   it("requires a status and a summary and allows only the three statuses", () => {
     expect(WORKER_RESULT_SCHEMA.required).toEqual(["status", "summary"])
     expect(WORKER_RESULT_SCHEMA.properties.status.enum).toEqual(["done", "needs_input", "blocked"])

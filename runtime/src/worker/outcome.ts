@@ -8,7 +8,9 @@
  * (reportProblem): the runner asks the same session for the report once, and
  * with commits ahead titles the PR from them rather than strand the work.
  * A done report's self-check (STEP-3284) is part of its form: the one-hop
- * sweep's checklist, and a mutation check for each new guard test.
+ * sweep's checklist, and a mutation check for each new guard test. Its gaps
+ * never strand work: after the one correction, the work goes out with them
+ * named on the PR, a revise round's included.
  */
 
 import { USAGE_LIMIT_ERROR_PREFIXES } from "@anthropic-ai/claude-agent-sdk"
@@ -44,18 +46,36 @@ export interface WorkerReport {
   notes?: string
   checklist?: Partial<Record<ChecklistKey, string>>
   mutations?: MutationCheck[]
+  /**
+   * Set by the runner, never by the worker: the job's own change is small
+   * (SMALL_CHANGE_FILES code files at most, none for a revise round that
+   * only answers), so a search answer may give a reason instead of a command.
+   */
+  small?: boolean
 }
+
+/** A change this small, in code files (tests aside), needs no search command in its sweep: a reason will do. */
+export const SMALL_CHANGE_FILES = 3
 
 /** A search, as the sweep's answers must show it: the command, not a claim. */
 const SEARCH_RE = /(^|[\s`'"(])(rg|grep|git grep|ag|ack)\s/
+/** An answer that says a search was done: then it must show the command. */
+const CLAIMS_SEARCH_RE = /\b(search(ed|ing)?|grepp?ed|looked|scanned|swept|checked|found)\b/i
+/** "none" with no reason. */
+const BARE_RE = /^(none|n\/a|nothing|no)[\s.:]*$/i
 
-/** What a report's checklist lacks: each missing answer, and each search answer that names no search command. */
+/**
+ * What a report's checklist lacks: each missing answer, and each search
+ * answer that names no search command. A search answer may give a reason
+ * instead ("none: only the copy changed") when the change is small, unless
+ * it says a search was done: that one shows the command.
+ */
 export function checklistGaps(report: WorkerReport): string[] {
   const gaps: string[] = []
   for (const item of CHECKLIST) {
     const answer = report.checklist?.[item.key]?.trim()
     if (!answer) gaps.push(item.key)
-    else if (item.search && !SEARCH_RE.test(answer)) gaps.push(`${item.key} (no search command)`)
+    else if (item.search && !SEARCH_RE.test(answer) && (CLAIMS_SEARCH_RE.test(answer) || BARE_RE.test(answer) || !report.small)) gaps.push(`${item.key} (no search command)`)
   }
   return gaps
 }
@@ -137,6 +157,8 @@ export function toOutcome(
     limits: { maxTurns: number; maxBudgetUsd: number; wallClockMinutes: number }
     /** false for a revise job: its PR has a title already. */
     requireTitle?: boolean
+    /** The job's own change is small: see WorkerReport.small. */
+    small?: boolean
   },
 ): Outcome {
   const base = { costUsd: result?.total_cost_usd ?? null, turns: result?.num_turns ?? null, sessionId: result?.session_id ?? null }
@@ -168,8 +190,9 @@ export function toOutcome(
         const text = (result.result ?? "").trim()
         return isLimit(text, result.api_error_status) ? limited : blocked(`an API error: ${text || "unknown"}`)
       }
-      const report = parseReport(result.structured_output)
-      if (!report) return { ...blocked("the worker ended without a valid report"), reportProblem: "report" }
+      const parsed = parseReport(result.structured_output)
+      if (!parsed) return { ...blocked("the worker ended without a valid report"), reportProblem: "report" }
+      const report: WorkerReport = ctx.small ? { ...parsed, small: true } : parsed
       if (report.status === "done") {
         if (!report.prTitle && ctx.requireTitle !== false) return { ...blocked("the report has no PR title", report), reportProblem: "prTitle" }
         const gaps = checklistGaps(report)

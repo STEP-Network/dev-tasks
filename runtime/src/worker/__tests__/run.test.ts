@@ -8,6 +8,7 @@ import { listNew } from "../../fsq.ts"
 import { listJobs, moveJob, submitJob } from "../../jobs.ts"
 import type { Logger } from "../../log.ts"
 import { fakeExec, fakeTracker, issue, SWEEP } from "../../__tests__/fakes.ts"
+import { JARGON } from "../../plain.ts"
 import type { ExecResult } from "../git.ts"
 import { acceptWithGaps, checkBilling, checkPlugins, correctionMinutes, correctionPrompt, mergeMode, requireMutations, modelFor, runJob, sdkOptions, type QueryFn, type RunDeps, type SdkMessage } from "../run.ts"
 
@@ -105,7 +106,7 @@ describe("runJob", () => {
     expect(f.lines()).toContain(`gh pr merge ${PR} --auto --squash --delete-branch`)
     expect(listJobs(paths, "running")).toEqual([])
     expect(listJobs(paths, "done")[0].result).toMatchObject({ status: "done", prUrl: PR })
-    expect(outbox()).toEqual(["claimed STEP-7 Fix the date", `STEP-7 PR opened: ${PR} (auto-merge armed)`])
+    expect(outbox()).toEqual(["claimed STEP-7 Fix the date", `STEP-7: I opened <${PR}|PR #1701> for "Fix the date". It goes in by itself once the checks and the review pass. Nothing needed from you.`])
   })
 
   it("opens the PR without arming auto-merge when worker.autoMerge is off on this mini, though the policy allows it", async () => {
@@ -113,7 +114,7 @@ describe("runJob", () => {
     expect(await runJob(deps, job.id)).toMatchObject({ status: "done", prUrl: PR })
     expect(f.lines().some((l) => l.startsWith("gh pr create"))).toBe(true)
     expect(f.lines().some((l) => l.startsWith("gh pr merge"))).toBe(false)
-    expect(outbox()).toEqual(["claimed STEP-7 Fix the date", `STEP-7 PR opened: ${PR} (auto-merge off on this mini: a person merges)`])
+    expect(outbox()).toEqual(["claimed STEP-7 Fix the date", `STEP-7: I opened <${PR}|PR #1701> for "Fix the date". Auto-merge is off on this mini, so a person needs to merge it once the checks pass.`])
   })
 
   it("marks when the session starts, after the worktree, for agentd's wall-clock backstop", async () => {
@@ -370,10 +371,11 @@ describe("runJob", () => {
       expect(body(stubborn.paths)).toContain("## Mutation checks\n- None listed.")
     })
 
-    it("stays blocked, asking nothing, when an incomplete report comes with nothing committed", async () => {
-      const { deps, job, q } = setup({ messages: [INIT, NO_SWEEP], exec: [[/rev-list --count/, { stdout: "0\n" }]] })
-      expect(await runJob(deps, job.id)).toMatchObject({ status: "blocked", reason: expect.stringMatching(/^the report's self-check is incomplete/) })
-      expect(q.seen).toHaveLength(1)
+    it("never stops on the self-check alone: with nothing committed, it asks once, then stops on the missing code, and says so plainly", async () => {
+      const { deps, job, q, outbox } = setup({ sessions: [[INIT, NO_SWEEP], [INIT, NO_SWEEP]], exec: [[/rev-list --count/, { stdout: "0\n" }]] })
+      expect(await runJob(deps, job.id)).toMatchObject({ status: "blocked", reason: "the worker reported done but made no commits" })
+      expect(q.seen).toHaveLength(2)
+      expect(outbox().at(-1)).toBe("STEP-7: I had to stop: I finished without changing any code. I asked in the issue's thread what to do.")
     })
 
     it("counts only test files, and leaves a report with its checks, or any other status, as it is", () => {
@@ -466,7 +468,7 @@ describe("runJob", () => {
       expect(brief).toContain("### Test\n\n```\nFAIL lib/notice.test.ts\n  expected 2026-09-01, got 2026-08-31\n```")
       // Older than the round, or the PR author's own: not feedback.
       for (const text of ["An older point.", "Eve's own earlier reply.", "Eve on her own code.", "Eve's own review note."]) expect(brief).not.toContain(text)
-      expect(outbox()).toEqual([`STEP-7 revised ${PR_URL} (round 1 of 3): 1 commit pushed to STEP-7-fix-the-date`])
+      expect(outbox()).toEqual([`STEP-7: I fixed the review comments and the failing checks on <${PR_URL}|PR #1674> and pushed the fixes. Nothing needed from you.`])
     })
 
     it("skips a revise job whose PR has closed meanwhile", async () => {
@@ -481,7 +483,7 @@ describe("runJob", () => {
       expect(await runJob(deps, job.id)).toMatchObject({ status: "done" })
       expect(f.lines().some((l) => l.includes(" push "))).toBe(false)
       expect(readFileSync(join(paths.state, "pr-reply-STEP-7.md"), "utf8")).toContain("\n\nNo commit pushed.\n")
-      expect(outbox()).toEqual([`STEP-7 revised ${PR_URL} (round 1 of 3): replied, nothing to change`])
+      expect(outbox()).toEqual([`STEP-7: I went through the review comments and the failing checks on <${PR_URL}|PR #1674> and answered each point on the PR. No code needed changing. Nothing needed from you.`])
     })
 
     it("says on the PR and in the issue's thread when it could not finish the round", async () => {
@@ -493,9 +495,90 @@ describe("runJob", () => {
       const thread = listNew<{ kind: string; text: string; question: boolean }>(paths.outbox).map((e) => e.payload).find((p) => p.kind === "issue")
       expect(thread).toMatchObject({
         question: true,
-        text: `Revising ${PR_URL} stopped: The migration needs a person. Reply "fix it" to try the round again once that is sorted, or "leave it" to leave the PR to a person.`,
+        text: `I could not finish the fixes for the review comments and the failing checks on <${PR_URL}|PR #1674>: The migration needs a person. I pushed what I had so far. Reply "fix it" and I will try again, or "leave it" and I will leave the PR to a person.`,
       })
       expect(fake.called("updateIssue")).toEqual([])
+    })
+
+    const LINK = `<${PR_URL}|PR #1674>`
+    const WHAT = "the review comments and the failing checks"
+    const ZERO: Array<[RegExp, Partial<ExecResult>]> = [[/rev-list --count origin\/STEP-7-fix-the-date\.\.HEAD/, { stdout: "0\n" }]]
+    const sent = (paths: RunDeps["paths"]) => listNew<{ kind: string; text: string; question?: boolean }>(paths.outbox).map((e) => e.payload)
+    /** The round before this one on the same PR, as agentd keeps it in jobs/done. */
+    const earlierRound = (paths: RunDeps["paths"], reason: string) => {
+      mkdirSync(join(paths.jobs, "done"), { recursive: true })
+      writeFileSync(
+        join(paths.jobs, "done", "STEP-7-20260924080000.json"),
+        JSON.stringify({
+          id: "STEP-7-20260924080000", issue: "STEP-7", kind: "revise", model: null, submittedAt: "2026-09-24T08:00:00.000Z", endedAt: "2026-09-24T08:30:00.000Z",
+          revise: REVISE, result: { status: "blocked", reason, prUrl: PR_URL, branch: REVISE.branch, costUsd: null, turns: null, minutes: 30 },
+        }),
+      )
+    }
+
+    it("never stops a round on the self-check alone: with nothing new to push, it answers on the PR and asks nobody (Eve, PR #1704)", async () => {
+      // Her answers: a reason where there was nothing to search, which a round with no code of its own may give.
+      const answered: SdkMessage = {
+        ...DONE,
+        structured_output: { status: "done", summary: "Use the publication date: already done.", checklist: { ...SWEEP, siblings: "none: this round only answers the reviewer", docs: "none: no doc describes the date" } },
+      }
+      const eve = revising({ messages: [INIT, answered], exec: answers(ZERO) })
+      expect(await runJob(eve.deps, eve.job.id)).toMatchObject({ status: "done", reason: "revised (round 1 of 3)" })
+      expect(eve.q.seen).toHaveLength(1)
+      // No answers at all: asked once, then the reply goes out with the gaps named for the reviewer.
+      const bare: SdkMessage = { ...DONE, structured_output: { status: "done", summary: "Use the publication date: already done." } }
+      const { deps, job, q, paths, outbox } = revising({ sessions: [[INIT, bare], [INIT, bare]], exec: answers(ZERO) })
+      expect(await runJob(deps, job.id)).toMatchObject({ status: "done", reason: "revised (round 1 of 3)" })
+      expect(q.seen).toHaveLength(2)
+      expect(readFileSync(join(paths.state, "pr-reply-STEP-7.md"), "utf8")).toContain(
+        "Not answered by the worker: siblings, publicOutputs, caches, coupled, docs, translations. A reviewer should check these.",
+      )
+      expect(sent(paths).some((p) => p.question)).toBe(false)
+      expect(outbox()).toEqual([
+        `STEP-7: I went through ${WHAT} on ${LINK} and answered each point on the PR. No code needed changing. I noted on the PR what the reviewer should double-check. Nothing needed from you.`,
+      ])
+    })
+
+    it("asks nobody when a round stops for the reason the round before stopped for, and notes on the PR what is left", async () => {
+      const said: SdkMessage = { ...DONE, structured_output: { status: "blocked", summary: "The migration needs a person." } }
+      const { deps, job, paths } = revising({ messages: [INIT, said] })
+      earlierRound(paths, "The migration needs a person")
+      expect(await runJob(deps, job.id)).toMatchObject({ status: "blocked", reason: "The migration needs a person" })
+      const plain = `I could not finish the fixes for ${WHAT} on ${LINK} again, for the same reason as last time: The migration needs a person. I pushed what I had so far. I noted on the PR what is left for the reviewer, and I will not ask about it again. Nothing needed from you.`
+      expect(sent(paths)).toEqual([
+        expect.objectContaining({ kind: "issue", question: false, text: plain }),
+        expect.objectContaining({ kind: "post", text: `STEP-7: ${plain}` }),
+      ])
+      expect(readFileSync(join(paths.state, "pr-reply-STEP-7.md"), "utf8")).toContain("Left for the reviewer: The migration needs a person. eve does not ask about it again.")
+      expect(readFileSync(join(paths.logs, "ledger.jsonl"), "utf8")).toContain('"type":"pr.reviseRepeated"')
+      // A round before that stopped for another reason: this stop is new, and asked about.
+      const other = revising({ messages: [INIT, said] })
+      earlierRound(other.paths, "the wall-clock limit of 90 minutes")
+      await runJob(other.deps, other.job.id)
+      expect(sent(other.paths).filter((p) => p.question)).toHaveLength(1)
+    })
+
+    it("answers in the issue's thread too when the round before asked there", async () => {
+      const { deps, job, paths } = revising()
+      earlierRound(paths, "The migration needs a person")
+      await runJob(deps, job.id)
+      expect(sent(paths).find((p) => p.kind === "issue")).toEqual(
+        expect.objectContaining({ question: false, text: `I fixed ${WHAT} on ${LINK} and pushed the fixes. Nothing needed from you.` }),
+      )
+    })
+
+    it("tells people what happened in plain words, whatever the round's end", async () => {
+      const ends: SdkMessage[] = [
+        REVISED,
+        { ...DONE, structured_output: { status: "done", summary: "x" } },
+        { ...DONE, structured_output: { status: "needs_input", summary: "x", question: "Should the notice show the publication date or the signing date?" } },
+        { ...DONE, structured_output: { status: "blocked", summary: "The migration needs a person." } },
+      ]
+      for (const end of ends) {
+        const { deps, job, paths } = revising({ sessions: [[INIT, end], [INIT, end]] })
+        await runJob(deps, job.id)
+        for (const p of sent(paths)) expect(p.text, p.text).not.toMatch(JARGON)
+      }
     })
 
     it("refuses to revise a branch origin no longer has", async () => {
@@ -550,7 +633,7 @@ describe("runJob", () => {
     expect(f.lines().some((l) => l.includes(" push -u origin HEAD:refs/heads/STEP-7-fix-the-date"))).toBe(true)
     expect(f.lines().some((l) => l.startsWith("gh pr create"))).toBe(false)
     expect(fake.issues.get("STEP-7")!.state).toBe("On hold")
-    expect(outbox().at(-1)).toBe("STEP-7 blocked: the worker process failed: Claude Code process exited with code 1")
+    expect(outbox().at(-1)).toBe("STEP-7: I had to stop: my run stopped unexpectedly. I asked in the issue's thread what to do.")
   })
 
   it("refuses to resume a branch that changes the agent configuration, before any session, and says why", async () => {
@@ -559,7 +642,7 @@ describe("runJob", () => {
     expect(await runJob(deps, job.id)).toMatchObject({ status: "blocked", reason })
     expect(q.seen).toEqual([])
     expect(fake.issues.get("STEP-7")!.state).toBe("On hold")
-    expect(outbox().at(-1)).toBe(`STEP-7 blocked: ${reason}`)
+    expect(outbox().at(-1)).toBe(`STEP-7: I had to stop: ${reason}. I asked in the issue's thread what to do.`)
   })
 
   it("stops before any tool runs when the session never sent its init message, hook events aside", async () => {

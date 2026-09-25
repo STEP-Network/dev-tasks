@@ -475,8 +475,13 @@ invariant per new guard test, shown failing and then reverted. Its report
 answers the checklist, the searches with their commands, and lists the
 mutations, and the PR shows both. A report without them is asked for again
 the same way, with turns for the sweep. If they still do not come, the PR
-goes out with the gaps named for the reviewer. `agentctl report` counts how
-often each happened.
+goes out with the gaps named for the reviewer ("Not answered by the worker:
+..."). No job ever stops on the checklist alone, a revise round with nothing
+new to push included: it replies on the PR all the same. A small change
+(three code files at most, tests aside, and none for a revise round that only
+answers) may give a reason instead of a search command, `none: only the copy
+changed`, unless the answer says it searched: then it shows the command.
+`agentctl report` counts how often each happened.
 
 ### Its own PRs
 
@@ -495,7 +500,16 @@ ahead of new work. The worker continues the PR's branch as origin has it (a
 person's commits included), with the reviews, comments, code comments and
 failing logs in its brief. The runner pushes to the same branch, never
 forced, and replies on the PR point by point. The issue stays In Review,
-and `#polads-agents` says `<agent>: STEP-<n> revising <PR> (round 1 of 3)`.
+and `#polads-agents` says `<agent>: STEP-<n>: I am fixing the review comments
+on PR #<n> (...), try 1 of 3. Nothing needed from you.`
+
+A round that stops for the same reason as the round before it on that PR asks
+nobody again: it pushes what it has, notes on the PR what is left for the
+reviewer, and says so in the issue's thread, where the last question was.
+
+Every message a person reads in Slack is in plain words (`runtime/src/plain.ts`,
+and the front door's rule in its skill): what happened, what the agent did,
+and the one thing it needs, or "Nothing needed from you."
 
 A failure of CI's infrastructure is not the code's: a Neon 404, ECONNRESET,
 a runner that lost its connection, a cancelled run, a skipped shard. The

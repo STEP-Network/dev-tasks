@@ -26,6 +26,7 @@ import type { AgentConfig, AgentPaths } from "../config.ts"
 import { recordPr } from "../jobs.ts"
 import { appendLedger } from "../log.ts"
 import { enqueueSlack } from "../outbox.ts"
+import { NOTHING_NEEDED, plainReason, prLink } from "../plain.ts"
 import { truncateChars } from "../slack/text.ts"
 import type { Tracker, TrackerIssue } from "../tracker.ts"
 import { commitsAhead, isDirty, must, pushBranch, removeWorktree, type Exec } from "./git.ts"
@@ -204,8 +205,13 @@ async function settle(ctx: FinalizeContext, outcome: Outcome, progress: { pushed
     recordPr(ctx.paths, { issue: issue.id, url, openedAt: ctx.now().toISOString() })
     appendLedger(ctx.paths, { type: "pr.opened", issue: issue.id, url }, ctx.now())
     if (ctx.merge === "auto") await must(ctx.exec, "gh", ["pr", "merge", url, "--auto", "--squash", "--delete-branch"], { cwd: config.repo.path })
-    const who = { auto: "auto-merge armed", person: "a person merges this one", "mini-off": MINI_OFF }[ctx.merge]
-    post(`${issue.id} PR opened: ${url} (${who})`)
+    // In plain words (../plain.ts): what happened, and whether anyone needs to act.
+    const who = {
+      auto: `It goes in by itself once the checks and the review pass. ${NOTHING_NEEDED}`,
+      person: "A person needs to merge it once the checks pass.",
+      "mini-off": "Auto-merge is off on this mini, so a person needs to merge it once the checks pass.",
+    }[ctx.merge]
+    post(`${issue.id}: I opened ${prLink(url)} for "${issue.title}". ${who}`)
     await ctx.tracker.attachLink(issue.id, url, `PR ${url.split("/").pop()}`)
     await ctx.tracker.updateIssue(issue.id, { state: "In Review" })
     if (!dirty) await removeWorktree(ctx.exec, config.repo.path, ctx.worktree!)
@@ -217,7 +223,7 @@ async function settle(ctx: FinalizeContext, outcome: Outcome, progress: { pushed
     // runner reports it, and the answer still reaches the issue: the bridge
     // appends it whatever the state.
     inThread(outcome.report!.question!)
-    post(`${issue.id} parked: waiting for an answer in its Slack thread`)
+    post(`${issue.id}: I have a question before I can go on. It is in the issue's thread: please answer there.`)
     await ctx.tracker.updateIssue(issue.id, { state: "On hold", addLabels: ["awaiting-answer"] })
     return { status, reason, prUrl: null, pushed }
   }
@@ -230,8 +236,9 @@ async function settle(ctx: FinalizeContext, outcome: Outcome, progress: { pushed
   }
 
   const more = beyondReason(reason, outcome.report?.summary)
-  inThread(`blocked: ${clause(reason)}. ${more ? `${more} ` : ""}Reply "retry" when it can continue, and I pick it up on its branch.`)
-  post(`${issue.id} blocked: ${clause(reason)}`)
+  const why = plainReason(reason)
+  inThread(`I had to stop work on ${issue.id}: ${why}. ${more ? `${more} ` : ""}Reply "retry" when it can go on, and I will pick it up where I left off.`)
+  post(`${issue.id}: I had to stop: ${why}. I asked in the issue's thread what to do.`)
   await ctx.tracker.updateIssue(issue.id, { state: "On hold" })
   await ctx.tracker.comment(issue.id, blockedReport(reason, outcome.report, { branch: ctx.branch, pushed }))
   return { status: "blocked", reason, prUrl: null, pushed }
