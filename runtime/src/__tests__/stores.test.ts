@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest"
 import { agentPaths } from "../config.ts"
 import { listNew } from "../fsq.ts"
 import { forgetWatchedPr, listJobs, moveJob, readWatchedPrs, recordPr, submitJob, updateJob, updateWatchedPr } from "../jobs.ts"
-import { enqueueSlack, type OutboxMessage } from "../outbox.ts"
+import { enqueueSlack, lastQuestion, type OutboxMessage } from "../outbox.ts"
 import { issueForThread, saveThread, threadFor } from "../threads.ts"
 
 const paths = () => agentPaths(mkdtempSync(join(tmpdir(), "agentd-stores-")))
@@ -25,6 +25,19 @@ describe("the outbox", () => {
     enqueueSlack(p, { kind: "post", channel: "agents", text: "push failed: https://x-access-token:xoxb-1-2-abc@github.com" })
     const [entry] = listNew<{ text: string }>(p.outbox)
     expect(entry.payload.text).toBe("push failed: https://x-access-token:[redacted]@github.com")
+  })
+})
+
+describe("the last question on an issue (STEP-3289)", () => {
+  it("keeps the newest question asked about an issue, redacted, for the Monday board", () => {
+    const p = paths()
+    expect(lastQuestion(p, "STEP-7")).toBeNull()
+    enqueueSlack(p, { kind: "issue", issue: "STEP-7", text: "Which date?", question: true }, new Date("2026-09-24T08:00:00.000Z"))
+    enqueueSlack(p, { kind: "issue", issue: "STEP-7", text: "Parked: waiting", question: false }, new Date("2026-09-24T08:00:01.000Z"))
+    expect(lastQuestion(p, "STEP-7")).toEqual({ text: "Which date?", at: "2026-09-24T08:00:00.000Z" })
+    enqueueSlack(p, { kind: "issue", issue: "STEP-7", text: "Paste xoxb-1-2-abc here?", question: true }, new Date("2026-09-24T09:00:00.000Z"))
+    expect(lastQuestion(p, "STEP-7")).toEqual({ text: "Paste [redacted] here?", at: "2026-09-24T09:00:00.000Z" })
+    expect(lastQuestion(p, "STEP-8")).toBeNull()
   })
 })
 

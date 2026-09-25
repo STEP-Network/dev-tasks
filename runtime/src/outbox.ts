@@ -7,8 +7,9 @@
  */
 
 import { randomUUID } from "node:crypto"
+import { join } from "node:path"
 import type { AgentPaths } from "./config.ts"
-import { putOnce } from "./fsq.ts"
+import { putOnce, readJson, safeKey, writeJsonAtomic } from "./fsq.ts"
 import { redact } from "./log.ts"
 
 export type ChannelKey = "agents" | "questions" | "intake" | "releases"
@@ -32,5 +33,17 @@ export function enqueueSlack(paths: AgentPaths, message: OutboxMessage, now: Dat
   // disk: token-shaped strings are redacted before they are written.
   const safe = "text" in message ? { ...message, text: redact(message.text) } : message
   putOnce(paths.outbox, key, { ...safe, queuedAt: now.toISOString() })
+  if (safe.kind === "issue" && safe.question) writeJsonAtomic(questionPath(paths, safe.issue), { text: safe.text, at: now.toISOString() })
   return key
+}
+
+const questionPath = (paths: AgentPaths, issue: string) => join(paths.state, "questions", `${safeKey(issue)}.json`)
+
+/**
+ * The newest question this mini asked about an issue (a worker's, a
+ * decision's, a person's to-do), as Slack got it. The Monday bridge shows it
+ * on the board (STEP-3289), where the Slack thread is out of reach.
+ */
+export function lastQuestion(paths: AgentPaths, issue: string): { text: string; at: string } | null {
+  return readJson<{ text: string; at: string }>(questionPath(paths, issue))
 }

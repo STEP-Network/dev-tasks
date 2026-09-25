@@ -6,7 +6,8 @@
  *   inbox/        Slack events the front door or the bridge has not finished with
  *   outbox/       Slack messages waiting for the bridge to post
  *   jobs/         develop jobs: pending/, running/, done/
- *   state/        small JSON files: threads/, heartbeats, usage, the front door's state
+ *   state/        small JSON files: threads/, heartbeats, usage, the front door's state,
+ *                 and monday/ on the coordinator mini (STEP-3289)
  *   logs/         JSON-lines logs and the ledger
  *   worktrees/    one git worktree per develop job
  *   PAUSE         present = no new jobs; the front door only answers
@@ -62,6 +63,73 @@ export const MINI_RE = /^[a-z][a-z0-9-]*$/
  * app id (A...) or a name would pass as a string and quietly match nobody.
  */
 const MEMBER_ID = z.string().regex(/^[UW][A-Z0-9]+$/, "must be a Slack member id (U...): the person's or bot's profile, More, Copy member ID")
+
+/** A Monday user or board id: digits. Monday's API gives them as strings, and a config may write numbers. */
+const MONDAY_ID = z.union([z.string().regex(/^\d+$/, "must be a Monday id (digits)"), z.number().int().positive()]).transform(String)
+const MONDAY_COLUMN = z.string().regex(/^[a-z0-9_]+$/, "must be a Monday column id")
+
+/**
+ * The Monday bridge (STEP-3289): the people-and-agents board, kept in step
+ * with Linear. On exactly one coordinator mini (Eve's first), and off
+ * everywhere else. The ids default to the board as it was built on
+ * 2026-09-25; the group titles are matched by name, every poll.
+ */
+const MondayBridgeSchema = z
+  .object({
+    enabled: z.boolean().default(false),
+    boardId: MONDAY_ID.default("5104953028"),
+    /** The shortest time between two reads of the board. apiShare can make it longer. */
+    pollMinutes: z.number().int().positive().default(2),
+    /**
+     * The share of the account's daily Monday API calls the board's reads may
+     * take: 1,000 a day on Basic and Standard, 10,000 on Pro, 25,000 on
+     * Enterprise, shared by everyone's API use (developer.monday.com, Rate
+     * limits). The bridge reads the account's own limit and polls no more
+     * often than this allows.
+     */
+    apiShare: z.number().gt(0).max(1).default(0.2),
+    columns: z
+      .object({
+        person: MONDAY_COLUMN.default("multiple_person_mm7hcr31"),
+        kind: MONDAY_COLUMN.default("color_mm7hx8zq"),
+        state: MONDAY_COLUMN.default("color_mm7hvyyt"),
+        agent: MONDAY_COLUMN.default("dropdown_mm7hmyqg"),
+        linear: MONDAY_COLUMN.default("link_mm7hz1nj"),
+        pr: MONDAY_COLUMN.default("link_mm7h42x"),
+        due: MONDAY_COLUMN.default("date_mm7hfrdv"),
+        answer: MONDAY_COLUMN.default("long_text_mm7hzj39"),
+      })
+      .prefault({}),
+    groups: z
+      .object({
+        needsYou: z.string().default("Needs you"),
+        testDay: z.string().default("Test day"),
+        requests: z.string().default("Requests"),
+        working: z.string().default("Agents working on"),
+        done: z.string().default("Done"),
+      })
+      .prefault({}),
+    /**
+     * The people whose updates, answers and requests count, and no one else
+     * (Nate, Kristoffer, Tomas: their Monday user ids). linearEmail maps an
+     * issue's owner or requester to the item's Person.
+     */
+    people: z.array(z.object({ id: MONDAY_ID, name: z.string().min(1), linearEmail: z.string().optional() })).min(1),
+    /** Who an item goes to when its issue names none of the people: Nate. */
+    defaultPerson: MONDAY_ID,
+    /** This mini in the Agent column's dropdown. Default: its name, capitalised. */
+    agentLabel: z.string().optional(),
+    /** The dropdown's labels for agents: an issue held by a Linear account of that name shows it. Default: agentLabel alone. */
+    agentLabels: z.array(z.string()).optional(),
+    /** The label a request from the board gets in Linear. */
+    requestLabel: z.string().default("intake/monday"),
+    archiveAfterDays: z.number().positive().default(14),
+  })
+  .superRefine((m, ctx) => {
+    if (!m.people.some((p) => p.id === m.defaultPerson)) {
+      ctx.addIssue({ code: "custom", path: ["defaultPerson"], message: "must be one of bridges.monday.people" })
+    }
+  })
 
 export const ConfigSchema = z.object({
   /** The mini's name: the claim comment, the Slack prefix, the profile's `mini`. */
@@ -141,9 +209,11 @@ export const ConfigSchema = z.object({
       ttlHours: z.number().positive().default(6),
     })
     .prefault({}),
+  bridges: z.object({ monday: MondayBridgeSchema.optional() }).prefault({}),
 })
 
 export type AgentConfig = z.infer<typeof ConfigSchema>
+export type MondayBridgeConfig = z.infer<typeof MondayBridgeSchema>
 
 export function loadConfig(paths: AgentPaths): AgentConfig {
   let raw: string

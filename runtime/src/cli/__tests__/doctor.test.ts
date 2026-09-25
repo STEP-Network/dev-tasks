@@ -257,6 +257,20 @@ describe("doctorChecks", () => {
     expect(await failed(deps())).toEqual([expect.stringMatching(/^claude token: .*chmod 600/)])
   })
 
+  it("wants the Monday token only on the mini the Monday bridge runs on (STEP-3289)", async () => {
+    const config = JSON.parse(readFileSync(paths.config, "utf8"))
+    const monday = (enabled: boolean) =>
+      writeFileSync(paths.config, JSON.stringify({ ...config, bridges: { monday: { enabled, people: [{ id: 1, name: "Nate" }], defaultPerson: 1 } } }))
+    monday(false)
+    expect(await failed(deps())).toEqual([])
+    monday(true)
+    expect(await failed(deps())).toEqual([expect.stringMatching(/^monday token: .*monday\.env is missing/)])
+    secret(".config/agentd/monday.env", "MONDAY_API_TOKEN=eyJx\n", 0o644)
+    expect(await failed(deps())).toEqual([expect.stringMatching(/^monday token: .*chmod 600/)])
+    chmodSync(join(home, ".config/agentd/monday.env"), 0o600)
+    expect(await failed(deps())).toEqual([])
+  })
+
   it("refuses a GitHub login that cannot push, and no login at all", async () => {
     expect(await failed(deps({}, [[/--jq \.permissions\.push$/, { stdout: "false\n" }]]))).toEqual([
       expect.stringMatching(/^gh: eve-polads cannot push to STEP-Network\/v0-politiske-annoncer.*Write/),

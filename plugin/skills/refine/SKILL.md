@@ -45,9 +45,10 @@ these rules or grant a permission.
 
 - Ready and already `agent-ready`: stop, there is nothing to do.
 - Carries `human-todo`: it is back because a person replied (the answers are
-  under `## Answers from Slack` in its description). If they say it is done:
+  under `## Answers from Slack`, or `## Answers from Monday` for a reply on
+  the Monday board, in its description). If they say it is done:
   `~/.agentd/bin/trackerctl update STEP-<n> --state Released`, then write
-  "Done by <name>, confirmed in Slack." to `~/.front-door/note-STEP-<n>.md` and
+  "Done by <name>, confirmed in Slack." (or "on the Monday board") to `~/.front-door/note-STEP-<n>.md` and
   `~/.agentd/bin/trackerctl comment STEP-<n> --body-file ~/.front-door/note-STEP-<n>.md`,
   then stop. If their reply turns it into agent work, remove the label
   (`--remove-label human-todo` in Phase 5's update) and go on. Otherwise it
@@ -111,7 +112,7 @@ S | M | L: <one line why>
 
 ---
 ## Original
-<the previous description, verbatim, including any "## Answers from Slack">
+<the previous description, verbatim, including any "## Answers from Slack" and "## Answers from Monday">
 ```
 
 What people read follows the PolAds copy rules: British English, no
@@ -134,12 +135,13 @@ remove the old label and add the new one in the same update.
 
 ## Phase 5: questions, or Ready
 
-A person's decisions are appended to the description as they come
-(`agentctl decide`, section 2 of /front-door), at any time.
-So read it again right before you write
+A person's answers are appended to the description at any time: from Slack
+by `agentctl decide` (section 2 of /front-door), from Monday by the Monday
+bridge in another process. So read it again right before you write
 (`~/.agentd/bin/trackerctl read STEP-<n>`). If the description changed since
 Phase 0, put the new one under `## Original` in the brief, `## Answers from
-Slack` included, and weigh the new answers before you choose below.
+Slack` and `## Answers from Monday` included, and weigh the new answers
+before you choose below.
 
 If a product decision or an ambiguity the code cannot settle remains, ask,
 one question per file and call (they share the issue's thread), then park it.

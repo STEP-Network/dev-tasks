@@ -89,18 +89,28 @@ export interface SlackAnswer {
 
 export const ANSWERS_HEADING = "## Answers from Slack"
 
+/** Where an answer came from: a Slack message, or an update or the Answer column on the Monday board (STEP-3289). */
+export type AnswerSource = "slack" | "monday"
+
+const ANSWER_SOURCES: Record<AnswerSource, { heading: string; link: string }> = {
+  slack: { heading: ANSWERS_HEADING, link: "Slack" },
+  monday: { heading: "## Answers from Monday", link: "Monday" },
+}
+
 /**
- * Appends once per Slack message: the ts marker makes a redelivery a no-op.
- * Linear rebuilds a description from its own document model and may drop an
- * HTML comment, so the answer's Slack link, when it has one, counts too.
+ * Appends once per message: the marker (the Slack ts, or the Monday update's
+ * id) makes a redelivery a no-op. Linear rebuilds a description from its own
+ * document model and may drop an HTML comment, so the answer's link, when it
+ * has one, counts too.
  */
-export function appendAnswer(description: string, answer: SlackAnswer): string {
-  const marker = `<!-- slack:${answer.ts} -->`
+export function appendAnswer(description: string, answer: SlackAnswer, source: AnswerSource = "slack"): string {
+  const { heading, link: label } = ANSWER_SOURCES[source]
+  const marker = `<!-- ${source}:${answer.ts} -->`
   if (description.includes(marker) || (answer.permalink && description.includes(`(${answer.permalink})`))) return description
-  const link = answer.permalink ? ` ([Slack](${answer.permalink}))` : ""
+  const link = answer.permalink ? ` ([${label}](${answer.permalink}))` : ""
   const entry = `${marker}\n**${answer.userName}**${link}: ${answer.text}`
   const base = description.trimEnd()
-  return base.includes(ANSWERS_HEADING) ? `${base}\n\n${entry}` : `${base}\n\n${ANSWERS_HEADING}\n\n${entry}`
+  return base.includes(heading) ? `${base}\n\n${entry}` : `${base}\n\n${heading}\n\n${entry}`
 }
 
 /**

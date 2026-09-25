@@ -60,13 +60,23 @@ function clock(at: Date, timeZone: string): string {
   return at.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", timeZone })
 }
 
-/** The question as Slack shows it: the situation, then each reply and what it does, the default marked with its time. */
-export function questionText(d: Decision, timeZone: string): string {
-  // The default is what this mini recommends, and a "yes" takes it (STEP-3293).
+/**
+ * The question as a person reads it. In Slack the front door reads the reply,
+ * so the default is what this mini recommends and a "yes" takes it
+ * (STEP-3293). On the Monday board the fixed verbs still read it
+ * (monday/route.ts), so it names each reply to write, the default marked with
+ * its time.
+ */
+export function questionText(d: Decision, timeZone: string, via: "slack" | "monday" = "slack"): string {
+  const at = clock(new Date(d.deadlineAt), timeZone)
+  if (via === "monday") {
+    const options = d.options.map((o) => (o.reply === d.defaultReply ? `"${o.reply}" to ${o.does} (the default: I do it at ${at} if nobody answers)` : `"${o.reply}" to ${o.does}`))
+    return `${d.question} Reply ${options.join(", or ")}.`
+  }
   const byDefault = d.options.find((o) => o.reply === d.defaultReply)
   const others = d.options.filter((o) => o.reply !== d.defaultReply).map((o) => `"${o.reply}" to ${o.does}`)
   const recommended = withRecommendation(d.question, byDefault ? byDefault.does : d.defaultReply)
-  return `${recommended}${others.length ? ` You can also reply ${others.join(", or ")}.` : ""} If nobody answers, I do it at ${clock(new Date(d.deadlineAt), timeZone)}.`
+  return `${recommended}${others.length ? ` You can also reply ${others.join(", or ")}.` : ""} If nobody answers, I do it at ${at}.`
 }
 
 /** Asks once: a question for this id already asked is not asked again. */

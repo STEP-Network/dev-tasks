@@ -14,7 +14,7 @@ import { frontDoorSettingsPath, frontDoorSettingsProblem } from "../agentd/front
 import { channelApproval, MANAGED_CHANNEL_JSON, MANAGED_SETTINGS } from "../channel/managed.ts"
 import { readHooksProbes, workerClaudePath, type HooksProbe } from "./hooks-probe.ts"
 import { readSandboxProbe } from "./sandbox-probe.ts"
-import { agentdSecretsPath, assertLinearKeyFile, claudeTokenPath, linearKeyPath, slackSecretsPath } from "../secrets.ts"
+import { agentdSecretsPath, assertLinearKeyFile, claudeTokenPath, linearKeyPath, mondaySecretsPath, slackSecretsPath } from "../secrets.ts"
 import type { Exec } from "../worker/git.ts"
 
 export interface Check {
@@ -373,6 +373,8 @@ export async function doctorChecks(d: DoctorDeps): Promise<Check[]> {
   add(secretCheck("slack tokens", slackSecretsPath(d.paths.home), true))
   add(secretCheck("sentry url", agentdSecretsPath(d.paths.home), false))
   add(secretCheck("claude token", claudeTokenPath(d.paths.home), false))
+  // Only the coordinator mini holds one (STEP-3289), and there agentd will not start without it.
+  add(secretCheck("monday token", mondaySecretsPath(d.paths.home), Boolean(config?.bridges.monday?.enabled)))
   add(await gitIdentity(d))
   if (config) add(await github(d, config.repo.slug))
   const p = await d.exec("pnpm", ["--version"])

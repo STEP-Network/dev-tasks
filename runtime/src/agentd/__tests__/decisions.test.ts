@@ -51,6 +51,10 @@ describe("decisions (STEP-3285)", () => {
     expect(questionText({ ...INFRA, defaultReply: "leave it", askedAt: "", deadlineAt: "2026-09-25T10:00:00.000Z" }, "UTC")).toBe(
       `${INFRA.question}\n\nMy recommendation: leave the PR to a person. Reply yes to go with it, or tell me what you want instead. You can also reply "re-run" to re-run CI in full once more. If nobody answers, I do it at 10:00.`,
     )
+    // On the Monday board the fixed verbs read the reply, so a bare yes would act on nothing there.
+    expect(questionText({ ...INFRA, askedAt: "", deadlineAt: "2026-09-25T10:00:00.000Z" }, "UTC", "monday")).toBe(
+      `${INFRA.question} Reply "re-run" to re-run CI in full once more (the default: I do it at 10:00 if nobody answers), or "leave it" to leave the PR to a person.`,
+    )
   })
 
   it("takes a re-run default after its hour, in full, and logs it in the thread, the PR body and the issue", async () => {

@@ -16,7 +16,10 @@ import { listJobs } from "../jobs.ts"
 import { appendLedger, createLogger, redact, type Logger } from "../log.ts"
 import { enqueueSlack } from "../outbox.ts"
 import { releasePidLock, takePidLock } from "../pidlock.ts"
-import { assertLinearKeyFile, loadSentryCronUrl } from "../secrets.ts"
+import { createMondayBridge, type MondayBridge } from "../monday/bridge.ts"
+import { createMondayApi } from "../monday/client.ts"
+import { createPeopleView } from "../monday/people.ts"
+import { assertLinearKeyFile, loadMondayToken, loadSentryCronUrl } from "../secrets.ts"
 import { createLinearTracker, type Tracker } from "../tracker.ts"
 import { readUsage } from "../usage.ts"
 import { realExec, type Exec } from "../worker/git.ts"
@@ -33,13 +36,15 @@ const TICK_MS = 15_000
  * What agentd checks on this machine before it starts, in this order:
  * config.json, the mini's one name (decision 2: config.json and the machine
  * profile must agree, or claims are signed with a name the heartbeat never
- * finds), and the Linear key file. The Sentry check-in URL is optional.
+ * finds), the Linear key file, and on the coordinator mini the Monday token
+ * (STEP-3289). The Sentry check-in URL is optional.
  */
-export function checkLocal(paths: AgentPaths, profileMini: string | null): { config: AgentConfig; sentryUrl: string | null } {
+export function checkLocal(paths: AgentPaths, profileMini: string | null): { config: AgentConfig; sentryUrl: string | null; mondayToken: string | null } {
   const config = loadConfig(paths)
   assertProfileMini(config, profileMini, paths.config)
   assertLinearKeyFile(paths.home)
-  return { config, sentryUrl: loadSentryCronUrl(paths.home) }
+  const mondayToken = config.bridges.monday?.enabled ? loadMondayToken(paths.home) : null
+  return { config, sentryUrl: loadSentryCronUrl(paths.home), mondayToken }
 }
 
 /** Signals a process group, ignoring one that ended between the liveness check and the signal. */
@@ -66,6 +71,8 @@ export interface DutyDeps {
   sentryUrl: string | null
   /** One GET of the Sentry check-in URL. */
   checkIn: (url: string) => Promise<{ ok: boolean; status: number }>
+  /** The Monday bridge, on the coordinator mini only (bridges.monday.enabled, STEP-3289). */
+  monday?: Pick<MondayBridge, "sync" | "drain" | "pollEveryMs">
 }
 
 /** What agentd carries from one loop to the next. */
@@ -114,6 +121,14 @@ export async function runDuties(d: DutyDeps, memo: DutyMemo): Promise<void> {
   })
   // A person's Slack reply is acted on at once, before the job it may queue is started (STEP-3285).
   await step("instructions", () => actOnInstructions({ exec: d.exec, paths, config, now, log }))
+  // The board every poll (pollMinutes, or longer to stay within the account's
+  // daily API calls), and between polls only the replies just queued (STEP-3289).
+  const monday = config.bridges.monday
+  if (d.monday && monday?.enabled) {
+    const bridge = d.monday
+    if (d.every.due("monday", bridge.pollEveryMs())) await step("monday", () => bridge.sync())
+    else await step("monday replies", () => bridge.drain())
+  }
   await step("jobs", () => superviseJobs({ paths, config, now, log, bootAt: d.bootAt, liveness: d.liveness, kill: d.kill, spawnWorker: d.spawnWorker }))
   if (d.every.due("decisions", 60_000)) {
     await step("decisions", () => takeDefaults({ exec: d.exec, paths, config, now, log, comment: (issue, body) => d.tracker.comment(issue, body) }))
@@ -195,7 +210,7 @@ async function main(): Promise<void> {
   process.on("SIGTERM", () => process.exit(143))
   process.on("SIGINT", () => process.exit(130))
 
-  let setup: { config: AgentConfig; sentryUrl: string | null }
+  let setup: ReturnType<typeof checkLocal>
   try {
     setup = checkLocal(paths, readProfileMini())
   } catch (error) {
@@ -206,15 +221,16 @@ async function main(): Promise<void> {
     status({ error: why })
     process.exit(0)
   }
-  const { config, sentryUrl } = setup
+  const { config, sentryUrl, mondayToken } = setup
   const runtimeDir = join(dirname(fileURLToPath(import.meta.url)), "..", "..")
   const bootAt = new Date(Date.now() - uptime() * 1000)
+  const tracker = createLinearTracker()
   const deps: DutyDeps = {
     paths,
     config,
     log,
     exec: realExec,
-    tracker: createLinearTracker(),
+    tracker,
     now: () => new Date(),
     every: new Every(() => Date.now()),
     bootAt,
@@ -223,6 +239,15 @@ async function main(): Promise<void> {
     spawnWorker: spawnWorkerProcess(paths, runtimeDir),
     sentryUrl,
     checkIn: (url) => fetch(url, { signal: AbortSignal.timeout(10_000) }),
+    // Its own log, monday.log: the board's traffic is not agentd's.
+    ...(mondayToken
+      ? {
+          monday: createMondayBridge({
+            paths, config, log: createLogger(paths, "monday"), now: () => new Date(),
+            api: createMondayApi(mondayToken), tracker, people: createPeopleView(),
+          }),
+        }
+      : {}),
   }
   const memo = freshMemo()
   let running = false
