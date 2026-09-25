@@ -7,7 +7,7 @@ import { askDecision, questionText } from "../../agentd/decisions.ts"
 import { enqueueSlack } from "../../outbox.ts"
 import { recommendationOf, withRecommendation } from "../../plain.ts"
 import { issue } from "../../__tests__/fakes.ts"
-import { saveRecord } from "../store.ts"
+import { readRecords, saveRecord } from "../store.ts"
 import { BOARD, doorsSetup, NEEDS_COLUMNS as COL, T0 } from "./fake-monday.ts"
 
 describe("the Needs-you board's groups and columns (spec 6)", () => {
@@ -24,7 +24,8 @@ describe("the Needs-you board's groups and columns (spec 6)", () => {
       return [item.groupId, item.columns[COL.kind]?.text, item.columns.col_rec?.text ?? null]
     }
     expect(where(/Which date/)).toEqual(["g_needs", "Decision", null])
-    expect(where(/Bulk upload/)).toEqual(["g_plan", "Approval", "Build it as planned"])
+    // This mini asked no plan question: the item recommends nothing it was not told to.
+    expect(where(/Bulk upload/)).toEqual(["g_plan", "Approval", null])
     expect(where(/Wider buttons/)).toEqual(["g_looks", "Check", "Looks good"])
     expect(where(/New checkout/)).toEqual(["g_test", "Check", null])
   })
@@ -35,10 +36,24 @@ describe("the Needs-you board's groups and columns (spec 6)", () => {
     expect(monday.item(/Bulk upload/)!.groupId).toBe("g_needs")
   })
 
+  it("writes a plan's Recommendation from its question, and none when the question gives none", async () => {
+    const { bridge, monday, paths } = doorsSetup([
+      issue({ id: "STEP-2", title: "Bulk upload", state: "On hold", labels: ["awaiting-answer", "plan-to-approve", "approval/try"] }),
+      issue({ id: "STEP-5", title: "Split exports", state: "On hold", labels: ["awaiting-answer", "plan-to-approve", "approval/try"] }),
+    ])
+    enqueueSlack(paths, { kind: "issue", issue: "STEP-2", text: withRecommendation("Two tasks, this week.", "Build it as planned"), question: true }, T0)
+    enqueueSlack(paths, { kind: "issue", issue: "STEP-5", text: "Two tasks or three?", question: true }, T0)
+    await bridge.sync()
+    expect(monday.item(/Bulk upload/)!.columns.col_rec?.text).toBe("Build it as planned")
+    expect(monday.item(/Split exports/)!.columns.col_rec?.text ?? null).toBeNull()
+  })
+
   it("takes a yes on a plan it did not ask as agreement to the item's Recommendation, which approves the plan", async () => {
     const { bridge, monday, fake, later } = doorsSetup([issue({ id: "STEP-2", title: "Bulk upload", state: "On hold", labels: ["awaiting-answer", "plan-to-approve", "approval/try"] })])
     await bridge.sync()
     const item = monday.item(/Bulk upload/)!
+    // Another mini's plan: the Recommendation on the item is what a yes agrees to.
+    await monday.api.setColumns(BOARD, item.id, { col_rec: "Build it as planned" })
     later(1)
     monday.says(item.id, "111", "yes")
     later(1)
@@ -102,6 +117,13 @@ describe("the Needs-you board's groups and columns (spec 6)", () => {
     later(1)
     await bridge.sync()
     expect(monday.called("setColumns").some(([, id, v]) => id === item.id && (v as Record<string, unknown>).col_rec === "")).toBe(true)
+  })
+
+  it("records no Request link before the board has the column, so go-live still writes it", async () => {
+    const { bridge, paths } = doorsSetup([issue({ id: "STEP-10", title: "Export", state: "In Progress", labels: ["needs-human"] })], { newLayout: false })
+    saveRecord(paths, { key: "request-5001", kind: "request", issue: "STEP-10", itemId: "5001", state: "Waiting on agent", bodyHash: null, createdAt: T0.toISOString(), doneAt: null, handled: [] })
+    await bridge.sync()
+    expect(readRecords(paths).find((r) => r.kind === "needs")!.requestItem).toBeUndefined()
   })
 
   it("writes the Request column once, and never again while it stands", async () => {
