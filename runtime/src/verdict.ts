@@ -24,20 +24,36 @@ import type { Tracker } from "./tracker.ts"
 
 export type Verdict = { verdict: "pass" | "fail"; note: string }
 
-const VERDICT = /^\s*(pass|fail)\b[\s:.,!-]*/i
-const LOOK = /^\s*(looks good|looks right|looks fine|change)\b[\s:.,!-]*/i
+/**
+ * What may follow a verdict word, after any space on its line (a no-break
+ * space too): the end, a new line, punctuation that ends it (":", ",", ".",
+ * "!", an en or em dash, a hyphen with a space after it), or an emoji such
+ * as 👍. Never a question mark, more words, or a hyphen that joins a word:
+ * "pass me the link again?", "fail to see why" and "Fail-safe" are not
+ * verdicts. What ends it is not part of what they saw.
+ */
+const EMOJI = String.raw`\p{Extended_Pictographic}\p{Emoji_Modifier}\u{FE0F}\u{200D}`
+const ENDED = String.raw`(?=[^\S\n]*(?:$|\n|[:.,!–—]|-(?=\s|$)|\p{Extended_Pictographic}))[\s:.,!\-–—${EMOJI}]*`
+const VERDICT = new RegExp(String.raw`^\s*(pass|fail)${ENDED}`, "iu")
+const LOOKS_RIGHT = new RegExp(String.raw`^\s*looks (?:good|right|fine)(?: to me)?${ENDED}`, "iu")
+/** A Look's change says what should change, after a colon. */
+const CHANGE = /^\s*change\s*:\s*/i
 
 /**
- * A verdict when their words start with one: PASS or FAIL, and on a Look
- * also "looks good", "looks right", "looks fine" (pass) or "change" (fail).
- * A plain yes on a Look agrees with its recommendation, "Looks good".
+ * A verdict when their words are one: PASS or FAIL on its own, or followed by
+ * punctuation and what they saw ("FAIL: the date is wrong"). On a Look also
+ * "looks good", "looks right" or "looks fine" (pass), and "change:" with what
+ * should change (fail). A plain yes on a Look agrees with its recommendation,
+ * "Looks good".
  */
 export function parseVerdict(text: string, look: boolean): Verdict | null {
   const m = VERDICT.exec(text)
   if (m) return { verdict: m[1].toLowerCase() === "pass" ? "pass" : "fail", note: text.slice(m[0].length).trim() }
   if (!look) return null
-  const l = LOOK.exec(text)
-  if (l) return { verdict: l[1].toLowerCase() === "change" ? "fail" : "pass", note: text.slice(l[0].length).trim() }
+  const change = CHANGE.exec(text)
+  if (change) return { verdict: "fail", note: text.slice(change[0].length).trim() }
+  const right = LOOKS_RIGHT.exec(text)
+  if (right) return { verdict: "pass", note: text.slice(right[0].length).trim() }
   return BARE.test(text) ? { verdict: "pass", note: "" } : null
 }
 

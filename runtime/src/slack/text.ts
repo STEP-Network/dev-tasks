@@ -10,6 +10,17 @@ export function prefixed(mini: string, text: string): string {
   return `${mini}: ${text}`
 }
 
+/**
+ * Slack's special mentions made plain text (STEP-3353): <!channel>, <!here>,
+ * <!everyone> and a user group's <!subteam^…> go out as they read, never
+ * notifying anyone. A worker's words may carry what a PR or an issue told
+ * it, and the runtime never writes one on purpose. A person's <@U…> stays a
+ * mention.
+ */
+export function noBroadcast(text: string): string {
+  return text.replace(/<!/g, "&lt;!")
+}
+
 const graphemes = new Intl.Segmenter(undefined, { granularity: "grapheme" })
 
 /** Cuts between characters as a reader sees them: never inside an emoji, a flag or a letter with its accent. */
