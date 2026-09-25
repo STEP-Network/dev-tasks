@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest"
+import { JARGON } from "../../plain.ts"
 import { aboutText, needBody, needKind, needName, plainText, requestIssue, say, stableUuid, toHtml, uatBody, uatName, type NeedSource } from "../render.ts"
 
 const SOURCES: NeedSource[] = ["decision", "awaiting-answer", "human-todo", "needs-human"]
@@ -7,6 +8,8 @@ const SOURCES: NeedSource[] = ["decision", "awaiting-answer", "human-todo", "nee
 function expectPlainEnglish(text: string) {
   expect(text).not.toMatch(/\*\*|__|`|^#+ |\]\(|<!--/m)
   expect(text).not.toMatch(/needs-human|human-todo|awaiting-answer|agent-ready|On hold|Triage/)
+  // The words the mini's Slack messages keep out too (plain.ts).
+  expect(text).not.toMatch(JARGON)
   // The PolAds copy rules: no semicolons, no em or en dashes.
   expect(text).not.toMatch(/[;–—]/)
 }
@@ -84,7 +87,7 @@ describe("the board's words (plain English)", () => {
       say.notWaiting("Approved"), say.gone("STEP-9"), say.refused("STEP-9"),
     ]
     for (const line of lines) expectPlainEnglish(line)
-    expect(say.answered("Nate", "Ready")).toBe("Thanks, Nate. I added your answer to the issue, and an agent picks it up again.")
+    expect(say.answered("Nate", "Ready")).toBe("Thanks, Nate. I added your answer to the issue, and an agent picks it up again. Nothing needed from you.")
   })
 
   it("takes the first real paragraph of a description as what an issue is about", () => {

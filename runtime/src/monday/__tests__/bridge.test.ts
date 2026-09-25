@@ -199,7 +199,7 @@ describe("the Monday bridge: Linear to Needs you (STEP-3289)", () => {
       {
         [COL.kind]: { label: "Approval" }, [COL.state]: { label: "Needs you" }, [COL.linear]: { url: "https://linear.app/step/issue/STEP-7", text: "STEP-7" },
         [COL.person]: { personsAndTeams: [{ id: Number(KRISTOFFER), kind: "person" }] }, [COL.agent]: { labels: ["Eve"] },
-        [COL.pr]: { url: PR, text: "#1679" }, [COL.due]: { date: "2026-10-01" },
+        [COL.pr]: { url: PR, text: "PR #1679" }, [COL.due]: { date: "2026-10-01" },
       },
     ]])
     const item = monday.item(/Move the VAT field/)!
@@ -298,7 +298,7 @@ describe("the Monday bridge: answers (STEP-3289)", () => {
     const { bridge, monday, texts, inbox, later } = decided()
     await bridge.sync()
     const item = monday.item(/Eve needs a decision: Fix the date/)!
-    expect(monday.called("createItem")[0][3]).toMatchObject({ [COL.kind]: { label: "Decision" }, [COL.agent]: { labels: ["Eve"] }, [COL.pr]: { url: PR, text: "#1679" }, [COL.due]: { date: "2026-09-25" } })
+    expect(monday.called("createItem")[0][3]).toMatchObject({ [COL.kind]: { label: "Decision" }, [COL.agent]: { labels: ["Eve"] }, [COL.pr]: { url: PR, text: "PR #1679" }, [COL.due]: { date: "2026-09-25" } })
     expect(texts(item.id)[0]).toContain("Reply &quot;re-run&quot; to re-run CI in full once more")
     later(1)
     const said = monday.says(item.id, NATE, "leave it")
@@ -332,7 +332,7 @@ describe("the Monday bridge: answers (STEP-3289)", () => {
     expect(now.description).toBe(`## Goal\n\nFix it.\n\n## Answers from Monday\n\n<!-- monday:${said} -->\n**Kristoffer** ([Monday](${item.url}/posts/${said})): Use the publication date, then merge`)
     // The reply went out in the same poll, under the person's thread, with a like beside it.
     expect(listNew(mondayOutbox(paths))).toEqual([])
-    expect(monday.called("postUpdate").at(-1)).toEqual([item.id, "Eve: Thanks, Kristoffer. I added your answer to the issue, and an agent picks it up again.", thread])
+    expect(monday.called("postUpdate").at(-1)).toEqual([item.id, "Eve: Thanks, Kristoffer. I added your answer to the issue, and an agent picks it up again. Nothing needed from you.", thread])
     expect(monday.called("like")).toEqual([[said]])
     later(2)
     await bridge.sync()
@@ -351,7 +351,7 @@ describe("the Monday bridge: answers (STEP-3289)", () => {
     later(2)
     await bridge.sync()
     expect(fake.issues.get("STEP-7")!.description).toBe(`Do the DNS.\n\n## Answers from Monday\n\n<!-- monday:log:${change} -->\n**Nate**: Done, the record is in.`)
-    expect(monday.called("postUpdate").at(-1)).toEqual([item.id, "Eve: Thanks, Nate. I added your answer to the issue, and an agent looks at it again.", null])
+    expect(monday.called("postUpdate").at(-1)).toEqual([item.id, "Eve: Thanks, Nate. I added your answer to the issue, and an agent looks at it again. Nothing needed from you.", null])
     expect(monday.called("like")).toEqual([])
     later(2)
     await bridge.sync()
@@ -428,7 +428,7 @@ describe("the Monday bridge: requests (STEP-3289)", () => {
     expect(item.columns[COL.linear]?.value).toBe(JSON.stringify({ url: filed.url, text: filed.id }))
     expect(stateOf(item)).toBe("Waiting on agent")
     expect(item.columns[COL.kind]?.text).toBe("Request")
-    expect(monday.called("postUpdate").at(-1)?.[1]).toBe(`Eve: Thanks, Kristoffer. I filed this for the agents as ${filed.id}. It moves to Done when the change is released.`)
+    expect(monday.called("postUpdate").at(-1)?.[1]).toBe(`Eve: Thanks, Kristoffer. I filed this for the agents as ${filed.id}. It moves to Done when the change is released. Nothing needed from you.`)
     later(2)
     await bridge.sync()
     // Dragged back into Requests, it is still the same request.
@@ -465,7 +465,7 @@ describe("the Monday bridge: requests (STEP-3289)", () => {
     await bridge.sync()
     expect(stateOf(monday.items.get(id))).toBe("Done")
     expect(monday.items.get(id)!.groupId).toBe("g_done")
-    expect(monday.called("postUpdate").at(-1)?.[1]).toBe(`Eve: Done: ${filed.id} is released.`)
+    expect(monday.called("postUpdate").at(-1)?.[1]).toBe(`Eve: Done: ${filed.id} is released. Nothing needed from you.`)
   })
 
   it("puts a person's later words on a request onto its issue", async () => {
@@ -510,7 +510,7 @@ describe("the Monday bridge: test day (STEP-3289)", () => {
     await bridge.sync()
     expect(fake.called("comment")).toEqual([["STEP-7", `UAT PASS from Nate on the Monday board (${item.url}/posts/${said}): looks right on mobile too`]])
     expect(fake.issues.get("STEP-7")!.state).toBe("Approved")
-    expect(monday.called("postUpdate").some((c) => c[1] === "Eve: Thanks, Nate. I marked it as approved, so it goes out with the next release.")).toBe(true)
+    expect(monday.called("postUpdate").some((c) => c[1] === "Eve: Thanks, Nate. I marked it as approved, so it goes out with the next release. Nothing needed from you.")).toBe(true)
     expect(stateOf(monday.items.get(item.id))).toBe("Done")
   })
 

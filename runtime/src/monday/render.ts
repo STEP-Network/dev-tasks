@@ -1,14 +1,16 @@
 /**
  * What the Monday board says (STEP-3289), pure. People who never open Linear
- * or GitHub read it, so it is plain English: no Markdown, no label names, no
- * workflow states, and the PolAds copy rules (British English, no
- * semicolons, no em or en dashes). What comes from an issue or a question is
+ * or GitHub read it, so it is plain English, by the rule the mini's Slack
+ * messages keep (plain.ts): no Markdown, no label names, no workflow states,
+ * no words from inside the machine, and the PolAds copy rules (British
+ * English, no semicolons, no em or en dashes). What comes from an issue or a question is
  * shown as plain text. What goes to Monday is escaped HTML, so no item text
  * becomes a link, a mention or markup there.
  */
 
 import { createHash } from "node:crypto"
 import { redact } from "../log.ts"
+import { NOTHING_NEEDED } from "../plain.ts"
 import { truncateChars } from "../slack/text.ts"
 import type { CreateIssueInput } from "../tracker.ts"
 
@@ -143,18 +145,22 @@ export function uatBody(title: string, steps: string | null): string {
   ].join("\n\n")
 }
 
-/** What the bridge says on an item after it acted. */
+/**
+ * What the bridge says on an item after it acted, as the mini says it in
+ * Slack (plain.ts): what happened, what it did, and the one thing needed from
+ * the person, or that nothing is.
+ */
 export const say = {
   answered: (name: string, movedTo: string | null) =>
-    `Thanks, ${name}. I added your answer to the issue${movedTo === "Ready" ? ", and an agent picks it up again" : movedTo ? ", and an agent looks at it again" : ""}.`,
-  filed: (name: string, id: string) => `Thanks, ${name}. I filed this for the agents as ${id}. It moves to Done when the change is released.`,
-  released: (id: string) => `Done: ${id} is released.`,
-  closed: (id: string) => `${id} was closed without a change, so this is done.`,
-  passed: (name: string) => `Thanks, ${name}. I marked it as approved, so it goes out with the next release.`,
-  failed: (name: string, sub: string) => `Thanks, ${name}. I wrote down what you saw as ${sub}, and the change goes back to be fixed.`,
+    `Thanks, ${name}. I added your answer to the issue${movedTo === "Ready" ? ", and an agent picks it up again" : movedTo ? ", and an agent looks at it again" : ""}. ${NOTHING_NEEDED}`,
+  filed: (name: string, id: string) => `Thanks, ${name}. I filed this for the agents as ${id}. It moves to Done when the change is released. ${NOTHING_NEEDED}`,
+  released: (id: string) => `Done: ${id} is released. ${NOTHING_NEEDED}`,
+  closed: (id: string) => `${id} was closed without a change, so this is done. ${NOTHING_NEEDED}`,
+  passed: (name: string) => `Thanks, ${name}. I marked it as approved, so it goes out with the next release. ${NOTHING_NEEDED}`,
+  failed: (name: string, sub: string) => `Thanks, ${name}. I wrote down what you saw as ${sub}, and the change goes back to be fixed. ${NOTHING_NEEDED}`,
   onlyVerdicts: () => "I read only PASS or FAIL here. Start your reply with PASS if it works, or with FAIL and what you saw.",
-  notWaiting: (state: string) => `This is no longer waiting for a test (it is ${state} now), so I did not record it.`,
-  gone: (id: string) => `I could not add this to ${id}, because ${id} is no longer in Linear.`,
+  notWaiting: (state: string) => `This is no longer waiting for a test (it is ${state} now), so I did not record it. ${NOTHING_NEEDED}`,
+  gone: (id: string) => `I could not add this to ${id}, because ${id} is no longer in Linear. ${NOTHING_NEEDED}`,
   refused: (id: string) => `Linear refused this for a whole day, so I have stopped trying to add it to ${id}. Please write it again.`,
 }
 

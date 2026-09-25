@@ -34,6 +34,7 @@ import type { AgentConfig, AgentPaths } from "../config.ts"
 import { ack, fail, listNew, putOnce } from "../fsq.ts"
 import { appendLedger, redact, type Logger } from "../log.ts"
 import { lastQuestion } from "../outbox.ts"
+import { prRef } from "../plain.ts"
 import { openDecisions, questionText, type Decision } from "../agentd/decisions.ts"
 import { instructionFor, type MondayInstructionEntry } from "../slack/instruction.ts"
 import { answerTransition, appendAnswer, truncateChars } from "../slack/text.ts"
@@ -195,7 +196,7 @@ export function createMondayBridge(deps: MondayBridgeDeps): MondayBridge {
     // The Person is chosen once: a person who hands an item on keeps it handed on.
     if (first) values[c.person] = { personsAndTeams: [{ id: Number(personFor(need.issue)), kind: "person" }] }
     if (need.agent) values[c.agent] = { labels: [need.agent] }
-    if (need.pr) values[c.pr] = { url: need.pr, text: `#${need.pr.split("/").pop()}` }
+    if (need.pr) values[c.pr] = { url: need.pr, text: prRef(need.pr) }
     if (need.due) values[c.due] = { date: need.due }
     return values
   }
