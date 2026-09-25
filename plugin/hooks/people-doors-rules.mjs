@@ -33,12 +33,14 @@ export function serviceOf(tool) {
   return kind ? { kind, name: m[2] } : null
 }
 
-/** A tool that only reads, by its name. Everything else counts as a write. */
+/** Reads whose names start with no read verb: named one by one, since a last word like `status` can end a write too (`update_status`). */
+const READS_BY_NAME = new Set(["all_api_read", "board_insights", "workspace_info", "agent_catalog", "all_widgets_schema"])
+
+/** A tool that only reads, by its name's first verb. Everything else counts as a write. */
 export function isRead(name) {
   // slack_read_channel reads as read_channel: a tool may carry its service's name first.
   const n = String(name).replace(/([a-z])([A-Z])/g, "$1_$2").replace(/-/g, "_").toLowerCase().replace(/^(slack|monday|linear|dev_tasks)_/, "")
-  if (/^(get|list|read|search|fetch|find|query|describe|view|explore|lookup|show)(_|$)/.test(n)) return true
-  return /(^|_)(read|search|history|info|schema|insights|context|catalog|knowledge|details|status|summary)$/.test(n)
+  return READS_BY_NAME.has(n) || /^(get|list|read|search|fetch|find|query|describe|view|explore|lookup|show)(_|$)/.test(n)
 }
 
 /** Every string (and number, as a string) anywhere in a tool's input. */
@@ -50,10 +52,13 @@ export function values(input, out = []) {
   return out
 }
 
-/** The ids a Monday or dev-tasks call could touch: every run of six or more digits in its input. */
+/** An id as Monday reads it: `07000000001` is item 7000000001. */
+export const normId = (id) => String(id).trim().replace(/^0+(?=\d)/, "")
+
+/** The ids a Monday or dev-tasks call could touch: every run of six or more digits in its input, as Monday reads it. */
 export function mondayIds(input) {
   const ids = new Set()
-  for (const v of values(input)) for (const m of v.matchAll(/(?<!\d)\d{6,}(?!\d)/g)) ids.add(m[0])
+  for (const v of values(input)) for (const m of v.matchAll(/(?<!\d)\d{6,}(?!\d)/g)) ids.add(normId(m[0]))
   return [...ids]
 }
 
@@ -78,17 +83,20 @@ async function monday(name, input, ctx) {
   if (!ctx.doors) return { deny: NO_LIST(ctx.listFile) }
   if (name === "execute_code") return { deny: CODE_NO }
   const ids = mondayIds(input)
-  if (ids.some((id) => ctx.doors.mondayBoards.includes(id))) return { deny: MONDAY_NO }
+  const people = ctx.doors.mondayBoards.map(normId)
+  if (ids.some((id) => people.includes(id))) return { deny: MONDAY_NO }
   // Touches no existing board, item or update: a new board, a workspace, a doc of its own.
   if (!ids.length) return null
   let boards
   try {
-    boards = await ctx.boardsOf(ids, ctx.doors.mondayBoards)
+    boards = await ctx.boardsOf(ids, people)
   } catch {
     return { deny: UNSURE_NO }
   }
-  return ids.some((id) => (boards.get(id) ?? []).some((b) => ctx.doors.mondayBoards.includes(b))) ? { deny: MONDAY_NO } : null
+  return ids.some((id) => (boards.get(id) ?? []).some((b) => people.includes(normId(b)))) ? { deny: MONDAY_NO } : null
 }
+
+const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
 
 function slack(name, input, doors, listFile) {
   if (isRead(name)) return null
@@ -96,7 +104,9 @@ function slack(name, input, doors, listFile) {
   const said = values(input)
   const channel = said.some((v) => doors.slackChannels.includes(v.trim().replace(/^#/, "")))
   const agent = said.some((v) => doors.agentBots.some((b) => v.trim() === b || v.includes(`<@${b}`)))
-  return channel || agent ? { deny: SLACK_NO } : null
+  // "@eve" typed plainly: Slack turns it into a mention when the message is sent with link_names.
+  const named = (doors.agentNames ?? []).some((n) => said.some((v) => new RegExp(`(^|[^\\w@])@${escapeRe(n)}(?![\\w-])`, "i").test(v)))
+  return channel || agent || named ? { deny: SLACK_NO } : null
 }
 
 const ANSWER_MARKER = /<!-- (slack|monday|slack-user):/
@@ -141,7 +151,8 @@ export function applyPatch(text, ops) {
 
 async function linear(name, input, ctx) {
   if (isRead(name)) return null
-  const issue = /issue/i.test(name) ? (input?.id ?? input?.issueId) : undefined
+  // Linear servers name the issue differently: id, issueId, issue_id or identifier.
+  const issue = /issue/i.test(name) ? (input?.id ?? input?.issueId ?? input?.issue_id ?? input?.identifier) : undefined
   // An edit of an existing issue's description is checked whole, below: it may carry the entries it keeps.
   const edit = Boolean(issue) && (input.description !== undefined || input.patch !== undefined)
   const rest = edit ? { ...input, description: undefined, patch: undefined } : input
@@ -176,15 +187,97 @@ async function linear(name, input, ctx) {
 // Hosts in any case, as curl takes them.
 const API_HOST = /api\.monday\.com|api\.linear\.app|slack\.com\/api/i
 const GRAPHQL_HOST = /api\.monday\.com|api\.linear\.app/i
-/** A body from a file or stdin, which the guard cannot read. */
-const BODY_FROM_FILE = /(^|\s)(-d|--data(-binary|-raw|-urlencode)?|--json|-F|--form|-T|--upload-file)(\s+|=)['"]?[@-]/
 const SLACK_WRITE_METHOD = /slack\.com\/api\/(chat|reactions|pins|files|bookmarks|reminders|usergroups|calls|dnd)\.|slack\.com\/api\/conversations\.(open|join|invite|kick|leave|archive|create|rename|set|mark)/i
+
+/**
+ * A command's words as the shell splits them. `open` is the part the shell
+ * would still expand (outside quotes' protection): a `$`, a backtick or a
+ * `<` there is text the guard cannot read before it runs.
+ */
+export function shellWords(command) {
+  const words = []
+  let text = ""
+  let open = ""
+  let started = false
+  let quote = null
+  const end = () => {
+    if (started) words.push({ text, open })
+    text = ""
+    open = ""
+    started = false
+  }
+  for (let i = 0; i < command.length; i++) {
+    const c = command[i]
+    if (quote === "'") {
+      if (c === "'") quote = null
+      else text += c
+    } else if (quote === '"') {
+      if (c === '"') quote = null
+      else if (c === "\\" && /["\\$`]/.test(command[i + 1] ?? "")) text += command[++i]
+      else {
+        text += c
+        open += c
+      }
+    } else if (c === "'" || c === '"') {
+      quote = c
+      started = true
+    } else if (c === "\\" && i + 1 < command.length) {
+      text += command[++i]
+      started = true
+    } else if (/\s/.test(c)) end()
+    else {
+      text += c
+      open += c
+      started = true
+    }
+  }
+  end()
+  return words
+}
+
+/** Options that send a file, a config or stdin: never a body the guard can read. */
+const FILE_OPTIONS = new Set(["-T", "--upload-file", "-K", "--config", "--post-file", "--body-file"])
+/** Options whose value is the body: curl's, and wget's inline one. */
+const BODY_OPTIONS = new Set(["-d", "-F", "--data", "--data-raw", "--data-binary", "--data-ascii", "--data-urlencode", "--json", "--form", "--form-string", "--post-data", "--body-data"])
+
+/**
+ * A request body to Monday or Linear that is not written out in the command
+ * itself: from a file (`@`, `<`, `--post-file`), stdin, a config, or
+ * anything the shell fills in (`$(…)`, `$VAR`, a backtick). A mutation can
+ * hide in any of them, so none passes.
+ */
+export function bodyNotInline(command) {
+  const words = shellWords(command)
+  if (words.some((w) => /</.test(w.open))) return true
+  for (let i = 0; i < words.length; i++) {
+    const w = words[i]
+    let option = null
+    let value = null
+    const long = /^(--[a-z-]+)(?:=([\s\S]*))?$/.exec(w.text)
+    const short = /^-[sSfLkviNgqI]*([dFTK])([\s\S]*)$/.exec(w.text)
+    if (long && (FILE_OPTIONS.has(long[1]) || BODY_OPTIONS.has(long[1]))) {
+      option = long[1]
+      value = long[2] !== undefined ? { text: long[2], open: w.open.slice(long[1].length + 1) } : words[i + 1]
+    } else if (short && !w.text.startsWith("--")) {
+      option = `-${short[1]}`
+      value = short[2] ? { text: short[2], open: w.open.slice(w.text.length - short[2].length) } : words[i + 1]
+    }
+    if (!option) continue
+    if (FILE_OPTIONS.has(option)) return true
+    if (!value) return true
+    if (/[$`]/.test(value.open) || value.text.startsWith("@")) return true
+    // A form field or an urlencoded part from a file: name=@file, name=<file, name@file.
+    if ((option === "-F" || option.startsWith("--form")) && /=[@<]/.test(value.text)) return true
+    if (option === "--data-urlencode" && /^[^=]*@/.test(value.text)) return true
+  }
+  return false
+}
 
 function bash(input) {
   const command = String(input?.command ?? "")
   if (/\bsudo\b/.test(command) && /\/etc\/dev-tasks|people-doors/.test(command)) return { deny: LIST_NO }
   if (!API_HOST.test(command)) return null
-  if (GRAPHQL_HOST.test(command) && (/\bmutation\b/.test(command) || BODY_FROM_FILE.test(command))) return { deny: API_NO }
+  if (GRAPHQL_HOST.test(command) && (/\bmutation\b/.test(command) || bodyNotInline(command))) return { deny: API_NO }
   return SLACK_WRITE_METHOD.test(command) ? { deny: API_NO } : null
 }
 

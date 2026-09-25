@@ -1010,7 +1010,8 @@ Tasks server, or any other). It refuses:
 - On Slack: reads pass. Anything else (a message, reply, schedule, draft,
   reaction or edit) is refused when it names a people's channel (by id, or
   by name with or without `#`) or an agent's bot (a direct message by the
-  bot's user id, or a `<@…>` mention anywhere).
+  bot's user id, a `<@…>` mention anywhere, or its name typed as `@eve`,
+  which Slack turns into a mention when a message is sent with `link_names`).
 - On Linear: an answer entry (`<!-- slack:…`, `<!-- monday:…`,
   `<!-- slack-user:…`) and the recorder's plan labels (`plan-to-approve`,
   `plan-approved`, by name or id), on a new issue or an existing one, added
@@ -1019,10 +1020,14 @@ Tasks server, or any other). It refuses:
   takes out an answer entry: the guard reads the description as it stands
   (the Linear key, `LINEAR_API_KEY` or `~/.config/linear/.env`) and applies
   the patch first. An edit that keeps every entry passes.
-- From the shell: a GraphQL mutation, or a body from a file or stdin, to
-  `api.monday.com` or `api.linear.app`; a Slack write method (`chat.`,
-  `reactions.`, `files.`, `conversations.open` and the like) to
-  `slack.com/api`; and `sudo` on its own list.
+- From the shell: to `api.monday.com` or `api.linear.app`, a GraphQL
+  mutation, or any body not written out in the command itself (from a file,
+  stdin, a redirect, a curl config, wget's `--post-file` or `--body-file`,
+  or anything the shell fills in: `$(…)`, `$VAR`, a backtick). A Slack write
+  method (`chat.`, `reactions.`, `files.`, `conversations.open` and the like)
+  to `slack.com/api`. And `sudo` on its own list.
+- A guard that cannot run refuses: with no `node` on `PATH`, a Node that
+  fails, or a tool call it cannot read, every guarded call is refused.
 
 **What it costs outside PolAds**, since the plugin is user-wide:
 
@@ -1034,8 +1039,11 @@ Tasks server, or any other). It refuses:
   waits for one Linear read. Without a Linear key it is refused in every
   workspace.
 - Monday's `execute_code` is refused on every board.
-- No Monday or Linear mutation, and no Slack write, goes out by `curl` from
-  an agent session, on any board, workspace or channel.
+- No Monday or Linear mutation, no Monday or Linear body from a file or a
+  variable, and no Slack write goes out by `curl` or `wget` from an agent
+  session, on any board, workspace or channel.
+- Without `node` on `PATH`, every Monday, Slack, Linear and dev-tasks tool
+  that writes is refused.
 - Until the list is in place, every Monday, dev-tasks and Slack write is
   refused everywhere (reads pass). So the list goes on in the same step as
   the plugin update that brings the guard.
@@ -1052,7 +1060,8 @@ no list: the guard refuses as above.
 {
   "mondayBoards": ["1234567890"],
   "slackChannels": ["C0123456789", "polads-questions", "C0123456790", "polads-intake"],
-  "agentBots": ["U0123456789"]
+  "agentBots": ["U0123456789"],
+  "agentNames": ["eve"]
 }
 ```
 
@@ -1062,6 +1071,7 @@ no list: the guard refuses as above.
   take either.
 - `agentBots` are the agents' bot users: a direct message to one, or its
   mention in any channel, reaches an agent.
+- `agentNames` (optional) are the agents' display names, for a plain `@eve`.
 
 The ids are not secrets:
 
@@ -1074,7 +1084,7 @@ terminal (the guard refuses it from an agent session). The same command with
 the whole new list changes it, for example when a new agent's bot comes:
 
 ```bash
-echo '{"mondayBoards":["1234567890"],"slackChannels":["C0123456789","polads-questions"],"agentBots":["U0123456789"]}' | sudo sh -c 'umask 022 && mkdir -p /etc/dev-tasks && cat > /etc/dev-tasks/people-doors.json'
+echo '{"mondayBoards":["1234567890"],"slackChannels":["C0123456789","polads-questions"],"agentBots":["U0123456789"],"agentNames":["eve"]}' | sudo sh -c 'umask 022 && mkdir -p /etc/dev-tasks && cat > /etc/dev-tasks/people-doors.json'
 ```
 
 `node <plugin>/hooks/people-doors-guard.mjs check` says whether the guard
@@ -1085,7 +1095,16 @@ guard, by root only:
 **What it does not do.** It is a guardrail for misled sessions, not a
 sandbox. It stops a misled session, not a determined one: a
 session set on writing as a person can still find another way (a script
-file, a host built from parts, its own environment). The detection layer is
+file, a host built from parts, its own environment). Two more doors it does
+not see at all:
+
+- **The Make connector**, which runs Monday and Slack modules on the
+  person's own Monday and Slack connections: a scenario it builds or runs
+  writes as the person, and its tools name no Monday or Slack server.
+- **Browser and computer-use tools** in a browser where the person is
+  logged in to Monday, Slack or Linear: a click there is the person's.
+
+Keep those off in sessions that work on PolAds, or watch them. The detection layer is
 #polads-agents: from Wave 2, every plan approval and every lowering of an
 approval class from Monday or Slack is announced there, with who approved or
 lowered it and where, so a forged one shows. Until then a class is lowered

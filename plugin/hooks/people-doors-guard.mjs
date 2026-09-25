@@ -8,7 +8,7 @@
  *
  * The list is root's, since dev-tasks is public and an agent session runs as
  * the person: /etc/dev-tasks/people-doors.json, { mondayBoards,
- * slackChannels, agentBots }, trusted only when it and its folder are owned
+ * slackChannels, agentBots, agentNames? }, trusted only when it and its folder are owned
  * by root and writable by no one else. It is never read from $HOME, and no
  * environment variable moves it. With no trusted list, or an empty one, every
  * Monday, dev-tasks and Slack write is refused (fail closed). The one way out
@@ -49,9 +49,11 @@ export function readDoors({ file = LIST_FILE, stat = statSync, read = readFileSy
   if (!rootOwned(file, stat)) return null
   try {
     const d = JSON.parse(read(file, "utf8"))
-    const list = (v) => (Array.isArray(v) && v.length && v.every((x) => typeof x === "string" && x.trim()) ? v.map((x) => x.trim().replace(/^#/, "")) : null)
-    const doors = { mondayBoards: list(d?.mondayBoards), slackChannels: list(d?.slackChannels), agentBots: list(d?.agentBots) }
-    return doors.mondayBoards && doors.slackChannels && doors.agentBots ? doors : null
+    const list = (v) => (Array.isArray(v) && v.length && v.every((x) => typeof x === "string" && x.trim()) ? v.map((x) => x.trim().replace(/^[#@]/, "")) : null)
+    // The agents' display names are optional ("@eve" typed plainly); given, they must read as a list.
+    const names = d?.agentNames === undefined || (Array.isArray(d.agentNames) && !d.agentNames.length) ? [] : list(d.agentNames)
+    const doors = { mondayBoards: list(d?.mondayBoards), slackChannels: list(d?.slackChannels), agentBots: list(d?.agentBots), agentNames: names }
+    return doors.mondayBoards && doors.slackChannels && doors.agentBots && doors.agentNames ? doors : null
   } catch {
     return null
   }
@@ -153,9 +155,10 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
       try {
         call = JSON.parse(raw)
       } catch {
-        return
+        call = null
       }
-      const verdict = await hook(call)
+      // A call it cannot read is one it cannot check.
+      const verdict = call ? await hook(call) : { deny: "The people-doors guard could not read the tool call, so it refused it." }
       if (verdict) process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: verdict.deny } }))
     })
   }

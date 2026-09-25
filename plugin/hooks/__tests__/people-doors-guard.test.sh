@@ -74,6 +74,26 @@ else
   check "a Slack message is still refused" deny "$(verdict "$SEND")"
 fi
 
+echo "A guard that cannot run refuses (fail closed):"
+# The Linear rule refuses with or without a list, so a pass here can only be a guard that did not run.
+PLAN='{"tool_name":"mcp__linear-server__save_issue","tool_input":{"id":"STEP-7","addLabels":["plan-approved"]}}'
+if PATH=/usr/bin:/bin command -v node >/dev/null 2>&1; then
+  echo "  (skipped: this machine has node in /usr/bin or /bin)"
+  SKIP=$((SKIP + 1))
+else
+  out=$(printf '%s' "$PLAN" | PATH=/usr/bin:/bin bash "$HOOK")
+  check "with no node on PATH, a guarded call is refused" yes "$(printf '%s' "$out" | grep -q '"permissionDecision":"deny"' && printf '%s' "$out" | grep -q 'no node on PATH' && echo yes)"
+fi
+FAKE_BIN="$(mktemp -d)"
+printf '#!/bin/sh\nexit 3\n' >"$FAKE_BIN/node"
+chmod +x "$FAKE_BIN/node"
+out=$(printf '%s' "$PLAN" | PATH="$FAKE_BIN:$PATH" bash "$HOOK")
+check "with node failing, a guarded call is refused and the exit named" yes "$(printf '%s' "$out" | grep -q '"permissionDecision":"deny"' && printf '%s' "$out" | grep -q 'exit 3' && echo yes)"
+out=$(printf '%s' "$PLAIN_BASH" | PATH="$FAKE_BIN:$PATH" bash "$HOOK")
+check "with node failing, an unguarded command still passes, never reaching Node" pass "$([ -z "$out" ] && echo pass || echo "other: $out")"
+check "a tool call that is not JSON is refused" deny "$(verdict '{"tool_name":"mcp__claude_ai_Slack__slack_send_message", not json')"
+rm -rf "$FAKE_BIN"
+
 echo "The check command:"
 if [ -e /etc/dev-tasks/people-doors.json ] || [ -e /etc/dev-tasks/people-doors.off ]; then
   echo "  (skipped: this machine has /etc/dev-tasks)"

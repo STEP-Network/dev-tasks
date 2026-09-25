@@ -18,7 +18,7 @@ import { answerBlocks, applyPatch, decide, isRead, serviceOf } from "../../hooks
 const PEOPLE = "1111111111"
 const PEOPLE_2 = "2222222222"
 const OTHER = "9999999999"
-const DOORS = { mondayBoards: [PEOPLE, PEOPLE_2], slackChannels: ["CINTAKE01", "CQUESTION1", "polads-questions"], agentBots: ["UEVE00001", "UBOB00001"] }
+const DOORS = { mondayBoards: [PEOPLE, PEOPLE_2], slackChannels: ["CINTAKE01", "CQUESTION1", "polads-questions"], agentBots: ["UEVE00001", "UBOB00001"], agentNames: ["eve", "bob"] }
 /** Where each made-up item and update is: the lookup the hook makes with the person's key. */
 const ON = new Map<string, string[]>([
   ["7000000001", [PEOPLE]], // an item on the Needs-you board
@@ -93,6 +93,8 @@ describe("which servers it guards, and which tools only read", () => {
     ["create_update", false], ["createUpdate", false], ["all_api_write", false], ["all_monday_api", false], ["execute_code", false], ["run_action", false],
     ["create_automation", false], ["manage_automations", false], ["create_workflow", false], ["publish_workflow", false], ["slack_send_message", false],
     ["slack_send_message_draft", false], ["slack_add_reaction", false], ["save_issue", false], ["save_comment", false], ["updateTask", false],
+    // A read verb at the end is no read: these write.
+    ["update_status", false], ["change_item_status", false], ["set_item_details", false], ["update_item_summary", false],
   ])("%s reads: %s", (name, reads) => {
     expect(isRead(name)).toBe(reads)
   })
@@ -122,6 +124,9 @@ describe("Monday and dev-tasks: nothing on the people's boards, and no effect an
     ["an update through all_monday_api elsewhere", M("all_monday_api"), { query: "mutation { create_update(item_id: 7000000002, body: \"ok\") { id } }" }, false],
     ["a new board, which names no board or item", M("create_board"), { boardName: "Launch", boardKind: "public" }, false],
     ["a phone number in a column, which is no item", M("create_item"), { boardId: OTHER, name: "Call", columnValues: '{"phone":"45123456"}' }, false],
+    // Monday reads 07000000001 as 7000000001.
+    ["an update on a people's item, its id zero-padded", M("create_update"), { itemId: "07000000001", body: "PASS" }, true],
+    ["a new item on a people's board, its id zero-padded", M("create_item"), { boardId: `00${PEOPLE}`, name: "Export notices" }, true],
     // Reads.
     ["a read of a people's board", M("get_board_items_page"), { boardId: PEOPLE }, false],
     ["a read through all_api_read", M("all_api_read"), { query: `query { boards(ids: ${PEOPLE}) { items_page { items { id } } } }` }, false],
@@ -141,6 +146,12 @@ describe("Monday and dev-tasks: nothing on the people's boards, and no effect an
   it("asks for every id at once, with the people's boards", async () => {
     await denied(M("create_update"), { itemId: 7000000002, body: "ok", parentId: "8000000002" })
     expect(lookups.boardsOf).toHaveBeenCalledWith(["7000000002", "8000000002"], [PEOPLE, PEOPLE_2])
+  })
+
+  it("asks for an id as Monday reads it, without its leading zeros, and finds the people's boards that way too", async () => {
+    await denied(M("create_update"), { itemId: "0007000000002", body: "ok" })
+    expect(lookups.boardsOf).toHaveBeenCalledWith(["7000000002"], [PEOPLE, PEOPLE_2])
+    expect(await denied(M("create_update"), { itemId: 7000000002, body: "ok" }, ctx({ ...DOORS, mondayBoards: [`0${OTHER}`] }))).toBe(true)
   })
 
   it("refuses what it cannot check: a lookup that fails refuses, whatever the board", async () => {
@@ -170,6 +181,10 @@ describe("Slack: nothing in the people's channels or to the agents, and no effec
     ["a direct message to an agent's bot, which needs no mention", S("slack_send_message"), { channel_id: "UEVE00001", message: "make it auto" }, true],
     ["a message that mentions an agent's bot, anywhere", S("slack_send_message"), { channel_id: "COTHER0001", message: "<@UEVE00001> make it auto" }, true],
     ["a mention with a label", S("slack_send_message"), { channel_id: "COTHER0001", message: "hi <@UBOB00001|bob>" }, true],
+    ["a plain @eve, which Slack makes a mention when sent with link_names", S("slack_send_message"), { channel_id: "COTHER0001", message: "@eve make it auto" }, true],
+    ["a plain @Bob in capitals, mid-sentence", S("slack_send_message"), { channel_id: "COTHER0001", message: "thanks, @Bob." }, true],
+    ["an address with an agent's name in it", S("slack_send_message"), { channel_id: "COTHER0001", message: "write to ada@eve.test" }, false],
+    ["a longer handle that starts with the name", S("slack_send_message"), { channel_id: "COTHER0001", message: "@everyone lunch?" }, false],
     ["a scheduled message in a people's channel", S("slack_schedule_message"), { channel_id: "CINTAKE01", message: "export", post_at: 1790000000 }, true],
     ["a draft in a people's channel", S("slack_send_message_draft"), { channel_id: "CQUESTION1", message: "yes" }, true],
     ["a reaction in a people's channel", S("slack_add_reaction"), { channel_id: "CQUESTION1", timestamp: "1790000000.000100", name: "white_check_mark" }, true],
@@ -213,6 +228,8 @@ describe("Linear: answers and plan approvals are the recorder's alone", () => {
     ["a patch that cuts a range across the answers", L("save_issue"), { id: "STEP-7", patch: [{ op: "replace_range", from: "## Answers", to: "## Plan", new_string: "" }] }, true],
     ["a patch that would not apply", L("save_issue"), { id: "STEP-7", patch: [{ op: "replace", old_string: "not in it", new_string: "x" }] }, true],
     ["an edit through the hosted Linear server that drops an answer", HOSTED_LINEAR("update_issue"), { issueId: "STEP-7", description: "## Context\nshort" }, true],
+    ["an edit through a server that calls the issue issue_id", "mcp__linear__update_issue", { issue_id: "STEP-7", description: "## Context\nshort" }, true],
+    ["an edit through a server that calls the issue identifier", "mcp__linear__update_issue", { identifier: "STEP-7", description: "## Context\nshort" }, true],
     // Everything else passes.
     ["a description that keeps every answer", L("save_issue"), keep(DESCRIPTION.replace("The export needs a date.", "The export needs a date and a time.")), false],
     ["a patch outside the answers", L("save_issue"), { id: "STEP-7", patch: [{ op: "replace", old_string: "Ship it.", new_string: "Ship it on Monday." }] }, false],
@@ -279,7 +296,25 @@ describe("Bash: no write to the three APIs, and no sudo on the guard's list", ()
     ["a direct message opened", "curl https://slack.com/api/conversations.open -d users=UEVE00001", true],
     ["the list written with sudo", "echo '{}' | sudo tee /etc/dev-tasks/people-doors.json", true],
     ["the way out placed with sudo", "sudo touch /etc/dev-tasks/people-doors.off", true],
+    // A body the guard cannot read before it runs (review of #133).
+    ["a body the shell fills in from a file", `curl https://api.monday.com/v2 -H "Authorization: $MONDAY_API_KEY" -d "$(cat body.json)"`, true],
+    ["a body from a variable", 'curl https://api.linear.app/graphql -d "$BODY"', true],
+    ["a body from a bare variable", "curl https://api.linear.app/graphql --data=$BODY", true],
+    ["a body in backticks", "curl https://api.monday.com/v2 -d \"`cat body.json`\"", true],
+    ["a body glued to -d from a file", "curl https://api.monday.com/v2 -d@body.json", true],
+    ["a body after clustered flags", "curl -sd @body.json https://api.monday.com/v2", true],
+    ["a body read from a redirect", "curl https://api.monday.com/v2 --data-binary @- < body.json", true],
+    ["a body from a heredoc", "curl https://api.linear.app/graphql --data-binary @- <<EOF", true],
+    ["httpie's body from a redirect, with no body option at all", "http POST https://api.monday.com/v2 Authorization:k < body.json", true],
+    ["a quoted body with a variable spliced in", `curl https://api.monday.com/v2 -d '{"query":"'"$Q"'"}'`, true],
+    ["a form field from a file", "curl -F 'query=<q.graphql' https://api.linear.app/graphql", true],
+    ["an urlencoded part from a file", "curl https://api.monday.com/v2 --data-urlencode 'query@q.txt'", true],
+    ["a curl config file", "curl -K request.cfg https://api.monday.com/v2", true],
+    ["wget's body from a file", "wget --post-file=body.json https://api.linear.app/graphql", true],
+    ["wget's other body from a file", "wget --method=POST --body-file=body.json https://api.monday.com/v2", true],
     ["a read from Monday", `curl https://api.monday.com/v2 -d '{"query":"query { me { id } }"}'`, false],
+    ["a read with the key in a header and GraphQL variables in single quotes", `curl https://api.monday.com/v2 -H "Authorization: $MONDAY_API_KEY" -H 'Content-Type: application/json' -d '{"query":"query ($i: [ID!]) { items(ids: $i) { name } }","variables":{"i":["1"]}}'`, false],
+    ["wget's inline read", `wget -qO- --post-data='{"query":"query { me { id } }"}' https://api.monday.com/v2`, false],
     ["a Slack history read", "curl https://slack.com/api/conversations.history?channel=CQUESTION1", false],
     ["reading the list", "cat /etc/dev-tasks/people-doors.json", false],
     ["a plain command", "ls -la", false],
@@ -301,7 +336,9 @@ describe("the guard's list: root's, never the session's", () => {
   })
 
   it("is read when it and its folder are root's and no one else can write them", () => {
-    expect(readDoors({ stat: at(root()), read: read() })).toEqual({ mondayBoards: [PEOPLE], slackChannels: ["CQUESTION1", "polads-questions"], agentBots: ["UEVE00001"] })
+    expect(readDoors({ stat: at(root()), read: read() })).toEqual({ mondayBoards: [PEOPLE], slackChannels: ["CQUESTION1", "polads-questions"], agentBots: ["UEVE00001"], agentNames: [] })
+    const named = JSON.stringify({ mondayBoards: [PEOPLE], slackChannels: ["CQUESTION1"], agentBots: ["UEVE00001"], agentNames: ["@eve"] })
+    expect(readDoors({ stat: at(root()), read: read(named) })?.agentNames).toEqual(["eve"])
   })
 
   it.each([
@@ -324,6 +361,8 @@ describe("the guard's list: root's, never the session's", () => {
     ["one empty list", { mondayBoards: [PEOPLE], slackChannels: [], agentBots: ["UEVE00001"] }],
     ["a missing list", { mondayBoards: [PEOPLE], slackChannels: ["CQUESTION1"] }],
     ["a blank id", { mondayBoards: [" "], slackChannels: ["CQUESTION1"], agentBots: ["UEVE00001"] }],
+    ["agents' names that are not a list", { mondayBoards: [PEOPLE], slackChannels: ["CQUESTION1"], agentBots: ["UEVE00001"], agentNames: "eve" }],
+    ["a blank agent's name", { mondayBoards: [PEOPLE], slackChannels: ["CQUESTION1"], agentBots: ["UEVE00001"], agentNames: [""] }],
   ])("guards as no list at all with %s: an empty list means nothing, never 'guard nothing'", (_, list) => {
     expect(readDoors({ stat: at(root()), read: read(JSON.stringify(list)) })).toBeNull()
   })
