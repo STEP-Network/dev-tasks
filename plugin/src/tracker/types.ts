@@ -44,6 +44,34 @@ export interface CreateIssueInput {
    *  a create whose id is already taken reads that issue back and returns it, so the
    *  retry opens no second issue. Anything but a UUID is refused before the write. */
   clientId?: string
+  /** The parent issue (`STEP-123` or its uuid): this one is its sub-issue. Linear only. */
+  parent?: string
+  /** A Linear project's id, and one of its milestones' ids. Linear only. */
+  projectId?: string
+  milestoneId?: string
+  /** A calendar day, YYYY-MM-DD: the target week's Friday. Anything else is refused before the write. */
+  dueDate?: string
+}
+
+/** A Linear project with milestones (spec 4: more than 5 tasks, more than one release, or several phases). */
+export interface ProjectInput {
+  name: string
+  /** One short line: Linear keeps a project's description to 255 characters. */
+  summary?: string
+  /** The plan, as Markdown. */
+  content?: string
+  targetDate?: string
+  milestones: Array<{ name: string; targetDate?: string }>
+  /** A UUID the caller chose, as CreateIssueInput.clientId: a second run makes nothing new. */
+  clientId?: string
+}
+
+export interface TrackerProject {
+  id: string
+  name: string
+  url: string
+  targetDate: string | null
+  milestones: Array<{ id: string; name: string; targetDate: string | null }>
 }
 
 /** The Linear user an API key belongs to. Every person and every agent has their own
@@ -64,6 +92,12 @@ export interface IssuePatch {
   removeLabels?: string[]
   /** "me" assigns the key's owner. null unassigns. */
   assignee?: "me" | null
+  /** YYYY-MM-DD, or null to clear it. */
+  dueDate?: string | null
+  /** A project's id, or null to take the issue out of its project. */
+  projectId?: string | null
+  /** A milestone's id, or null to clear it. */
+  milestoneId?: string | null
 }
 
 /** Every claim comment starts with this. The heartbeat edits the same comment (spec 6.5). */
@@ -142,6 +176,8 @@ export interface Tracker {
   claimIssue(ref: string, claimant: string): Promise<TrackerIssue>
 
   createIssue(input: CreateIssueInput): Promise<TrackerIssue>
+  /** A project with its milestones, each made once under ids named from clientId. The Monday tracker refuses it. */
+  createProject(input: ProjectInput): Promise<TrackerProject>
 
   comment(ref: string, body: string): Promise<void>
 

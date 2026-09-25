@@ -105,6 +105,9 @@ async function toIssue(item: RawItem): Promise<TrackerIssue> {
   }
 }
 
+/** Sub-issues and projects (Wave 2): Linear has them, a Monday item has neither. */
+const LINEAR_SHAPES = "Projects and sub-issues are Linear's: the Monday tracker has neither. Set tracker.provider to \"linear\"."
+
 /** Methods only the agent runtime uses. The runtime requires Linear; this adapter is cutover-only. */
 function linearOnly(method: string): () => Promise<never> {
   return async () => {
@@ -142,6 +145,7 @@ export function createMondayTracker(): Tracker {
     },
 
     async createIssue(input: CreateIssueInput) {
+      if (input.parent || input.projectId || input.milestoneId) throw new Error(LINEAR_SHAPES)
       const data = await executeMondayQuery<{ create_item: { id: string } }>(
         `mutation($board: ID!, $name: String!) {
            create_item(board_id: $board, item_name: $name) { id }
@@ -205,5 +209,8 @@ export function createMondayTracker(): Tracker {
     releaseIssue: linearOnly("releaseIssue"),
     listClaims: linearOnly("listClaims"),
     listByState: linearOnly("listByState"),
+    createProject: async () => {
+      throw new Error(LINEAR_SHAPES)
+    },
   }
 }
