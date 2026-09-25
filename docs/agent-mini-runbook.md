@@ -1049,6 +1049,29 @@ Tasks server, or any other). It refuses:
   the plugin update that brings the guard.
 - Everything else passes as before.
 
+**On an agent mini.** The minis carry no list, and need none. Their sessions
+reach Slack and Monday through agentd, not through tool calls that write as a
+person:
+
+- The front door replies with `~/.agentd/bin/agentctl slack reply
+  --text-file …`, a Bash command that names no API, so the guard never
+  sees it.
+- The workers have no MCP server at all.
+- On the agent profile, the plugin's own dev-tasks server registers no tools.
+- The plugin's own Slack channel server (`mcp__plugin_dev-tasks_slack__*`)
+  has none today, and would speak only with an agent bot's token, as the
+  agent. The guard leaves that one server alone everywhere.
+
+Otherwise the guard does on a mini what it does on a laptop. With no list,
+any Monday, dev-tasks or Slack write through a tool is refused: a claude.ai
+connector on a mini would write as its account's person. The Bash and Linear
+rules hold too.
+
+The dev-tasks server is not exempted by profile. The profile is
+`~/.claude/dev-tasks-profile.json` or `DEV_TASKS_PROFILE`, both the
+session's to set, so on a laptop such an exemption would reopen
+`createUpdate` with the person's key.
+
 Its list is root's, since this repository is public and an agent session
 runs as the person: `/etc/dev-tasks/people-doors.json`. The guard trusts it
 only when the file and `/etc/dev-tasks` are owned by root and writable by no

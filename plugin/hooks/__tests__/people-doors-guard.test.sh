@@ -57,7 +57,7 @@ check "a plan approved on a new issue is refused" deny "$(verdict '{"tool_name":
 
 if [ -e /etc/dev-tasks/people-doors.json ] || [ -e /etc/dev-tasks/people-doors.off ]; then
   echo "Without a list: skipped, this machine has /etc/dev-tasks"
-  SKIP=$((SKIP + 7))
+  SKIP=$((SKIP + 9))
 else
   echo "Without a list (fail closed):"
   check "a Slack message anywhere is refused" deny "$(verdict "$SEND")"
@@ -66,6 +66,10 @@ else
   check "a hosted dev-tasks update is refused" deny "$(verdict "$HOSTED_DEV")"
   check "a read passes" pass "$(verdict "$READ")"
   check "the deny names the list" yes "$(printf '%s' "$SEND" | HOME="$TMP_HOME" bash "$HOOK" | grep -q '/etc/dev-tasks/people-doors.json is missing' && echo yes)"
+
+  echo "On an agent mini, which has no list, the front door's own work passes:"
+  check "its Slack reply through agentctl" pass "$(verdict '{"tool_name":"Bash","tool_input":{"command":"~/.agentd/bin/agentctl slack reply --channel \"CQUESTION1\" --thread \"1790000000.000100\" --text-file ~/.front-door/reply-1790000000.000100.md"}}')"
+  check "the plugin's own Slack channel server" pass "$(verdict '{"tool_name":"mcp__plugin_dev-tasks_slack__reply","tool_input":{"chat_id":"CQUESTION1","text":"Done"}}')"
 
   echo "A \$HOME override and an empty list don't disable it:"
   mkdir -p "$TMP_HOME/.config/dev-tasks"

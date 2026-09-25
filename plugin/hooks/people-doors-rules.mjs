@@ -25,11 +25,19 @@
  * every plan approval and every lowering, with who and where.
  */
 
+/**
+ * The plugin's own Slack channel server (plugin/.mcp.json, `slack`): it
+ * only ever speaks with an agent bot's token, as the agent, never as a
+ * person, so none of its calls is a person's door.
+ */
+const AGENT_OWN_SERVERS = new Set(["plugin_dev-tasks_slack"])
+
 /** Which guarded service a tool's server is, by name: any server whose name says monday, slack, linear or dev-tasks. */
 export function serviceOf(tool) {
   const m = /^mcp__(.+?)__(.+)$/.exec(String(tool))
   if (!m) return null
   const server = m[1].toLowerCase()
+  if (AGENT_OWN_SERVERS.has(server)) return null
   const kind = /dev[-_]?tasks/.test(server) ? "devtasks" : /monday/.test(server) ? "monday" : /slack/.test(server) ? "slack" : /linear/.test(server) ? "linear" : null
   return kind ? { kind, name: m[2] } : null
 }

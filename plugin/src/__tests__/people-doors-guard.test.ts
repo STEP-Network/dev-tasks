@@ -82,6 +82,11 @@ describe("which servers it guards, and which tools only read", () => {
     expect(serviceOf(tool)?.kind).toBe(kind)
   })
 
+  it("leaves the plugin's own Slack channel server alone: it speaks only as an agent's bot", () => {
+    expect(serviceOf("mcp__plugin_dev-tasks_slack__reply")).toBeNull()
+    expect(serviceOf("mcp__plugin_dev-tasks_dev-tasks__createUpdate")?.kind).toBe("devtasks")
+  })
+
   it("leaves every other tool alone", () => {
     for (const tool of ["Read", "Write", "mcp__github__create_issue", "mcp__claude_ai_Gmail__send_message", "mcp__plugin_github_github__add_issue_comment"]) expect(serviceOf(tool)).toBeNull()
   })
@@ -329,6 +334,40 @@ describe("Bash: no call to Monday or Linear at all, no write to Slack, and no su
 
   it("says a read is refused too, and what to use instead", async () => {
     expect(await denial("Bash", { command: "curl https://api.linear.app/graphql -d '{\"query\":\"{ viewer { id } }\"}'" })).toMatch(/reads included[\s\S]*Monday and Linear tools, or trackerctl[\s\S]*Grep tool/)
+  })
+})
+
+describe("on an agent mini, which has no list: the front door's own work passes", () => {
+  const saved = process.env.DEV_TASKS_PROFILE
+  afterEach(() => {
+    if (saved === undefined) delete process.env.DEV_TASKS_PROFILE
+    else process.env.DEV_TASKS_PROFILE = saved
+  })
+
+  it.each([
+    // The front door replies in Slack through agentctl, its words in a file (front-door skill, section 2).
+    ["its Slack reply", '~/.agentd/bin/agentctl slack reply --channel "CQUESTION1" --thread "1790000000.000100" --text-file ~/.front-door/reply-1790000000.000100.md'],
+    ["its question back", "~/.agentd/bin/agentctl ask --issue STEP-7 --text-file ~/.front-door/ask-STEP-7.md --recommendation-file ~/.front-door/rec-STEP-7.md"],
+    ["a decision", "~/.agentd/bin/agentctl decide --key msg:CQUESTION1:1790000000.000200 --agree"],
+    ["an instruction", "~/.agentd/bin/agentctl instruct --key msg:CAGENTS01:1790000000.000300 --actions revise,merge"],
+    ["its acks", "~/.agentd/bin/agentctl ack msg:CQUESTION1:1790000000.000100 msg:CAGENTS01:1790000000.000300"],
+    ["its wakeup", "~/.agentd/bin/agentctl tick"],
+    ["a tracker update", 'trackerctl update STEP-7 --state "On hold" --add-label awaiting-answer --description-file brief.md'],
+  ])("%s passes with no list", async (_, command) => {
+    expect(await hook({ tool_name: "Bash", tool_input: { command } }, { doors: null, off: false, lookups: failing })).toBeNull()
+  })
+
+  it("lets the plugin's own Slack channel server through, list or none: it posts only as the agent's bot", async () => {
+    for (const doors of [null, DOORS]) {
+      expect(await hook({ tool_name: "mcp__plugin_dev-tasks_slack__reply", tool_input: { chat_id: "CQUESTION1", text: "Done: STEP-7 is released." } }, { doors, off: false, lookups: failing })).toBeNull()
+    }
+  })
+
+  it("keeps the plugin's dev-tasks server guarded whatever the profile says: the profile is the session's to set", async () => {
+    // On the agent profile that server registers no tools at all (plugin/src/server.ts), so there is nothing to exempt;
+    // on a laptop, DEV_TASKS_PROFILE=agent must not open createUpdate with the person's key.
+    process.env.DEV_TASKS_PROFILE = "agent"
+    expect(await hook({ tool_name: DEV("createUpdate"), tool_input: { taskId: "7000000002", body: "Deployed" } }, { doors: null, off: false, lookups })).toMatchObject({ deny: expect.stringMatching(/people-doors\.json/) })
   })
 })
 
