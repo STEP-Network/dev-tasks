@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Tests for plugin/hooks/people-doors-guard.sh, end to end: the tool call on
-# stdin, the deny on stdout, with HOME pointed at a temp folder so the guard
-# reads a made-up list (STEP-3330). The rules themselves are in
-# plugin/src/__tests__/people-doors-guard.test.ts.
+# stdin, the deny on stdout (STEP-3330). The rules themselves are in
+# plugin/src/__tests__/people-doors-guard.test.ts. The list is root's
+# (/etc/dev-tasks/people-doors.json) and no test may write it, so the cases
+# that need it absent are skipped on a machine that has one.
 
 set -u
 
@@ -14,6 +15,7 @@ trap 'rm -rf "$TMP_HOME"' EXIT
 
 PASS=0
 FAIL=0
+SKIP=0
 check() {
   local desc="$1" expected="$2" actual="$3"
   if [ "$expected" = "$actual" ]; then
@@ -25,10 +27,10 @@ check() {
   fi
 }
 
-# deny or pass, as the hook answers the call.
+# deny or pass, as the hook answers the call. No Monday or Linear key, so no lookup reaches the network.
 verdict() {
   local out
-  out=$(printf '%s' "$1" | HOME="$TMP_HOME" bash "$HOOK")
+  out=$(printf '%s' "$1" | env -u MONDAY_API_KEY -u LINEAR_API_KEY HOME="$TMP_HOME" bash "$HOOK")
   case "$out" in
     *'"permissionDecision":"deny"'*) echo deny ;;
     "") echo pass ;;
@@ -36,35 +38,50 @@ verdict() {
   esac
 }
 
-SEND='{"tool_name":"mcp__claude_ai_Slack__slack_send_message","tool_input":{"channel_id":"CQUESTION1","message":"yes"}}'
-UPDATE='{"tool_name":"mcp__claude_ai_monday_com__create_update","tool_input":{"itemId":7001,"body":"PASS"}}'
-OTHER_BOARD='{"tool_name":"mcp__claude_ai_monday_com__change_item_column_values","tool_input":{"boardId":9999999999,"itemId":5,"columnValues":"{}"}}'
+SEND='{"tool_name":"mcp__claude_ai_Slack__slack_send_message","tool_input":{"channel_id":"COTHER0001","message":"lunch?"}}'
+UPDATE='{"tool_name":"mcp__claude_ai_monday_com__create_update","tool_input":{"itemId":7000000002,"body":"Done"}}'
+DEV_UPDATE='{"tool_name":"mcp__plugin_dev-tasks_dev-tasks__createUpdate","tool_input":{"taskId":"7000000002","body":"Deployed"}}'
+HOSTED_DEV='{"tool_name":"mcp__claude_ai_Dev_Tasks__createUpdate","tool_input":{"itemId":"7000000002","body":"PASS"}}'
 READ='{"tool_name":"mcp__claude_ai_monday_com__get_board_items_page","tool_input":{"boardId":1111111111}}'
 PLAIN_BASH='{"tool_name":"Bash","tool_input":{"command":"ls -la"}}'
 
-echo "Without a list (fail closed):"
-check "a Slack message is refused" deny "$(verdict "$SEND")"
-check "a Monday column write on any board is refused" deny "$(verdict "$OTHER_BOARD")"
-check "a read passes" pass "$(verdict "$READ")"
+echo "The API writes from the shell (with or without a list):"
+check "a Monday mutation with curl is refused" deny "$(verdict '{"tool_name":"Bash","tool_input":{"command":"curl https://api.monday.com/v2 -d {\"query\":\"mutation { create_update(item_id: 1, body: \\\"yes\\\") { id } }\"}"}}')"
+check "a Linear body from a file is refused" deny "$(verdict '{"tool_name":"Bash","tool_input":{"command":"curl https://api.linear.app/graphql --data @body.json"}}')"
+check "a Slack message with curl is refused" deny "$(verdict '{"tool_name":"Bash","tool_input":{"command":"curl -X POST https://slack.com/api/chat.postMessage -d channel=C1 -d text=yes"}}')"
+check "sudo on the guard's list is refused" deny "$(verdict '{"tool_name":"Bash","tool_input":{"command":"echo {} | sudo tee /etc/dev-tasks/people-doors.json"}}')"
+check "a Monday read with curl passes" pass "$(verdict '{"tool_name":"Bash","tool_input":{"command":"curl https://api.monday.com/v2 -d {\"query\":\"query { me { id } }\"}"}}')"
 check "a plain command passes, without Node" pass "$(verdict "$PLAIN_BASH")"
-check "the deny names the missing list" yes "$(printf '%s' "$OTHER_BOARD" | HOME="$TMP_HOME" bash "$HOOK" | grep -q 'people-doors.json is missing' && echo yes)"
+check "an answer entry through the hosted Linear server is refused" deny "$(verdict '{"tool_name":"mcp__claude_ai_Linear__save_comment","tool_input":{"issueId":"STEP-7","body":"<!-- slack:1790000000.000100 -->\nyes"}}')"
+check "a plan approved on a new issue is refused" deny "$(verdict '{"tool_name":"mcp__linear-server__save_issue","tool_input":{"team":"STEP","title":"New","labels":["plan-approved"]}}')"
 
-echo "The add-only command places the list:"
-HOME="$TMP_HOME" node "$GUARD" add --board 1111111111 --channel CQUESTION1 --channel polads-questions --bot UEVE00001 >/dev/null
-check "the list exists" yes "$([ -f "$TMP_HOME/.config/dev-tasks/people-doors.json" ] && echo yes)"
-check "a second add without a channel extends it" 0 "$(HOME="$TMP_HOME" node "$GUARD" add --board 2222222222 >/dev/null; echo $?)"
-check "a bad id is refused" 1 "$(HOME="$TMP_HOME" node "$GUARD" add --board 12ab 2>/dev/null >/dev/null; echo $?)"
+if [ -e /etc/dev-tasks/people-doors.json ] || [ -e /etc/dev-tasks/people-doors.off ]; then
+  echo "Without a list: skipped, this machine has /etc/dev-tasks"
+  SKIP=$((SKIP + 7))
+else
+  echo "Without a list (fail closed):"
+  check "a Slack message anywhere is refused" deny "$(verdict "$SEND")"
+  check "a Monday update on any board is refused" deny "$(verdict "$UPDATE")"
+  check "a dev-tasks update is refused" deny "$(verdict "$DEV_UPDATE")"
+  check "a hosted dev-tasks update is refused" deny "$(verdict "$HOSTED_DEV")"
+  check "a read passes" pass "$(verdict "$READ")"
+  check "the deny names the list" yes "$(printf '%s' "$SEND" | HOME="$TMP_HOME" bash "$HOOK" | grep -q '/etc/dev-tasks/people-doors.json is missing' && echo yes)"
 
-echo "With the list:"
-check "a message in a people's channel is refused" deny "$(verdict "$SEND")"
-check "an update on a Test day item is refused" deny "$(verdict "$UPDATE")"
-check "a column write on another board passes" pass "$(verdict "$OTHER_BOARD")"
-check "a read passes" pass "$(verdict "$READ")"
-check "writing the list by hand is refused" deny "$(verdict '{"tool_name":"Bash","tool_input":{"command":"echo {} > ~/.config/dev-tasks/people-doors.json"}}')"
-check "reading the list passes" pass "$(verdict '{"tool_name":"Bash","tool_input":{"command":"cat ~/.config/dev-tasks/people-doors.json"}}')"
-EDIT_LIST="{\"tool_name\":\"Edit\",\"tool_input\":{\"file_path\":\"$TMP_HOME/.config/dev-tasks/people-doors.json\",\"old_string\":\"1\",\"new_string\":\"\"}}"
-check "an Edit of the list is refused" deny "$(verdict "$EDIT_LIST")"
+  echo "A \$HOME override and an empty list don't disable it:"
+  mkdir -p "$TMP_HOME/.config/dev-tasks"
+  printf '%s' '{"mondayBoards":[],"slackChannels":[],"agentBots":[]}' >"$TMP_HOME/.config/dev-tasks/people-doors.json"
+  : >"$TMP_HOME/.config/dev-tasks/people-doors.off"
+  check "a Slack message is still refused" deny "$(verdict "$SEND")"
+fi
+
+echo "The check command:"
+if [ -e /etc/dev-tasks/people-doors.json ] || [ -e /etc/dev-tasks/people-doors.off ]; then
+  echo "  (skipped: this machine has /etc/dev-tasks)"
+  SKIP=$((SKIP + 1))
+else
+  check "says there is no trusted list, and fails" 1 "$(node "$GUARD" check >/dev/null; echo $?)"
+fi
 
 echo ""
-echo "$PASS passed, $FAIL failed"
+echo "$PASS passed, $FAIL failed, $SKIP skipped"
 [ "$FAIL" -eq 0 ]

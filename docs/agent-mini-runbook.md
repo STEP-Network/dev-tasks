@@ -987,30 +987,66 @@ the board as they are.
 ### No agent session writes as a person (the people-doors guard, STEP-3330)
 
 The bridge takes a Monday user's update or Answer column as that person's
-words, and the Slack bridge takes a Slack member's reply as theirs. The
-claude.ai Monday and Slack connectors write as the person whose account
-they use, so an agent session that used them would be taken for one of
-the people. The rule: **an agent session never writes on the
-people's boards, in their Slack channels or to the agents as a person.**
+words, the Slack bridge takes a Slack member's message as theirs, and the
+answer recorder trusts the answer entries and plan labels on a Linear issue.
+The Monday, Slack, Linear and dev-tasks tools a Claude session has write as
+the person whose account they use, so an agent session that used them would
+be taken for one of the people, or for the recorder. The rule: **an agent
+session never writes on the people's boards, in their Slack channels, to the
+agents, or as the answer recorder.**
 
 The dev-tasks plugin's people-doors guard holds to it in every Claude
-session that has the plugin, on both profiles, with no opt-in. It refuses:
+session that has the plugin, on both profiles, with no opt-in. It goes by
+the server's name: any server whose name says monday, slack, linear or
+dev-tasks (the claude.ai connectors, the dev-tasks plugin, the hosted Dev
+Tasks server, or any other). It refuses:
 
-- On Monday: a new or changed item, and a move, on a people's board. An
-  update anywhere, since an update names only its item. The generic API
-  tools (`all_api_write`, `all_monday_api`, `execute_code`) when they
-  touch an item. Reads, and board structure (columns, groups, a board's
-  name), pass.
-- On Slack: a message, reply, schedule or edit in a people's channel, or one
-  that mentions an agent's bot anywhere. A draft passes, since the person
-  sends it themselves.
-- On Linear: an answer entry (`<!-- slack:…`, `<!-- monday:…`) in a
-  description or comment, and the answer recorder's plan labels.
-- Any change to its own list, other than a plain `cat` of it or the add
-  command below.
+- On Monday and dev-tasks: reads pass. Anything else passes only when it
+  touches none of the people's boards. The guard reads which board every id
+  in the call is on (one Monday read with the person's `MONDAY_API_KEY`, up
+  to 5 seconds), and refuses a people's board, an item or update on one (a
+  subitem counts on its parent's board), `execute_code` (which can build any
+  id), and any write it cannot check.
+- On Slack: reads pass. Anything else (a message, reply, schedule, draft,
+  reaction or edit) is refused when it names a people's channel (by id, or
+  by name with or without `#`) or an agent's bot (a direct message by the
+  bot's user id, or a `<@…>` mention anywhere).
+- On Linear: an answer entry (`<!-- slack:…`, `<!-- monday:…`,
+  `<!-- slack-user:…`) and the recorder's plan labels (`plan-to-approve`,
+  `plan-approved`, by name or id), on a new issue or an existing one, added
+  or taken away, or another label renamed to one. An existing issue's labels
+  replaced wholesale. A description edit or patch that adds, changes or
+  takes out an answer entry: the guard reads the description as it stands
+  (the Linear key, `LINEAR_API_KEY` or `~/.config/linear/.env`) and applies
+  the patch first. An edit that keeps every entry passes.
+- From the shell: a GraphQL mutation, or a body from a file or stdin, to
+  `api.monday.com` or `api.linear.app`; a Slack write method (`chat.`,
+  `reactions.`, `files.`, `conversations.open` and the like) to
+  `slack.com/api`; and `sudo` on its own list.
 
-Its list is local to each machine, since this repository is public:
-`~/.config/dev-tasks/people-doors.json`.
+**What it costs outside PolAds**, since the plugin is user-wide:
+
+- Every Monday or dev-tasks write that names an existing board, item or
+  update waits for one Monday read. It needs `MONDAY_API_KEY` in the
+  environment Claude Code starts with, from an account that can see the
+  people's boards. Without it, those writes are refused on every board.
+- A description edit on an existing Linear issue, or a label given by id,
+  waits for one Linear read. Without a Linear key it is refused in every
+  workspace.
+- Monday's `execute_code` is refused on every board.
+- No Monday or Linear mutation, and no Slack write, goes out by `curl` from
+  an agent session, on any board, workspace or channel.
+- Until the list is in place, every Monday, dev-tasks and Slack write is
+  refused everywhere (reads pass). So the list goes on in the same step as
+  the plugin update that brings the guard.
+- Everything else passes as before.
+
+Its list is root's, since this repository is public and an agent session
+runs as the person: `/etc/dev-tasks/people-doors.json`. The guard trusts it
+only when the file and `/etc/dev-tasks` are owned by root and writable by no
+one else. It never reads a list from `$HOME`, and no environment variable
+moves it. A list that is missing, not root's, or has an empty list in it is
+no list: the guard refuses as above.
 
 ```json
 {
@@ -1022,32 +1058,39 @@ Its list is local to each machine, since this repository is public:
 
 - `mondayBoards` are the people's boards: today the Needs-you board, later
   the Requests board too.
-- `slackChannels` are the four channels, by id and by name, since a
-  connector may take either.
-- `agentBots` are the agents' bot users, whose mention in any channel reaches
-  an agent.
+- `slackChannels` are the four channels, by id and by name, since a tool may
+  take either.
+- `agentBots` are the agents' bot users: a direct message to one, or its
+  mention in any channel, reaches an agent.
 
-With no list, or one it cannot read, the guard refuses every Monday item
-write and every Slack send: it cannot tell which are the people's.
-
-To place the list, or add to it, run one command from any dev-tasks
-checkout. The orchestrator may run it for a person who asks. The ids are not
-secrets:
+The ids are not secrets:
 
 - the board id is in the coordinator mini's `config.json` (`bridges.monday.boardId`);
 - the agents' bot ids are in each mini's `~/.agentd/state/bridge.json` (`botUserId`);
 - the channel names are in `slack.channels`, and their ids are in each channel's details in Slack.
 
+Each person sets it once on their own machine, with one command in their own
+terminal (the guard refuses it from an agent session). The same command with
+the whole new list changes it, for example when a new agent's bot comes:
+
 ```bash
-node <dev-tasks>/plugin/hooks/people-doors-guard.mjs add --board 1234567890 \
-  --channel C0123456789 --channel polads-questions --bot U0123456789
+echo '{"mondayBoards":["1234567890"],"slackChannels":["C0123456789","polads-questions"],"agentBots":["U0123456789"]}' | sudo sh -c 'umask 022 && mkdir -p /etc/dev-tasks && cat > /etc/dev-tasks/people-doors.json'
 ```
 
-It only ever adds, never takes anything out. A new list needs at least a
-board, a channel and a bot, so it never guards nothing. Taking an entry out
-is a person's own edit, in an editor outside Claude. A hook change needs the
-plugin cache cleared and a reload before it runs (the plugin version goes up
-with it).
+`node <plugin>/hooks/people-doors-guard.mjs check` says whether the guard
+trusts it. A machine that never works on PolAds can be taken out of the
+guard, by root only:
+`sudo sh -c 'mkdir -p /etc/dev-tasks && touch /etc/dev-tasks/people-doors.off'`.
+
+**What it does not do.** It stops a misled session, not a determined one: a
+session set on writing as a person can still find another way (a script
+file, a host built from parts, its own environment). The detection layer is
+#polads-agents: every lowering of an approval class, and from Wave 2 every
+plan approval, is announced there, with who lowered or approved it and
+where, so a forged one shows.
+
+A hook change needs the plugin cache cleared and a reload before it runs
+(the plugin version goes up with it).
 
 ## The browser test (WS5)
 

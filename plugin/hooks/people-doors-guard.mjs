@@ -1,53 +1,55 @@
 /**
- * The people-doors guard (STEP-3330). The Monday bridge takes a Monday user's
- * update or Answer column as that person's words, and the Slack bridge a
- * Slack member's reply. The claude.ai connectors write as the person whose
- * account they use. So no agent session writes through them on the people's
- * boards, in their channels or to the agents' bots, none writes an answer
- * entry or a recorder's label through the Linear connector, and none changes
- * this guard's own list. Always on, in every session that has the plugin: it
+ * The people-doors guard (STEP-3330): no agent session writes as a person
+ * through the Monday, Slack, Linear or dev-tasks tools, or the Monday, Slack
+ * and Linear APIs from the shell. The rules are in people-doors-rules.mjs;
+ * this file finds the list, makes the lookups the rules ask for, and speaks
+ * the hook's protocol. Always on, in every session that has the plugin: it
  * guards people, not a project's workflow.
  *
- * The list is local to each machine, since dev-tasks is public:
- * ~/.config/dev-tasks/people-doors.json, { mondayBoards, slackChannels,
- * agentBots }. With none, every Monday item write and Slack send is refused
- * (fail closed). `node people-doors-guard.mjs add ...` places or extends it,
- * and never takes anything out: only a person does that, by hand.
+ * The list is root's, since dev-tasks is public and an agent session runs as
+ * the person: /etc/dev-tasks/people-doors.json, { mondayBoards,
+ * slackChannels, agentBots }, trusted only when it and its folder are owned
+ * by root and writable by no one else. It is never read from $HOME, and no
+ * environment variable moves it. With no trusted list, or an empty one, every
+ * Monday, dev-tasks and Slack write is refused (fail closed). The one way out
+ * is root's too: /etc/dev-tasks/people-doors.off, for a machine that never
+ * works on PolAds.
  *
- * As a hook: the tool call on stdin, a deny on stdout, nothing otherwise.
- * Plain Node, no dependencies.
+ * `node people-doors-guard.mjs check` says whether the list is trusted. As a
+ * hook: the tool call on stdin, a deny on stdout, nothing otherwise. Plain
+ * Node, no dependencies.
  */
-import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs"
+import { readFileSync, statSync } from "node:fs"
 import { homedir } from "node:os"
 import { dirname, join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
+import { decide } from "./people-doors-rules.mjs"
 
-export const doorsFile = (home = homedir()) => join(home, ".config", "dev-tasks", "people-doors.json")
+export const LIST_FILE = "/etc/dev-tasks/people-doors.json"
+export const OFF_FILE = "/etc/dev-tasks/people-doors.off"
+const MONDAY_API = "https://api.monday.com/v2"
+const LINEAR_API = "https://api.linear.app/graphql"
+const LOOKUP_MS = 5000
 
-const MONDAY = "mcp__claude_ai_monday_com__"
-const SLACK = "mcp__claude_ai_Slack__"
-const LINEAR = "mcp__linear-server__"
-/** Tools that write items on the board their input names. */
-const MONDAY_BOARD_WRITES = new Set(["create_item", "create_items", "update_items", "change_item_column_values", "create_form_submission", "move_object"])
-/** Tools that can run any mutation: refused when it touches an item, whose board the hook cannot know. */
-const MONDAY_GENERIC = new Set(["all_api_write", "all_monday_api", "execute_code"])
-const ITEM_MUTATION = /\b(create_update|create_item|create_subitem|change_column_value|change_simple_column_value|change_multiple_column_values|move_item_to_board|move_item_to_group|archive_item|delete_item|duplicate_item|like_update|delete_update|edit_update)\b/
-const SLACK_WRITE = /(send|post|reply|schedule|update|edit)/i
-const ANSWER_ENTRY = /<!-- (slack|monday|slack-user):/
-const RECORDER_LABELS = ["plan-to-approve", "plan-approved"]
-
-const MONDAY_NO = "An agent session cannot write on the people's Monday boards as a person: the Monday bridge would take it for their words. Ask the person to do it themselves."
-const SLACK_NO = "An agent session cannot write in the people's Slack channels, or to the agents, as a person: the Slack bridge would take it for their words. Ask the person to do it themselves."
-const LINEAR_NO = "Answers on an issue and a plan's approval are the answer recorder's to write, never an agent session's."
-const LIST_NO = "The people-doors guard's list is a person's to change, never an agent session's. Read it with cat, or add to it with: node <dev-tasks>/plugin/hooks/people-doors-guard.mjs add."
-const noList = (home) =>
-  `${doorsFile(home)} is missing, so this session cannot tell which Monday boards and Slack channels are the people's, and writes on none of them as a person. A person places it with: node <dev-tasks>/plugin/hooks/people-doors-guard.mjs add (runbook, The Monday board).`
-
-/** The list, or null when there is none or it does not read as one. */
-export function readDoors(file = doorsFile()) {
+/** Root's, and only root can change it: the file and its folder owned by uid 0 and writable by no one else. */
+export function rootOwned(path, stat = statSync) {
   try {
-    const d = JSON.parse(readFileSync(file, "utf8"))
-    const list = (v) => (Array.isArray(v) && v.every((x) => typeof x === "string" && x) ? v : null)
+    for (const p of [dirname(path), path]) {
+      const s = stat(p)
+      if (s.uid !== 0 || (s.mode & 0o022) !== 0) return false
+    }
+    return stat(path).isFile()
+  } catch {
+    return false
+  }
+}
+
+/** The list, or null when it is missing, not root's, does not read as one, or has an empty list in it. */
+export function readDoors({ file = LIST_FILE, stat = statSync, read = readFileSync } = {}) {
+  if (!rootOwned(file, stat)) return null
+  try {
+    const d = JSON.parse(read(file, "utf8"))
+    const list = (v) => (Array.isArray(v) && v.length && v.every((x) => typeof x === "string" && x.trim()) ? v.map((x) => x.trim().replace(/^#/, "")) : null)
     const doors = { mondayBoards: list(d?.mondayBoards), slackChannels: list(d?.slackChannels), agentBots: list(d?.agentBots) }
     return doors.mondayBoards && doors.slackChannels && doors.agentBots ? doors : null
   } catch {
@@ -55,140 +57,105 @@ export function readDoors(file = doorsFile()) {
   }
 }
 
-/** Every string (and number, as a string) anywhere in a tool's input. */
-function values(input, out = []) {
-  if (typeof input === "string") out.push(input)
-  else if (typeof input === "number") out.push(String(input))
-  else if (Array.isArray(input)) for (const v of input) values(v, out)
-  else if (input && typeof input === "object") for (const v of Object.values(input)) values(v, out)
-  return out
+/** The machine is out of the guard only when root says so. */
+export const guardOff = ({ file = OFF_FILE, stat = statSync } = {}) => rootOwned(file, stat)
+
+async function graphql(url, key, query, variables, fetchImpl) {
+  const res = await fetchImpl(url, {
+    method: "POST",
+    headers: { Authorization: key, "Content-Type": "application/json", "API-Version": "2025-10" },
+    body: JSON.stringify({ query, variables }),
+    signal: AbortSignal.timeout(LOOKUP_MS),
+  })
+  if (!res.ok) throw new Error(`answered ${res.status}`)
+  const body = await res.json()
+  if (body?.errors?.length || !body?.data) throw new Error("answered with errors")
+  return body.data
 }
 
-const names = (input, id) => values(input).some((v) => v === id || new RegExp(`(^|[^0-9])${id}([^0-9]|$)`).test(v))
-
-function monday(name, input, doors, home) {
-  const generic = MONDAY_GENERIC.has(name)
-  const writes = MONDAY_BOARD_WRITES.has(name) || name === "create_update" || (generic && values(input).some((v) => ITEM_MUTATION.test(v)))
-  if (!writes) return null
-  if (!doors) return { deny: noList(home) }
-  // An update and a generic item mutation name no board the hook can trust: refused whatever the board.
-  if (name === "create_update" || generic) return { deny: MONDAY_NO }
-  return doors.mondayBoards.some((b) => names(input, b)) ? { deny: MONDAY_NO } : null
-}
-
-function slack(name, input, doors, home) {
-  // A draft is the person's to send: sending it is their act, not the session's.
-  if (!SLACK_WRITE.test(name) || /draft/i.test(name)) return null
-  if (!doors) return { deny: noList(home) }
-  const said = values(input)
-  const inChannel = said.some((v) => doors.slackChannels.includes(v.replace(/^#/, "")))
-  const toAgent = said.some((v) => doors.agentBots.some((b) => v.includes(`<@${b}`)))
-  return inChannel || toAgent ? { deny: SLACK_NO } : null
-}
-
-function linear(name, input) {
-  if (name !== "save_issue" && name !== "save_comment") return null
-  if (values(input).some((v) => ANSWER_ENTRY.test(v))) return { deny: LINEAR_NO }
-  if (name !== "save_issue") return null
-  const added = Array.isArray(input?.addLabels) ? input.addLabels : []
-  const removed = Array.isArray(input?.removeLabels) ? input.removeLabels : []
-  if (added.includes("plan-approved") || removed.some((l) => RECORDER_LABELS.includes(l))) return { deny: LINEAR_NO }
-  // A whole new label set on an existing issue could drop a recorder's label unseen: add and remove instead.
-  if (input?.id && Array.isArray(input?.labels)) return { deny: `${LINEAR_NO} Change an existing issue's labels with addLabels and removeLabels.` }
-  return null
-}
-
-/** The guard's own list: a plain read of it passes, any other Edit, Write or command that names it or its folder is refused. */
-function ownList(tool, input, home) {
-  const folder = dirname(doorsFile(home))
-  if (tool === "Bash") {
-    const command = String(input?.command ?? "")
-    if (!/\.config\/dev-tasks|people-doors\.json/.test(command)) return null
-    return /^\s*cat\s+"?[^\s"<>|;&]+"?\s*$/.test(command) ? null : { deny: LIST_NO }
-  }
-  const path = input?.file_path ?? input?.notebook_path
-  if (typeof path !== "string") return null
-  const full = resolve(path.replace(/^~(?=\/)/, home))
-  return full === folder || full.startsWith(`${folder}/`) ? { deny: LIST_NO } : null
-}
-
-export function decide({ tool_name: tool, tool_input: input }, doors, home = homedir()) {
-  if (typeof tool !== "string") return null
-  if (tool.startsWith(MONDAY)) return monday(tool.slice(MONDAY.length), input, doors, home)
-  if (tool.startsWith(SLACK)) return slack(tool.slice(SLACK.length), input, doors, home)
-  if (tool.startsWith(LINEAR)) return linear(tool.slice(LINEAR.length), input)
-  if (["Bash", "Edit", "Write", "MultiEdit", "NotebookEdit"].includes(tool)) return ownList(tool, input, home)
-  return null
-}
-
-const BOARD = /^\d+$/
-const CHANNEL = /^([CG][A-Z0-9]{6,}|[a-z0-9][a-z0-9._-]{0,79})$/
-const BOT = /^[UWB][A-Z0-9]{6,}$/
+const BOARDS_QUERY = `query ($ids: [ID!], $boards: [ID!]) {
+  items(ids: $ids, limit: 100) { id board { id } parent_item { board { id } } }
+  updates(ids: $ids, limit: 100) { id item { board { id } parent_item { board { id } } } }
+  boards(ids: $boards, limit: 100) { id }
+}`
 
 /**
- * Places the list, or adds to it, never taking anything out: agents may run
- * it, since it can only make the guard hold more. A new list needs a board, a
- * channel and a bot, so it is never one that guards nothing.
+ * The boards each id is on, for the ids that are items or updates (a
+ * subitem counts on its parent's board too). One read with the person's
+ * MONDAY_API_KEY. Throws when it cannot answer, and when the key cannot see
+ * every one of the people's boards, since then an item on one would look
+ * like no item at all.
  */
-export function addToDoors(file, add) {
-  for (const b of add.boards) if (!BOARD.test(b)) throw new Error(`${JSON.stringify(b)} is not a Monday board id (digits)`)
-  for (const c of add.channels) if (!CHANNEL.test(c.replace(/^#/, ""))) throw new Error(`${JSON.stringify(c)} is not a Slack channel id or name`)
-  for (const u of add.bots) if (!BOT.test(u)) throw new Error(`${JSON.stringify(u)} is not a Slack bot user id`)
-  let current = { mondayBoards: [], slackChannels: [], agentBots: [] }
-  if (existsSync(file)) {
-    const read = readDoors(file)
-    if (!read) throw new Error(`cannot read ${file} as the guard's list: a person fixes it by hand, and this command changes nothing`)
-    current = read
-  } else if (!add.boards.length || !add.channels.length || !add.bots.length) {
-    throw new Error("a new list needs a board, a channel and a bot, so it never guards nothing")
+export async function boardsOf(ids, peopleBoards, { key = process.env.MONDAY_API_KEY, fetchImpl = fetch } = {}) {
+  if (!key?.trim()) throw new Error("no MONDAY_API_KEY")
+  if (ids.length > 100) throw new Error("more ids than one lookup takes")
+  const data = await graphql(MONDAY_API, key.trim(), BOARDS_QUERY, { ids, boards: peopleBoards }, fetchImpl)
+  const seen = new Set((data.boards ?? []).map((b) => String(b.id)))
+  if (!peopleBoards.every((b) => seen.has(b))) throw new Error("the key cannot see the people's boards")
+  const on = (item) => [item?.board?.id, item?.parent_item?.board?.id].filter(Boolean).map(String)
+  const boards = new Map()
+  for (const [id, item] of [...(data.items ?? []).map((i) => [i.id, i]), ...(data.updates ?? []).map((u) => [u.id, u.item])]) {
+    boards.set(String(id), [...(boards.get(String(id)) ?? []), ...on(item)])
   }
-  const merged = (a, b) => [...new Set([...a, ...b])]
-  const next = {
-    mondayBoards: merged(current.mondayBoards, add.boards),
-    slackChannels: merged(current.slackChannels, add.channels.map((c) => c.replace(/^#/, ""))),
-    agentBots: merged(current.agentBots, add.bots),
-  }
-  mkdirSync(dirname(file), { recursive: true, mode: 0o700 })
-  const tmp = `${file}.${process.pid}.tmp`
-  writeFileSync(tmp, `${JSON.stringify(next, null, 2)}\n`, { mode: 0o600 })
-  chmodSync(tmp, 0o600)
-  renameSync(tmp, file)
-  return next
+  return boards
 }
 
-/** `add --board <id> --channel <id or name> --bot <id>`, each as often as needed. */
-function parseAdd(args) {
-  const add = { boards: [], channels: [], bots: [] }
-  const into = { "--board": add.boards, "--channel": add.channels, "--bot": add.bots }
-  for (let i = 0; i < args.length; i += 2) {
-    const list = into[args[i]]
-    if (!list || args[i + 1] === undefined) throw new Error(`usage: people-doors-guard.mjs add [--board <id>]... [--channel <id or name>]... [--bot <id>]...`)
-    list.push(args[i + 1])
+/** The person's Linear key, where the plugin's own Linear client finds it. */
+export function linearKey(env = process.env, home = homedir()) {
+  if (env.LINEAR_API_KEY?.trim()) return env.LINEAR_API_KEY.trim()
+  const line = readFileSync(join(home, ".config", "linear", ".env"), "utf8")
+    .split("\n")
+    .find((l) => l.startsWith("LINEAR_API_KEY="))
+  const key = line?.slice("LINEAR_API_KEY=".length).trim()
+  if (!key) throw new Error("no Linear key")
+  return key
+}
+
+/** An issue's description as it stands. Throws when Linear cannot say. */
+export async function descriptionOf(issue, { key = () => linearKey(), fetchImpl = fetch } = {}) {
+  const data = await graphql(LINEAR_API, key(), "query ($id: String!) { issue(id: $id) { description } }", { id: issue }, fetchImpl)
+  if (!data.issue) throw new Error("no such issue")
+  return data.issue.description ?? ""
+}
+
+/** The names of labels given by id. Throws unless Linear names every one. */
+export async function labelNamesOf(ids, { key = () => linearKey(), fetchImpl = fetch } = {}) {
+  const data = await graphql(LINEAR_API, key(), "query ($ids: [ID!]) { issueLabels(filter: { id: { in: $ids } }, first: 100) { nodes { id name } } }", { ids }, fetchImpl)
+  const nodes = data.issueLabels?.nodes ?? []
+  if (new Set(nodes.map((n) => n.id)).size < new Set(ids).size) throw new Error("not every label found")
+  return nodes.map((n) => n.name)
+}
+
+/** The hook's answer to one tool call: a deny, or null to say nothing. */
+export async function hook(call, { doors = readDoors(), off = guardOff(), lookups = { boardsOf, descriptionOf, labelNamesOf } } = {}) {
+  if (off) return null
+  try {
+    return await decide(call ?? {}, { doors, listFile: LIST_FILE, ...lookups })
+  } catch (error) {
+    return { deny: `The people-doors guard failed (${error instanceof Error ? error.message : String(error)}), so it refused the call.` }
   }
-  return add
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  const [command, ...rest] = process.argv.slice(2)
-  if (command === "add") {
-    try {
-      const doors = addToDoors(doorsFile(), parseAdd(rest))
-      process.stdout.write(`${JSON.stringify(doors, null, 2)}\n`)
-    } catch (error) {
-      process.stderr.write(`people-doors-guard: ${error instanceof Error ? error.message : String(error)}\n`)
+  if (process.argv[2] === "check") {
+    const doors = readDoors()
+    if (guardOff()) process.stdout.write(`people-doors guard: off on this machine (${OFF_FILE})\n`)
+    else if (doors) process.stdout.write(`people-doors guard: on, ${LIST_FILE} is root's: ${doors.mondayBoards.length} board(s), ${doors.slackChannels.length} channel(s), ${doors.agentBots.length} bot(s)\n`)
+    else {
+      process.stdout.write(`people-doors guard: on, with NO trusted list: ${LIST_FILE} is missing, not root's, or has an empty list, so every Monday, dev-tasks and Slack write is refused\n`)
       process.exit(1)
     }
   } else {
     let raw = ""
     process.stdin.on("data", (chunk) => (raw += chunk))
-    process.stdin.on("end", () => {
+    process.stdin.on("end", async () => {
       let call
       try {
         call = JSON.parse(raw)
       } catch {
         return
       }
-      const verdict = decide(call ?? {}, readDoors())
+      const verdict = await hook(call)
       if (verdict) process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: verdict.deny } }))
     })
   }

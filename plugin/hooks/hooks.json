@@ -2,7 +2,7 @@
   "hooks": {
     "PreToolUse": [
       {
-        "matcher": "mcp__claude_ai_monday_com__.*|mcp__claude_ai_Slack__.*|mcp__linear-server__.*|Bash|Edit|Write|MultiEdit|NotebookEdit",
+        "matcher": "mcp__.*([Mm]onday|MONDAY|[Ss]lack|SLACK|[Ll]inear|LINEAR|[Dd]ev[-_]?[Tt]asks|DEV[-_]?TASKS).*|Bash",
         "hooks": [
           {
             "type": "command",

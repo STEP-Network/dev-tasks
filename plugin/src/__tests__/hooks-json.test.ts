@@ -56,16 +56,26 @@ describe("hooks.json conditions", () => {
     expect(conditions).toHaveLength(12)
   })
 
-  it("runs the people-doors guard on every connector call and every Bash, Edit and Write, with no `if` to miss one (STEP-3330)", () => {
+  it("runs the people-doors guard on every Monday, Slack, Linear and dev-tasks server's tools and every Bash, with no `if` to miss one (STEP-3330)", () => {
     const guard = handlers.filter((h) => h.command.endsWith("/hooks/people-doors-guard.sh"))
     expect(guard).toHaveLength(1)
     expect(guard[0].event).toBe("PreToolUse")
     expect(guard[0].if).toBeUndefined()
     const matcher = new RegExp(`^(?:${guard[0].matcher})$`)
-    for (const tool of ["mcp__claude_ai_monday_com__create_update", "mcp__claude_ai_Slack__slack_send_message", "mcp__linear-server__save_issue", "Bash", "Edit", "Write", "MultiEdit", "NotebookEdit"]) {
+    for (const tool of [
+      "mcp__claude_ai_monday_com__create_update",
+      "mcp__claude_ai_monday_com__execute_code",
+      "mcp__claude_ai_Slack__slack_send_message",
+      "mcp__slack__post_message",
+      "mcp__linear-server__save_issue",
+      "mcp__claude_ai_Linear__save_issue",
+      "mcp__plugin_dev-tasks_dev-tasks__createUpdate",
+      "mcp__claude_ai_Dev_Tasks__createUpdate",
+      "Bash",
+    ]) {
       expect(matcher.test(tool), tool).toBe(true)
     }
-    expect(matcher.test("Read")).toBe(false)
+    for (const tool of ["Read", "Edit", "Write", "BashOutput", "mcp__claude_ai_Gmail__send_message"]) expect(matcher.test(tool), tool).toBe(false)
   })
 
   it("runs build-failure-advisor once per command: it counts failures, and filters the command itself", () => {
