@@ -164,8 +164,77 @@ export async function prepareWorktree(exec: Exec, o: WorktreeOptions): Promise<{
   return { path, resumed }
 }
 
-export async function commitsAhead(exec: Exec, path: string, base: string): Promise<number> {
-  return Number.parseInt((await mustGit(exec, ["-C", path, "rev-list", "--count", `origin/${base}..HEAD`])).trim(), 10) || 0
+export async function commitsAhead(exec: Exec, path: string, base: string, o: { firstParent?: boolean } = {}): Promise<number> {
+  const args = ["-C", path, "rev-list", "--count", `origin/${base}..HEAD`, ...(o.firstParent ? ["--first-parent"] : [])]
+  return Number.parseInt((await mustGit(exec, args)).trim(), 10) || 0
+}
+
+/**
+ * Starts merging origin's copy of `base` into the worktree's branch, for a
+ * revise round whose PR clashes with it (STEP-3340). Here, outside the
+ * sandbox: the merge writes every file the base changed, the agent
+ * configuration included, which the sandbox keeps read-only. None of those
+ * conflicts: prepareWorktree refuses a branch that changes one. A clean merge
+ * is committed. Otherwise the conflicted files are left marked, and named,
+ * for the worker to resolve and commit. A merge, never a rebase: the branch
+ * is on origin, and its push is never forced.
+ */
+export async function startMerge(exec: Exec, path: string, base: string): Promise<{ conflicts: string[] }> {
+  const merge = ["-C", path, "merge", "--no-ff", "--no-edit", `origin/${base}`]
+  const r = await git(exec, merge)
+  const unmerged = await mustGit(exec, ["-C", path, "diff", "--name-only", "--diff-filter=U"])
+  const conflicts = unmerged.split("\n").map((f) => f.trim()).filter(Boolean)
+  if (r.code !== 0 && !conflicts.length) throw failed(`git ${merge.join(" ")}`, r)
+  return { conflicts }
+}
+
+/**
+ * An added line that opens or closes a conflict, or opens its base's part
+ * (diff3): seven characters or more, as a conflict-marker-size attribute
+ * makes them longer. `=======` alone is also a Markdown heading's underline.
+ */
+const MARKER = /^\+(<{7,}|>{7,}|\|{7,})(\s|$)/
+
+/**
+ * The files where HEAD adds a conflict marker over every one of `refs`
+ * (STEP-3340). A Markdown or YAML file passes CI with one, so the runner
+ * never pushes it. Over every ref: a merge of the base brings the base's own
+ * lines, which are not the round's. The diff as git stores it, in text: no
+ * external diff, no textconv, and no file hidden as binary (`-diff`), which
+ * the branch's attributes could each name.
+ */
+export async function conflictMarkers(exec: Exec, path: string, refs: readonly string[]): Promise<string[]> {
+  let found: string[] | null = null
+  for (const ref of refs) {
+    const out = await mustGit(exec, ["-C", path, "diff", "--no-color", "--no-ext-diff", "--no-textconv", "--text", "-U0", ref, "HEAD"])
+    const files = new Set<string>()
+    let file = ""
+    let header = false
+    for (const line of out.split("\n")) {
+      if (line.startsWith("diff --git ")) header = true
+      else if (line.startsWith("@@")) header = false
+      // Only in a file's header: an added line "++ x" reads "+++ x" in a hunk.
+      else if (header && line.startsWith("+++ ")) file = line.slice(4).replace(/^"(.*)"$/, "$1").replace(/^b\//, "")
+      else if (!header && MARKER.test(line)) files.add(file)
+    }
+    found = found ? found.filter((f) => files.has(f)) : [...files].sort()
+    if (!found.length) return []
+  }
+  return found ?? []
+}
+
+/** The stop reason for commits that leave a conflict marker. */
+export const leftoverMarkers = (files: readonly string[]) =>
+  `leftover conflict marker in ${files.slice(0, 5).join(", ")}${files.length > 5 ? ` and ${files.length - 5} more files` : ""}`
+
+/**
+ * Of `files`, those that still differ from origin's copy of `base`: what a
+ * round changed itself, not what merging the base in brought (STEP-3340).
+ */
+export async function ownChanges(exec: Exec, path: string, base: string, files: readonly string[]): Promise<string[]> {
+  const out = await mustGit(exec, ["-C", path, "diff", "--name-only", `origin/${base}`, "HEAD"])
+  const differs = new Set(out.split("\n").map((f) => f.trim()).filter(Boolean))
+  return files.filter((f) => differs.has(f))
 }
 
 /** The files the branch changes against origin's copy of `base`. */

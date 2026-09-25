@@ -85,7 +85,7 @@ describe("the board's words (plain English)", () => {
     const lines = [
       say.answered("Nate", "Ready"), say.answered("Nate", "Refining"), say.answered("Nate", null), say.filed("Nate", "STEP-9"),
       say.released("STEP-9"), say.closed("STEP-9"), say.passed("Nate"), say.failed("Nate", "STEP-10"), say.onlyVerdicts(),
-      say.notWaiting(), say.gone("STEP-9"), say.refused("STEP-9"), say.onlyVerdicts(true), say.sameAnswer("Ben", "Ada"),
+      say.notWaiting(), say.gone("STEP-9"), say.refused("STEP-9"), say.onlyVerdicts(true), say.sameAnswer("Ben", "Ada"), say.planYes("Ada"),
       say.onMonday("https://step.monday.com/boards/1/pulses/2"), say.mirrored("Ada", "on Monday", "use the order date"), say.mirrored("Ben", "in Slack", "x".repeat(400)),
       say.mirroredVerdict("Ben", "on Monday", { outcome: "passed" }), say.mirroredVerdict("Ben", "in Slack", { outcome: "failed", fix: "STEP-10" }),
       say.mirroredVerdict("Ben", "on Monday", { outcome: "not-waiting", state: "Approved" }), say.settled("STEP-4", "approved"),

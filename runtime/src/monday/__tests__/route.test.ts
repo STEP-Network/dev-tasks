@@ -56,6 +56,13 @@ describe("routeWords: the first answer counts (Wave 2)", () => {
     expect(fake.issues.get("STEP-7")!.description).not.toContain("(Not applied")
   })
 
+  it("asks back on a bare yes to a plan with nothing to agree to, and the plan keeps waiting", async () => {
+    const { fake, say } = setup(["awaiting-answer", "plan-to-approve", "approval/try"])
+    const before = fake.issues.get("STEP-7")!
+    expect(await say("yes", "U1", NOW.toISOString())).toEqual({ to: "unclear" })
+    expect(fake.issues.get("STEP-7")).toMatchObject({ state: "On hold", labels: before.labels, description: before.description })
+  })
+
   it("takes a bare yes as agreement to the item's own recommendation when this mini asked no question on the issue (another mini's plan)", async () => {
     const { fake, say } = setup(["awaiting-answer", "polads"])
     await say("yes", "U1", NOW.toISOString(), { recommendation: "Build it as planned" })

@@ -508,6 +508,99 @@ describe("runJob", () => {
       ])
     })
 
+    describe("a PR that clashes with its base (STEP-3340)", () => {
+      const MERGE_ONLY = { ...REVISE, reasons: ["merge conflict with staging"] }
+      const MERGED: SdkMessage = { ...DONE, structured_output: { status: "done", summary: "lib/notice.ts: kept the PR's date and staging's new field.", checklist: SWEEP } }
+      const clash: Array<[RegExp, Partial<ExecResult>]> = [
+        [/ merge --no-ff --no-edit origin\/staging$/, { code: 1, stderr: "CONFLICT (content): Merge conflict in lib/notice.ts" }],
+        [/ diff --name-only --diff-filter=U$/, { stdout: "lib/notice.ts\n" }],
+        // What the merge brought: staging's own test among it. Only lib/notice.ts still differs from staging.
+        [/ diff --name-only origin\/STEP-7-fix-the-date\.\.\.HEAD$/, { stdout: "lib/notice.ts\nlib/staging-only.test.ts\n" }],
+        [/ diff --name-only origin\/staging HEAD$/, { stdout: "lib/notice.ts\n" }],
+      ]
+      const merging = (over: Array<[RegExp, Partial<ExecResult>]> = [], reasons = MERGE_ONLY.reasons, messages = [INIT, MERGED]) =>
+        revising({ job: { kind: "revise", revise: { ...REVISE, reasons } }, messages, exec: answers([...over, ...clash]) })
+
+      it("starts the merge outside the sandbox, briefs the worker on the conflicts alone, and pushes the merge", async () => {
+        const { deps, job, f, q, paths, outbox } = merging()
+        expect(await runJob(deps, job.id)).toMatchObject({ status: "done", reason: "revised (merge round 1 of 3)", prUrl: PR_URL })
+        const lines = f.lines()
+        const checkout = lines.findIndex((l) => l.endsWith("checkout -B STEP-7-fix-the-date origin/STEP-7-fix-the-date"))
+        const merge = lines.findIndex((l) => / merge --no-ff --no-edit origin\/staging$/.test(l))
+        expect(checkout).toBeGreaterThan(-1)
+        expect(merge).toBeGreaterThan(checkout)
+        // Through the runner's safe git: no hook, no replace ref.
+        expect(lines[merge]).toMatch(/^git --no-replace-objects -c core\.hooksPath=\/dev\/null -c core\.fsmonitor=false -C \S+ merge /)
+        expect(lines.some((l) => /\brebase\b| push .*(--force|\s-f\b|\+HEAD)/.test(l))).toBe(false)
+        // No feedback gathered: a merge round answers none.
+        expect(lines.some((l) => l.includes("--json author,reviews"))).toBe(false)
+        const brief = q.seen[0].prompt
+        expect(brief).toMatch(/^# STEP-7: Fix the date \(revise, merge round 1 of 3\)/)
+        expect(brief).toContain("these files conflict:\n\n- lib/notice.ts\n")
+        expect(brief).not.toContain("## Review feedback since")
+        // The merge commit counts once, not as every commit it brought.
+        expect(lines.some((l) => l.endsWith("rev-list --count origin/STEP-7-fix-the-date..HEAD --first-parent"))).toBe(true)
+        expect(lines.some((l) => l.endsWith(" push -u origin HEAD:refs/heads/STEP-7-fix-the-date"))).toBe(true)
+        expect(readFileSync(join(paths.state, "pr-reply-STEP-7.md"), "utf8")).toMatch(/^eve's revision, merge round 1 of 3:\n\nlib\/notice\.ts: kept the PR's date/)
+        expect(outbox()).toEqual([`STEP-7: I fixed the clash with newer changes in staging on <${PR_URL}|PR #1674> and pushed the fixes. Nothing needed from you.`])
+      })
+
+      it("asks for no mutation check of the tests the merge brought in, nor of a merge round's own", async () => {
+        // No mutations listed. staging's test came in by the merge; a merge round writes no tests of its own.
+        const { deps, job, q, paths } = merging([[/ diff --name-only origin\/staging HEAD$/, { stdout: "lib/notice.ts\nlib/notice.test.ts\n" }], [/ diff --name-only origin\/STEP-7-fix-the-date\.\.\.HEAD$/, { stdout: "lib/notice.ts\nlib/notice.test.ts\nlib/staging-only.test.ts\n" }]])
+        expect(await runJob(deps, job.id)).toMatchObject({ status: "done", reason: "revised (merge round 1 of 3)" })
+        // Not asked again, and nothing left for the reviewer.
+        expect(q.seen).toHaveLength(1)
+        expect(readFileSync(join(paths.state, "pr-reply-STEP-7.md"), "utf8")).not.toContain("self-check was incomplete")
+      })
+
+      it("in a round with feedback too, asks for mutation checks of the round's own tests only", async () => {
+        const both = ["changes requested by ada", "merge conflict with staging"]
+        const reply = (paths: { state: string }) => readFileSync(join(paths.state, "pr-reply-STEP-7.md"), "utf8")
+        const own = merging([], both)
+        expect(await runJob(own.deps, own.job.id)).toMatchObject({ status: "done", reason: "revised (round 1 of 3)" })
+        expect(reply(own.paths)).not.toContain("self-check was incomplete")
+        const tested = merging(
+          [
+            [/ diff --name-only origin\/staging HEAD$/, { stdout: "lib/notice.ts\nlib/notice.test.ts\n" }],
+            [/ diff --name-only origin\/STEP-7-fix-the-date\.\.\.HEAD$/, { stdout: "lib/notice.ts\nlib/notice.test.ts\nlib/staging-only.test.ts\n" }],
+          ],
+          both,
+        )
+        expect(await runJob(tested.deps, tested.job.id)).toMatchObject({ status: "done" })
+        expect(reply(tested.paths)).toContain("self-check was incomplete (the branch changes tests (lib/notice.test.ts) but the report lists no mutation check)")
+      })
+
+      it("never pushes commits that leave a conflict marker the round added, and ends the round stuck, asking what next", async () => {
+        const marked = "diff --git a/docs/notice.md b/docs/notice.md\n--- a/docs/notice.md\n+++ b/docs/notice.md\n@@ -3 +3,5 @@\n+<<<<<<< HEAD\n+the PR's\n+=======\n+staging's\n+>>>>>>> origin/staging\n"
+        const { deps, job, f, outbox } = merging([[/ diff --no-color --no-ext-diff --no-textconv --text -U0 origin\/(STEP-7-fix-the-date|staging) HEAD$/, { stdout: marked }]])
+        expect(await runJob(deps, job.id)).toMatchObject({ status: "blocked", reason: "leftover conflict marker in docs/notice.md" })
+        expect(f.lines().some((l) => / push /.test(l))).toBe(false)
+        expect(outbox().join("\n")).toContain(`on <${PR_URL}|PR #1674>: leftover conflict marker in docs/notice.md. Nothing new was pushed. Reply "fix it"`)
+      })
+
+      it("pushes a merge whose only marker-like line came from the base", async () => {
+        const marked = "diff --git a/vendor/x.txt b/vendor/x.txt\n--- a/vendor/x.txt\n+++ b/vendor/x.txt\n@@ -0,0 +1 @@\n+>>>>>>> the base's own line\n"
+        const { deps, job, f } = merging([[/ diff --no-color --no-ext-diff --no-textconv --text -U0 origin\/STEP-7-fix-the-date HEAD$/, { stdout: marked }]])
+        expect(await runJob(deps, job.id)).toMatchObject({ status: "done" })
+        expect(f.lines().some((l) => l.endsWith(" push -u origin HEAD:refs/heads/STEP-7-fix-the-date"))).toBe(true)
+      })
+
+      it("ends a merge round that committed nothing as a stuck round, asking what next", async () => {
+        const { deps, job, outbox } = merging([[/rev-list --count origin\/STEP-7-fix-the-date\.\.HEAD/, { stdout: "0\n" }]])
+        expect(await runJob(deps, job.id)).toMatchObject({ status: "blocked", reason: "the merge of staging was not committed, so the PR still clashes with it" })
+        expect(outbox().join("\n")).toContain(`I could not finish the fixes for the clash with newer changes in staging on <${PR_URL}|PR #1674>: the merge of staging was not committed, so the PR still clashes with it. Nothing new was pushed. Reply "fix it"`)
+      })
+
+      it("stops before the session when the merge cannot start", async () => {
+        const { deps, job, q } = merging([[/ merge --no-ff --no-edit origin\/staging$/, { code: 128, stderr: "fatal: refusing to merge unrelated histories" }], [/ diff --name-only --diff-filter=U$/, { stdout: "" }]])
+        const result = await runJob(deps, job.id)
+        expect(result).toMatchObject({ status: "blocked" })
+        expect(result.reason).toMatch(/^the merge of staging could not start: git -C \S+ merge --no-ff --no-edit origin\/staging failed \(128\): fatal: refusing to merge unrelated histories/)
+        expect(q.seen).toEqual([])
+      })
+    })
+
     it("skips a revise job whose PR has closed meanwhile", async () => {
       const { deps, job, q, f } = revising({ exec: answers([[/^gh pr view \S+ --json state$/, { stdout: '{"state":"MERGED"}' }]]) })
       expect(await runJob(deps, job.id)).toMatchObject({ status: "skipped", reason: "the PR is merged, so there is nothing to revise", prUrl: PR_URL })

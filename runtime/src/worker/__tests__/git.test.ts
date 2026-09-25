@@ -4,7 +4,7 @@ import { join } from "node:path"
 import { describe, expect, it } from "vitest"
 import { fakeExec } from "../../__tests__/fakes.ts"
 import { execFileSync } from "node:child_process"
-import { assertPushable, commitMessages, commitsAhead, isDirty, prepareWorktree, pushBranch, realExec, removeWorktree, WorktreeRefused } from "../git.ts"
+import { assertPushable, changedFiles, commitMessages, commitsAhead, conflictMarkers, isDirty, leftoverMarkers, ownChanges, prepareWorktree, pushBranch, realExec, removeWorktree, startMerge, WorktreeRefused } from "../git.ts"
 
 const OPTS = { repo: "/Users/eve/polads", worktreesDir: "/Users/eve/.agentd/worktrees", branch: "STEP-7-fix-the-date", base: "staging" }
 const WT = "/Users/eve/.agentd/worktrees/STEP-7-fix-the-date"
@@ -149,6 +149,118 @@ describe("commitsAhead, isDirty and removeWorktree", () => {
       `${GIT} -C ${WT} status --porcelain --ignore-submodules=all`,
       `${GIT} -C /Users/eve/polads worktree remove --force ${WT}`,
     ])
+  })
+})
+
+describe("startMerge, commitsAhead by first parent and ownChanges (STEP-3340)", () => {
+  const repoWith = () => {
+    const repo = mkdtempSync(join(tmpdir(), "start-merge-"))
+    const git = (...args: string[]) => execFileSync("git", ["-C", repo, ...args], { stdio: "pipe" }).toString()
+    const write = (file: string, text: string) => writeFileSync(join(repo, file), text)
+    execFileSync("git", ["init", "-q", "-b", "staging", repo])
+    git("config", "user.name", "t")
+    git("config", "user.email", "t@localhost")
+    write("a.ts", "one\n")
+    git("add", ".")
+    git("commit", "-q", "-m", "base")
+    git("checkout", "-q", "-b", "STEP-7-x")
+    write("a.ts", "the PR's\n")
+    git("commit", "-q", "-am", "feat: the PR (STEP-7)")
+    git("update-ref", "refs/remotes/origin/STEP-7-x", "HEAD")
+    git("checkout", "-q", "staging")
+    write("b.test.ts", "staging's test\n")
+    git("add", ".")
+    git("commit", "-q", "-m", "staging moves on")
+    return { repo, git, write }
+  }
+
+  it("leaves a clash marked and named for the worker, and a merge commit counts once", async () => {
+    const { repo, git, write } = repoWith()
+    write("a.ts", "staging's\n")
+    git("commit", "-q", "-am", "staging changes the same line")
+    git("update-ref", "refs/remotes/origin/staging", "HEAD")
+    git("checkout", "-q", "STEP-7-x")
+    expect(await startMerge(realExec, repo, "staging")).toEqual({ conflicts: ["a.ts"] })
+    write("a.ts", "the PR's, and staging's\n")
+    git("add", "a.ts")
+    git("commit", "-q", "--no-edit")
+    expect(await commitsAhead(realExec, repo, "STEP-7-x")).toBe(3)
+    expect(await commitsAhead(realExec, repo, "STEP-7-x", { firstParent: true })).toBe(1)
+    // What the round did itself: not staging's test, which the merge brought.
+    expect(await ownChanges(realExec, repo, "staging", await changedFiles(realExec, repo, "STEP-7-x"))).toEqual(["a.ts"])
+  })
+
+  it("commits a merge with no clash itself, and names no file", async () => {
+    const { repo, git } = repoWith()
+    git("update-ref", "refs/remotes/origin/staging", "HEAD")
+    git("checkout", "-q", "STEP-7-x")
+    expect(await startMerge(realExec, repo, "staging")).toEqual({ conflicts: [] })
+    expect(git("rev-list", "--parents", "-n", "1", "HEAD").trim().split(" ")).toHaveLength(3)
+    expect(await commitsAhead(realExec, repo, "STEP-7-x", { firstParent: true })).toBe(1)
+  })
+
+  it("throws, naming the command, when the merge fails without a clash", async () => {
+    const { repo, git } = repoWith()
+    git("checkout", "-q", "STEP-7-x")
+    await expect(startMerge(realExec, repo, "no-such-base")).rejects.toThrow(/^git -C \S+ merge --no-ff --no-edit origin\/no-such-base failed \(\d+\)/)
+  })
+})
+
+describe("conflictMarkers (STEP-3340)", () => {
+  const repo = () => {
+    const dir = mkdtempSync(join(tmpdir(), "markers-"))
+    const git = (...args: string[]) => execFileSync("git", ["-C", dir, "-c", "user.name=t", "-c", "user.email=t@localhost", ...args], { stdio: "pipe" }).toString()
+    const write = (file: string, text: string) => writeFileSync(join(dir, file), text)
+    execFileSync("git", ["init", "-q", "-b", "staging", dir])
+    write("a.ts", "one\n")
+    write("doc.md", "Intro\n")
+    git("add", ".")
+    git("commit", "-q", "-m", "base")
+    return { dir, git, write }
+  }
+
+  it("names each file where HEAD adds a marker that opens or closes a conflict", async () => {
+    const { dir, git, write } = repo()
+    // An added line "++ x" reads "+++ x" in a hunk: it names no file.
+    write("a.ts", "++ x\n<<<<<<< HEAD\nours\n=======\ntheirs\n>>>>>>> origin/staging\n")
+    write("b.yml", "key: 1\n>>>>>>>\n")
+    // A Markdown heading underlined with exactly seven "=" is no marker.
+    write("doc.md", "Title\n=======\n")
+    git("add", ".")
+    git("commit", "-q", "-m", "next")
+    expect(await conflictMarkers(realExec, dir, ["HEAD~1"])).toEqual(["a.ts", "b.yml"])
+    expect(await conflictMarkers(realExec, dir, ["HEAD"])).toEqual([])
+    expect(leftoverMarkers(["a.ts", "b.yml"])).toBe("leftover conflict marker in a.ts, b.yml")
+    expect(leftoverMarkers(["1", "2", "3", "4", "5", "6", "7"])).toBe("leftover conflict marker in 1, 2, 3, 4, 5 and 2 more files")
+  })
+
+  it("reads longer markers, a diff3 base's marker, and a file its attributes would show as binary", async () => {
+    const { dir, git, write } = repo()
+    // conflict-marker-size=10 writes ten; -diff would make git diff print "Binary files differ".
+    write(".gitattributes", "hidden.txt -diff\n")
+    write("long-open.ts", "<<<<<<<<<< HEAD\nours\n")
+    write("long-close.ts", "theirs\n>>>>>>>>>> origin/staging\n")
+    write("base.ts", "||||||| merged common ancestors\n")
+    write("hidden.txt", "<<<<<<< HEAD\nours\n")
+    git("add", ".")
+    git("commit", "-q", "-m", "next")
+    expect(await conflictMarkers(realExec, dir, ["HEAD~1"])).toEqual(["base.ts", "hidden.txt", "long-close.ts", "long-open.ts"])
+  })
+
+  it("counts only a marker new over every ref: one the base already had came in by the merge", async () => {
+    const { dir, git, write } = repo()
+    git("checkout", "-q", "-b", "STEP-7-x")
+    git("checkout", "-q", "staging")
+    write("vendored.txt", ">>>>>>> the base's own line\n")
+    git("add", ".")
+    git("commit", "-q", "-m", "the base gains a marker-like line")
+    git("checkout", "-q", "STEP-7-x")
+    git("merge", "-q", "--no-ff", "--no-edit", "staging")
+    expect(await conflictMarkers(realExec, dir, ["STEP-7-x~1"])).toEqual(["vendored.txt"])
+    expect(await conflictMarkers(realExec, dir, ["STEP-7-x~1", "staging"])).toEqual([])
+    write("a.ts", "<<<<<<< HEAD\none\n=======\ntwo\n>>>>>>> staging\n")
+    git("commit", "-q", "-am", "a marker of the round's own")
+    expect(await conflictMarkers(realExec, dir, ["STEP-7-x~2", "staging"])).toEqual(["a.ts"])
   })
 })
 

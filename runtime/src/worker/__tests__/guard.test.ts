@@ -31,6 +31,65 @@ describe("workerBashDenial", () => {
     expect(workerBashDenial("gh pr view 12 --json reviews")).toBeNull()
   })
 
+  it("refuses one side of a directory, several files, or files a substitution picks, and lets one named file through (STEP-3340)", () => {
+    for (const command of [
+      "git checkout --theirs -- src/",
+      "git checkout --ours lib",
+      "git checkout --ours .github",
+      "git checkout --ours $(git diff --name-only --diff-filter=U)",
+      "git checkout --theirs $(git diff --name-only --diff-filter=U | grep ts)",
+      "git checkout --ours `git diff --name-only --diff-filter=U`",
+      // One word, and it reads like a file: the list is in it.
+      "git checkout --theirs $(<conflicts.txt)",
+      "git checkout --theirs a.ts b.ts",
+      "git restore --ours 'lib/*.ts'",
+      "git checkout --theirs",
+      "cd /x; git checkout --ours -- lib/",
+    ]) {
+      expect(workerBashDenial(command), command).toMatch(/^Resolve a merge conflict hunk by hunk/)
+    }
+    for (const command of [
+      "git checkout --theirs pnpm-lock.yaml",
+      "git checkout --ours -- 'lib/a.ts'",
+      "git restore --theirs .env.example",
+      "git checkout --ours lib/a.ts && git add lib/a.ts",
+      "git checkout -b STEP-7-x",
+      "git checkout main -- lib",
+      "git restore --staged lib",
+    ]) {
+      expect(workerBashDenial(command), command).toBeNull()
+    }
+  })
+
+  it("refuses a rebase, and taking one side of a whole merge or tree, and lets one file's side through (STEP-3340)", () => {
+    for (const command of ["git rebase origin/staging", "cd /x && git  rebase -i HEAD~3", "git fetch; git rebase --continue"]) {
+      expect(workerBashDenial(command), command).toMatch(/^Workers never rebase/)
+    }
+    for (const command of [
+      "git merge -s ours origin/staging",
+      "git merge -X theirs origin/staging",
+      "git merge -Xours origin/staging",
+      "git merge --no-ff --strategy=ours origin/staging",
+      "git merge --strategy-option=theirs origin/staging",
+      "git checkout --theirs .",
+      "git checkout --ours -- .",
+      "git restore --theirs --worktree :/",
+      "cd /x && git checkout --ours *",
+    ]) {
+      expect(workerBashDenial(command), command).toMatch(/^Resolve a merge conflict hunk by hunk/)
+    }
+    for (const command of [
+      "git merge --no-ff --no-edit origin/staging",
+      "git checkout --theirs pnpm-lock.yaml",
+      "git checkout --ours -- lib/a.ts",
+      "git diff --name-only --diff-filter=U",
+      "git commit --no-edit",
+      "git log --oneline origin/staging..HEAD",
+    ]) {
+      expect(workerBashDenial(command), command).toBeNull()
+    }
+  })
+
   it("refuses a command that names ~/.config or a .env file", () => {
     for (const command of [
       "cat ~/.config/linear/.env",
