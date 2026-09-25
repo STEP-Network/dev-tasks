@@ -13,58 +13,15 @@ import { askDecision } from "../../agentd/decisions.ts"
 import { moveJob, recordPr, submitJob } from "../../jobs.ts"
 import { createMondayBridge } from "../bridge.ts"
 import { MondayRefused, type MondayItem } from "../client.ts"
-import type { PeopleIssue, PeopleView } from "../people.ts"
+import type { PeopleIssue } from "../people.ts"
 import { enqueueMonday, mondayOutbox, readRecords } from "../store.ts"
-import { AGENT, BOARD, fakeMonday, NEEDS_COLUMNS, T0 } from "./fake-monday.ts"
+import { AGENT, BOARD, fakeMonday, fakePeople, NEEDS_COLUMNS, T0 } from "./fake-monday.ts"
 
 const NATE = "111"
 const KRISTOFFER = "222"
 const STRANGER = "333"
 const COL = NEEDS_COLUMNS
 const PR = "https://github.com/STEP-Network/v0-politiske-annoncer/pull/1679"
-
-/**
- * The people's view of the fake tracker's issues, with the fields only
- * Linear's people-facing reads carry. `parents` maps a sub-issue to its parent.
- */
-function fakePeople(issues: Map<string, TrackerIssue>, extra: Record<string, Partial<PeopleIssue>> = {}, parents: Record<string, string> = {}) {
-  const types: Record<string, string> = { Released: "completed", Canceled: "canceled", Duplicate: "duplicate", Triage: "triage" }
-  const view = (i: TrackerIssue): PeopleIssue => ({
-    id: i.id, uuid: i.uuid, title: i.title, description: i.description, url: i.url, state: i.state, stateType: types[i.state] ?? "started",
-    labels: i.labels, owner: null, requester: null, dueDate: null, prUrl: null, uatSteps: null, ...extra[i.id],
-  })
-  const parentOf = new Map(Object.entries(parents))
-  const byUuid = (uuid: string) => [...issues.values()].find((i) => i.uuid === uuid)
-  const adopted: Array<[string, string, number]> = []
-  const people: PeopleView = {
-    async needsYou() {
-      return [...issues.values()]
-        .filter((i) => !["Released", "Canceled"].includes(i.state))
-        .filter((i) => i.labels.includes("needs-human") || (i.state === "On hold" && (i.labels.includes("human-todo") || i.labels.includes("awaiting-answer"))))
-        .map(view)
-    },
-    async waitingForUat() {
-      return [...issues.values()].filter((i) => i.state === "Waiting for UAT").map(view)
-    },
-    async byIdentifiers(ids) {
-      return ids.flatMap((id) => (issues.has(id) ? [view(issues.get(id)!)] : []))
-    },
-    async adoptFix(child, parent, priority) {
-      adopted.push([child, parent, priority])
-      const c = byUuid(child)
-      const p = byUuid(parent)
-      if (c && p) parentOf.set(c.id, p.id)
-    },
-    async parentOf(id) {
-      const parent = issues.get(parentOf.get(id) ?? "")
-      if (!parent) return null
-      const fixes = [...parentOf].filter(([, p]) => p === parent.id).map(([c]) => issues.get(c)!)
-      const openFixes = fixes.filter((f) => f.title.startsWith("UAT fix:") && !["Approved", "Released", "Canceled"].includes(f.state)).map((f) => f.id)
-      return { id: parent.id, state: parent.state, openFixes }
-    },
-  }
-  return { people, adopted }
-}
 
 interface SetupOptions {
   extra?: Record<string, Partial<PeopleIssue>>

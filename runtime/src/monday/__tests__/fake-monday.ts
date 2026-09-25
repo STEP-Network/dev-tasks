@@ -6,7 +6,19 @@
  * public since STEP-3289.
  */
 
+import { mkdtempSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
+import { agentPaths, ConfigSchema } from "../../config.ts"
+import { listNew } from "../../fsq.ts"
+import type { Logger } from "../../log.ts"
+import type { OutboxMessage } from "../../outbox.ts"
+import { saveThread } from "../../threads.ts"
+import type { TrackerIssue } from "../../tracker.ts"
+import { fakeTracker } from "../../__tests__/fakes.ts"
+import { createMondayBridge } from "../bridge.ts"
 import { MondayRefused, type ColumnChange, type MondayApi, type MondayColumn, type MondayItem } from "../client.ts"
+import type { PeopleIssue, PeopleView } from "../people.ts"
 
 export const BOARD = "5104953028"
 export const AGENT = "900"
@@ -172,3 +184,94 @@ export function fakeMonday(
     item: (name: RegExp) => [...items.values()].find((i) => name.test(i.name)),
   }
 }
+
+/**
+ * The people's view of the fake tracker's issues, with the fields only
+ * Linear's people-facing reads carry. `parents` maps a sub-issue to its parent.
+ */
+export function fakePeople(issues: Map<string, TrackerIssue>, extra: Record<string, Partial<PeopleIssue>> = {}, parents: Record<string, string> = {}) {
+  const types: Record<string, string> = { Released: "completed", Canceled: "canceled", Duplicate: "duplicate", Triage: "triage" }
+  const view = (i: TrackerIssue): PeopleIssue => ({
+    id: i.id, uuid: i.uuid, title: i.title, description: i.description, url: i.url, state: i.state, stateType: types[i.state] ?? "started",
+    labels: i.labels, owner: null, requester: null, dueDate: null, prUrl: null, uatSteps: null,
+    parent: parents[i.id] ?? null, slackThread: null, project: null, ...extra[i.id],
+  })
+  const parentOf = new Map(Object.entries(parents))
+  const byUuid = (uuid: string) => [...issues.values()].find((i) => i.uuid === uuid)
+  const adopted: Array<[string, string, number]> = []
+  const people: PeopleView = {
+    async needsYou() {
+      return [...issues.values()]
+        .filter((i) => !["Released", "Canceled"].includes(i.state))
+        .filter((i) => i.labels.includes("needs-human") || (i.state === "On hold" && (i.labels.includes("human-todo") || i.labels.includes("awaiting-answer"))))
+        .map(view)
+    },
+    async waitingForUat() {
+      return [...issues.values()].filter((i) => i.state === "Waiting for UAT").map(view)
+    },
+    async byIdentifiers(ids) {
+      return ids.flatMap((id) => (issues.has(id) ? [view(issues.get(id)!)] : []))
+    },
+    async adoptFix(child, parent, priority) {
+      adopted.push([child, parent, priority])
+      const c = byUuid(child)
+      const p = byUuid(parent)
+      if (c && p) parentOf.set(c.id, p.id)
+    },
+    async parentOf(id) {
+      const parent = issues.get(parentOf.get(id) ?? "")
+      if (!parent) return null
+      const fixes = [...parentOf].filter(([, p]) => p === parent.id).map(([c]) => issues.get(c)!)
+      const openFixes = fixes.filter((f) => f.title.startsWith("UAT fix:") && !["Approved", "Released", "Canceled"].includes(f.state)).map((f) => f.id)
+      return { id: parent.id, state: parent.state, openFixes }
+    },
+  }
+  return { people, adopted }
+}
+
+/** Wave 2's Needs-you board: its six groups, and the two a board keeps until the Requests board takes them. */
+export const LAYOUT = [
+  { id: "g_needs", title: "Decide" }, { id: "g_plan", title: "Approve plan" }, { id: "g_looks", title: "Looks good?" }, { id: "g_test", title: "Test day" },
+  { id: "g_fyi", title: "FYI" }, { id: "g_done", title: "Done" }, { id: "g_req", title: "Requests" }, { id: "g_work", title: "Agents working on" },
+]
+export const THREAD = "https://acme.slack.com/archives/CQ/p1790000000000100"
+
+/**
+ * A bridge on the Wave 2 layout (made-up people Ada and Ben), or on today's
+ * with newLayout false: the new groups and columns switch on only with their
+ * config.
+ */
+export function doorsSetup(seed: TrackerIssue[] = [], opts: { extra?: Record<string, Partial<PeopleIssue>>; parents?: Record<string, string>; newLayout?: boolean } = {}) {
+  const newLayout = opts.newLayout ?? true
+  const paths = agentPaths(mkdtempSync(join(tmpdir(), "agentd-doors-")))
+  const config = ConfigSchema.parse({
+    mini: "eve", repo: { path: "/r", product: "polads" }, pluginRoot: "/p", slack: { allowedUsers: ["UADA", "UBEN", "UCY"] },
+    bridges: {
+      monday: {
+        enabled: true,
+        people: [{ id: "111", name: "Ada", slackId: "UADA" }, { id: "222", name: "Ben", slackId: "UBEN" }],
+        defaultPerson: "111",
+        ...(newLayout
+          ? { columns: { recommendation: "col_rec", request: "col_request", slackThread: "col_thread" }, groups: { needsYou: "Decide", approvePlan: "Approve plan", looks: "Looks good?", fyi: "FYI" } }
+          : {}),
+      },
+    },
+  })
+  const fake = fakeTracker(seed)
+  const monday = fakeMonday(undefined, null, newLayout ? { [BOARD]: LAYOUT } : undefined)
+  const { people } = fakePeople(fake.issues, opts.extra, opts.parents)
+  const log: Logger = { info: () => {}, warn: () => {}, error: () => {} }
+  let now = T0
+  const bridge = createMondayBridge({ paths, config, log, now: () => now, api: monday.api, tracker: fake.tracker, people })
+  const later = (minutes: number) => {
+    now = new Date(now.getTime() + minutes * 60_000)
+    monday.at(now)
+  }
+  const slack = () => listNew<OutboxMessage & { queuedAt: string }>(paths.outbox).map((e) => e.payload)
+  const texts = (itemId: string) => monday.items.get(itemId)?.updates.map((u) => u.text) ?? []
+  return { paths, config, fake, monday, bridge, later, slack, texts }
+}
+
+/** The issue's own Slack thread on this mini, as send.ts saves it. */
+export const ownThread = (paths: ReturnType<typeof agentPaths>, issueId: string, askedAt: string | null = null) =>
+  saveThread(paths, { issue: issueId, channelId: "CQ", ts: "1790000000.000100", permalink: THREAD, createdAt: T0.toISOString(), lastQuestionAt: askedAt })

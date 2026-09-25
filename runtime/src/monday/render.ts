@@ -132,6 +132,29 @@ export function needBody(source: NeedSource, n: NeedText): string {
   return parts.join("\n\n")
 }
 
+/** A Try plan waiting for a person's OK (Wave 2, the Approve plan group). */
+export const planName = (title: string, agent: string | null) => `${agent ?? "An agent"} has a plan to approve: ${oneLine(title, TITLE_MAX)}`
+
+export function planBody(n: NeedText): string {
+  const who = n.agent ?? "An agent"
+  return [
+    `${who} planned "${oneLine(n.title, TITLE_MAX)}" and needs a person's OK before building it.`,
+    n.question ? plainText(n.question) : "The plan is on the issue behind the Linear link.",
+    "Reply yes to build it as planned, or say what should change: the tasks, the shape or the week. Reply to this update, write in the Answer column, or answer in its Slack thread.",
+  ].join("\n\n")
+}
+
+/** A Look waiting for a person's eye (Wave 2, the Looks good? group). */
+export const lookName = (title: string) => `Does this look right? ${oneLine(title, TITLE_MAX)}`
+
+export function lookBody(title: string, prUrl: string | null, issueUrl: string): string {
+  return [
+    `"${oneLine(title, TITLE_MAX)}" changes how a page looks, and the agent's browser test has screenshots of it at desktop and phone width.`,
+    `See them in the browser test's comment on ${prUrl ? `the pull request, ${prUrl}, or on ` : ""}the Linear issue, ${issueUrl}.`,
+    'If it looks right, reply "looks good". If something should change, reply "change:" and what. Reply to this update, write in the Answer column, or answer in its Slack thread.',
+  ].join("\n\n")
+}
+
 export function uatName(title: string): string {
   return `Try it on the test site: ${oneLine(title, TITLE_MAX)}`
 }
