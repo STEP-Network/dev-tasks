@@ -86,6 +86,40 @@ echo "--- gate (d) outside a merge ---"
 json A Z ',\n  "goodbye": "Goodbye"' > messages/en.json
 git add messages/en.json
 assert 2 "locale parity" "a commit's own new key, in en only, still blocks"
+# A branch named MERGE_HEAD is no merge in progress, whatever it holds: the
+# file git writes for one is (STEP-3351). Each branch holds the staged tree.
+branch_like_staged() { git branch --quiet -f MERGE_HEAD "$(git commit-tree "$(git write-tree)" -p HEAD -m 'a branch named MERGE_HEAD')"; }
+branch_like_staged
+assert 2 "locale parity" "a branch named MERGE_HEAD holding the new key does not let it through (d)"
+git branch --quiet -D MERGE_HEAD
+git checkout --quiet HEAD -- messages/en.json
+json A2 Z > messages/en.json
+git add messages/en.json
+branch_like_staged
+assert 2 "completeness" "a branch named MERGE_HEAD holding the same file does not let a partial change through (e)"
+git branch --quiet -D MERGE_HEAD
+git checkout --quiet HEAD -- messages/en.json
+
+# A MERGE_HEAD file whose first line is no commit id is no merge (STEP-3351):
+# an option there would reach git diff, and --output= writes where it names.
+MERGE_HEAD_FILE="$(git rev-parse --absolute-git-dir)/MERGE_HEAD"
+written() {
+  if [ -e "$1" ]; then echo "FAIL: $2"; FAIL=$((FAIL + 1)); else echo "PASS: $2"; PASS=$((PASS + 1)); fi
+}
+json A Z ',\n  "goodbye": "Goodbye"' > messages/en.json
+git add messages/en.json
+for line in "--output=$TEST_HOME/pwned-d" "not-a-commit"; do
+  printf '%s\n' "$line" > "$MERGE_HEAD_FILE"
+  assert 2 "locale parity" "a MERGE_HEAD file reading '${line%%=*}…' is no merge: the new key still blocks (d)"
+done
+written "$TEST_HOME/pwned-d" "nothing is written where MERGE_HEAD's line names (d)"
+git checkout --quiet HEAD -- messages/en.json
+json A2 Z > messages/en.json
+git add messages/en.json
+printf -- '--output=%s\n' "$TEST_HOME/pwned-e" > "$MERGE_HEAD_FILE"
+assert 2 "completeness" "a MERGE_HEAD file reading '--output…' is no merge: a partial change still blocks (e)"
+written "$TEST_HOME/pwned-e" "nothing is written where MERGE_HEAD's line names (e)"
+rm -f "$MERGE_HEAD_FILE"
 git checkout --quiet HEAD -- messages/en.json
 
 # --- (e): main changes values in da and de only; the PR touches no messages.

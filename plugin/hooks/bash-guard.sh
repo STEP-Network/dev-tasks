@@ -109,7 +109,7 @@ if not os.path.exists(default_path):
 # Match JSON keys like: \"keyName\": ...
 def added(*against):
     diff = subprocess.run(
-        ['git', 'diff', '--cached', '-U0', *against, '--', default_path],
+        ['git', 'diff', '--cached', '-U0', '--end-of-options', *against, '--', default_path],
         capture_output=True, text=True
     ).stdout
     keys = set()
@@ -120,11 +120,25 @@ def added(*against):
                 keys.add(match.group(1))
     return keys
 
+# The commit a merge in progress merges in, from the file git writes for one,
+# or None. Never the name: a branch called MERGE_HEAD is no merge (STEP-3351).
+# Only a commit id (sha1 or sha256): any other line is no merge, as one that
+# starts with a dash would reach git diff as an option (--output= writes a file).
+def merged_in():
+    path = subprocess.run(['git', 'rev-parse', '--git-path', 'MERGE_HEAD'], capture_output=True, text=True).stdout.strip()
+    try:
+        with open(path) as f:
+            line = f.readline().strip()
+    except OSError:
+        return None
+    return line if re.fullmatch(r'[0-9a-f]{40}([0-9a-f]{24})?', line) else None
+
 added_keys = added()
 # A merge commit's own keys are new over both parents (STEP-3348): a key the
 # branch merged in already has came with it, checked where it was added.
-if subprocess.run(['git', 'rev-parse', '-q', '--verify', 'MERGE_HEAD'], capture_output=True).returncode == 0:
-    added_keys &= added('MERGE_HEAD')
+merge_head = merged_in()
+if merge_head:
+    added_keys &= added(merge_head)
 
 if not added_keys:
     print('OK')
@@ -178,7 +192,7 @@ if echo "$ACTUAL_CMD" | grep -q "git commit" && [ "$I18N_ENABLED" = "true" ] && 
     DEFAULT_BASE_BRANCH=$(read_project_config '.git.defaultBase')
     [ -z "$DEFAULT_BASE_BRANCH" ] && DEFAULT_BASE_BRANCH="main"
     I18N_COMPLETENESS=$(cd "$PROJECT_ROOT" && I18N_MESSAGES_DIR="$I18N_MESSAGES_DIR" I18N_LOCALES_CSV="$I18N_LOCALES_CSV" I18N_BASE_BRANCH="$DEFAULT_BASE_BRANCH" python3 -c "
-import subprocess, os, sys
+import subprocess, os, sys, re
 
 messages_dir = os.environ.get('I18N_MESSAGES_DIR', 'messages')
 locales_csv = os.environ.get('I18N_LOCALES_CSV', '')
@@ -202,13 +216,26 @@ branch_diff = subprocess.run(
 # that differ from both parents (STEP-3348).
 def staged_names(*against):
     return subprocess.run(
-        ['git', 'diff', '--cached', '--name-only', *against, '--', messages_dir + '/'],
+        ['git', 'diff', '--cached', '--name-only', '--end-of-options', *against, '--', messages_dir + '/'],
         capture_output=True, text=True
     ).stdout.strip().split('\n')
 
+# The commit a merge in progress merges in, from the file git writes for one:
+# never the name, which a branch can take (STEP-3351). Only a commit id: any
+# other line is no merge, as one that starts with a dash would be an option.
+def merged_in():
+    path = subprocess.run(['git', 'rev-parse', '--git-path', 'MERGE_HEAD'], capture_output=True, text=True).stdout.strip()
+    try:
+        with open(path) as f:
+            line = f.readline().strip()
+    except OSError:
+        return None
+    return line if re.fullmatch(r'[0-9a-f]{40}([0-9a-f]{24})?', line) else None
+
 staged = staged_names()
-if subprocess.run(['git', 'rev-parse', '-q', '--verify', 'MERGE_HEAD'], capture_output=True).returncode == 0:
-    merged = set(staged_names('MERGE_HEAD'))
+merge_head = merged_in()
+if merge_head:
+    merged = set(staged_names(merge_head))
     staged = [f for f in staged if f in merged]
 
 # Combine: branch diff + staged
