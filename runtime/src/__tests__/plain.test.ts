@@ -47,17 +47,17 @@ describe("plain words for people (plain.ts)", () => {
   })
 
   it("says what a revise job works on, from the reasons agentd gave it", () => {
-    expect(feedbackFor(["changes requested by nate"])).toBe("the review comments")
-    expect(feedbackFor(["a comment from kris", "asked by Nate in Slack"])).toBe("the review comments")
+    expect(feedbackFor(["changes requested by ada"])).toBe("the review comments")
+    expect(feedbackFor(["a comment from ben", "asked by Ada in Slack"])).toBe("the review comments")
     expect(feedbackFor(["Claude review failed"])).toBe("the review comments")
     expect(feedbackFor(["Test failed"])).toBe("the failing checks")
-    expect(feedbackFor(["changes requested by nate", "Lint failed"])).toBe("the review comments and the failing checks")
+    expect(feedbackFor(["changes requested by ada", "Lint failed"])).toBe("the review comments and the failing checks")
     expect(feedbackFor(["the browser test found problems"])).toBe("the problems the browser test found")
     expect(feedbackFor(["changes requested by someone", "Test failed", "the browser test found problems"])).toBe("the review comments, the failing checks and the problems the browser test found")
     expect(feedbackFor(["Test failed", "the browser test found problems"])).toBe("the failing checks and the problems the browser test found")
     // STEP-3340: a PR that clashes with its base, by the base's name.
     expect(feedbackFor(["merge conflict with staging"])).toBe("the clash with newer changes in staging")
-    expect(feedbackFor(["changes requested by nate", "merge conflict with staging"])).toBe("the review comments and the clash with newer changes in staging")
-    expect(JARGON.test(feedbackFor(["asked by Nate in Slack", "Test failed", "merge conflict with staging"]))).toBe(false)
+    expect(feedbackFor(["changes requested by ada", "merge conflict with staging"])).toBe("the review comments and the clash with newer changes in staging")
+    expect(JARGON.test(feedbackFor(["asked by Ada in Slack", "Test failed", "merge conflict with staging"]))).toBe(false)
   })
 })

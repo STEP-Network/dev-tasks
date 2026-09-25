@@ -555,7 +555,7 @@ describe("runJob", () => {
       })
 
       it("in a round with feedback too, asks for mutation checks of the round's own tests only", async () => {
-        const both = ["changes requested by nate", "merge conflict with staging"]
+        const both = ["changes requested by ada", "merge conflict with staging"]
         const reply = (paths: { state: string }) => readFileSync(join(paths.state, "pr-reply-STEP-7.md"), "utf8")
         const own = merging([], both)
         expect(await runJob(own.deps, own.job.id)).toMatchObject({ status: "done", reason: "revised (round 1 of 3)" })
@@ -569,6 +569,21 @@ describe("runJob", () => {
         )
         expect(await runJob(tested.deps, tested.job.id)).toMatchObject({ status: "done" })
         expect(reply(tested.paths)).toContain("self-check was incomplete (the branch changes tests (lib/notice.test.ts) but the report lists no mutation check)")
+      })
+
+      it("never pushes commits that leave a conflict marker the round added, and ends the round stuck, asking what next", async () => {
+        const marked = "diff --git a/docs/notice.md b/docs/notice.md\n--- a/docs/notice.md\n+++ b/docs/notice.md\n@@ -3 +3,5 @@\n+<<<<<<< HEAD\n+the PR's\n+=======\n+staging's\n+>>>>>>> origin/staging\n"
+        const { deps, job, f, outbox } = merging([[/ diff --no-color --no-ext-diff --no-textconv -U0 origin\/(STEP-7-fix-the-date|staging) HEAD$/, { stdout: marked }]])
+        expect(await runJob(deps, job.id)).toMatchObject({ status: "blocked", reason: "leftover conflict marker in docs/notice.md" })
+        expect(f.lines().some((l) => / push /.test(l))).toBe(false)
+        expect(outbox().join("\n")).toContain(`on <${PR_URL}|PR #1674>: leftover conflict marker in docs/notice.md. Nothing new was pushed. Reply "fix it"`)
+      })
+
+      it("pushes a merge whose only marker-like line came from the base", async () => {
+        const marked = "diff --git a/vendor/x.txt b/vendor/x.txt\n--- a/vendor/x.txt\n+++ b/vendor/x.txt\n@@ -0,0 +1 @@\n+>>>>>>> the base's own line\n"
+        const { deps, job, f } = merging([[/ diff --no-color --no-ext-diff --no-textconv -U0 origin\/STEP-7-fix-the-date HEAD$/, { stdout: marked }]])
+        expect(await runJob(deps, job.id)).toMatchObject({ status: "done" })
+        expect(f.lines().some((l) => l.endsWith(" push -u origin HEAD:refs/heads/STEP-7-fix-the-date"))).toBe(true)
       })
 
       it("ends a merge round that committed nothing as a stuck round, asking what next", async () => {

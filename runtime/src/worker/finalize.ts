@@ -29,7 +29,7 @@ import { enqueueSlack } from "../outbox.ts"
 import { askWithRecommendation, NOTHING_NEEDED, plainReason, prLink } from "../plain.ts"
 import { truncateChars } from "../slack/text.ts"
 import type { Tracker, TrackerIssue } from "../tracker.ts"
-import { commitsAhead, isDirty, must, pushBranch, removeWorktree, type Exec } from "./git.ts"
+import { commitsAhead, conflictMarkers, isDirty, leftoverMarkers, must, pushBranch, removeWorktree, type Exec } from "./git.ts"
 import { CHECKLIST, checklistGaps, clause, type Outcome, type WorkerReport } from "./outcome.ts"
 
 /**
@@ -193,7 +193,13 @@ async function settle(ctx: FinalizeContext, outcome: Outcome, progress: { pushed
     status = "blocked"
     reason = "the worker reported done but made no commits"
   }
-  const pushed = ahead > 0 && ctx.worktree !== null
+  // Commits that leave a conflict marker never go out (STEP-3340): a Markdown or YAML file passes CI with one.
+  const markers = ahead > 0 && ctx.worktree ? await conflictMarkers(ctx.exec, ctx.worktree, [`origin/${config.repo.base}`]) : []
+  if (markers.length) {
+    status = "blocked"
+    reason = leftoverMarkers(markers)
+  }
+  const pushed = ahead > 0 && ctx.worktree !== null && !markers.length
   if (pushed) {
     await pushBranch(ctx.exec, ctx.worktree!, ctx.branch, issue.id)
     progress.pushed = true

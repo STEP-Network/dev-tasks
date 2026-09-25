@@ -567,8 +567,11 @@ bring agent configuration the sandbox keeps read-only. A clean merge is
 committed there. Otherwise the brief names the conflicted files, and the
 worker resolves them hunk by hunk, keeping both sides' intent. It never
 rebases, never takes one side of the whole merge (its guard refuses `git
-rebase`, `-s ours`, `-X ours|theirs`, and `--ours|--theirs` on the whole
-tree), and runs the tests the conflicts touched, then commits. The plugin's
+rebase`, `-s ours`, `-X ours|theirs`, and `--ours|--theirs` on anything but
+one named file), and runs the tests the conflicts touched, then commits.
+Commits that add a conflict marker (`<<<<<<<` or `>>>>>>>`) over both the
+branch and the base are never pushed, in a revise round or a develop job: a
+Markdown or YAML file passes CI with one. The round stops and asks what next. The plugin's
 secrets scan (1.3.4) reads a merge commit's own lines, what differs from the
 branch merged in, so a fixture the base gained never blocks it. A conflict that
 needs a product decision is a plain-English question in the issue's thread.
