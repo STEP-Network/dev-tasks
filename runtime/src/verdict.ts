@@ -27,12 +27,13 @@ export type Verdict = { verdict: "pass" | "fail"; note: string }
 /**
  * What may follow a verdict word, after any space on its line (a no-break
  * space too): the end, a new line, punctuation that ends it (":", ",", ".",
- * "!", a dash), or an emoji such as 👍. Never a question mark or more words:
- * "pass me the link again?" and "fail to see why" are not verdicts. What
- * ends it is not part of what they saw.
+ * "!", an en or em dash, a hyphen with a space after it), or an emoji such
+ * as 👍. Never a question mark, more words, or a hyphen that joins a word:
+ * "pass me the link again?", "fail to see why" and "Fail-safe" are not
+ * verdicts. What ends it is not part of what they saw.
  */
 const EMOJI = String.raw`\p{Extended_Pictographic}\p{Emoji_Modifier}\u{FE0F}\u{200D}`
-const ENDED = String.raw`(?=[^\S\n]*(?:$|\n|[:.,!\-–—]|\p{Extended_Pictographic}))[\s:.,!\-–—${EMOJI}]*`
+const ENDED = String.raw`(?=[^\S\n]*(?:$|\n|[:.,!–—]|-(?=\s|$)|\p{Extended_Pictographic}))[\s:.,!\-–—${EMOJI}]*`
 const VERDICT = new RegExp(String.raw`^\s*(pass|fail)${ENDED}`, "iu")
 const LOOKS_RIGHT = new RegExp(String.raw`^\s*looks (?:good|right|fine)(?: to me)?${ENDED}`, "iu")
 /** A Look's change says what should change, after a colon. */
