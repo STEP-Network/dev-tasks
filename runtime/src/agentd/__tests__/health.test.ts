@@ -83,7 +83,7 @@ describe("watchPrs, and the revise loop (STEP-3274)", () => {
         revise: { url: PR1, number: 1, branch: "STEP-7-fix-the-date", round: 1, since: "2026-09-24T10:00:00.000Z", reasons: ["changes requested by nate"] },
       }),
     ])
-    expect(outbox(paths)).toEqual([expect.objectContaining({ kind: "post", channel: "agents", text: `STEP-7 revising ${PR1} (round 1 of 3): changes requested by nate` })])
+    expect(outbox(paths)).toEqual([expect.objectContaining({ kind: "post", channel: "agents", text: `STEP-7: I am fixing the review comments on <${PR1}|PR #1> (changes requested by nate), try 1 of 3. Nothing needed from you.` })])
     expect(readWatchedPrs(paths)[0].revise).toEqual({ rounds: 1, handled: ["review:R1"], lastRoundAt: NOW.toISOString() })
   })
 
@@ -112,7 +112,7 @@ describe("watchPrs, and the revise loop (STEP-3274)", () => {
     expect(w.f.lines().filter((l) => l.startsWith("gh run rerun"))).toEqual([`gh run rerun 111 --repo ${SLUG}`])
     expect(w.f.lines().some((l) => l.includes("--failed"))).toBe(false)
     expect(listJobs(paths, "pending")).toEqual([])
-    expect(outbox(paths).map((p) => p.text)).toEqual([`STEP-7: CI on ${PR1} failed on its infrastructure, not the code. Re-running it in full.`])
+    expect(outbox(paths).map((p) => p.text)).toEqual([`STEP-7: the automatic checks on <${PR1}|PR #1> failed for a reason that has nothing to do with the code, so I started them again. Nothing needed from you.`])
     // The verdict is kept for the head: the log is not read again.
     await w.run()
     expect(w.f.lines().filter((l) => l.startsWith("gh run view"))).toHaveLength(1)
@@ -121,7 +121,7 @@ describe("watchPrs, and the revise loop (STEP-3274)", () => {
     await w.run()
     expect(outbox(paths).filter((p) => p.kind === "issue").map((p) => p.text)).toEqual([
       // One question with its options and a default, never "a person needs to look" (STEP-3285). 13:00 UTC is 15:00 in Copenhagen.
-      `CI on ${PR1} failed on its infrastructure again after a full re-run (Test on abc1234), not on the code. Reply "re-run" to re-run CI in full once more (the default: I do it at 15:00 if nobody answers), or "leave it" to leave the PR to a person.`,
+      `The automatic checks on <${PR1}|PR #1> failed again for a reason that has nothing to do with the code (Test on abc1234), even after I started them again. Reply "re-run" to have me start them once more (the default: I do it at 15:00 if nobody answers), or "leave it" to leave the PR to a person.`,
     ])
   })
 
@@ -142,7 +142,7 @@ describe("watchPrs, and the revise loop (STEP-3274)", () => {
     expect(listJobs(paths, "pending").map((j) => [j.issue, j.kind])).toEqual([["STEP-7", "revise"]])
     // STEP-8's infrastructure failed again at the same head: one question, with a default.
     expect(sent.filter((p) => p.kind === "issue")).toEqual([
-      expect.objectContaining({ issue: "STEP-8", question: true, text: expect.stringMatching(/^CI on .*\/pull\/2 failed on its infrastructure again .* Reply "re-run" .*\(the default: I do it at \d\d:\d\d if nobody answers\), or "leave it"/) }),
+      expect.objectContaining({ issue: "STEP-8", question: true, text: expect.stringMatching(/^The automatic checks on .*\/pull\/2\|PR #2> failed again .* Reply "re-run" .*\(the default: I do it at \d\d:\d\d if nobody answers\), or "leave it"/) }),
     ])
   })
 
@@ -219,7 +219,7 @@ describe("watchPrs, and the revise loop (STEP-3274)", () => {
         kind: "issue",
         issue: "STEP-7",
         question: true,
-        text: `PR ${PR1} still has review feedback after 3 revise rounds (changes requested by nate). Reply "fix it" to revise it once more, or "leave it" to leave it to a person (the default: I do it at 15:00 if nobody answers).`,
+        text: `<${PR1}|PR #1> still has review feedback after I worked on it 3 times (changes requested by nate). Reply "fix it" to have me try once more, or "leave it" to leave it to a person (the default: I do it at 15:00 if nobody answers).`,
       }),
     ])
   })

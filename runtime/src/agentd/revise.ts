@@ -33,6 +33,7 @@ import { listJobs, submitJob, updateWatchedPr, type WatchedPr } from "../jobs.ts
 import { appendLedger, type Logger } from "../log.ts"
 import { askDecision } from "./decisions.ts"
 import { enqueueSlack } from "../outbox.ts"
+import { feedbackFor, NOTHING_NEEDED, prLink } from "../plain.ts"
 import type { Exec } from "../worker/git.ts"
 
 export const MAX_REVISE_ROUNDS = 3
@@ -236,7 +237,11 @@ export async function reviseOwnPr(deps: ReviseDeps, pr: WatchedPr, view: OwnPrVi
       }
       if (done.length) {
         appendLedger(deps.paths, { type: "pr.rerun", issue: pr.issue, url: pr.url, runs: done }, now)
-        enqueueSlack(deps.paths, { kind: "post", channel: "agents", text: `${pr.issue}: CI on ${pr.url} failed on its infrastructure, not the code. Re-running it in full.` }, now)
+        enqueueSlack(
+          deps.paths,
+          { kind: "post", channel: "agents", text: `${pr.issue}: the automatic checks on ${prLink(pr.url)} failed for a reason that has nothing to do with the code, so I started them again. ${NOTHING_NEEDED}` },
+          now,
+        )
       }
       record = { ...record, reruns: [...(pr.reruns ?? []), ...done] }
       break
@@ -251,9 +256,9 @@ export async function reviseOwnPr(deps: ReviseDeps, pr: WatchedPr, view: OwnPrVi
           id: `infra-${pr.issue}-${view.headRefOid.slice(0, 12)}`,
           issue: pr.issue,
           url: pr.url,
-          question: `CI on ${pr.url} failed on its infrastructure again after a full re-run (${plan.failing.join(", ")} on ${view.headRefOid.slice(0, 7)}), not on the code.`,
+          question: `The automatic checks on ${prLink(pr.url)} failed again for a reason that has nothing to do with the code (${plan.failing.join(", ")} on ${view.headRefOid.slice(0, 7)}), even after I started them again.`,
           options: [
-            { reply: "re-run", does: "re-run CI in full once more" },
+            { reply: "re-run", does: "have me start them once more" },
             { reply: "leave it", does: "leave the PR to a person" },
           ],
           defaultReply: "re-run",
@@ -272,9 +277,9 @@ export async function reviseOwnPr(deps: ReviseDeps, pr: WatchedPr, view: OwnPrVi
           id: `cap-${pr.issue}-${view.number}`,
           issue: pr.issue,
           url: pr.url,
-          question: `PR ${pr.url} still has review feedback after ${MAX_REVISE_ROUNDS} revise rounds (${plan.reasons.join(", ")}).`,
+          question: `${prLink(pr.url)} still has review feedback after I worked on it ${MAX_REVISE_ROUNDS} times (${plan.reasons.join(", ")}).`,
           options: [
-            { reply: "fix it", does: "revise it once more" },
+            { reply: "fix it", does: "have me try once more" },
             { reply: "leave it", does: "leave it to a person" },
           ],
           defaultReply: "leave it",
@@ -296,7 +301,11 @@ export async function reviseOwnPr(deps: ReviseDeps, pr: WatchedPr, view: OwnPrVi
       })
       record = { ...record, revise: { rounds: round, handled: [...(pr.revise?.handled ?? []), ...plan.handled], lastRoundAt: now.toISOString() } }
       appendLedger(deps.paths, { type: "pr.revise", issue: pr.issue, url: pr.url, round, reasons: plan.reasons }, now)
-      enqueueSlack(deps.paths, { kind: "post", channel: "agents", text: `${pr.issue} revising ${pr.url} (round ${round} of ${MAX_REVISE_ROUNDS}): ${plan.reasons.join(", ")}` }, now)
+      enqueueSlack(
+        deps.paths,
+        { kind: "post", channel: "agents", text: `${pr.issue}: I am fixing ${feedbackFor(plan.reasons)} on ${prLink(pr.url)} (${plan.reasons.join(", ")}), try ${round} of ${MAX_REVISE_ROUNDS}. ${NOTHING_NEEDED}` },
+        now,
+      )
       break
     }
   }

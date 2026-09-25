@@ -60,7 +60,7 @@ describe("finalize: done", () => {
     expect(body).not.toMatch(/auto-merge/i)
     expect(fake.called("attachLink")[0]).toEqual(["STEP-7", PR, "PR 1700"])
     expect(fake.issues.get("STEP-7")!.state).toBe("In Review")
-    expect(outbox()).toEqual([expect.objectContaining({ kind: "post", text: `STEP-7 PR opened: ${PR} (auto-merge armed)` })])
+    expect(outbox()).toEqual([expect.objectContaining({ kind: "post", text: `STEP-7: I opened <${PR}|PR #1700> for "Fix the date". It goes in by itself once the checks and the review pass. Nothing needed from you.` })])
     expect(readWatchedPrs(paths)).toEqual([{ issue: "STEP-7", url: PR, openedAt: "2026-09-24T09:00:00.000Z" }])
     expect(lines).toContain(`${GIT} -C ${REPO} worktree remove --force ${WT}`)
   })
@@ -84,7 +84,7 @@ describe("finalize: done", () => {
     const { ctx, f, outbox } = setup()
     await finalize({ ...ctx, merge: "person" }, done)
     expect(f.lines().some((l) => l.startsWith("gh pr merge"))).toBe(false)
-    expect(outbox()[0].text).toBe(`STEP-7 PR opened: ${PR} (a person merges this one)`)
+    expect(outbox()[0].text).toBe(`STEP-7: I opened <${PR}|PR #1700> for "Fix the date". A person needs to merge it once the checks pass.`)
   })
 
   it("opens the PR but leaves the merge to a person when auto-merge is off on this mini, and says so in the PR and in Slack", async () => {
@@ -93,7 +93,7 @@ describe("finalize: done", () => {
     expect(f.lines().some((l) => l.startsWith("gh pr create"))).toBe(true)
     expect(f.lines().some((l) => l.startsWith("gh pr merge"))).toBe(false)
     expect(readFileSync(join(paths.state, "pr-body-STEP-7.md"), "utf8")).toContain("37 min.\nAuto-merge off on this mini: a person merges.\n")
-    expect(outbox()[0].text).toBe(`STEP-7 PR opened: ${PR} (auto-merge off on this mini: a person merges)`)
+    expect(outbox()[0].text).toBe(`STEP-7: I opened <${PR}|PR #1700> for "Fix the date". Auto-merge is off on this mini, so a person needs to merge it once the checks pass.`)
   })
 
   it("keeps a worktree with uncommitted changes for a person, and says so in the PR", async () => {
@@ -118,7 +118,7 @@ describe("finalize: done", () => {
     const error = await failure(finalize(ctx, done))
     expect(error).toMatchObject({ message: "Linear: attachLink failed (fake)", pushed: true, prUrl: PR })
     expect(readWatchedPrs(paths).map((p) => p.url)).toEqual([PR])
-    expect(outbox().map((m) => m.text)).toEqual([`STEP-7 PR opened: ${PR} (auto-merge armed)`])
+    expect(outbox().map((m) => m.text)).toEqual([`STEP-7: I opened <${PR}|PR #1700> for "Fix the date". It goes in by itself once the checks and the review pass. Nothing needed from you.`])
   })
 
   it("says nothing and claims nothing was pushed when the push itself fails", async () => {
@@ -140,14 +140,14 @@ describe("finalize: the other outcomes", () => {
     expect(await finalize(ctx, question)).toMatchObject({ status: "needs_input", pushed: true, prUrl: null })
     expect(fake.issues.get("STEP-7")).toMatchObject({ state: "On hold", labels: ["awaiting-answer"] })
     expect(outbox()[0]).toEqual(expect.objectContaining({ kind: "issue", text: "Which date?", question: true }))
-    expect(outbox()[1].text).toBe("STEP-7 parked: waiting for an answer in its Slack thread")
+    expect(outbox()[1].text).toBe("STEP-7: I have a question before I can go on. It is in the issue's thread: please answer there.")
     expect(f.lines().some((l) => l.startsWith("gh pr create"))).toBe(false)
   })
 
   it("needs_input asks the question even when Linear then fails to park the issue", async () => {
     const { ctx, outbox } = setup("1\n", [], ["updateIssue"])
     expect(await failure(finalize(ctx, question))).toMatchObject({ pushed: true, prUrl: null })
-    expect(outbox().map((m) => m.text)).toEqual(["Which date?", "STEP-7 parked: waiting for an answer in its Slack thread"])
+    expect(outbox().map((m) => m.text)).toEqual(["Which date?", "STEP-7: I have a question before I can go on. It is in the issue's thread: please answer there."])
   })
 
   it("limited goes back to Ready, still held, with a comment and no Slack", async () => {
@@ -177,22 +177,25 @@ describe("finalize: the other outcomes", () => {
     expect(fake.issues.get("STEP-7")!.state).toBe("On hold")
     expect(fake.called("comment")[0][1]).toMatch(/^Worker stopped: the turn limit of 250\./)
     expect(fake.called("comment")[0][1]).toContain("Work so far is on branch `STEP-7-fix-the-date`.")
-    expect(outbox()[0]).toEqual(expect.objectContaining({ kind: "issue", text: "blocked: the turn limit of 250. Reply \"retry\" when it can continue, and I pick it up on its branch." }))
+    expect(outbox()[0]).toEqual(expect.objectContaining({ kind: "issue", text: "I had to stop work on STEP-7: I reached the most steps one job may take. Reply \"retry\" when it can go on, and I will pick it up where I left off." }))
   })
 
   it("blocked by the worker's own report says its reason once, with one full stop", async () => {
     const { ctx, fake, outbox } = setup("1\n")
     const summary = "pnpm install fails offline.\nThe lockfile names a package the store lacks."
     await finalize(ctx, { ...done, status: "blocked", reason: "pnpm install fails offline", report: { status: "blocked", summary } })
-    expect(outbox()[0].text).toBe("blocked: pnpm install fails offline. The lockfile names a package the store lacks. Reply \"retry\" when it can continue, and I pick it up on its branch.")
-    expect(outbox()[1].text).toBe("STEP-7 blocked: pnpm install fails offline")
+    expect(outbox()[0].text).toBe("I had to stop work on STEP-7: pnpm install fails offline. The lockfile names a package the store lacks. Reply \"retry\" when it can go on, and I will pick it up where I left off.")
+    expect(outbox()[1].text).toBe("STEP-7: I had to stop: pnpm install fails offline. I asked in the issue's thread what to do.")
     expect(fake.called("comment")[0][1]).toMatch(/^Worker stopped: pnpm install fails offline\.\nThe lockfile names a package the store lacks\.\n/)
   })
 
   it("blocked still says why in Slack when Linear then fails", async () => {
     const { ctx, outbox } = setup("1\n", [], ["updateIssue"])
     expect(await failure(finalize(ctx, { ...done, status: "blocked", reason: "the turn limit of 250", report: null }))).toMatchObject({ pushed: true })
-    expect(outbox().map((m) => m.text)).toEqual(["blocked: the turn limit of 250. Reply \"retry\" when it can continue, and I pick it up on its branch.", "STEP-7 blocked: the turn limit of 250"])
+    expect(outbox().map((m) => m.text)).toEqual([
+      "I had to stop work on STEP-7: I reached the most steps one job may take. Reply \"retry\" when it can go on, and I will pick it up where I left off.",
+      "STEP-7: I had to stop: I reached the most steps one job may take. I asked in the issue's thread what to do.",
+    ])
   })
 })
 

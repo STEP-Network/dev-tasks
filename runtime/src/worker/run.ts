@@ -32,7 +32,7 @@ import { buildBrief, WORKER_RESULT_SCHEMA, workerRules, type BriefInput } from "
 import { finalize, FinalizeFailed, type MergeMode } from "./finalize.ts"
 import { changedFiles, commitMessages, commitsAhead, historyRewrite, prepareWorktree, realExec, WorktreeRefused, type Exec } from "./git.ts"
 import { denyBannedBash, denyWorkerPaths, ENV_TEMPLATE, workerEnv, workerToolDenial } from "./guard.ts"
-import { clause, toOutcome, type Outcome, type ResultMessageLike } from "./outcome.ts"
+import { SMALL_CHANGE_FILES, clause, toOutcome, type Outcome, type ResultMessageLike } from "./outcome.ts"
 import { buildReviseBrief, finalizeRevise, gatherFeedback } from "./revise.ts"
 
 export type SdkMessage = { type: string; subtype?: string; [key: string]: unknown }
@@ -271,7 +271,7 @@ export function correctionPrompt(problem: NonNullable<Outcome["reportProblem"]>,
   if (problem === "checklist") {
     return [
       sentence(detail, "your report's self-check is incomplete"),
-      "Do the one-hop sweep in your rules for what is missing: search for it (grep or rg), fix and commit what it finds, and answer every checklist key, siblings and docs with the command you ran.",
+      "Do the one-hop sweep in your rules for what is missing: search for it (grep or rg), fix and commit what it finds, and answer every checklist key, siblings and docs with the command you ran. Where you searched nothing because nothing else can be affected, answer 'none: ' and why.",
       report,
     ].join(" ")
   }
@@ -517,8 +517,9 @@ export async function runJob(deps: RunDeps, jobId: string): Promise<JobResult> {
   // A revise job's own commits are those past the PR's head on origin.
   const since = revise ? revise.branch : config.repo.base
   const changed = await changedFiles(exec, worktree.path, since).catch(() => [] as string[])
+  const small = changed.filter((f) => !TEST_FILE_RE.test(f)).length <= SMALL_CHANGE_FILES
   const judge = (end: typeof first) =>
-    requireMutations(toOutcome(end.result, { abortedByClock: end.abortedByClock, thrown: end.thrown, limits, requireTitle }), changed)
+    requireMutations(toOutcome(end.result, { abortedByClock: end.abortedByClock, thrown: end.thrown, limits, requireTitle, small }), changed)
   let outcome = first.initProblem ? blockedBefore(first.initProblem) : judge(first)
   log.info("worker session ended", { issue: issue.id, status: outcome.status, reason: outcome.reason, costUsd: outcome.costUsd, turns: outcome.turns })
 
@@ -527,9 +528,13 @@ export async function runJob(deps: RunDeps, jobId: string): Promise<JobResult> {
   // (a sweep or a mutation check included, when those were missing). Then a
   // report still short of its self-check goes out with its gaps named, and
   // one without a title or at all is titled from the commits. With no
-  // commits, it stays blocked.
+  // commits, it stays blocked, unless the self-check was all it lacked: no
+  // job stops on the checklist alone. A revise round then replies on the PR
+  // (Eve looped on PR #1704 so, three rounds running), and a develop job is
+  // judged on its commits, as any done report is.
   const selfCheck = (o: Outcome | null) => Boolean(o?.report) && (o!.reportProblem === "checklist" || o!.reportProblem === "mutations")
-  if (outcome.reportProblem && (await commitsAhead(exec, worktree.path, since).catch(() => 0)) > 0) {
+  const ahead = outcome.reportProblem ? await commitsAhead(exec, worktree.path, since).catch(() => 0) : 0
+  if (outcome.reportProblem && (ahead > 0 || selfCheck(outcome))) {
     const problem = outcome.reportProblem
     let repaired: Outcome | null = null
     let closest: Outcome | null = selfCheck(outcome) ? outcome : null

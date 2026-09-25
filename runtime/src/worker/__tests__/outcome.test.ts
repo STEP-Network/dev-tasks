@@ -106,6 +106,22 @@ describe("the self-check a done report carries (STEP-3284)", () => {
     }
   })
 
+  it("takes a reason instead of a search command for a small change, unless the answer says it searched (Eve, PR #1704)", () => {
+    const small = (checklist: WorkerReport["checklist"]): WorkerReport => ({ ...done(checklist), small: true })
+    // A revise round that only answered the review: there was nothing to search.
+    const answered = { ...SWEEP, siblings: "none: this round only answers the reviewer, no code changed", docs: "none: no doc describes the notice date" }
+    expect(checklistGaps(small(answered))).toEqual([])
+    // An answer that says it searched shows the command, small or not.
+    expect(checklistGaps(small({ ...SWEEP, siblings: "searched the routes, nothing else", docs: "checked the docs" }))).toEqual(["siblings (no search command)", "docs (no search command)"])
+    // A bare "none" gives no reason.
+    expect(checklistGaps(small({ ...SWEEP, docs: "none" }))).toEqual(["docs (no search command)"])
+    // A larger change still shows its commands.
+    expect(checklistGaps(done(answered))).toEqual(["siblings (no search command)", "docs (no search command)"])
+    // The runner says the change is small. A worker's own claim to it is dropped.
+    expect(toOutcome(result({ structured_output: { ...report, checklist: answered } }), { ...ctx, small: true })).toMatchObject({ status: "done", report: { small: true } })
+    expect(toOutcome(result({ structured_output: { ...report, small: true, checklist: answered } }), ctx)).toMatchObject({ status: "blocked", reportProblem: "checklist" })
+  })
+
   it("blocks a done report with an incomplete checklist, as a problem of its form, for develop and revise alike", () => {
     const partial = { ...report, checklist: { ...SWEEP, caches: undefined, docs: "none" } }
     for (const requireTitle of [true, false]) {

@@ -117,6 +117,15 @@ Replies follow the PolAds copy rules: British English, no semicolons, no em or
 en dashes. Start with the point. The bridge starts each message with this
 mini's name, so do not.
 
+Every message a person reads is in plain words that someone who does not
+write code follows: what happened, what you did about it, and the one thing
+you need from them, if anything. Otherwise end with "Nothing needed from
+you." Never use the words of the machinery: no "self-check", "siblings",
+"checklist", "report", "worker", "worktree" or "session". Name a PR as
+"PR #1704". For example: "I fixed the review comments on PR #1704 and pushed
+them. Nothing needed from you." The runner's own messages follow the same
+rule (`runtime/src/plain.ts`).
+
 ## 3. Finished jobs
 
 `finishedJobs` lists develop jobs that ended since the last wakeup. The runner

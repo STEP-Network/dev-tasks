@@ -10,9 +10,10 @@
 import { mkdirSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import type { AgentConfig, AgentPaths } from "../config.ts"
-import type { ReviseRequest } from "../jobs.ts"
+import { listJobs, type JobRecord, type ReviseRequest } from "../jobs.ts"
 import { appendLedger } from "../log.ts"
 import { enqueueSlack } from "../outbox.ts"
+import { feedbackFor, NOTHING_NEEDED, plainReason, prLink } from "../plain.ts"
 import type { TrackerIssue } from "../tracker.ts"
 import { failingRequired, MAX_REVISE_ROUNDS, type OwnPrView } from "../agentd/revise.ts"
 import type { BriefInput } from "./brief.ts"
@@ -140,9 +141,22 @@ export interface ReviseFinalizeContext {
 }
 
 /**
+ * The round before this one on the same PR, as it ended: whether it asked a
+ * person in the issue's thread, and why it stopped.
+ */
+export function previousRound(paths: AgentPaths, url: string): JobRecord["result"] | null {
+  const rounds = listJobs(paths, "done").filter((j) => j.kind === "revise" && j.revise?.url === url && j.result)
+  rounds.sort((a, b) => (a.endedAt ?? a.submittedAt).localeCompare(b.endedAt ?? b.submittedAt))
+  return rounds.at(-1)?.result ?? null
+}
+
+/**
  * Push what the worker committed to the PR's own branch, reply on the PR, and
- * say so in Slack. The issue stays where it is (In Review), and nothing here
- * dismisses a review or touches auto-merge: CI runs again on the new head.
+ * say so in Slack in plain words (../plain.ts). The issue stays where it is
+ * (In Review), and nothing here dismisses a review or touches auto-merge: CI
+ * runs again on the new head. A round that stops for the reason the round
+ * before it stopped for asks nobody again: it pushes what it has, notes on
+ * the PR what is left for the reviewer, and says so.
  */
 export async function finalizeRevise(ctx: ReviseFinalizeContext, outcome: Outcome): Promise<FinalizeResult> {
   const { issue, revise, config } = ctx
@@ -151,7 +165,8 @@ export async function finalizeRevise(ctx: ReviseFinalizeContext, outcome: Outcom
   const dirty = ctx.worktree ? await isDirty(ctx.exec, ctx.worktree) : false
   const pushed = ahead > 0 && ctx.worktree !== null
   if (pushed) await pushBranch(ctx.exec, ctx.worktree!, revise.branch, issue.id)
-  const post = (text: string) => enqueueSlack(ctx.paths, { kind: "post", channel: "agents", text }, ctx.now())
+  const post = (text: string) => enqueueSlack(ctx.paths, { kind: "post", channel: "agents", text: `${issue.id}: ${text}` }, ctx.now())
+  const inThread = (text: string, question: boolean) => enqueueSlack(ctx.paths, { kind: "issue", issue: issue.id, text, question }, ctx.now())
   const reply = async (text: string) => {
     mkdirSync(ctx.paths.state, { recursive: true })
     const file = join(ctx.paths.state, `pr-reply-${issue.id}.md`)
@@ -160,13 +175,22 @@ export async function finalizeRevise(ctx: ReviseFinalizeContext, outcome: Outcom
   }
   const commits = pushed ? `${ahead} commit${ahead === 1 ? "" : "s"} pushed to ${revise.branch}.` : "No commit pushed."
   const status = outcome.status
+  const pr = prLink(revise.url)
+  const what = feedbackFor(revise.reasons)
+  const before = previousRound(ctx.paths, revise.url)
 
   if (status === "limited") return { status, reason: outcome.reason, prUrl: revise.url, pushed }
 
   if (status === "done") {
     const report = outcome.report!
     await reply([`${config.mini}'s revision, ${round}:`, "", report.summary, "", commits, "", ...selfCheckSections(report), ...(report.notes ? ["", report.notes] : [])].join("\n"))
-    post(`${issue.id} revised ${revise.url} (${round}): ${pushed ? commits.replace(/\.$/, "") : "replied, nothing to change"}`)
+    const gaps = outcome.reason.startsWith("done, with") ? " I noted on the PR what the reviewer should double-check." : ""
+    const said = pushed
+      ? `I fixed ${what} on ${pr} and pushed the fixes.${gaps} ${NOTHING_NEEDED}`
+      : `I went through ${what} on ${pr} and answered each point on the PR. No code needed changing.${gaps} ${NOTHING_NEEDED}`
+    post(said)
+    // The round before asked in the issue's thread: the answer goes there too.
+    if (before?.status === "blocked") inThread(said, false)
     appendLedger(ctx.paths, { type: "pr.revised", issue: issue.id, url: revise.url, round: revise.round, commits: ahead }, ctx.now())
     if (ctx.worktree && !dirty) await removeWorktree(ctx.exec, config.repo.path, ctx.worktree)
     return { status: "done", reason: `revised (${round})`, prUrl: revise.url, pushed }
@@ -175,17 +199,31 @@ export async function finalizeRevise(ctx: ReviseFinalizeContext, outcome: Outcom
   if (status === "needs_input") {
     const question = outcome.report!.question!
     await reply([`${config.mini}'s revision, ${round}, needs an answer before it goes on:`, "", question, "", commits].join("\n"))
-    enqueueSlack(ctx.paths, { kind: "issue", issue: issue.id, text: `Revising ${revise.url}: ${question}`, question: true }, ctx.now())
-    post(`${issue.id} revising ${revise.url} waits for an answer in its Slack thread`)
+    inThread(`Before I can finish the fixes for ${what} on ${pr}, I need an answer: ${question}`, true)
+    post(`I have a question about ${pr} before I can finish. It is in the issue's thread: please answer there.`)
     return { status, reason: outcome.reason, prUrl: revise.url, pushed }
   }
 
+  const why = plainReason(outcome.reason)
+  const kept = pushed ? "I pushed what I had so far." : "Nothing new was pushed."
+  if (before?.status === "blocked" && clause(before.reason) === clause(outcome.reason)) {
+    await reply(
+      [
+        `${config.mini} could not finish this revision (${round}), again for the same reason: ${clause(outcome.reason)}.`,
+        "",
+        commits,
+        "",
+        `Left for the reviewer: ${clause(outcome.reason)}. ${config.mini} does not ask about it again.`,
+      ].join("\n"),
+    )
+    const said = `I could not finish the fixes for ${what} on ${pr} again, for the same reason as last time: ${why}. ${kept} I noted on the PR what is left for the reviewer, and I will not ask about it again. ${NOTHING_NEEDED}`
+    inThread(said, false)
+    post(said)
+    appendLedger(ctx.paths, { type: "pr.reviseRepeated", issue: issue.id, url: revise.url, round: revise.round, reason: outcome.reason }, ctx.now())
+    return { status: "blocked", reason: outcome.reason, prUrl: revise.url, pushed }
+  }
   await reply([`${config.mini} could not finish this revision (${round}): ${clause(outcome.reason)}.`, "", commits].join("\n"))
-  enqueueSlack(
-    ctx.paths,
-    { kind: "issue", issue: issue.id, text: `Revising ${revise.url} stopped: ${clause(outcome.reason)}. Reply "fix it" to try the round again once that is sorted, or "leave it" to leave the PR to a person.`, question: true },
-    ctx.now(),
-  )
-  post(`${issue.id} blocked revising ${revise.url}: ${clause(outcome.reason)}`)
+  inThread(`I could not finish the fixes for ${what} on ${pr}: ${why}. ${kept} Reply "fix it" and I will try again, or "leave it" and I will leave the PR to a person.`, true)
+  post(`I could not finish the fixes for ${what} on ${pr}: ${why}. I asked in the issue's thread what to do.`)
   return { status: "blocked", reason: outcome.reason, prUrl: revise.url, pushed }
 }
