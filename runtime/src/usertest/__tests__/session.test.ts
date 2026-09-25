@@ -59,6 +59,7 @@ describe("chromeMcpArgs", () => {
       "--redactNetworkHeaders=true",
       "--categoryPerformance=false",
       "--categoryMemory=false",
+      "--no-page-id-routing",
       "--workspace=/shots",
     ])
   })
