@@ -154,9 +154,10 @@ export function createRequests(deps: RequestsDeps) {
     if (thread) enqueueSlack(paths, { kind: "reply", channelId: thread.channelId, threadTs: thread.threadTs, text }, now)
   }
 
+  /** Released first: a comment that fails then leaves the state right, and one that is written never says what did not happen. */
   async function completeAnchor(anchor: PeopleIssue): Promise<void> {
-    await tracker.comment(anchor.id, "Every task of this request is released or closed, so the request is done.")
     await tracker.updateIssue(anchor.id, { state: "Released" })
+    await tracker.comment(anchor.id, "Every task of this request is released or closed, so the request is done.")
   }
 
   async function update(pass: RequestsPass): Promise<void> {
@@ -176,7 +177,12 @@ export function createRequests(deps: RequestsDeps) {
         await write(rec, item, columnsFor(work, stage, progress, anchor, rec))
         const group = pass.groups[requestGroup(stage)]
         if (item.groupId !== group) await api.moveItem(item.id, group)
-        if (rec.stage && rec.stage !== stage && anchor) tellStage(rec, anchor, stage, progress, pass.now)
+        if (rec.stage && rec.stage !== stage && anchor) {
+          tellStage(rec, anchor, stage, progress, pass.now)
+          // Said: saved at once, so a failure below never says it twice.
+          rec.stage = stage
+          save(rec)
+        }
         if (anchor && anchor.stateType !== "completed" && workDone(work)) await completeAnchor(anchor)
         rec.stage = stage
         rec.doneAt = stage === "Released" || stage === "Declined" ? (rec.doneAt ?? pass.now.toISOString()) : null
