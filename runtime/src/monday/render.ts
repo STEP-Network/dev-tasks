@@ -183,6 +183,8 @@ export const say = {
   failed: (name: string, sub: string) => `Thanks, ${name}. I wrote down what you saw as ${sub}, and the change goes back to be fixed. ${NOTHING_NEEDED}`,
   /** Another person gave this answer first (spec 6): nothing new is recorded. The same words as Slack's. */
   sameAnswer: (name: string, first: string) => `Thanks, ${name}. ${first} gave the same answer already, so it stands as it is. ${NOTHING_NEEDED}`,
+  planYes: (name: string) =>
+    `Thanks, ${name}. A yes on its own does not say what to do with this plan, because it names no recommendation. Reply Build it as planned to approve it, or say what should change.`,
   newerQuestion: (name: string, question: string) =>
     `Thanks, ${name}. I asked a newer question after you wrote this, so I have not taken it as your answer. Please answer the newer one here: ${plainText(question)}`,
   onlyVerdicts: (look = false) =>

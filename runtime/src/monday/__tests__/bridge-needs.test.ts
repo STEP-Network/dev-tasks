@@ -62,6 +62,25 @@ describe("the Needs-you board's groups and columns (spec 6)", () => {
     expect(fake.issues.get("STEP-2")!.description).toContain("Ada agreed with the recommendation: Build it as planned.")
   })
 
+  it("asks a bare yes on a plan with no Recommendation what it means, and the plan keeps waiting", async () => {
+    const { bridge, monday, fake, later, texts } = doorsSetup([issue({ id: "STEP-2", title: "Bulk upload", state: "On hold", labels: ["awaiting-answer", "plan-to-approve", "approval/try"] })])
+    await bridge.sync()
+    const item = monday.item(/Bulk upload/)!
+    later(1)
+    monday.says(item.id, "111", "yes")
+    later(1)
+    await bridge.sync()
+    expect(fake.issues.get("STEP-2")!.labels).toEqual(expect.arrayContaining(["plan-to-approve", "awaiting-answer"]))
+    expect(texts(item.id).at(-1)).toBe("Eve: Thanks, Ada. A yes on its own does not say what to do with this plan, because it names no recommendation. Reply Build it as planned to approve it, or say what should change.")
+    expect(item.groupId).toBe("g_plan")
+    // Their next words, written out, approve it.
+    later(1)
+    monday.says(item.id, "111", "Build it as planned")
+    later(1)
+    await bridge.sync()
+    expect(fake.issues.get("STEP-2")!.labels).toEqual(expect.arrayContaining(["plan-approved"]))
+  })
+
   it("without the new groups in config, every item goes where it went before", async () => {
     const { bridge, monday } = doorsSetup(
       [issue({ id: "STEP-2", title: "Bulk upload", state: "On hold", labels: ["awaiting-answer", "plan-to-approve"] }), issue({ id: "STEP-3", title: "Wider buttons", state: "Waiting for UAT", labels: ["polads", "approval/look"] })],

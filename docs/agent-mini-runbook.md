@@ -886,7 +886,11 @@ What it does:
   this mini's newest question on the issue answer nothing: the item asks for
   an answer to the newer question, the issue stays where it is, and a bare
   "yes" is not recorded at all. Slack decides this by the same rule. Otherwise a
-  parked issue moves on. So "hold off" on another mini's issue pauses
+  parked issue moves on. The Recommendation column (Wave 2) is input too:
+  where this mini asked no question on the issue, a plain "yes" agrees to
+  what the column says, so write in it only what a yes should mean. A plain
+  "yes" to a plan with nothing to agree to is asked back and records
+  nothing; "Build it as planned", written out, approves it. So "hold off" on another mini's issue pauses
   nothing here. The State goes to Waiting on agent, then Done once Linear
   no longer needs a person. Words are acted on once, even when Monday fails
   after Linear has them.

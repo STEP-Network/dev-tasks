@@ -368,6 +368,11 @@ export function createMondayBridge(deps: MondayBridgeDeps): MondayBridge {
       reply(item.id, words, say.newerQuestion(who.name, routed.question), pass.now)
       return
     }
+    // Nothing recorded: the item still waits for what they mean.
+    if (routed.to === "unclear") {
+      reply(item.id, words, say.planYes(who.name), pass.now, false)
+      return
+    }
     // A request's State follows its issue in Linear (requests below).
     if (rec.kind !== "request") await after("state", rec, () => setState(rec, "Waiting on agent"))
   }

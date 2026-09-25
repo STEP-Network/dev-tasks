@@ -85,7 +85,7 @@ describe("the board's words (plain English)", () => {
     const lines = [
       say.answered("Nate", "Ready"), say.answered("Nate", "Refining"), say.answered("Nate", null), say.filed("Nate", "STEP-9"),
       say.released("STEP-9"), say.closed("STEP-9"), say.passed("Nate"), say.failed("Nate", "STEP-10"), say.onlyVerdicts(),
-      say.notWaiting(), say.gone("STEP-9"), say.refused("STEP-9"), say.onlyVerdicts(true), say.sameAnswer("Ben", "Ada"),
+      say.notWaiting(), say.gone("STEP-9"), say.refused("STEP-9"), say.onlyVerdicts(true), say.sameAnswer("Ben", "Ada"), say.planYes("Ada"),
       planName("Bulk upload", "Eve"), planBody({ title: "Bulk upload", agent: "Eve", question: "Two tasks, this week.\n\nMy recommendation: Build it as planned." } as never),
       planBody({ title: "Bulk upload", agent: null, question: null } as never),
       lookName("Wider buttons"), lookBody("Wider buttons", "https://github.com/STEP-Network/v0-politiske-annoncer/pull/1679", "https://linear.app/step/issue/STEP-3"), lookBody("Wider buttons", null, "https://linear.app/step/issue/STEP-3"),
