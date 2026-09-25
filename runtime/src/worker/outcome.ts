@@ -7,9 +7,33 @@
  * A blocked outcome whose only fault is the report's form says so
  * (reportProblem): the runner asks the same session for the report once, and
  * with commits ahead titles the PR from them rather than strand the work.
+ * A done report's self-check (STEP-3284) is part of its form: the one-hop
+ * sweep's checklist, and a mutation check for each new guard test.
  */
 
 import { USAGE_LIMIT_ERROR_PREFIXES } from "@anthropic-ai/claude-agent-sdk"
+
+/**
+ * The one-hop sweep a done report answers (STEP-3284), in the order the PR
+ * shows it. Reviews of Eve's first nine PRs found each of these missed.
+ */
+export const CHECKLIST = [
+  { key: "siblings", label: "Sibling call sites", search: true },
+  { key: "publicOutputs", label: "Public outputs and exports", search: false },
+  { key: "caches", label: "Caches and version keys", search: false },
+  { key: "coupled", label: "Crons, reminders and emails", search: false },
+  { key: "docs", label: "Docs and comments", search: true },
+  { key: "translations", label: "Translations", search: false },
+] as const
+
+export type ChecklistKey = (typeof CHECKLIST)[number]["key"]
+
+/** One deliberate mutation of an invariant a new guard test covers: what was changed, and how the test failed on it. */
+export interface MutationCheck {
+  test: string
+  mutation: string
+  result: string
+}
 
 export interface WorkerReport {
   status: "done" | "needs_input" | "blocked"
@@ -18,6 +42,22 @@ export interface WorkerReport {
   verification?: string[]
   question?: string
   notes?: string
+  checklist?: Partial<Record<ChecklistKey, string>>
+  mutations?: MutationCheck[]
+}
+
+/** A search, as the sweep's answers must show it: the command, not a claim. */
+const SEARCH_RE = /(^|[\s`'"(])(rg|grep|git grep|ag|ack)\s/
+
+/** What a report's checklist lacks: each missing answer, and each search answer that names no search command. */
+export function checklistGaps(report: WorkerReport): string[] {
+  const gaps: string[] = []
+  for (const item of CHECKLIST) {
+    const answer = report.checklist?.[item.key]?.trim()
+    if (!answer) gaps.push(item.key)
+    else if (item.search && !SEARCH_RE.test(answer)) gaps.push(`${item.key} (no search command)`)
+  }
+  return gaps
 }
 
 /** The fields of the SDK's result message this module reads. */
@@ -42,8 +82,12 @@ export interface Outcome {
   costUsd: number | null
   turns: number | null
   sessionId: string | null
-  /** Set when the session ended well but its report was malformed: prTitle missing from a done report, or no valid report at all. */
-  reportProblem?: "prTitle" | "report"
+  /**
+   * Set when the session ended well but its report was malformed: prTitle
+   * missing from a done report, no valid report at all, the sweep's checklist
+   * incomplete, or no mutation check for a branch that changes tests.
+   */
+  reportProblem?: "prTitle" | "report" | "checklist" | "mutations"
 }
 
 const LIMIT_RE = /usage limit|rate.?limit|\b429\b|limit reached/i
@@ -64,6 +108,15 @@ export function parseReport(value: unknown): WorkerReport | null {
   if (v.status !== "done" && v.status !== "needs_input" && v.status !== "blocked") return null
   if (typeof v.summary !== "string" || !v.summary.trim()) return null
   const text = (x: unknown) => (typeof x === "string" ? x.trim() : undefined)
+  const given = v.checklist && typeof v.checklist === "object" ? (v.checklist as Record<string, unknown>) : null
+  const checklist = given ? Object.fromEntries(CHECKLIST.flatMap((item) => (text(given[item.key]) ? [[item.key, text(given[item.key])!]] : []))) : undefined
+  const mutations = Array.isArray(v.mutations)
+    ? v.mutations.flatMap((m): MutationCheck[] => {
+        const e = m && typeof m === "object" ? (m as Record<string, unknown>) : {}
+        const [test, mutation, result] = [text(e.test), text(e.mutation), text(e.result)]
+        return test && mutation && result ? [{ test, mutation, result }] : []
+      })
+    : []
   return {
     status: v.status,
     summary: v.summary.trim(),
@@ -71,6 +124,8 @@ export function parseReport(value: unknown): WorkerReport | null {
     verification: Array.isArray(v.verification) ? v.verification.filter((s): s is string => typeof s === "string") : [],
     question: text(v.question),
     notes: text(v.notes),
+    ...(checklist ? { checklist } : {}),
+    mutations,
   }
 }
 
@@ -116,9 +171,10 @@ export function toOutcome(
       const report = parseReport(result.structured_output)
       if (!report) return { ...blocked("the worker ended without a valid report"), reportProblem: "report" }
       if (report.status === "done") {
-        return report.prTitle || ctx.requireTitle === false
-          ? { status: "done", reason: "done", report, ...base }
-          : { ...blocked("the report has no PR title", report), reportProblem: "prTitle" }
+        if (!report.prTitle && ctx.requireTitle !== false) return { ...blocked("the report has no PR title", report), reportProblem: "prTitle" }
+        const gaps = checklistGaps(report)
+        if (gaps.length) return { ...blocked(`the report's self-check is incomplete: ${gaps.join(", ")}`, report), reportProblem: "checklist" }
+        return { status: "done", reason: "done", report, ...base }
       }
       if (report.status === "needs_input") {
         return report.question

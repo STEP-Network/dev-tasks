@@ -6,7 +6,7 @@ import { agentPaths, ConfigSchema } from "../../config.ts"
 import { listNew } from "../../fsq.ts"
 import { readWatchedPrs } from "../../jobs.ts"
 import { fakeExec, fakeTracker, issue } from "../../__tests__/fakes.ts"
-import { finalize, FinalizeFailed, prBody, prTitle, type FinalizeContext } from "../finalize.ts"
+import { finalize, FinalizeFailed, prBody, prTitle, selfCheckSections, type FinalizeContext } from "../finalize.ts"
 import type { Outcome } from "../outcome.ts"
 
 const PR = "https://github.com/STEP-Network/v0-politiske-annoncer/pull/1700"
@@ -196,6 +196,29 @@ describe("finalize: the other outcomes", () => {
   })
 })
 
+describe("selfCheckSections (STEP-3284)", () => {
+  it("shows the sweep's answers and each mutation check, and names what went unanswered", () => {
+    const sections = selfCheckSections({
+      status: "done",
+      summary: "x",
+      checklist: { siblings: "rg -n limiter app: two routes", docs: "rg -n limit docs: none" },
+      mutations: [{ test: "lib/__tests__/limit.test.ts > per pair", mutation: "made the limit all-or-nothing", result: "expected 429, got 200." }],
+    }).join("\n")
+    expect(sections).toBe(
+      [
+        "## Sweep checklist",
+        "- Sibling call sites: rg -n limiter app: two routes",
+        "- Docs and comments: rg -n limit docs: none",
+        "Not answered by the worker: publicOutputs, caches, coupled, translations. A reviewer should check these.",
+        "",
+        "## Mutation checks",
+        "- `lib/__tests__/limit.test.ts > per pair`: made the limit all-or-nothing. It failed: expected 429, got 200. Reverted.",
+      ].join("\n"),
+    )
+    expect(selfCheckSections({ status: "done", summary: "x" }).at(-1)).toBe("- None listed.")
+  })
+})
+
 describe("prTitle and prBody", () => {
   it("carry the id Task trace reads, capped titles, and the checks", () => {
     expect(prTitle("STEP-7", { status: "done", summary: "x", prTitle: "fix:   the  date" }, "Fix the date")).toBe("STEP-7: fix: the date")
@@ -206,5 +229,7 @@ describe("prTitle and prBody", () => {
     expect(body).toContain("- (the worker listed none)")
     expect(body).toContain("The worker left uncommitted changes, which are not in this PR.")
     expect(body).toContain("Worker: eve, model opus, ? turns, estimated unknown, 5 min.")
+    // The self-check sits between the checks and the notes.
+    expect(body).toMatch(/Everything else runs in CI\.\n\n## Sweep checklist\nNot answered by the worker: [^\n]+\n\n## Mutation checks\n- None listed\.\n\n## Notes/)
   })
 })
