@@ -9,7 +9,7 @@ import { listNew, putOnce, writeJsonAtomic } from "../../fsq.ts"
 import { listJobs, recordPr, submitJob } from "../../jobs.ts"
 import { parseInstruction } from "../../slack/instruction.ts"
 import type { Logger } from "../../log.ts"
-import { fakeExec, fakeTracker } from "../../__tests__/fakes.ts"
+import { fakeExec, fakeTracker, issue } from "../../__tests__/fakes.ts"
 import { recordSandboxProbe } from "../../cli/sandbox-probe.ts"
 import { frontDoorSettingsPath } from "../frontdoor.ts"
 import { Every } from "../health.ts"
@@ -111,6 +111,24 @@ describe("runDuties", () => {
     expect(listJobs(paths, "running")).toEqual([expect.objectContaining({ issue: "STEP-7", kind: "revise" })])
     expect(spawned).toEqual([listJobs(paths, "running")[0].id])
     expect(listNew<{ kind: string; text?: string }>(paths.outbox).map((e) => e.payload.kind)).toEqual(["reply", "react"])
+  })
+
+  it("raises an issue's approval class from its PR's red Approval class check, through its own Linear (Wave 1)", async () => {
+    const pr = "https://github.com/example/repo/pull/7"
+    const view = {
+      url: pr, number: 7, state: "OPEN", headRefName: "STEP-7-x", headRefOid: "b".repeat(40), labels: [{ name: "approval/look" }],
+      statusCheckRollup: [{ name: "Approval class", conclusion: "FAILURE", detailsUrl: "https://github.com/example/repo/actions/runs/111/job/222" }],
+    }
+    const f = fakeExec([
+      [/^gh pr view /, { stdout: JSON.stringify(view) }],
+      [/ls-remote/, { stdout: `${SHA}\trefs/heads/staging\n` }],
+      [/ --version$/, { stdout: "2.1.281 (Claude Code)\n" }],
+    ])
+    const linear = fakeTracker([issue({ id: "STEP-7", labels: ["polads", "approval/auto"] })])
+    const { d, paths } = duties({ exec: f.exec, tracker: linear.tracker })
+    recordPr(paths, { issue: "STEP-7", url: pr, openedAt: NOW.toISOString() })
+    await runDuties(d, freshMemo())
+    expect(linear.issues.get("STEP-7")!.labels).toEqual(["polads", "approval/look"])
   })
 
   it("starts the weekly retro once per slot, on a mini that has it on, when no job runs and nothing is paused (STEP-3290)", async () => {

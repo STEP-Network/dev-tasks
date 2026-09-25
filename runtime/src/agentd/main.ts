@@ -154,7 +154,7 @@ export async function runDuties(d: DutyDeps, memo: DutyMemo): Promise<void> {
       }
     })
   }
-  if (d.every.due("prs", 15 * 60_000)) await step("prs", () => watchPrs({ exec: d.exec, paths, config, now, log }))
+  if (d.every.due("prs", 15 * 60_000)) await step("prs", () => watchPrs({ exec: d.exec, paths, config, now, log, tracker: d.tracker }))
   // The weekly retro (STEP-3290), on the coordinator mini alone: once per slot, when no job runs and nothing is paused.
   // Checked when it starts, not after: a job may start while the retro runs. They share no repository, and
   // lessons.jsonl, which both write, is locked around each write (retro/jsonl.ts).
