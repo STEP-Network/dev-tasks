@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process"
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -22,6 +23,13 @@ describe("gifFromPngs", () => {
     // The logical screen: 10 wide, and 5 high to keep the frames' shape.
     expect([readFileSync(out!).readUInt16LE(6), readFileSync(out!).readUInt16LE(8)]).toEqual([10, 5])
   })
+
+  it("loads under Node itself, as agentd runs it, not only under vitest's resolver", () => {
+    const runtime = join(import.meta.dirname, "..", "..", "..")
+    const run = spawnSync(join(runtime, "node_modules", ".bin", "tsx"), ["-e", "import('./src/usertest/gif.ts').then((m) => console.log(typeof m.gifFromPngs))"], { cwd: runtime, encoding: "utf8", timeout: 30_000 })
+    expect(run.stderr).toBe("")
+    expect(run.stdout.trim()).toBe("function")
+  }, 30_000)
 
   it("makes none from a single frame", () => {
     const dir = mkdtempSync(join(tmpdir(), "gif-"))

@@ -5,8 +5,12 @@
  * gifenc), so the minis need no ffmpeg.
  */
 import { readFileSync, writeFileSync } from "node:fs"
-import { applyPalette, GIFEncoder, quantize } from "gifenc"
+import { createRequire } from "node:module"
 import { PNG } from "pngjs"
+
+// Required, not imported: Node cannot name the exports of gifenc's CommonJS
+// build, and vitest would load its ESM build instead. Both read this one.
+const { applyPalette, GIFEncoder, quantize } = createRequire(import.meta.url)("gifenc") as typeof import("gifenc")
 
 export function gifFromPngs(files: readonly string[], outFile: string, o: { width?: number; delayMs?: number; maxFrames?: number } = {}): string | null {
   const frames = files.slice(0, o.maxFrames ?? 12)
