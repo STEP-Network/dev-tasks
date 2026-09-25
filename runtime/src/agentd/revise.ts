@@ -22,6 +22,13 @@
  * #polads-questions, once, and stops. Nothing here, and nothing the worker
  * may run, dismisses a person's or a bot's review.
  *
+ * A PR git cannot merge into its base (STEP-3340) comes back too, once per
+ * head: its worker merges the base in (never a rebase, never forced) and
+ * resolves each conflict. Feedback at the same head rides along in its round.
+ * A round with only the conflict counts against MAX_CONFLICT_ROUNDS, its own
+ * cap, so a base that keeps moving never uses up the review rounds. At that
+ * cap it asks, once per head.
+ *
  * Neither the re-run that failed again nor the round cap is a "person needs
  * to look" (STEP-3285): each is one question with options and a default
  * (agentd/decisions.ts). A re-run's default is another re-run, which agentd
@@ -29,7 +36,7 @@
  */
 
 import type { AgentConfig, AgentPaths } from "../config.ts"
-import { listJobs, submitJob, updateWatchedPr, type WatchedPr } from "../jobs.ts"
+import { conflictReason, isConflictOnly, isConflictReason, listJobs, submitJob, updateWatchedPr, type WatchedPr } from "../jobs.ts"
 import { appendLedger, type Logger } from "../log.ts"
 import { askDecision } from "./decisions.ts"
 import { enqueueSlack } from "../outbox.ts"
@@ -39,6 +46,7 @@ import type { Exec } from "../worker/git.ts"
 import { BROWSER_TEST_REASON, readUserTestState, type UserTestState } from "../usertest/state.ts"
 
 export const MAX_REVISE_ROUNDS = 3
+export const MAX_CONFLICT_ROUNDS = 3
 
 export interface PrActor {
   login?: string
@@ -69,9 +77,25 @@ export interface OwnPrView {
   autoMergeRequest?: unknown
   /** The PR's labels: the Approval class check puts the diff's class there (approval/<class>). */
   labels?: Array<{ name: string }>
+  baseRefName?: string
+  /** MERGEABLE, CONFLICTING, or UNKNOWN while GitHub works it out: it does so lazily, after a read asks. */
+  mergeable?: string
+  /** DIRTY when the merge commit cannot be made: a conflict, as mergeable says. */
+  mergeStateStatus?: string
 }
 
-export const PR_FIELDS = "url,number,state,headRefName,headRefOid,author,reviews,comments,statusCheckRollup,autoMergeRequest,labels"
+export const PR_FIELDS = "url,number,state,headRefName,headRefOid,baseRefName,mergeable,mergeStateStatus,author,reviews,comments,statusCheckRollup,autoMergeRequest,labels"
+
+/**
+ * Why the PR is back when git cannot merge it into the mini's base, or null.
+ * UNKNOWN is no conflict yet: the next watch reads it again. A PR against
+ * another base is a person's to merge: the worker has only the mini's base.
+ */
+export function conflictWith(view: Pick<OwnPrView, "baseRefName" | "mergeable" | "mergeStateStatus">, base: string): string | null {
+  if (view.mergeable !== "CONFLICTING" && view.mergeStateStatus !== "DIRTY") return null
+  if (view.baseRefName && view.baseRefName !== base) return null
+  return conflictReason(base)
+}
 
 /**
  * The PolAds check that sets a PR's approval class from its diff (WS1). Its
@@ -155,7 +179,7 @@ export type RevisePlan =
 export function planRevision(
   view: OwnPrView,
   pr: WatchedPr,
-  ctx: { mini: string; required: readonly string[]; infra: Record<string, boolean>; usertest?: UserTestState | null },
+  ctx: { mini: string; required: readonly string[]; infra: Record<string, boolean>; usertest?: UserTestState | null; base?: string },
 ): RevisePlan {
   const handled = new Set(pr.revise?.handled ?? [])
   const author = view.author?.login ?? ""
@@ -191,13 +215,23 @@ export function planRevision(
     ids.push(id)
     reasons.push(`${f.name} failed`)
   }
+  const conflictId = `conflict:${view.headRefOid}`
+  const conflict = handled.has(conflictId) ? null : conflictWith(view, ctx.base ?? view.baseRefName ?? "its base")
+  // Only the conflict: a round under its own cap. Before any re-run, as a PR that conflicts gets no new CI.
+  const conflictPlan = (reason: string): RevisePlan =>
+    (pr.revise?.conflictRounds ?? 0) >= MAX_CONFLICT_ROUNDS
+      ? { kind: "ask", handled: [conflictId], reasons: [reason] }
+      : { kind: "revise", handled: [conflictId], reasons: [reason] }
   if (ids.length) {
     const rounds = pr.revise?.rounds ?? 0
     // Asked once per head: feedback on a head nobody was asked about asks again.
     const askedHere = pr.revise?.asked && (pr.revise.askedHead === undefined || pr.revise.askedHead === view.headRefOid)
-    if (rounds >= MAX_REVISE_ROUNDS) return askedHere ? { kind: "none" } : { kind: "ask", handled: ids, reasons }
-    return { kind: "revise", handled: ids, reasons }
+    if (rounds < MAX_REVISE_ROUNDS) return conflict ? { kind: "revise", handled: [...ids, conflictId], reasons: [...reasons, conflict] } : { kind: "revise", handled: ids, reasons }
+    if (!askedHere) return { kind: "ask", handled: ids, reasons }
+    // The feedback waits for a person's answer. The conflict need not.
+    return conflict ? conflictPlan(conflict) : { kind: "none" }
   }
+  if (conflict) return conflictPlan(conflict)
   if (infraOnly.length) {
     const done = new Set(pr.reruns ?? [])
     const runs = [...new Set(infraOnly.map((f) => f.job?.runId).filter((r): r is string => Boolean(r)))]
@@ -381,7 +415,7 @@ export async function reviseOwnPr(deps: ReviseDeps, pr: WatchedPr, view: OwnPrVi
   const infra = Object.fromEntries(Object.entries(verdicts).map(([name, v]) => [`${view.headRefOid}:${name}`, v]))
   let record: WatchedPr = { ...(await raiseClass(deps, pr, view)), infra }
   const usertest = readUserTestState(deps.paths, pr.url)
-  const plan = planRevision(view, pr, { mini: deps.config.mini, required, infra: verdicts, usertest })
+  const plan = planRevision(view, pr, { mini: deps.config.mini, required, infra: verdicts, usertest, base: deps.config.repo.base })
   const now = deps.now()
   switch (plan.kind) {
     case "none":
@@ -429,6 +463,30 @@ export async function reviseOwnPr(deps: ReviseDeps, pr: WatchedPr, view: OwnPrVi
       break
     }
     case "ask": {
+      if (isConflictOnly(plan.reasons)) {
+        // Once per head, as the id says: a new head that still conflicts asks again.
+        askDecision(
+          deps.paths,
+          deps.config,
+          {
+            id: `conflict-${pr.issue}-${view.number}-${view.headRefOid.slice(0, 12)}`,
+            issue: pr.issue,
+            url: pr.url,
+            question: `${prLink(pr.url)} still cannot go in: it clashes with changes made to ${deps.config.repo.base} since, and I have already tried to combine them ${MAX_CONFLICT_ROUNDS} times.`,
+            options: [
+              { reply: "fix it", does: "have me try once more" },
+              { reply: "leave it", does: "leave it to a person" },
+            ],
+            defaultReply: "leave it",
+            defaultAction: { kind: "leave" },
+          },
+          now,
+        )
+        // The review cap's question is not this one: its record stays as it was.
+        record = { ...record, revise: { ...(pr.revise ?? { rounds: 0 }), handled: [...(pr.revise?.handled ?? []), ...plan.handled] } }
+        appendLedger(deps.paths, { type: "pr.conflictCapped", issue: pr.issue, url: pr.url }, now)
+        break
+      }
       askDecision(
         deps.paths,
         deps.config,
@@ -453,6 +511,27 @@ export async function reviseOwnPr(deps: ReviseDeps, pr: WatchedPr, view: OwnPrVi
     case "revise": {
       // One job per issue: the next watch picks this feedback up once the running one ends.
       if (["pending", "running"].some((state) => listJobs(deps.paths, state as "pending" | "running").some((j) => j.issue === pr.issue))) break
+      const handled = [...(pr.revise?.handled ?? []), ...plan.handled]
+      if (isConflictOnly(plan.reasons)) {
+        // Its own count, and the review rounds' record as it was: their cap, their question, and the feedback window (lastRoundAt).
+        const round = (pr.revise?.conflictRounds ?? 0) + 1
+        submitJob(deps.paths, pr.issue, null, now, {
+          kind: "revise",
+          revise: { url: view.url, number: view.number, branch: view.headRefName, round, since: pr.revise?.lastRoundAt ?? pr.openedAt, reasons: plan.reasons },
+        })
+        record = { ...record, revise: { ...(pr.revise ?? { rounds: 0 }), handled, conflictRounds: round } }
+        appendLedger(deps.paths, { type: "pr.revise", issue: pr.issue, url: pr.url, round, reasons: plan.reasons }, now)
+        enqueueSlack(
+          deps.paths,
+          {
+            kind: "post",
+            channel: "agents",
+            text: `${pr.issue}: ${prLink(pr.url)} clashes with changes made to ${deps.config.repo.base} since it was opened, so I am combining the two, try ${round} of ${MAX_CONFLICT_ROUNDS}. ${NOTHING_NEEDED}`,
+          },
+          now,
+        )
+        break
+      }
       const round = (pr.revise?.rounds ?? 0) + 1
       submitJob(deps.paths, pr.issue, null, now, {
         kind: "revise",
@@ -466,15 +545,18 @@ export async function reviseOwnPr(deps: ReviseDeps, pr: WatchedPr, view: OwnPrVi
           ...(plan.handled.some((id) => id.startsWith("usertest:")) && usertest ? { usertestFindings: usertest.findings } : {}),
         },
       })
-      record = { ...record, revise: { rounds: round, handled: [...(pr.revise?.handled ?? []), ...plan.handled], lastRoundAt: now.toISOString() } }
+      record = {
+        ...record,
+        revise: { rounds: round, handled, lastRoundAt: now.toISOString(), ...(pr.revise?.conflictRounds ? { conflictRounds: pr.revise.conflictRounds } : {}) },
+      }
       appendLedger(deps.paths, { type: "pr.revise", issue: pr.issue, url: pr.url, round, reasons: plan.reasons }, now)
       enqueueSlack(
         deps.paths,
         {
           kind: "post",
           channel: "agents",
-          // The browser test's reason says nothing feedbackFor has not said already.
-          text: `${pr.issue}: I am fixing ${feedbackFor(plan.reasons)} on ${prLink(pr.url)}${((rest) => (rest.length ? ` (${rest.join(", ")})` : ""))(plan.reasons.filter((r) => r !== BROWSER_TEST_REASON))}, try ${round} of ${MAX_REVISE_ROUNDS}. ${NOTHING_NEEDED}`,
+          // The browser test's reason and the conflict's say nothing feedbackFor has not said already.
+          text: `${pr.issue}: I am fixing ${feedbackFor(plan.reasons)} on ${prLink(pr.url)}${((rest) => (rest.length ? ` (${rest.join(", ")})` : ""))(plan.reasons.filter((r) => r !== BROWSER_TEST_REASON && !isConflictReason(r)))}, try ${round} of ${MAX_REVISE_ROUNDS}. ${NOTHING_NEEDED}`,
         },
         now,
       )

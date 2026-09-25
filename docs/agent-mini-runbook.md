@@ -558,6 +558,34 @@ After three rounds on one PR the agent asks in `#polads-questions` and stops
 revising it. It never dismisses a review, a person's or a bot's. To have it
 fix something, comment on the PR starting `@<agent>`.
 
+A PR that GitHub cannot merge into its base (`mergeable: CONFLICTING`,
+`mergeStateStatus: DIRTY`) comes back too, once per head commit (STEP-3340).
+`UNKNOWN` waits for the next watch, since GitHub works it out only after a
+read asks. The runner starts `git merge --no-ff origin/<base>` in the
+worktree, outside the sandbox: the sandbox cannot fetch, and the merge may
+bring agent configuration the sandbox keeps read-only. A clean merge is
+committed there. Otherwise the brief names the conflicted files, and the
+worker resolves them hunk by hunk, keeping both sides' intent. It never
+rebases, never takes one side of the whole merge (its guard refuses `git
+rebase`, `-s ours`, `-X ours|theirs`, and `--ours|--theirs` on anything but
+one named file), and runs the tests the conflicts touched, then commits.
+Commits that add a conflict marker (`<<<<<<<` or `>>>>>>>`) over both the
+branch and the base are never pushed, in a revise round or a develop job: a
+Markdown or YAML file passes CI with one. The round stops and asks what next. The plugin's
+secrets scan (1.3.4) reads a merge commit's own lines, what differs from the
+branch merged in, so a fixture the base gained never blocks it. A conflict that
+needs a product decision is a plain-English question in the issue's thread.
+The runner pushes the merge commit, never forced, and the round then follows
+the browser-test rules any revise push follows: auto-merge off, the test,
+and on again after a pass. The test reads the PR's own diff against its
+base, which after the merge is its own change again.
+
+A round with only the conflict has its own cap, three per PR, and never
+counts against the review rounds: a base that keeps moving would otherwise
+use them up. Feedback at the same head takes the merge along in its review
+round. At the merge cap the agent asks in the issue's thread, once per head.
+A PR against another base than the agent's is left to a person.
+
 ### Talking with the agent in Slack (STEP-3293)
 
 Slack works like a Claude Code Channel: every message from a person on

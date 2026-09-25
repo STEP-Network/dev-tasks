@@ -32,7 +32,7 @@ import type { Exec } from "../worker/git.ts"
 import { mergeMode, readAutoMergePolicy } from "../worker/run.ts"
 import { closeDecision, openDecisions } from "./decisions.ts"
 import { requiredChecks } from "./health.ts"
-import { failingRequired, MAX_REVISE_ROUNDS, type OwnPrView } from "./revise.ts"
+import { conflictWith, failingRequired, MAX_REVISE_ROUNDS, type OwnPrView } from "./revise.ts"
 import { readUserTestState } from "../usertest/state.ts"
 
 export type { AnyInstructionEntry, InstructionEntry }
@@ -93,8 +93,8 @@ function findPr(paths: AgentPaths, entry: AnyInstructionEntry): { issue: string 
   return { issue: null, pr: null }
 }
 
-async function viewPr(deps: InstructionDeps, url: string): Promise<OwnPrView & { baseRefName?: string }> {
-  const r = await deps.exec("gh", ["pr", "view", url, "--json", "url,number,state,headRefName,headRefOid,baseRefName,statusCheckRollup"], { timeoutMs: GH_TIMEOUT_MS })
+async function viewPr(deps: InstructionDeps, url: string): Promise<OwnPrView> {
+  const r = await deps.exec("gh", ["pr", "view", url, "--json", "url,number,state,headRefName,headRefOid,baseRefName,mergeable,mergeStateStatus,statusCheckRollup"], { timeoutMs: GH_TIMEOUT_MS })
   if (r.code !== 0) throw new Error(`gh could not read ${url} (${r.stderr.trim() || `exit ${r.code}`})`)
   return JSON.parse(r.stdout)
 }
@@ -130,7 +130,7 @@ async function act(deps: InstructionDeps, entry: AnyInstructionEntry): Promise<s
     const did = lines.length ? "so I did nothing more" : "so I did nothing"
     return closed([...lines, `I could not tell which PR you mean, ${did}. Please name it: STEP-<n>, #<number> or its link. I only act on PRs I opened.`])
   }
-  let view: (OwnPrView & { baseRefName?: string }) | null = null
+  let view: OwnPrView | null = null
   const open = async () => {
     if (!pr) return null
     view ??= await viewPr(deps, pr.url)
@@ -153,16 +153,26 @@ async function act(deps: InstructionDeps, entry: AnyInstructionEntry): Promise<s
         // The browser test's findings at this head go with the round, as agentd's own rounds carry them (WS5).
         const ut = readUserTestState(paths, v.url)
         const usertestFindings = ut?.verdict === "findings" && ut.head === v.headRefOid ? ut.findings : undefined
+        // A PR that clashes with the base: the round merges it in, and agentd sends no round of its own for this head (STEP-3340).
+        const conflict = conflictWith(v, config.repo.base)
         const job = submitJob(paths, issue, null, now, {
           kind: "revise",
           revise: {
             url: v.url, number: v.number, branch: v.headRefName, round, since: pr.revise?.lastRoundAt ?? pr.openedAt,
-            reasons: [`asked by ${who} ${where}`], instruction: entry.text,
+            reasons: [`asked by ${who} ${where}`, ...(conflict ? [conflict] : [])], instruction: entry.text,
             ...(usertestFindings ? { usertestFindings } : {}),
           },
         })
         // The head the round cap asked at stays: findings at a later head ask again (WS5).
-        updateWatchedPr(paths, { ...pr, revise: { rounds: round, handled: pr.revise?.handled ?? [], lastRoundAt: now.toISOString(), asked: pr.revise?.asked, askedHead: pr.revise?.askedHead } })
+        updateWatchedPr(paths, {
+          ...pr,
+          revise: {
+            ...pr.revise,
+            rounds: round,
+            handled: [...(pr.revise?.handled ?? []), ...(conflict ? [`conflict:${v.headRefOid}`] : [])],
+            lastRoundAt: now.toISOString(),
+          },
+        })
         appendLedger(paths, { type: "pr.revise", issue, url: v.url, round, reasons: [`asked by ${who}`] }, now)
         const past = round > MAX_REVISE_ROUNDS ? ` This is try ${round}, past my usual ${MAX_REVISE_ROUNDS}, because you asked.` : ""
         lines.push(`I am fixing ${prLink(v.url)} now, as you asked.${past}`)
