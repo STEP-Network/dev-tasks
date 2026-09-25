@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs"
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { describe, expect, it } from "vitest"
@@ -166,6 +166,11 @@ describe("createChannelServer", () => {
     expect(client.getInstructions()).toBeUndefined()
     expect(pushed).toEqual([])
     expect(readChannelState(paths)).toBeNull()
+  })
+
+  it("runs on an MCP SDK the runtime pins itself, never whatever the Agent SDK brings (STEP-3293 review)", () => {
+    const pkg = JSON.parse(readFileSync(new URL("../../../package.json", import.meta.url), "utf8")) as { dependencies: Record<string, string> }
+    expect(pkg.dependencies["@modelcontextprotocol/sdk"]).toMatch(/^\d+\.\d+\.\d+$/)
   })
 
   it("answers a legacy MCP revision, the only kind Claude Code registers a channel on (STEP-3293 review)", async () => {

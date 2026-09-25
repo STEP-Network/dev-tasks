@@ -27,6 +27,8 @@ import { fakeExec, fakeTracker, issue } from "../../__tests__/fakes.ts"
 import { readChannelState } from "../state.ts"
 
 const LAUNCHER = fileURLToPath(new URL("../../../../plugin/scripts/slack-channel.mjs", import.meta.url))
+const SERVER = fileURLToPath(new URL("../server.ts", import.meta.url))
+const LOADER = fileURLToPath(new URL("../../../node_modules/tsx/dist/loader.mjs", import.meta.url))
 const CONFIG = { mini: "eve", repo: { path: "/r" }, pluginRoot: "/p", slack: { allowedUsers: ["UNATE"] } }
 const QUESTION = "Should the notice show the publication date or the signing date?\n\nMy recommendation: use the publication date. Reply yes to go with it, or tell me what you want instead."
 
@@ -158,6 +160,23 @@ describe("the Slack channel into the front door (STEP-3293)", () => {
     await run(["ack", "msg:CQ:1700.6"], () => {}, { env: {}, isTTY: () => false })
     await new Promise((r) => setTimeout(r, 2_500))
     expect(second.events).toHaveLength(1)
+  }, 30_000)
+
+  it("is no channel from the runtime's own server either without AGENTD_CHANNEL, however it is started (STEP-3293 review)", async () => {
+    // The launcher checks first, and the server checks again: neither alone opens the channel.
+    const env: Record<string, string> = { PATH: process.env.PATH ?? "", HOME: root, AGENTD_HOME: paths.root, AGENTD_FRONT_DOOR: "1" }
+    const client = new Client({ name: "front-door", version: "1.0.0" })
+    const events: Notification[] = []
+    client.fallbackNotificationHandler = async (n) => void events.push(n)
+    await client.connect(new StdioClientTransport({ command: process.execPath, args: ["--import", LOADER, SERVER], env, stderr: "ignore" }))
+    clients.push(client)
+    expect(client.getServerVersion()).toEqual({ name: "slack", version: "1.0.0" })
+    expect(client.getServerCapabilities()?.experimental).toBeUndefined()
+    const { deps } = bridge()
+    await handleEnvelope(deps, reply("1700.8", "what do you recommend?"))
+    await new Promise((r) => setTimeout(r, 2_500))
+    expect(events).toEqual([])
+    expect(readChannelState(paths)).toBeNull()
   }, 30_000)
 
   for (const kind of ["front door without the channel", "another session"] as const) {

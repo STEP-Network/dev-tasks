@@ -174,8 +174,9 @@ export const ConfigSchema = z.object({
       tmuxPath: z.string().default("tmux"),
       /**
        * The Slack channel into the front door's session (STEP-3293): agentd
-       * starts it with --channels for the dev-tasks plugin, which the mini's
-       * managed settings approve. false: Slack messages wait for its next wakeup.
+       * starts it with --channels for the dev-tasks plugin when the mini's
+       * managed settings approve exactly that (channel/managed.ts). false, or
+       * not approved: Slack messages wait for its next wakeup.
        */
       channel: z.boolean().default(true),
     })
