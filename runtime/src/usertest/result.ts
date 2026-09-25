@@ -4,6 +4,7 @@
  * pages, so neutralise() runs over every piece of it before it is posted.
  */
 import { z } from "zod"
+import { NOTHING_NEEDED } from "../plain.ts"
 
 const Finding = z.object({
   severity: z.enum(["blocker", "major", "minor"]),
@@ -32,20 +33,42 @@ export function parseUserTestResult(raw: unknown): UserTestResult | null {
   return parsed.success ? parsed.data : null
 }
 
-/** What the revise loop acts on: blockers and major findings. Minor ones are reported, never sent back. */
+/**
+ * What the revise loop acts on: blockers and major findings. Minor ones are
+ * reported, never sent back. A report without a screenshot is no evidence:
+ * a session whose browser never started can still answer pass.
+ */
 export function verdictOf(result: UserTestResult | null): "pass" | "findings" | "error" {
-  if (!result || result.status === "blocked") return "error"
+  if (!result || result.status === "blocked" || !result.screenshots.length) return "error"
   return result.findings.some((f) => f.severity !== "minor") ? "findings" : "pass"
 }
 
-export function findingLines(result: UserTestResult | null): string[] {
-  return (result?.findings ?? []).filter((f) => f.severity !== "minor").map((f) => `${f.severity}: ${neutralise(f.title)} (${neutralise(f.where)})`)
+/** One line, cut short: what a model's text may be in a plain-text brief. */
+const oneLine = (text: string, max: number) => {
+  const line = text.replace(/\s+/g, " ").trim()
+  return line.length > max ? `${line.slice(0, max)}…` : line
 }
 
-/** No @-mention reaches a person, and no HTML closes the report's markup. */
-export function neutralise(text: string): string {
-  // Semicolons first: the entities below end in one.
-  return text.replace(/;/g, ",").replace(/@(?=[\w-])/g, "@\u200b").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+export function findingLines(result: UserTestResult | null): string[] {
+  return (result?.findings ?? []).filter((f) => f.severity !== "minor").map((f) => `${f.severity}: ${oneLine(f.title, 300)} (${oneLine(f.where, 100)})`)
+}
+
+/**
+ * Page and model text as inert markdown: one line (no heading, list item or
+ * table row of its own), no link, image, autolink or code span, no HTML, no
+ * @-mention, and no Linear profile URL, which would mention its person. Also
+ * the report's style: no semicolons and no dashes between clauses.
+ */
+export function neutralise(text: string, max = 1000): string {
+  return oneLine(text, max)
+    .replace(/;/g, ",")
+    .replace(/[–—]/g, ",")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/[\\`*_[\]()!|#~]/g, "\\$&")
+    .replace(/:\/\//g, ":\u200b//")
+    .replace(/@(?=[\w-])/g, "@\u200b")
 }
 
 export interface ReportInput {
@@ -59,28 +82,33 @@ export interface ReportInput {
   images: Array<{ file: string; caption: string; url: string }>
   gifUrl: string | null
   keptLocal: number
+  /** Why keptLocal screenshots are not shown, from "because". */
+  keptLocalReason?: string
 }
 
 const HEADLINE = { pass: "Passed", findings: "Found problems", skipped: "Did not run", error: "Could not finish" } as const
+/** GitHub refuses a comment over 65,536 characters: the report stays well inside. */
+const MAX_REPORT = 60_000
+const MAX_ITEMS = 30
 
 export function reportMarkdown(o: ReportInput): string {
   const r = o.result
   const lines = [`## Browser test by ${o.mini}: ${HEADLINE[o.verdict]}`, ""]
   if (o.reason) lines.push(neutralise(o.reason), "")
-  if (r) lines.push(neutralise(r.summary), "")
-  if (o.site) lines.push(`Site: ${o.site}. ${o.personaNote[0].toUpperCase()}${o.personaNote.slice(1)}.`, "")
+  if (r) lines.push(neutralise(r.summary, 2000), "")
+  if (o.site) lines.push(`Site: ${o.site}.${o.personaNote ? ` ${o.personaNote[0].toUpperCase()}${o.personaNote.slice(1)}.` : ""}`, "")
   if (r?.journeys.length) {
     lines.push("### Journeys", "", "| Journey | Result | Note |", "|---|---|---|")
-    for (const j of r.journeys) lines.push(`| ${neutralise(j.name)} | ${j.result} | ${neutralise(j.note ?? "")} |`)
+    for (const j of r.journeys.slice(0, MAX_ITEMS)) lines.push(`| ${neutralise(j.name, 200)} | ${j.result} | ${neutralise(j.note ?? "", 500)} |`)
     lines.push("")
   }
   if (r?.findings.length) {
     lines.push("### Problems found", "")
-    r.findings.forEach((f, n) => {
-      lines.push(`${n + 1}. **${f.severity[0].toUpperCase()}${f.severity.slice(1)}**: ${neutralise(f.title)}, at \`${neutralise(f.where)}\``)
+    r.findings.slice(0, MAX_ITEMS).forEach((f, n) => {
+      lines.push(`${n + 1}. **${f.severity[0].toUpperCase()}${f.severity.slice(1)}**: ${neutralise(f.title, 300)}, at ${neutralise(f.where, 200)}`)
       lines.push(`   Steps: ${neutralise(f.steps)}`, `   Expected: ${neutralise(f.expected)}`, `   Actual: ${neutralise(f.actual)}`)
       const shot = f.screenshot ? o.images.find((i) => i.file === f.screenshot) : undefined
-      if (shot) lines.push(`   ![${neutralise(f.title)}](${shot.url})`)
+      if (shot) lines.push(`   ![${neutralise(f.title, 100)}](${shot.url})`)
     })
     lines.push("")
   }
@@ -89,14 +117,16 @@ export function reportMarkdown(o: ReportInput): string {
     ["Accessibility", r?.accessibility ?? []],
     ["Not walked", r?.notWalked ?? []],
   ] as const) {
-    if (items.length) lines.push(`### ${title}`, "", ...items.map((i) => `- ${neutralise(i)}`), "")
+    if (items.length) lines.push(`### ${title}`, "", ...items.slice(0, MAX_ITEMS).map((i) => `- ${neutralise(i, 300)}`), "")
   }
   if (o.gifUrl) lines.push("### The main journey", "", `![The main journey](${o.gifUrl})`, "")
   if (o.images.length) {
     lines.push("### Screenshots", "")
-    for (const image of o.images) lines.push(`![${neutralise(image.caption)}](${image.url})`)
+    for (const image of o.images) lines.push(`![${neutralise(image.caption, 200)}](${image.url})`)
     lines.push("")
   }
-  if (o.keptLocal) lines.push(`${o.keptLocal} screenshots stay on the mini, because the pages they show hold real people's data.`)
-  return lines.join("\n").trim()
+  if (o.keptLocal) lines.push(`${o.keptLocal} screenshots stay on the mini, ${o.keptLocalReason ?? "because the pages they show hold real people's data"}.`, "")
+  let body = lines.join("\n").trim()
+  if (body.length > MAX_REPORT) body = `${body.slice(0, body.lastIndexOf("\n", MAX_REPORT))}\n\nThe report was too long to show in full.`
+  return `${body}\n\n${NOTHING_NEEDED}`
 }

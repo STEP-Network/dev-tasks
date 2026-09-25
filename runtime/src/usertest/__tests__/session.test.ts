@@ -1,3 +1,6 @@
+import { existsSync, mkdtempSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
 import { describe, expect, it } from "vitest"
 import { ConfigSchema } from "../../config.ts"
 import type { QueryFn, SdkMessage } from "../../worker/session.ts"
@@ -32,6 +35,12 @@ describe("denyOffAllowlist", () => {
     expect(r.hookSpecificOutput?.permissionDecision).toBe("deny")
   })
 
+  it("refuses extra request headers, which the test never needs", async () => {
+    const r = (await call("emulate", { extraHttpHeaders: '{"x-forwarded-for":"1.2.3.4"}' })) as { hookSpecificOutput?: { permissionDecision?: string } }
+    expect(r.hookSpecificOutput?.permissionDecision).toBe("deny")
+    expect(await call("emulate", { viewport: "390x844x3,mobile,touch" })).toEqual({})
+  })
+
   it("ignores tools that do not navigate", async () => {
     expect(await call("click", { uid: "1" })).toEqual({})
   })
@@ -48,6 +57,8 @@ describe("chromeMcpArgs", () => {
       "--usageStatistics=false",
       "--performanceCrux=false",
       "--redactNetworkHeaders=true",
+      "--categoryPerformance=false",
+      "--categoryMemory=false",
       "--workspace=/shots",
     ])
   })
@@ -78,10 +89,12 @@ describe("userTestSdkOptions", () => {
     expect(r).toMatchObject({ hookSpecificOutput: { permissionDecision: "deny" } })
   })
 
-  it("gives the browser tool only PATH from the runner's environment, and asks for the report's shape", () => {
+  it("starts the browser tool with an empty environment but PATH, and a home and temp folder in the run, and asks for the report's shape", () => {
     const server = o.mcpServers?.["chrome-devtools"] as { command?: string; args?: string[]; env?: Record<string, string> }
-    expect(Object.keys(server.env ?? {}).sort()).toEqual(["CHROME_DEVTOOLS_MCP_NO_USAGE_STATISTICS", "PATH"])
-    expect(server.args?.[0]).toBe("/mcp.js")
+    // The CLI would hand a stdio server its own environment: env -i clears it.
+    expect(server.command).toBe("/usr/bin/env")
+    expect(server.args?.slice(0, 7)).toEqual(["-i", `PATH=${process.env.PATH ?? ""}`, "HOME=/run", "TMPDIR=/run/tmp", "CHROME_DEVTOOLS_MCP_NO_USAGE_STATISTICS=1", process.execPath, "/mcp.js"])
+    expect(server.env).toBeUndefined()
     expect(o.outputFormat).toEqual({ type: "json_schema", schema: USERTEST_RESULT_SCHEMA })
   })
 })
@@ -108,8 +121,14 @@ describe("runBrowserSession", () => {
       for (const m of messages) yield m
     }
   const run = (messages: SdkMessage[]) =>
-    runBrowserSession({ config, query: queryOf(messages), mcpBin: "/mcp.js" }, { brief: "go", cwd: "/run", port: 9333, origins: ORIGINS, patterns: [], shotsDir: "/shots", env: {} })
+    runBrowserSession({ config, query: queryOf(messages), mcpBin: "/mcp.js" }, { brief: "go", cwd: mkdtempSync(join(tmpdir(), "ut-session-")), port: 9333, origins: ORIGINS, patterns: [], shotsDir: "/shots", env: {} })
   const report = { status: "pass", summary: "Fine.", journeys: [], findings: [], screenshots: [], notWalked: [] }
+
+  it("makes the browser tool's temp folder in the run", async () => {
+    const cwd = mkdtempSync(join(tmpdir(), "ut-session-"))
+    await runBrowserSession({ config, query: queryOf([INIT, done({ structured_output: report })]), mcpBin: "/mcp.js" }, { brief: "go", cwd, port: 9333, origins: ORIGINS, patterns: [], shotsDir: "/shots", env: {} })
+    expect(existsSync(join(cwd, "tmp"))).toBe(true)
+  })
 
   it("returns the report and its cost when the session ends with a readable one", async () => {
     expect(await run([INIT, done({ structured_output: report })])).toEqual({ result: report, costUsd: 0.8, problem: null })
@@ -117,7 +136,7 @@ describe("runBrowserSession", () => {
 
   it("says in plain words why there is no report", async () => {
     expect((await run([{ ...INIT, mcp_servers: [{ name: "chrome-devtools", status: "failed" }] }, done({ structured_output: report })])).problem).toBe("the browser tool did not start (failed)")
-    expect((await run([{ ...INIT, plugins: [{ name: "dev-tasks" }] }, done({ structured_output: report })])).problem).toMatch(/dev-tasks plugin loaded 1 times/)
+    expect((await run([{ ...INIT, plugins: [{ name: "dev-tasks" }] }, done({ structured_output: report })])).problem).toBe("the browser test started with the dev-tasks plugin loaded, which it must not")
     expect((await run([INIT, done({ subtype: "error_max_turns", is_error: true })])).problem).toBe("the browser test ended on an error")
     expect((await run([INIT, done({ structured_output: { status: "pass" } })])).problem).toBe("the browser test ended without a readable report")
   })

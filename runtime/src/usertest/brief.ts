@@ -45,7 +45,7 @@ export function buildUserTestBrief(i: UserTestBriefInput): string {
   const criteria = (i.issue.acceptanceCriteria || i.issue.description || "(the issue says no more)").slice(0, MAX_CRITERIA)
   const paths = i.changedPaths.slice(0, MAX_PATHS).map((p) => `- ${p}`)
   if (i.changedPaths.length > MAX_PATHS) paths.push(`- and ${i.changedPaths.length - MAX_PATHS} more`)
-  const before = i.targetKind === "preview" && (i.approvalClass === null || i.approvalClass !== "auto")
+  const before = i.targetKind === "preview" && i.approvalClass !== "auto"
   const shot = (name: string) => join(i.shotsDir, name)
   const sending =
     i.targetKind === "preview"
