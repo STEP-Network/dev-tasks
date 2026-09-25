@@ -13,6 +13,7 @@ import { redact } from "../log.ts"
 import { NOTHING_NEEDED } from "../plain.ts"
 import { truncateChars } from "../slack/text.ts"
 import type { CreateIssueInput } from "../tracker.ts"
+import type { VerdictOutcome } from "../verdict.ts"
 
 /** The Kind column's labels. */
 export type MondayKind = "Decision" | "Approval" | "Check" | "Request" | "FYI"
@@ -194,7 +195,21 @@ export const say = {
   notWaiting: () => `This change is no longer waiting for a test, so I did not record your verdict. ${NOTHING_NEEDED}`,
   gone: (id: string) => `I could not add this to ${id}, because ${id} is no longer in Linear. ${NOTHING_NEEDED}`,
   refused: (id: string) => `Linear refused this for a whole day, so I have stopped trying to add it to ${id}. Please write it again.`,
+  /** The item's Slack thread, the first time: the other door (spec 6). */
+  onMonday: (url: string) => `This is also on the Monday board: ${url}. Answer here or there, whichever suits you.`,
+  /** What a person settled in one door, said in the other (spec 6). */
+  mirrored: (name: string, door: Door, what: string) => `Answered by ${name} ${door}: ${oneLine(what, 300)}. This is done. ${NOTHING_NEEDED}`,
+  mirroredVerdict: (name: string, door: Door, out: VerdictOutcome) =>
+    out.outcome === "passed"
+      ? `${name} approved it ${door}. This is done. ${NOTHING_NEEDED}`
+      : out.outcome === "failed"
+        ? `${name} asked for a change ${door}, tracked as ${out.fix}, and it goes back to be fixed. ${NOTHING_NEEDED}`
+        : `${name} answered ${door}. ${NOTHING_NEEDED}`,
+  /** A tried change settled in the other door. */
+  settled: (id: string, what: string) => `Done: ${id} was ${what}. ${NOTHING_NEEDED}`,
 }
+
+type Door = "in Slack" | "on Monday"
 
 /** A UUID named by `name`, the same every time (plugin/src/tracker/ids.ts): the tracker's clientId. */
 export { stableUuid }
