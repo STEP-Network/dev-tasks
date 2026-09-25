@@ -45,6 +45,7 @@ function setup(
     failOn?: string[]
     exec?: Array<[RegExp, Partial<ExecResult>]>
     worker?: Record<string, unknown>
+    usertest?: Record<string, unknown>
     /** One message list per SDK session, for a runner that asks again. */
     sessions?: SdkMessage[][]
     job?: Parameters<typeof submitJob>[4]
@@ -55,7 +56,7 @@ function setup(
   mkdirSync(join(repo, ".claude"), { recursive: true })
   writeFileSync(join(repo, ".claude", "project-config.json"), JSON.stringify({ git: { autoMergePolicy: { staging: "auto-after-checks-and-review" } } }))
   const paths = agentPaths(home)
-  const config = ConfigSchema.parse({ mini: "eve", repo: { path: repo }, pluginRoot: "/Users/eve/dev-tasks/plugin", slack: { allowedUsers: ["UNATE"] }, worker: opts.worker })
+  const config = ConfigSchema.parse({ mini: "eve", repo: { path: repo }, pluginRoot: "/Users/eve/dev-tasks/plugin", slack: { allowedUsers: ["UNATE"] }, worker: opts.worker, usertest: opts.usertest })
   const fake = fakeTracker([issue({ id: "STEP-7", title: "Fix the date", labels: ["polads", "agent-ready"], ...opts.issueOver })], undefined, opts.failOn)
   const f = fakeExec([
     ...(opts.exec ?? []),
@@ -732,6 +733,31 @@ describe("modelFor, checkPlugins and checkBilling", () => {
     expect(checkBilling("none")).toBeNull()
     expect(checkBilling(undefined)).toBeNull()
     for (const source of ["ANTHROPIC_API_KEY", "apiKeyHelper", "/login managed key"]) expect(checkBilling(source), source).toMatch(/would bill an API key/)
+  })
+})
+
+describe("a develop job and the browser test (WS5)", () => {
+  const usertest = { enabled: true, previewEnvironment: "Preview – example", previewHost: "^app-[a-z0-9-]+\\.vercel\\.app$", stagingOrigin: "https://staging.example.com" }
+  const changed = (files: string) => [[/diff --name-only origin\/staging\.\.\.HEAD/, { stdout: files }]] as Array<[RegExp, Partial<ExecResult>]>
+  const arms = (lines: string[]) => lines.filter((l) => l.startsWith("gh pr merge"))
+
+  it("leaves auto-merge to the browser test when a user can see the change, which arms it after its test", async () => {
+    const { deps, job, f, outbox } = setup({ usertest, exec: changed("components/account/Profile.tsx\n") })
+    expect(await runJob(deps, job.id)).toMatchObject({ status: "done", prUrl: PR })
+    expect(outbox()[1]).toBe(`STEP-7: I opened <${PR}|PR #1701> for "Fix the date". It goes in by itself once I have tried it in a browser and the checks and the review pass. Nothing needed from you.`)
+    const lines = f.lines()
+    expect(arms(lines)).toEqual([`gh pr merge ${PR} --auto --squash --delete-branch`])
+    expect(lines.indexOf(arms(lines)[0])).toBeGreaterThan(lines.findIndex((l) => l.startsWith(`gh pr view ${PR} --json number,headRefOid`)))
+  })
+
+  it("arms at once when no user can see the change, or the browser test is off", async () => {
+    for (const o of [{ usertest, exec: changed("docs/a.md\n") }, { usertest: { ...usertest, enabled: false }, exec: changed("components/account/Profile.tsx\n") }]) {
+      const { deps, job, f, outbox } = setup(o)
+      await runJob(deps, job.id)
+      expect(outbox()[1]).toContain("It goes in by itself once the checks and the review pass.")
+      expect(arms(f.lines())).toEqual([`gh pr merge ${PR} --auto --squash --delete-branch`])
+      expect(f.lines().some((l) => l.startsWith(`gh pr view ${PR} --json number,headRefOid`))).toBe(false)
+    }
   })
 })
 

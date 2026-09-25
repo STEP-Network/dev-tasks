@@ -1049,6 +1049,19 @@ the preview and staging.
    `~/.agentd/bin/agentctl probe-browser`, which opens staging and shows that
    any other site is refused, on the real Chrome and with no model.
 
+### In develop and revise jobs
+
+Once a develop job opens its PR, or a revise round pushes, the agent tests
+the PR's preview, signed out. Where the mini may auto-merge, a develop PR
+that a user could see waits for the test: auto-merge is armed after a pass,
+and also when the test could not run (the PR then says why, and the checks
+and the review still decide). A revise round's push switches auto-merge off
+until its own test passes. Findings leave auto-merge off, and agentd's PR
+watcher sends the blockers and major findings back as a revise round. A
+change no user can see (docs, tests, `.claude`, `.github`) is not tested,
+and is armed at once. The test's own time is `previewWaitMinutes` plus
+`wallClockMinutes`, and runs and verdicts older than 14 days are removed.
+
 ### A merged PR's test on staging
 
 `~/.agentd/bin/agentctl usertest --issue STEP-n --pr <number>` queues the

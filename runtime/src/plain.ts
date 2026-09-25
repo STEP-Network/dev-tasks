@@ -62,9 +62,10 @@ export function feedbackFor(reasons: readonly string[]): string {
   // "Claude review failed" is a check, whose content is a review.
   const review = reasons.some((r) => /changes requested|comment|asked|review/i.test(r))
   const checks = reasons.some((r) => /failed/i.test(r) && !/review/i.test(r))
-  if (review && checks) return "the review comments and the failing checks"
-  if (checks) return "the failing checks"
-  return "the review comments"
+  const browser = reasons.some((r) => /browser test/i.test(r))
+  const parts = [review && "the review comments", checks && "the failing checks", browser && "the problems the browser test found"].filter((p): p is string => Boolean(p))
+  if (!parts.length) return "the review comments"
+  return parts.length === 1 ? parts[0] : `${parts.slice(0, -1).join(", ")} and ${parts.at(-1)}`
 }
 
 /** A PR as a Slack link that reads "PR #1704". */

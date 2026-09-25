@@ -38,6 +38,8 @@ export interface ReviseRequest {
   reasons: string[]
   /** A person's own words, when a Slack reply asked for the round (STEP-3285). */
   instruction?: string
+  /** The browser test's blockers and major findings, when they brought the PR back (WS5). */
+  usertestFindings?: string[]
 }
 
 export interface JobRecord {

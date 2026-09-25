@@ -37,7 +37,8 @@ import { denyBannedBash, denyWorkerPaths, ENV_TEMPLATE, workerEnv, workerToolDen
 import { SMALL_CHANGE_FILES, clause, toOutcome, type Outcome, type ResultMessageLike } from "./outcome.ts"
 import { buildReviseBrief, finalizeRevise, gatherFeedback } from "./revise.ts"
 import { checkBilling, checkPlugins, runSession, type QueryFn, type SdkMessage } from "./session.ts"
-import { runUserTestJob } from "./usertest-step.ts"
+import { runUserTestJob, userTestStep } from "./usertest-step.ts"
+import { isBrowserVisible } from "../usertest/target.ts"
 
 // Moved to session.ts, which the browser test shares: every import from here keeps working.
 export { checkBilling, checkPlugins, runSession, type QueryFn, type SdkMessage, type SessionEnd } from "./session.ts"
@@ -419,12 +420,21 @@ export async function runJob(deps: RunDeps, jobId: string): Promise<JobResult> {
   const model = modelFor(issue, job, config)
   const limits = { maxTurns: config.worker.maxTurns, maxBudgetUsd: config.worker.maxBudgetUsd, wallClockMinutes: config.worker.wallClockMinutes }
   const merge = mergeMode(readAutoMergePolicy(config.repo.path, config.repo.base), config)
+  // Whether a user could see this change, known once the session has made it.
+  // A let, set below: finishWith also runs before the session (a failed
+  // worktree), and must not read a const that does not exist yet.
+  let visibleChange = true
   const finishWith = async (worktree: string | null, outcome: Outcome): Promise<JobResult> => {
     let result: JobResult
+    // The browser test arms auto-merge itself once it passes (WS5), so finalize must not arm it first.
+    const deferred = !revise && merge === "auto" && config.usertest.enabled && visibleChange
+    const mode: MergeMode = deferred ? "deferred" : merge
     try {
       const fin = revise
         ? await finalizeRevise({ exec, paths, config, issue, revise, worktree, now: deps.now }, outcome)
-        : await finalize({ exec, tracker, paths, config, issue, branch, worktree, merge, model, minutes: minutes(), now: deps.now }, outcome)
+        : await finalize({ exec, tracker, paths, config, issue, branch, worktree, merge: mode, model, minutes: minutes(), now: deps.now }, outcome)
+      // It never throws, so a broken test never turns a done job into a blocked one.
+      if (fin.status === "done" && fin.prUrl) await userTestStep(deps, { job, issue, prUrl: fin.prUrl, merge: mode, pushed: fin.pushed, revise })
       result = { status: fin.status, reason: fin.reason, prUrl: fin.prUrl, branch, costUsd: outcome.costUsd, turns: outcome.turns, minutes: minutes() }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
@@ -474,6 +484,7 @@ export async function runJob(deps: RunDeps, jobId: string): Promise<JobResult> {
   // A revise job's own commits are those past the PR's head on origin.
   const since = revise ? revise.branch : config.repo.base
   const changed = await changedFiles(exec, worktree.path, since).catch(() => [] as string[])
+  visibleChange = isBrowserVisible(changed, config.usertest.skipPaths)
   const small = changed.filter((f) => !TEST_FILE_RE.test(f)).length <= SMALL_CHANGE_FILES
   const judge = (end: typeof first) =>
     requireMutations(toOutcome(end.result, { abortedByClock: end.abortedByClock, thrown: end.thrown, limits, requireTitle, small }), changed)

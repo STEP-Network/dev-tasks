@@ -36,6 +36,7 @@ import { enqueueSlack } from "../outbox.ts"
 import { feedbackFor, NOTHING_NEEDED, prLink } from "../plain.ts"
 import { approvalLabel, approvalPatch, classOfLabels, classRank, type ApprovalClass, type Tracker } from "../tracker.ts"
 import type { Exec } from "../worker/git.ts"
+import { readUserTestState, type UserTestState } from "../usertest/state.ts"
 
 export const MAX_REVISE_ROUNDS = 3
 
@@ -151,7 +152,11 @@ export type RevisePlan =
  * What one open PR needs, from its view, the watcher's record and which
  * failing checks are the infrastructure's (`infra`, by name). Pure.
  */
-export function planRevision(view: OwnPrView, pr: WatchedPr, ctx: { mini: string; required: readonly string[]; infra: Record<string, boolean> }): RevisePlan {
+export function planRevision(
+  view: OwnPrView,
+  pr: WatchedPr,
+  ctx: { mini: string; required: readonly string[]; infra: Record<string, boolean>; usertest?: UserTestState | null },
+): RevisePlan {
   const handled = new Set(pr.revise?.handled ?? [])
   const author = view.author?.login ?? ""
   const others = (who?: PrActor) => Boolean(who?.login) && who!.login !== author
@@ -167,6 +172,12 @@ export function planRevision(view: OwnPrView, pr: WatchedPr, ctx: { mini: string
     if (!others(c.author) || !trustedCommenter(c) || !addressed.test(c.body ?? "") || handled.has(`comment:${c.id}`)) continue
     ids.push(`comment:${c.id}`)
     reasons.push(`a comment from ${c.author!.login}`)
+  }
+  // This mini's own browser test of the PR's head (WS5): its blockers and major findings.
+  const ut = ctx.usertest
+  if (ut && ut.verdict === "findings" && ut.head === view.headRefOid && !handled.has(`usertest:${ut.head}`)) {
+    ids.push(`usertest:${ut.head}`)
+    reasons.push("the browser test found problems")
   }
   const failing = failingRequired(view, ctx.required)
   const infraOnly: FailingCheck[] = []
@@ -367,7 +378,8 @@ export async function reviseOwnPr(deps: ReviseDeps, pr: WatchedPr, view: OwnPrVi
   const verdicts = await classifyFailures(deps, view, pr, required)
   const infra = Object.fromEntries(Object.entries(verdicts).map(([name, v]) => [`${view.headRefOid}:${name}`, v]))
   let record: WatchedPr = { ...(await raiseClass(deps, pr, view)), infra }
-  const plan = planRevision(view, pr, { mini: deps.config.mini, required, infra: verdicts })
+  const usertest = readUserTestState(deps.paths, pr.url)
+  const plan = planRevision(view, pr, { mini: deps.config.mini, required, infra: verdicts, usertest })
   const now = deps.now()
   switch (plan.kind) {
     case "none":
@@ -442,7 +454,15 @@ export async function reviseOwnPr(deps: ReviseDeps, pr: WatchedPr, view: OwnPrVi
       const round = (pr.revise?.rounds ?? 0) + 1
       submitJob(deps.paths, pr.issue, null, now, {
         kind: "revise",
-        revise: { url: view.url, number: view.number, branch: view.headRefName, round, since: pr.revise?.lastRoundAt ?? pr.openedAt, reasons: plan.reasons },
+        revise: {
+          url: view.url,
+          number: view.number,
+          branch: view.headRefName,
+          round,
+          since: pr.revise?.lastRoundAt ?? pr.openedAt,
+          reasons: plan.reasons,
+          ...(plan.handled.some((id) => id.startsWith("usertest:")) && usertest ? { usertestFindings: usertest.findings } : {}),
+        },
       })
       record = { ...record, revise: { rounds: round, handled: [...(pr.revise?.handled ?? []), ...plan.handled], lastRoundAt: now.toISOString() } }
       appendLedger(deps.paths, { type: "pr.revise", issue: pr.issue, url: pr.url, round, reasons: plan.reasons }, now)

@@ -557,6 +557,27 @@ describe("cleanup", () => {
     expect(f.lines()).toEqual([`${GIT} -C /r worktree remove --force ${join(paths.worktrees, "STEP-1-x")}`, `${GIT} -C /r worktree prune`])
   })
 
+  it("removes a browser test's folder and its recorded verdict after 14 days, and keeps newer ones (WS5)", async () => {
+    const paths = agentPaths(mkdtempSync(join(tmpdir(), "agentd-clean-ut-")))
+    const config = ConfigSchema.parse({ mini: "eve", repo: { path: "/r" }, pluginRoot: "/p", slack: { allowedUsers: ["UNATE"] } })
+    const old = new Date(NOW.getTime() - 15 * 86_400_000)
+    const oldRun = join(paths.usertest, "STEP-1-20260901000000")
+    mkdirSync(join(oldRun, "shots"), { recursive: true })
+    writeFileSync(join(oldRun, "shots", "main-01.png"), "png")
+    utimesSync(oldRun, old, old)
+    const newRun = join(paths.usertest, "STEP-2-20260920000000")
+    mkdirSync(newRun, { recursive: true })
+    mkdirSync(join(paths.state, "usertest"), { recursive: true })
+    writeFileSync(join(paths.state, "usertest", "x.json"), "{}")
+    utimesSync(join(paths.state, "usertest", "x.json"), old, old)
+    writeFileSync(join(paths.state, "usertest", "y.json"), "{}")
+    await cleanup({ paths, config, exec: fakeExec().exec, now: () => NOW })
+    expect(existsSync(oldRun)).toBe(false)
+    expect(existsSync(newRun)).toBe(true)
+    expect(existsSync(join(paths.state, "usertest", "x.json"))).toBe(false)
+    expect(existsSync(join(paths.state, "usertest", "y.json"))).toBe(true)
+  })
+
   it("keeps the retro's lessons and history to 90 days, and removes an old retro worktree from dev-tasks, not the project (STEP-3290)", async () => {
     const paths = agentPaths(mkdtempSync(join(tmpdir(), "agentd-clean-retro-")))
     const config = ConfigSchema.parse({ mini: "eve", repo: { path: "/r" }, pluginRoot: "/d/plugin", slack: { allowedUsers: ["UNATE"] } })

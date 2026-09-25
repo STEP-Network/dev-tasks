@@ -36,8 +36,10 @@ import { CHECKLIST, checklistGaps, clause, type Outcome, type WorkerReport } fro
  * Who merges the PR. auto: auto-merge is armed, as the project's policy
  * allows. person: the policy leaves it to a person. mini-off: the policy
  * allows it, but this mini's worker.autoMerge is false (a supervised phase).
+ * deferred: the policy and the mini allow auto-merge, and the browser test
+ * arms it once it passes (worker/usertest-step.ts).
  */
-export type MergeMode = "auto" | "person" | "mini-off"
+export type MergeMode = "auto" | "person" | "mini-off" | "deferred"
 
 export const MINI_OFF = "auto-merge off on this mini: a person merges"
 
@@ -208,6 +210,7 @@ async function settle(ctx: FinalizeContext, outcome: Outcome, progress: { pushed
     // In plain words (../plain.ts): what happened, and whether anyone needs to act.
     const who = {
       auto: `It goes in by itself once the checks and the review pass. ${NOTHING_NEEDED}`,
+      deferred: `It goes in by itself once I have tried it in a browser and the checks and the review pass. ${NOTHING_NEEDED}`,
       person: "A person needs to merge it once the checks pass.",
       "mini-off": "Auto-merge is off on this mini, so a person needs to merge it once the checks pass.",
     }[ctx.merge]

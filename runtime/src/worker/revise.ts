@@ -118,6 +118,16 @@ export function buildReviseBrief(input: BriefInput, revise: ReviseRequest, feedb
     ...(feedback.logs.length
       ? ["## Failing checks", "", ...feedback.logs.flatMap((l) => [`### ${l.name}`, "", "```", l.tail, "```", ""])]
       : []),
+    ...(revise.usertestFindings?.length
+      ? [
+          "## What the browser test found",
+          "",
+          "From this mini's own test of the PR's preview in a real browser. Each is a problem a user would meet: fix it, or say in your reply why it is not one. The full report with screenshots is on the PR.",
+          "",
+          ...revise.usertestFindings.map((f) => `- ${f}`),
+          "",
+        ]
+      : []),
     "## Your job",
     "",
     "Fix every point that needs a change, with tests, and commit. Never undo or rewrite a commit someone else pushed. For a point that needs no change, say why. Then run the self-check in your rules (the one-hop sweep, and a mutation check per new guard test).",
