@@ -601,7 +601,7 @@ describe("the Monday bridge: test day (STEP-3289)", () => {
     monday.says(item.id, NATE, "merge it")
     later(2)
     await bridge.sync()
-    expect(monday.called("postUpdate").at(-1)?.[1]).toBe("Eve: I read only PASS or FAIL here. Start your reply with PASS if it works, or with FAIL and what you saw.")
+    expect(monday.called("postUpdate").at(-1)?.[1]).toBe("Eve: I read only PASS or FAIL here. Start your reply with PASS if it works, or with FAIL: and what you saw.")
     expect(fake.called("updateIssue")).toEqual([])
     fake.issues.set("STEP-7", { ...fake.issues.get("STEP-7")!, state: "On hold", labels: ["polads", "human-todo"] })
     monday.says(item.id, NATE, "PASS")

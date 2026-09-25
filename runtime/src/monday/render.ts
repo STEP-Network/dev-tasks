@@ -141,7 +141,7 @@ export function uatBody(title: string, steps: string | null): string {
   return [
     `"${oneLine(title, TITLE_MAX)}" is on the test site, test.polads.eu, and waits for a person to try it before the next release.`,
     `What to check:\n${steps?.trim() || "Open the issue behind the Linear link and try what it describes."}`,
-    "When you have tried it, reply PASS if it works as described, or FAIL and what you saw. Reply to this update, or write it in the Answer column.",
+    "When you have tried it, reply PASS if it works as described, or FAIL: and what you saw. Reply to this update, or write it in the Answer column.",
   ].join("\n\n")
 }
 
@@ -165,7 +165,7 @@ export const say = {
   onlyVerdicts: (look = false) =>
     look
       ? "I read only a verdict here. Start your reply with Looks good if it looks right, or with Change: and what should change."
-      : "I read only PASS or FAIL here. Start your reply with PASS if it works, or with FAIL and what you saw.",
+      : "I read only PASS or FAIL here. Start your reply with PASS if it works, or with FAIL: and what you saw.",
   notWaiting: () => `This change is no longer waiting for a test, so I did not record your verdict. ${NOTHING_NEEDED}`,
   gone: (id: string) => `I could not add this to ${id}, because ${id} is no longer in Linear. ${NOTHING_NEEDED}`,
   refused: (id: string) => `Linear refused this for a whole day, so I have stopped trying to add it to ${id}. Please write it again.`,
