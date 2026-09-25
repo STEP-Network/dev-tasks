@@ -229,6 +229,15 @@ describe("the Monday bridge: Linear to Needs you (STEP-3289)", () => {
     expect(readRecords(paths)).toEqual([expect.objectContaining({ key: "needs-STEP-7", itemId: monday.item(/STEP|question/)!.id })])
   })
 
+  it("does not put back an item a person deleted while its need lasts", async () => {
+    const { bridge, monday, later } = setup([issue({ id: "STEP-8", state: "On hold", labels: ["human-todo"] })])
+    await bridge.sync()
+    monday.items.delete(monday.item(/job for a person/)!.id)
+    later(2)
+    await bridge.sync()
+    expect(monday.called("createItem")).toHaveLength(1)
+  })
+
   it("shows the worker's question in words, where this mini asked it", async () => {
     const { bridge, monday, texts, paths } = setup([issue({ id: "STEP-7", title: "Fix the date", state: "On hold", labels: ["awaiting-answer"], assigneeId: "user-eve" })], {
       extra: { "STEP-7": { owner: { name: "Eve", email: "eve@polads.eu" } } },
@@ -328,7 +337,9 @@ describe("the Monday bridge: answers (STEP-3289)", () => {
     later(2)
     await bridge.sync()
     expect(stateOf(monday.items.get(item.id))).toBe("Done")
+    // Read once: the next poll neither appends it again nor reads its "merge" as an instruction now the question is gone.
     expect(fake.called("updateIssue")).toHaveLength(1)
+    expect(inbox()).toEqual([])
   })
 
   it("reads the Answer column as the person who wrote it, and answers with a new update", async () => {
@@ -390,8 +401,10 @@ describe("the Monday bridge: answers (STEP-3289)", () => {
     later(2)
     await bridge.sync()
     expect(logged.some((l) => l.level === "warn" && /not acted on yet/.test(l.msg))).toBe(true)
+    later(60)
+    await bridge.sync()
     expect(monday.called("postUpdate").some((c) => /refused this for a whole day/.test(String(c[1])))).toBe(false)
-    later(24 * 60 + 5)
+    later(23 * 60 + 5)
     await bridge.sync()
     expect(monday.called("postUpdate").filter((c) => /refused this for a whole day/.test(String(c[1])))).toHaveLength(1)
     later(2)
@@ -416,6 +429,10 @@ describe("the Monday bridge: requests (STEP-3289)", () => {
     expect(stateOf(item)).toBe("Waiting on agent")
     expect(item.columns[COL.kind]?.text).toBe("Request")
     expect(monday.called("postUpdate").at(-1)?.[1]).toBe(`Eve: Thanks, Kristoffer. I filed this for the agents as ${filed.id}. It moves to Done when the change is released.`)
+    later(2)
+    await bridge.sync()
+    // Dragged back into Requests, it is still the same request.
+    monday.items.get(id)!.groupId = "g_req"
     later(2)
     await bridge.sync()
     expect(fake.called("createIssue")).toHaveLength(1)
