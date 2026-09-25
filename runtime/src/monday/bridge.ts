@@ -253,6 +253,8 @@ export function createMondayBridge(deps: MondayBridgeDeps): MondayBridge {
       }
     }
     for (const change of pass.board.changes) {
+      // Only the Answer column holds words: another watched column (the Class column, Task 12) is not an answer.
+      if (change.columnId !== cfg!.columns.answer) continue
       const rec = byItem.get(change.itemId)
       const item = pass.byId.get(change.itemId)
       const who = person.get(change.userId)
@@ -647,7 +649,7 @@ export function createMondayBridge(deps: MondayBridgeDeps): MondayBridge {
       const now = deps.now()
       await readLimit(now)
       const since = readCursor(paths) ?? new Date(now.getTime() - 2 * OVERLAP_MS)
-      const board = await api.readBoard(cfg.boardId, Object.values(cfg.columns), { columnId: cfg.columns.answer, since: new Date(since.getTime() - OVERLAP_MS) })
+      const board = await api.readBoard(cfg.boardId, Object.values(cfg.columns), { columnIds: [cfg.columns.answer], since: new Date(since.getTime() - OVERLAP_MS) })
       const pass: Pass = { board, groups: groupIds(board.groups), byId: new Map(board.items.map((i) => [i.id, i])), now }
       // Each part on its own: Linear down stops the needs, not the replies.
       const part = async (name: string, fn: () => Promise<void>) => {
