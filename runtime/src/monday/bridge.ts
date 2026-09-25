@@ -435,7 +435,8 @@ export function createMondayBridge(deps: MondayBridgeDeps): MondayBridge {
       [c.state]: { label: "Waiting on agent" },
       ...(item.creatorId ? { [c.person]: { personsAndTeams: [{ id: Number(item.creatorId), kind: "person" }] } } : {}),
     })
-    if (item.groupId !== groupOf(pass, "working")) await api.moveItem(item.id, groupOf(pass, "working"))
+    const working = pass.groups.working
+    if (working && item.groupId !== working) await api.moveItem(item.id, working)
     rec.linked = true
     rec.state = "Waiting on agent"
     save(rec)
@@ -445,6 +446,12 @@ export function createMondayBridge(deps: MondayBridgeDeps): MondayBridge {
 
 
   async function requests(pass: Pass): Promise<void> {
+    await fileRequests(pass)
+    await updateRequests(pass)
+  }
+
+  /** A person's new item in the Requests group, filed. */
+  async function fileRequests(pass: Pass): Promise<void> {
     const tracked = new Set(readRecords(paths).map((r) => r.itemId))
     for (const item of pass.board.items) {
       if (item.groupId !== groupOf(pass, "requests") || tracked.has(item.id)) continue
@@ -460,8 +467,15 @@ export function createMondayBridge(deps: MondayBridgeDeps): MondayBridge {
         log.warn("monday request not filed yet", { item: item.id, error: message(error) })
       }
     }
+  }
 
-    const open = readRecords(paths).filter((r) => r.kind === "request" && r.state !== "Done")
+  /**
+   * Each request item on this board kept in step with its issue. With the
+   * Requests board configured, only the ones still here (the migration,
+   * Task 11, moves them): that board's own are its part's.
+   */
+  async function updateRequests(pass: Pass): Promise<void> {
+    const open = readRecords(paths).filter((r) => r.kind === "request" && r.state !== "Done" && pass.byId.has(r.itemId))
     if (!open.length) return
     const issues = new Map((await people.byIdentifiers(open.map((r) => r.issue))).map((i) => [i.id, i]))
     for (const rec of open) {
@@ -773,8 +787,12 @@ export function createMondayBridge(deps: MondayBridgeDeps): MondayBridge {
       await part("words", () => hearWords(pass))
       if (asked) await part("request words", () => hearWords({ board: asked.board, groups: {}, byId: asked.byId, now }))
       if (!requestsBoard) await part("requests", () => requests(pass))
-      else if (asked) await part("requests", () => requestsBoard.fromBoard(asked))
-      if (requestsBoard && asked) await part("slack requests", () => requestsBoard.adopt(asked))
+      else {
+        // New asks come to the Requests board. Those still on this one stay in step until the migration moves them.
+        if (asked) await part("requests", () => requestsBoard.fromBoard(asked))
+        if (asked) await part("slack requests", () => requestsBoard.adopt(asked))
+        await part("old requests", () => updateRequests(pass))
+      }
       const linked = await part("needs", () => needs(pass))
       // Not without the needs: an item whose issue has a thread on another mini would get a second one.
       if (doors && linked) await part("threads", () => threads(pass, linked))
