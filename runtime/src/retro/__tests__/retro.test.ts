@@ -10,9 +10,10 @@ import { fakeExec } from "../../__tests__/fakes.ts"
 import type { ExecResult } from "../../worker/git.ts"
 import type { QueryFn, SdkMessage } from "../../worker/run.ts"
 import type { FyiNote } from "../fyi.ts"
+import { privateNames, privateTextProblems } from "../guard.ts"
 import { readLessons, recordLessons, type Lesson } from "../lessons.ts"
 import { weekMetrics } from "../metrics.ts"
-import { buildRetroBrief, clusterLessons, dueSlot, readRetros, RETRO_RESULT_SCHEMA, retroSummary, runRetro } from "../retro.ts"
+import { buildRetroBrief, clusterLessons, dueSlot, readRetros, RETRO_RESULT_SCHEMA, retroRules, retroSummary, runRetro } from "../retro.ts"
 
 const NOW = new Date("2026-09-25T12:30:00.000Z") // a Friday, 14:30 in Copenhagen
 const POLADS = (n: number) => `https://github.com/STEP-Network/v0-politiske-annoncer/pull/${n}`
@@ -26,8 +27,17 @@ const BASE_TREE = "c".repeat(40)
 const TREE = "d".repeat(40)
 const HEAD = "e".repeat(40)
 
+/** The people and ids a public line must never carry come from here: two people on the Monday board, and a Slack member id. */
 const config = (root: string, retro: Record<string, unknown> = {}) =>
-  ConfigSchema.parse({ mini: "eve", repo: { path: "/r" }, pluginRoot: join(root, "dev-tasks", "plugin"), slack: { allowedUsers: ["UNATE"] }, retro: { enabled: true, ...retro } })
+  ConfigSchema.parse({
+    mini: "eve",
+    repo: { path: "/r" },
+    pluginRoot: join(root, "dev-tasks", "plugin"),
+    slack: { allowedUsers: ["UNATE"] },
+    retro: { enabled: true, ...retro },
+    bridges: { monday: { people: [{ id: "70001", name: "Nate Refslund" }, { id: "70002", name: "Kristoffer" }], defaultPerson: "70001" } },
+  })
+const EVIDENCE = { id: "STEP-900", url: "https://linear.app/step/issue/STEP-900" }
 
 const at = (days: number) => new Date(NOW.getTime() - days * 86_400_000).toISOString()
 
@@ -74,7 +84,7 @@ const report = (over: Record<string, unknown> = {}): SdkMessage => ({
   },
 })
 
-function setup(opts: { exec?: Array<[RegExp, Partial<ExecResult>]>; result?: SdkMessage; init?: SdkMessage; retro?: Record<string, unknown> } = {}) {
+function setup(opts: { exec?: Array<[RegExp, Partial<ExecResult>]>; result?: SdkMessage; init?: SdkMessage; retro?: Record<string, unknown>; linearDown?: boolean } = {}) {
   const home = mkdtempSync(join(tmpdir(), "agentd-retro-"))
   const paths = agentPaths(home)
   seed(paths)
@@ -102,9 +112,20 @@ function setup(opts: { exec?: Array<[RegExp, Partial<ExecResult>]>; result?: Sdk
     })()
   }
   const fyi: FyiNote[] = []
-  const deps = { paths, config: cfg, exec: f.exec, query, now: () => NOW, log: { info() {}, warn() {}, error() {} }, fyi: { post: async (n: FyiNote) => void fyi.push(n) }, claudeToken: null }
+  /** Each evidence issue filed, with how many commands had run by then; and each PR linked on one. */
+  const filed: Array<{ key: string; title: string; description: string; commandsBefore: string[] }> = []
+  const linked: Array<[string, string]> = []
+  const evidence = {
+    file: async (input: { key: string; title: string; description: string }) => {
+      if (opts.linearDown) throw new Error("Linear: request failed (503)")
+      filed.push({ ...input, commandsBefore: f.lines() })
+      return EVIDENCE
+    },
+    link: async (id: string, url: string) => void linked.push([id, url]),
+  }
+  const deps = { paths, config: cfg, exec: f.exec, query, now: () => NOW, log: { info() {}, warn() {}, error() {} }, fyi: { post: async (n: FyiNote) => void fyi.push(n) }, evidence, claudeToken: null }
   const outbox = () => listNew<{ kind: string; channel?: string; text: string }>(paths.outbox).map((e) => e.payload)
-  return { paths, cfg, f, seen, deps, fyi, outbox, wt, root: join(home, "dev-tasks") }
+  return { paths, cfg, f, seen, deps, fyi, filed, linked, outbox, wt, root: join(home, "dev-tasks") }
 }
 
 describe("when the retro is due (STEP-3290)", () => {
@@ -148,6 +169,11 @@ describe("the retro's brief", () => {
     expect(brief).toContain("- the worker's prompts (runtime/prompts/*.md)")
     expect(brief).toMatch(/the runner checks the diff and opens no PR at all if one file is outside these/)
     expect(brief).toContain("Leave your changes in the worktree, uncommitted: the runner commits them")
+    // dev-tasks is public: rules in general terms, never quoting; the evidence goes to Linear.
+    expect(brief).toContain("## Public and private")
+    expect(brief).toContain("dev-tasks is public: anyone can read the files you change and each change's why. Write the rules in general terms only, never quoting.")
+    expect(brief).toContain("Each change's evidence is private: the runner files it in a Linear issue that only the team reads")
+    expect(retroRules("eve")).toContain("dev-tasks is public: write rules in general terms, never quoting a lesson or naming a person")
     expect(brief).toContain("Baseline: 1 of 9 (11 percent) on 2026-09-25")
   })
 })
@@ -163,9 +189,13 @@ describe("runRetro", () => {
     expect(r.body).toContain("Weekly retro by eve, the week to 2026-09-25 (STEP-3290).")
     expect(r.body).toContain("| First-pass merges | 1 of 2 (50 percent) | 1 of 1 (100 percent) |")
     expect(r.body).toContain("| PRs with a must-fix finding | 2 of 3 (67 percent) |")
-    expect(r.body).toContain("- self-check, siblings: 3 times (STEP-1)")
-    expect(r.body).toContain("- fix, tests: 2 times (STEP-1)")
+    // Kinds and counts only: dev-tasks is public, so the misses' issues go to the private evidence.
+    expect(r.body).toContain("- self-check, siblings: 3 times\n")
+    expect(r.body).toContain("- fix, tests: 2 times\n")
+    expect(r.body).not.toContain("STEP-1")
+    expect(privateTextProblems(r.body, "the PR body", privateNames(deps.config))).toEqual([])
     expect(r.body).toContain("(A dry run: the retro session drafts the changes.)")
+    expect(r.body).toContain("(A dry run: the runner files the lessons behind each change in a private Linear issue, and names it here.)")
     expect(r.body).toContain("This PR never auto-merges. A person reviews and merges it, like any other.")
     expect(seen).toEqual([])
     expect(f.lines().every((l) => l.startsWith("gh pr list "))).toBe(true)
@@ -174,8 +204,8 @@ describe("runRetro", () => {
     expect(readFileSync(join(paths.state, "lessons.jsonl"), "utf8")).toBe(before)
   })
 
-  it("opens one dev-tasks PR with the numbers and the evidence, never arms it to merge, and says so plainly in Slack and to Monday", async () => {
-    const { deps, f, seen, outbox, fyi, paths, wt, root, cfg } = setup()
+  it("opens one dev-tasks PR with the numbers, files the evidence in a private Linear issue, never arms the PR to merge, and says so plainly in Slack and to Monday", async () => {
+    const { deps, f, seen, outbox, fyi, filed, linked, paths, wt, root, cfg } = setup()
     const r = await runRetro(deps, { slot: "2026-09-25", dryRun: false })
     expect(r).toMatchObject({ status: "opened", pr: RETRO_PR, problems: [] })
     const lines = f.lines()
@@ -199,10 +229,29 @@ describe("runRetro", () => {
     expect(seen[0].options.sandbox?.filesystem?.allowWrite).toEqual([])
     expect(seen[0].options.sandbox).toMatchObject({ enabled: true, failIfUnavailable: true, allowUnsandboxedCommands: false })
     expect(seen[0].prompt).toMatch(/^# eve's weekly retro, the week to 2026-09-25/)
+    // The public body: numbers, one general line per change, and the evidence issue's id. No quote, issue, PR, link or name.
     const body = readFileSync(join(paths.state, "retro-body-2026-09-25.md"), "utf8")
     expect(body).toContain(`### ${LESSONS_MD}\n\nTwo must-fix findings asked for a test on a new branch.`)
     expect(body).toContain("Targets: PRs with a must-fix finding, 2 of 3 (67 percent) this week. It is kept only if that does not get worse")
-    expect(body).toContain("Evidence:\n- STEP-1, PR #1700: no test for the empty notice\n- STEP-2, PR #1701: the new branch has no test")
+    expect(body).toContain("The lessons behind each change, with their quotes and links, are in STEP-900, in Linear: they stay private, since this repository is public.")
+    for (const secret of ["empty notice", "STEP-1", "STEP-2", "PR #1700", "v0-politiske-annoncer", "lib/notice.ts", "nate", "Reviews kept asking"]) expect(body, secret).not.toContain(secret)
+    expect(privateTextProblems(body, "the PR body", privateNames(cfg))).toEqual([])
+    // The private issue: filed once, before anything is pushed, with the summary, the quotes, the issues and each change's evidence.
+    expect(filed).toHaveLength(1)
+    expect(filed[0]).toMatchObject({ key: "retro:eve:2026-09-25", title: "Retro evidence: eve's week to 2026-09-25" })
+    expect(filed[0].commandsBefore.some((l) => / push /.test(l))).toBe(false)
+    for (const said of [
+      "Reviews kept asking for tests on new branches",
+      "### fix, tests: 2 times (STEP-1)",
+      "- STEP-1, PR #1700, by nate: **BLOCKER** lib/notice.ts:12 no test for the empty notice",
+      "Evidence:\n- STEP-1, PR #1700: no test for the empty notice\n- STEP-2, PR #1701: the new branch has no test",
+      `The runner's commit is ${HEAD}.`,
+    ]) {
+      expect(filed[0].description, said).toContain(said)
+    }
+    expect(linked).toEqual([["STEP-900", RETRO_PR]])
+    expect(r.evidence).toBe("STEP-900")
+    expect(readFileSync(join(paths.logs, "ledger.jsonl"), "utf8")).toContain('"type":"retro.opened","slot":"2026-09-25","url":"https://github.com/STEP-Network/dev-tasks/pull/130","evidence":"STEP-900"')
     const summary = `This week 2 of my PRs went in, 1 of them without a second pass (it was 1 of 9 on 25 September). Reviewers asked for must-fix changes on 2 of the 3 PRs I worked on. 1 of my jobs got stuck. I proposed 1 change to my own instructions in <${RETRO_PR}|PR #130>. A person needs to review it.`
     expect(outbox()).toEqual([expect.objectContaining({ kind: "post", channel: "agents", text: summary })])
     expect(summary).not.toMatch(JARGON)
@@ -233,6 +282,47 @@ describe("runRetro", () => {
     })
     expect((await runRetro(deps, { slot: "2026-09-25", dryRun: false })).status).toBe("refused")
     expect(f.lines().some((l) => / push /.test(l))).toBe(false)
+  })
+
+  it("refuses the whole PR when a changed line names anything private, and files, pushes and opens nothing", async () => {
+    const cases: Array<[string, string]> = [
+      ["Ask <@U0ABCDEF12> first.", "a Slack member id"],
+      ["Ask UNATE first.", "a Slack member id"],
+      ["Write to someone(at)example.com.", "an email address"],
+      ["See https://test.polads.eu/notice/1.", "a link to PolAds"],
+      ["See STEP-Network/v0-politiske-annoncer#1700.", "a link to PolAds"],
+      ["Kristoffer wants tests first.", "a person's name"],
+      ["The board is 5104953028.", "a Monday id"],
+    ]
+    for (const [line, what] of cases) {
+      const s = setup({ exec: [[new RegExp(` cat-file blob ${HEAD}:`), { stdout: `# Lessons from review\n\n${line}\n` }]] })
+      const r = await runRetro(s.deps, { slot: "2026-09-25", dryRun: false })
+      expect(r.status, line).toBe("refused")
+      expect(r.problems, line).toEqual([`${LESSONS_MD}, line 3: ${what}, which must not be public`])
+      expect(s.f.lines().some((l) => / push |^gh pr create /.test(l)), line).toBe(false)
+      expect(s.filed, line).toEqual([])
+      const note = s.outbox()[0].text
+      expect(note, line).toContain("My weekly review wrote something private, such as a person's name, an email, a Slack or Monday id or a link to the PolAds code, where anyone could read it, so I opened no PR. A person should look at why.")
+      expect(note, line).not.toContain(line)
+      expect(note, line).not.toMatch(JARGON)
+    }
+  })
+
+  it("refuses the whole PR when the session's one-line reason would put anything private in the PR body", async () => {
+    const s = setup({ result: report({ changes: [{ path: LESSONS_MD, metric: "fixRate", why: "Nate asked twice for a test on each new branch.", evidence: [] }] }) })
+    const r = await runRetro(s.deps, { slot: "2026-09-25", dryRun: false })
+    expect(r.status).toBe("refused")
+    expect(r.problems).toEqual([expect.stringMatching(/^the PR body, line \d+: a person's name, which must not be public$/)])
+    expect(s.f.lines().some((l) => / push |^gh pr create /.test(l))).toBe(false)
+    expect(s.filed).toEqual([])
+  })
+
+  it("pushes nothing and opens no PR when Linear does not take the evidence issue", async () => {
+    const s = setup({ linearDown: true })
+    const r = await runRetro(s.deps, { slot: "2026-09-25", dryRun: false })
+    expect(r).toMatchObject({ status: "blocked", pr: null, problems: [expect.stringContaining("Linear did not take the evidence issue")] })
+    expect(s.f.lines().some((l) => / push |^gh pr create /.test(l))).toBe(false)
+    expect(s.outbox()[0].text).toMatch(/My weekly review could not finish, so I opened no PR\. A person should look at why\.$/)
   })
 
   it("opens no PR when origin refuses the push, and says the review could not finish", async () => {
@@ -296,7 +386,10 @@ describe("retroSummary", () => {
       retroSummary({ mini: "eve", now: m, status: "nothing", pr: null, changes: 0 }),
       retroSummary({ mini: "eve", now: m, status: "refused", pr: null, changes: 1, refused: ["plugin/hooks/x.sh: not a prompt"] }),
       retroSummary({ mini: "eve", now: { ...m, prsMerged: 0, prsSeen: 0 }, status: "blocked", pr: null, changes: 0 }),
+      retroSummary({ mini: "eve", now: m, status: "refused", pr: null, changes: 1, refused: [`${LESSONS_MD}, line 3: a person's name, which must not be public`] }),
     ]
+    expect(texts[4]).toContain("My weekly review wrote something private")
+    expect(texts[4]).not.toContain(LESSONS_MD)
     expect(texts[0]).toBe(
       `This week 4 of my PRs went in, 3 of them without a second pass (it was 1 of 9 on 25 September). Reviewers asked for must-fix changes on 1 of the 5 PRs I worked on. I proposed 2 changes to my own instructions in <${RETRO_PR}|PR #130>. A person needs to review it.`,
     )

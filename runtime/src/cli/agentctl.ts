@@ -28,6 +28,7 @@ import { parseCli, UsageError } from "./args.ts"
 import { doctorChecks, formatDoctor } from "./doctor.ts"
 import { statusReport, summariseLedger, type StatusInput } from "./report.ts"
 import { spawnRetroProcess } from "../agentd/jobrunner.ts"
+import { noEvidence } from "../retro/evidence.ts"
 import { noFyi } from "../retro/fyi.ts"
 import { readLessons } from "../retro/lessons.ts"
 import { localParts, readRetroState, runRetro, writeRetroState } from "../retro/retro.ts"
@@ -298,7 +299,7 @@ export async function run(argv: string[], out: (line: string) => void, overrides
       const noSession: QueryFn = () => {
         throw new Error("a dry run runs no session")
       }
-      const r = await runRetro({ paths, config, exec: deps.exec, query: noSession, now, log: quietLog, fyi: noFyi, claudeToken: null }, { slot, dryRun: true })
+      const r = await runRetro({ paths, config, exec: deps.exec, query: noSession, now, log: quietLog, fyi: noFyi, evidence: noEvidence, claudeToken: null }, { slot, dryRun: true })
       print([r.body, "", "## Slack, once it has run", "", r.summary].join("\n"))
       return 0
     }

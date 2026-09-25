@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest"
-import { frontmatter, parseNameStatus, retroDiffProblems, type DiffEntry } from "../guard.ts"
+import { ConfigSchema } from "../../config.ts"
+import { frontmatter, parseNameStatus, privateIn, privateNames, privateTextProblems, retroDiffProblems, type DiffEntry } from "../guard.ts"
 
 const SKILL = "---\nname: front-door\ndescription: One wakeup.\n---\n\n# /front-door\n\nStep one.\n"
 /** Texts at the base and at the head: every file is plain text with no frontmatter unless given. */
@@ -92,6 +93,65 @@ describe("what a retro PR may change (STEP-3290)", () => {
       expect(edited(`${before}\nSee ${leak}.\n`), leak).toEqual([`${doc}: adds what looks like a secret`])
     }
     expect(edited(`${before}\nA plain line.\n`)).toEqual([])
+  })
+
+  describe("nothing private in a public line (dev-tasks is public)", () => {
+    const known = privateNames(
+      ConfigSchema.parse({
+        mini: "eve",
+        repo: { path: "/r" },
+        pluginRoot: "/p",
+        slack: { allowedUsers: ["UNATE"], otherAgentBots: ["UBOBBOT"] },
+        bridges: { monday: { boardId: "5104953028", people: [{ id: "70001", name: "Nate Refslund" }, { id: "70002", name: "Søren Å" }], defaultPerson: "70001" } },
+      }),
+    )
+    const what = (line: string) => privateIn(line, known)
+
+    it("takes the people's names, and their Slack and Monday ids, from the config", () => {
+      expect(known).toEqual({ names: ["Nate Refslund", "Nate", "Refslund", "Søren Å", "Søren"], slackIds: ["UNATE", "UBOBBOT"], mondayIds: ["5104953028", "70001", "70002"] })
+    })
+
+    it("a Slack member id: any U0 or W0 id, and the ones the config names", () => {
+      for (const line of ["cc <@U0ABCDEF12>", "W0XYZ1234 asked", "ask UNATE", "the bot UBOBBOT"]) expect(what(line), line).toBe("a Slack member id")
+      for (const line of ["U0 bolt", "UNATED", "a U-turn"]) expect(what(line), line).toBeNull()
+    })
+
+    it("an email, with @ or with the (at) the brief writes for it", () => {
+      for (const line of ["write to a.b+c@example.com", "someone(at)example.com said", "someone (at) example.co.uk"]) expect(what(line), line).toBe("an email address")
+      for (const line of ["meet at 10", "an @-mention", "npm i @scope/pkg"]) expect(what(line), line).toBeNull()
+    })
+
+    it("a link to PolAds: its repository by name, and any polads.eu host", () => {
+      for (const line of ["https://github.com/STEP-Network/v0-politiske-annoncer/pull/1700", "in v0-politiske-annoncer", "see https://test.polads.eu/notice/1", "polads.eu itself"]) {
+        expect(what(line), line).toBe("a link to PolAds")
+      }
+      for (const line of ["https://github.com/STEP-Network/dev-tasks/pull/120", "PolAds's notices", "the pollads eu"]) expect(what(line), line).toBeNull()
+    })
+
+    it("a person's name, whole or in part, as a whole word in any case, letters outside ASCII included", () => {
+      for (const line of ["Nate said so", "ask nate", "Refslund's rule", "Søren wants it", "as Søren Å put it"]) expect(what(line), line).toBe("a person's name")
+      for (const line of ["an innate habit", "Natelle", "Sørensen"]) expect(what(line), line).toBeNull()
+    })
+
+    it("a Monday id the config names: the board's and each person's", () => {
+      for (const line of ["board 5104953028", "person 70002"]) expect(what(line), line).toBe("a Monday id")
+      for (const line of ["51049530281", "3 of 5 PRs this week missed sibling call sites", "STEP-3290"]) expect(what(line), line).toBeNull()
+    })
+
+    it("names each private line of a text by its kind and number, never by its words", () => {
+      expect(privateTextProblems("# Retro\n\nNate asked.\nFine.\nmail a@b.dk\n", "the PR body", known)).toEqual([
+        "the PR body, line 3: a person's name, which must not be public",
+        "the PR body, line 5: an email address, which must not be public",
+      ])
+    })
+
+    it("refuses an added line of the diff that carries one, and not a line that was there already", () => {
+      const doc = "docs/agent-mini-runbook.md"
+      const before = "# Runbook\n\nAsk Nate before a release.\n"
+      const problems = (after: string) => retroDiffProblems([edit(doc)], texts({ [doc]: before }, { [doc]: after }), known)
+      expect(problems(`${before}\nAsk first.\n`)).toEqual([])
+      expect(problems(`${before}\nAsk Søren first.\n`)).toEqual([`${doc}, line 5: a person's name, which must not be public`])
+    })
   })
 
   it("refuses a deletion, a rename out of the allowed places, a symlink and an executable", () => {

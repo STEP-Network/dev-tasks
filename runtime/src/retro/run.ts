@@ -8,8 +8,10 @@ import { agentPaths, assertProfileMini, loadConfig, readProfileMini } from "../c
 import { createLogger } from "../log.ts"
 import { enqueueSlack } from "../outbox.ts"
 import { loadClaudeOauthToken } from "../secrets.ts"
+import { createLinearTracker, linearRequest } from "../tracker.ts"
 import { realExec } from "../worker/git.ts"
 import type { QueryFn } from "../worker/run.ts"
+import { linearEvidence } from "./evidence.ts"
 import { fyiChannel } from "./fyi.ts"
 import { readRetroState, runRetro, writeRetroState } from "./retro.ts"
 
@@ -23,7 +25,17 @@ if (process.argv[1]?.endsWith("retro/run.ts")) {
     assertProfileMini(config, readProfileMini(), paths.config)
     const { query } = await import("@anthropic-ai/claude-agent-sdk")
     return runRetro(
-      { paths, config, exec: realExec, query: query as unknown as QueryFn, now: () => new Date(), log, fyi: fyiChannel(), claudeToken: loadClaudeOauthToken(paths.home) },
+      {
+        paths,
+        config,
+        exec: realExec,
+        query: query as unknown as QueryFn,
+        now: () => new Date(),
+        log,
+        fyi: fyiChannel(),
+        evidence: linearEvidence(createLinearTracker(), linearRequest),
+        claudeToken: loadClaudeOauthToken(paths.home),
+      },
       { slot, dryRun: false },
     )
   }

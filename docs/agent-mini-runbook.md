@@ -631,12 +631,23 @@ when the retro starts: a job may start while it runs. It:
    secret. A guard, a hook, a permission, an allowlist, the merge policy, a
    configuration, a secret or any code fails it, and then no PR opens at
    all.
-5. pushes that commit by its id and opens ONE dev-tasks PR with the numbers
-   and the evidence per change. It never auto-merges: a person reviews and
-   merges it like any other. dev-tasks is public, so the PR and its evidence
-   are too.
-6. posts a plain-English summary in `#polads-agents` (and to Monday, once
-   the bridge exists).
+5. keeps anything private out of dev-tasks, which is public. The PR's body
+   carries only the numbers, the misses' kinds and counts, and one general
+   line per change. No added line of the diff, and no line of the body, may
+   name a Slack member id, an email, a link to PolAds (its repository or a
+   `polads.eu` host), a person on the Monday board by name, or a Monday id
+   from `config.json`. One such line and no PR opens, with a plain note in
+   `#polads-agents` that names the kind, never the words.
+6. files the evidence privately: one Linear issue in STEP, in Triage,
+   labelled `dev-tasks` and `retro` (the runner creates the `retro` label
+   the first time), with the session's summary, the quoted lessons, the
+   issues and PRs they came from, and each change's evidence. If Linear does
+   not take it, nothing is pushed.
+7. pushes that commit by its id and opens ONE dev-tasks PR, which names the
+   evidence issue (STEP-n) and links itself on it. It never auto-merges: a
+   person reviews and merges it like any other.
+8. posts a plain-English summary in `#polads-agents` (and to Monday, once
+   the retro's FYI goes through the bridge).
 
 A change is kept only while its number does not get worse: the next retro
 proposes taking back a merged change whose number got worse, with the

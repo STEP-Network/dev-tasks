@@ -104,7 +104,8 @@ const evilCommit = (wt: string) => {
 
 async function run(w: ReturnType<typeof world>, act: (wt: string) => void) {
   const { exec, lines } = execFor()
-  const deps = { paths: w.paths, config: w.config, exec, query: sessionThat(act), now: () => new Date("2026-09-25T12:30:00.000Z"), log: { info() {}, warn() {}, error() {} }, fyi: { post: async () => {} }, claudeToken: null }
+  const evidence = { file: async () => ({ id: "STEP-900", url: "https://linear.app/step/issue/STEP-900" }), link: async () => {} }
+  const deps = { paths: w.paths, config: w.config, exec, query: sessionThat(act), now: () => new Date("2026-09-25T12:30:00.000Z"), log: { info() {}, warn() {}, error() {} }, fyi: { post: async () => {} }, evidence, claudeToken: null }
   const r = await runRetro(deps, { slot: "2026-09-25", dryRun: false })
   const originBranches = git(w.origin, "for-each-ref", "--format=%(refname)", "refs/heads/retro/")
   return { r, lines, originBranches }
