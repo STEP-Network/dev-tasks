@@ -35,6 +35,18 @@ describe("the Needs-you board's groups and columns (spec 6)", () => {
     expect(monday.item(/Bulk upload/)!.groupId).toBe("g_needs")
   })
 
+  it("takes a yes on a plan it did not ask as agreement to the item's Recommendation, which approves the plan", async () => {
+    const { bridge, monday, fake, later } = doorsSetup([issue({ id: "STEP-2", title: "Bulk upload", state: "On hold", labels: ["awaiting-answer", "plan-to-approve", "approval/try"] })])
+    await bridge.sync()
+    const item = monday.item(/Bulk upload/)!
+    later(1)
+    monday.says(item.id, "111", "yes")
+    later(1)
+    await bridge.sync()
+    expect(fake.issues.get("STEP-2")!.labels).toEqual(expect.arrayContaining(["plan-approved", "approval/try"]))
+    expect(fake.issues.get("STEP-2")!.description).toContain("Ada agreed with the recommendation: Build it as planned.")
+  })
+
   it("without the new groups in config, every item goes where it went before", async () => {
     const { bridge, monday } = doorsSetup(
       [issue({ id: "STEP-2", title: "Bulk upload", state: "On hold", labels: ["awaiting-answer", "plan-to-approve"] }), issue({ id: "STEP-3", title: "Wider buttons", state: "Waiting for UAT", labels: ["polads", "approval/look"] })],

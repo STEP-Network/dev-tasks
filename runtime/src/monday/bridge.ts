@@ -345,8 +345,8 @@ export function createMondayBridge(deps: MondayBridgeDeps): MondayBridge {
         // The first answer after the item asked counts (spec 6). A request asks nothing.
         since: request ? null : (rec.askedAt ?? lastQuestion(paths, rec.issue)?.at ?? rec.createdAt),
         by: personKey(deps.config, { monday: who.id }),
-        // The Recommendation column comes with the Needs-you board's new columns (Wave 2 Task 5).
-        recommendation: null,
+        // What the item recommends (its Recommendation column): a yes agrees to it where this mini asked nothing (another mini's plan).
+        recommendation: cfg!.columns.recommendation ? (item.columns[cfg!.columns.recommendation]?.text?.trim() || null) : null,
       },
     )
     mark(rec, words.id)
