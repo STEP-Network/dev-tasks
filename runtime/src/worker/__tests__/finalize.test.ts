@@ -122,7 +122,7 @@ describe("finalize: done", () => {
 
   it("is blocked, with no push and no PR, when the commits leave a conflict marker (STEP-3340)", async () => {
     const diff = "diff --git a/docs/a.md b/docs/a.md\n--- a/docs/a.md\n+++ b/docs/a.md\n@@ -1 +1,5 @@\n+<<<<<<< HEAD\n+ours\n+=======\n+theirs\n+>>>>>>> origin/staging\n"
-    const { ctx, fake, f, outbox } = setup("2\n", [[/ diff --no-color --no-ext-diff --no-textconv -U0 origin\/staging HEAD$/, { stdout: diff }]])
+    const { ctx, fake, f, outbox } = setup("2\n", [[/ diff --no-color --no-ext-diff --no-textconv --text -U0 origin\/staging HEAD$/, { stdout: diff }]])
     expect(await finalize(ctx, done)).toMatchObject({ status: "blocked", reason: "leftover conflict marker in docs/a.md", pushed: false })
     expect(f.lines().some((l) => l.includes(" push "))).toBe(false)
     expect(f.lines().some((l) => l.startsWith("gh pr"))).toBe(false)
