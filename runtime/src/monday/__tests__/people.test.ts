@@ -106,6 +106,16 @@ describe("the people's view of Linear (STEP-3289)", () => {
     expect(plain).toMatchObject({ parent: null, project: null, slackThread: THREAD })
   })
 
+  it("reads the anchors' sub-issues in one paged query, grouped by parent, and asks nothing for no anchors", async () => {
+    const { request, calls } = fakeRequest([[raw("STEP-11", { parent: { identifier: "STEP-10" } }), raw("STEP-12", { parent: { identifier: "STEP-10" } }), raw("STEP-21", { parent: { identifier: "STEP-20" } })]])
+    const children = await createPeopleView(request).childrenOf(["uuid-STEP-10", "uuid-STEP-20"])
+    expect([...children].map(([parent, list]) => [parent, list.map((i) => i.id)])).toEqual([["STEP-10", ["STEP-11", "STEP-12"]], ["STEP-20", ["STEP-21"]]])
+    expect(calls[0].query).toContain("parent: { id: { in: $parents } }")
+    expect(calls[0].variables).toMatchObject({ team: "STEP", parents: ["uuid-STEP-10", "uuid-STEP-20"] })
+    expect(await createPeopleView(request).childrenOf([])).toEqual(new Map())
+    expect(calls).toHaveLength(1)
+  })
+
   it("reads issues by their identifiers, in one query sized to them", async () => {
     const { request, calls } = fakeRequest([[raw("STEP-7"), raw("STEP-9")]])
     expect((await createPeopleView(request).byIdentifiers(["STEP-7", "STEP-9", "BAD-1"])).map((i) => i.id)).toEqual(["STEP-7", "STEP-9"])

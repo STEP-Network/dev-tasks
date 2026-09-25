@@ -73,6 +73,36 @@ const MONDAY_ID = z.union([z.string().regex(/^\d+$/, "must be a Monday id (digit
 const MONDAY_COLUMN = z.string().regex(/^[a-z0-9_]+$/, "must be a Monday column id")
 
 /**
+ * The Requests board (Wave 2, spec 6): one item per ask, kept in step with
+ * its anchor issue in Linear. Its ids are the board's own, made by a person
+ * (N1), so none has a default: without this block the bridge runs on one
+ * board, as before.
+ */
+const RequestsBoardSchema = z.object({
+  boardId: MONDAY_ID,
+  columns: z.object({
+    requester: MONDAY_COLUMN,
+    type: MONDAY_COLUMN,
+    class: MONDAY_COLUMN,
+    size: MONDAY_COLUMN,
+    stage: MONDAY_COLUMN,
+    progress: MONDAY_COLUMN,
+    targetWeek: MONDAY_COLUMN,
+    linear: MONDAY_COLUMN,
+    slackThread: MONDAY_COLUMN,
+  }),
+  groups: z
+    .object({
+      active: z.string().default("Active"),
+      released: z.string().default("Released"),
+      closed: z.string().default("Declined and on hold"),
+    })
+    .prefault({}),
+  /** How long a released or declined request stays on the board. */
+  releasedDays: z.number().positive().default(30),
+})
+
+/**
  * The Monday bridge (STEP-3289): the people-and-agents board, kept in step
  * with Linear. On exactly one coordinator mini (Eve's first), and off
  * everywhere else. The ids default to the board as it was built on
@@ -146,6 +176,8 @@ const MondayBridgeSchema = z
     /** The label a request from the board gets in Linear. */
     requestLabel: z.string().default("intake/monday"),
     archiveAfterDays: z.number().positive().default(14),
+    /** The Requests board (Wave 2). Set, requests live there and the board above keeps no request groups. */
+    requests: RequestsBoardSchema.optional(),
   })
   .superRefine((m, ctx) => {
     if (!m.people.some((p) => p.id === m.defaultPerson)) {

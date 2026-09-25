@@ -22,6 +22,24 @@ afterEach(() => {
   delete process.env.AGENTD_HOME
 })
 
+describe("the Requests board's config (Wave 2)", () => {
+  const base = { mini: "eve", repo: { path: "/r" }, pluginRoot: "/p", slack: { allowedUsers: ["U1"] } }
+  const monday = { people: [{ id: "111", name: "Ada" }], defaultPerson: "111" }
+  const columns = { requester: "r_person", type: "r_type", class: "r_class", size: "r_size", stage: "r_stage", progress: "r_progress", targetWeek: "r_week", linear: "r_linear", slackThread: "r_thread" }
+
+  it("is off unless configured, and takes its group titles and 30 days by default", () => {
+    expect(ConfigSchema.parse({ ...base, bridges: { monday } }).bridges.monday!.requests).toBeUndefined()
+    expect(ConfigSchema.parse({ ...base, bridges: { monday: { ...monday, requests: { boardId: "777", columns } } } }).bridges.monday!.requests).toEqual({
+      boardId: "777", columns, groups: { active: "Active", released: "Released", closed: "Declined and on hold" }, releasedDays: 30,
+    })
+  })
+
+  it("has no default for a column id", () => {
+    const { stage: _, ...missing } = columns
+    expect(() => ConfigSchema.parse({ ...base, bridges: { monday: { ...monday, requests: { boardId: "777", columns: missing } } } })).toThrow()
+  })
+})
+
 describe("agentPaths", () => {
   it("puts everything under ~/.agentd", () => {
     const paths = agentPaths("/Users/eve")
