@@ -14,7 +14,9 @@ import { frontDoorSettingsPath, frontDoorSettingsProblem } from "../agentd/front
 import { channelApproval, MANAGED_CHANNEL_JSON, MANAGED_SETTINGS } from "../channel/managed.ts"
 import { readHooksProbes, workerClaudePath, type HooksProbe } from "./hooks-probe.ts"
 import { readSandboxProbe } from "./sandbox-probe.ts"
-import { agentdSecretsPath, assertLinearKeyFile, claudeTokenPath, linearKeyPath, mondaySecretsPath, slackSecretsPath } from "../secrets.ts"
+import { agentdSecretsPath, assertLinearKeyFile, claudeTokenPath, linearKeyPath, mondaySecretsPath, slackSecretsPath, userTestSecretsPath } from "../secrets.ts"
+import { chromeMajor } from "../usertest/chrome.ts"
+import { CHROME_DEVTOOLS_MCP_VERSION, chromeDevtoolsMcp } from "../usertest/mcp.ts"
 import type { Exec } from "../worker/git.ts"
 
 export interface Check {
@@ -422,6 +424,50 @@ export async function doctorChecks(d: DoctorDeps): Promise<Check[]> {
   if (d.env.MONDAY_API_KEY) {
     add({ level: "warn", name: "monday", detail: "MONDAY_API_KEY is set in this environment. Monday is read-only for agents: remove it from the shell profile" })
   }
+  if (config) for (const check of await userTestChecks(d, config)) add(check)
+  return checks
+}
+
+/** chrome-devtools-mcp's --allowedUrlPattern needs Chrome 149 or newer. */
+const CHROME_FLOOR = 149
+
+/** The browser test's lines (WS5), where config.json turns it on. */
+export async function userTestChecks(d: DoctorDeps, config: AgentConfig): Promise<Check[]> {
+  const u = config.usertest
+  if (!u.enabled) return []
+  const checks: Check[] = []
+  const version = await d.exec(u.chromePath, ["--version"], { timeoutMs: 30_000 })
+  const major = version.code === 0 ? chromeMajor(version.stdout) : null
+  checks.push(
+    major === null
+      ? { level: "fail", name: "browser test Chrome", detail: `no Google Chrome at ${u.chromePath}: brew install --cask google-chrome, from the admin account` }
+      : major < CHROME_FLOOR
+        ? { level: "fail", name: "browser test Chrome", detail: `Chrome ${major} is older than ${CHROME_FLOOR}, which the browser allowlist needs: update Chrome` }
+        : { level: "ok", name: "browser test Chrome", detail: `Chrome ${major}` },
+  )
+  try {
+    const mcp = chromeDevtoolsMcp()
+    checks.push(
+      mcp.version === CHROME_DEVTOOLS_MCP_VERSION && existsSync(mcp.bin)
+        ? { level: "ok", name: "browser test tool", detail: `chrome-devtools-mcp ${mcp.version}` }
+        : { level: "fail", name: "browser test tool", detail: `chrome-devtools-mcp ${mcp.version}, not ${CHROME_DEVTOOLS_MCP_VERSION}: run npm ci in the runtime` },
+    )
+  } catch (error) {
+    checks.push({ level: "fail", name: "browser test tool", detail: message(error) })
+  }
+  checks.push(
+    Number(d.nodeVersion.split(".")[0]) >= 22
+      ? { level: "ok", name: "browser test node", detail: d.nodeVersion }
+      : { level: "fail", name: "browser test node", detail: `Node ${d.nodeVersion}: the browser test needs Node 22 or newer` },
+  )
+  checks.push(
+    secretCheck("browser test secrets", userTestSecretsPath(d.paths.home), false) ?? {
+      level: "warn",
+      name: "browser test secrets",
+      detail: `${userTestSecretsPath(d.paths.home)} is missing: the browser test runs signed out, and cannot open a protected preview`,
+    },
+  )
+  if (!u.personas.length) checks.push({ level: "warn", name: "browser test personas", detail: "none: every browser test runs as a visitor who is not signed in" })
   return checks
 }
 

@@ -22,7 +22,7 @@ launchd (<agent>'s GUI session, logged in automatically)
     the Monday bridge, on the coordinator mini only    ~/dev-tasks/runtime/src/monday/bridge.ts
   eu.polads.slack-bridge  Socket Mode and the outbox  ~/dev-tasks/runtime/src/slack/bridge.ts
 state   ~/.agentd (config.json, queues, jobs, logs, PAUSE)
-secrets ~/.config/linear/.env, ~/.config/agentd/{slack,agentd,claude,monday}.env, all chmod 600
+secrets ~/.config/linear/.env, ~/.config/agentd/{slack,agentd,claude,monday,usertest}.env, all chmod 600
 ```
 
 People talk to the agent in Slack. The front door answers, refines issues
@@ -983,6 +983,63 @@ Monday is out of reach, replies wait, in order, and agentd goes on.
 
 To turn it off: `"enabled": false`, and restart agentd. The items stay on
 the board as they are.
+
+## The browser test (WS5)
+
+Before any person looks at an agent's PR, the agent clicks it through in a
+real Chrome: on the PR's Vercel preview, as a staging persona where the
+change calls for one, at desktop and phone width, with screenshots and a GIF
+on the PR and the issue. A headless Google Chrome runs on the mini, driven
+by chrome-devtools-mcp 1.9.0 (pinned in `runtime/package.json`, never
+fetched with npx), and the browser opens only the preview and staging.
+
+### Setting it up (Nate, then the orchestrator)
+
+1. **Chrome**, from the mini's admin account:
+   `brew install --cask google-chrome`. Version 149 or newer: the browser
+   allowlist needs it. Node 22 or newer runs the runtime.
+2. **The two secrets**, typed on the mini as `<agent>`, the same way as
+   section 5, never through an agent's session:
+
+   ```bash
+   read -rs LOGIN_SECRET
+   read -rs BYPASS_SECRET
+   (umask 077; printf 'TEST_LOGIN_SECRET=%s\nVERCEL_AUTOMATION_BYPASS_SECRET=%s\n' "$LOGIN_SECRET" "$BYPASS_SECRET" > ~/.config/agentd/usertest.env); unset LOGIN_SECRET BYPASS_SECRET
+   chmod 600 ~/.config/agentd/usertest.env
+   ```
+
+   `TEST_LOGIN_SECRET` is the Vercel project's own (staging's test-login
+   route checks it), and `VERCEL_AUTOMATION_BYPASS_SECRET` is the project's
+   Deployment Protection "Protection Bypass for Automation" secret. Only the
+   runtime's own code reads them, from outside the browser: the persona's
+   session and the bypass reach Chrome as cookies, and the model never sees
+   either secret. Without the file the test runs as a visitor who is not
+   signed in, and cannot open a protected preview.
+3. **The config**: `usertest` in `~/.agentd/config.json`, the template's
+   section with `"enabled": true` and the personas. The persona addresses
+   stay in the mini's config, never in this repository:
+
+   ```json
+   "usertest": {
+     "enabled": true,
+     "previewEnvironment": "Preview – v0-politiske-annoncer",
+     "previewHost": "^v0-politiske-annoncer-[a-z0-9-]+\\.vercel\\.app$",
+     "stagingOrigin": "https://test.polads.eu",
+     "extraAllowedUrlPatterns": ["https://api.stack-auth.com/*"],
+     "personas": [
+       { "id": "<persona>", "email": "<the staging persona's address>", "admin": false, "paths": ["<changed paths that call for it>"] }
+     ]
+   }
+   ```
+
+   A persona whose pages show real people's data (an admin) has
+   `"publishScreenshots": false`: its screenshots stay on the mini.
+   `bootstrap-mini.sh --usertest <file>` writes this section from the
+   orchestrator's private file on a new mini.
+4. `~/.agentd/bin/agentctl doctor`: the "browser test" lines are Chrome, the
+   browser tool, Node and the secrets file, and all must be ok. Then
+   `~/.agentd/bin/agentctl probe-browser`, which opens staging and shows that
+   any other site is refused, on the real Chrome and with no model.
 
 ## Orchestrator access over SSH
 

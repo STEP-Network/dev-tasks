@@ -6,6 +6,8 @@
  *   ~/.config/agentd/agentd.env  SENTRY_CRON_URL, optional   (agentd only)
  *   ~/.config/agentd/claude.env  CLAUDE_CODE_OAUTH_TOKEN, optional   (the worker only)
  *   ~/.config/agentd/monday.env  MONDAY_API_TOKEN, the coordinator mini only   (agentd only)
+ *   ~/.config/agentd/usertest.env  TEST_LOGIN_SECRET, VERCEL_AUTOMATION_BYPASS_SECRET, optional
+ *                                (the browser test's own code, never the browser or the model)
  *
  * The Monday token is the agent's own Monday user's, with access to the one
  * board (STEP-3289). It is never the admin's: the bridge refuses one.
@@ -20,6 +22,7 @@ import { join } from "node:path"
 
 export const linearKeyPath = (home: string) => join(home, ".config", "linear", ".env")
 export const slackSecretsPath = (home: string) => join(home, ".config", "agentd", "slack.env")
+export const userTestSecretsPath = (home: string) => join(home, ".config", "agentd", "usertest.env")
 export const agentdSecretsPath = (home: string) => join(home, ".config", "agentd", "agentd.env")
 export const claudeTokenPath = (home: string) => join(home, ".config", "agentd", "claude.env")
 export const mondaySecretsPath = (home: string) => join(home, ".config", "agentd", "monday.env")
@@ -80,6 +83,24 @@ export function loadSentryCronUrl(home: string): string | null {
  * the worker, `claude setup-token` makes a one-year token for the same
  * subscription. It is kept here and handed to the worker's environment only.
  */
+/**
+ * The browser test's two secrets (WS5): the staging test-login route's shared
+ * secret, and Vercel's protection bypass for the project's previews. Both are
+ * optional. Without the first the test runs as a visitor who is not signed
+ * in, without the second it cannot open a protected preview. Only the
+ * runtime's own code reads them: the browser and the model never see either.
+ */
+export function loadUserTestSecrets(home: string): { testLoginSecret: string | null; bypassSecret: string | null } {
+  const path = userTestSecretsPath(home)
+  try {
+    statSync(path)
+  } catch {
+    return { testLoginSecret: null, bypassSecret: null }
+  }
+  const values = readSecretsFile(path)
+  return { testLoginSecret: values.TEST_LOGIN_SECRET || null, bypassSecret: values.VERCEL_AUTOMATION_BYPASS_SECRET || null }
+}
+
 export function loadClaudeOauthToken(home: string): string | null {
   const path = claudeTokenPath(home)
   try {

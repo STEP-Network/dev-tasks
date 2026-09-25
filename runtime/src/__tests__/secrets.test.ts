@@ -2,7 +2,20 @@ import { chmodSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
-import { assertLinearKeyFile, claudeTokenPath, linearKeyPath, loadClaudeOauthToken, loadMondayToken, loadSentryCronUrl, loadSlackSecrets, mondaySecretsPath, readSecretsFile, slackSecretsPath } from "../secrets.ts"
+import {
+  assertLinearKeyFile,
+  claudeTokenPath,
+  linearKeyPath,
+  loadClaudeOauthToken,
+  loadMondayToken,
+  loadSentryCronUrl,
+  loadSlackSecrets,
+  loadUserTestSecrets,
+  mondaySecretsPath,
+  readSecretsFile,
+  slackSecretsPath,
+  userTestSecretsPath,
+} from "../secrets.ts"
 
 const BOT = "xoxb-1111-2222-abcdefghijkl"
 const APP = "xapp-1-A1-3333-mnopqrstuv"
@@ -129,5 +142,26 @@ describe("loadMondayToken (STEP-3289)", () => {
     }
     write(mondaySecretsPath(h), "MONDAY_API_KEY=whatever\n", 0o600)
     expect(() => loadMondayToken(h)).toThrow(/MONDAY_API_TOKEN is missing/)
+  })
+})
+
+describe("loadUserTestSecrets (WS5)", () => {
+  it("reads nothing when the file is absent: the browser test then runs signed out", () => {
+    expect(loadUserTestSecrets(home())).toEqual({ testLoginSecret: null, bypassSecret: null })
+  })
+
+  it("reads both secrets from a file only its owner can read, and refuses one others can", () => {
+    const h = home()
+    expect(userTestSecretsPath(h)).toBe(join(h, ".config", "agentd", "usertest.env"))
+    write(userTestSecretsPath(h), "TEST_LOGIN_SECRET=login-example\nVERCEL_AUTOMATION_BYPASS_SECRET=bypass-example\n", 0o600)
+    expect(loadUserTestSecrets(h)).toEqual({ testLoginSecret: "login-example", bypassSecret: "bypass-example" })
+    chmodSync(userTestSecretsPath(h), 0o644)
+    expect(() => loadUserTestSecrets(h)).toThrow(/chmod 600/)
+  })
+
+  it("takes either secret alone", () => {
+    const h = home()
+    write(userTestSecretsPath(h), "TEST_LOGIN_SECRET=login-example\n", 0o600)
+    expect(loadUserTestSecrets(h)).toEqual({ testLoginSecret: "login-example", bypassSecret: null })
   })
 })

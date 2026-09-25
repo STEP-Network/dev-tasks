@@ -10,6 +10,7 @@
  *                 and monday/ on the coordinator mini (STEP-3289)
  *   logs/         JSON-lines logs and the ledger
  *   worktrees/    one git worktree per develop job
+ *   usertest/     one folder per browser test (WS5)
  *   PAUSE         present = no new jobs; the front door only answers
  */
 
@@ -32,6 +33,8 @@ export interface AgentPaths {
   logs: string
   worktrees: string
   pauseFile: string
+  /** One folder per browser test (WS5): its screenshots, GIF, report and throwaway Chrome profile. */
+  usertest: string
 }
 
 export function agentPaths(home: string = homedir()): AgentPaths {
@@ -48,6 +51,7 @@ export function agentPaths(home: string = homedir()): AgentPaths {
     logs: join(root, "logs"),
     worktrees: join(root, "worktrees"),
     pauseFile: join(root, "PAUSE"),
+    usertest: join(root, "usertest"),
   }
 }
 
@@ -128,6 +132,69 @@ const MondayBridgeSchema = z
   .superRefine((m, ctx) => {
     if (!m.people.some((p) => p.id === m.defaultPerson)) {
       ctx.addIssue({ code: "custom", path: ["defaultPerson"], message: "must be one of bridges.monday.people" })
+    }
+  })
+
+/**
+ * A persona the browser test signs in as (WS5): one of the staging test-login
+ * route's own accounts, never a real person's. Kept in this mini's config
+ * only: dev-tasks is public.
+ */
+const PersonaSchema = z.object({
+  id: z.string().regex(/^[a-z][a-z0-9-]*$/),
+  email: z.email(),
+  admin: z.boolean().default(false),
+  /** false for a persona whose pages show real people's data (an admin): its screenshots stay on the mini. */
+  publishScreenshots: z.boolean().default(true),
+  /** Changed paths that call for this persona. The first persona whose paths match wins. */
+  paths: z.array(z.string().min(1)).default([]),
+})
+
+const bareOrigin = (value: string) => {
+  try {
+    const u = new URL(value)
+    return u.protocol === "https:" && u.origin === value
+  } catch {
+    return false
+  }
+}
+const compiles = (value: string) => {
+  try {
+    new RegExp(value)
+    return true
+  } catch {
+    return false
+  }
+}
+
+/** The agent browser test (WS5): Claude in a real Chrome, on the PR's preview and on staging. */
+const UserTestSchema = z
+  .object({
+    enabled: z.boolean().default(false),
+    model: z.string().default("sonnet"),
+    maxTurns: z.number().int().positive().default(80),
+    maxBudgetUsd: z.number().positive().default(5),
+    wallClockMinutes: z.number().int().positive().default(25),
+    /** How long a develop or revise job waits for the PR's Vercel preview. */
+    previewWaitMinutes: z.number().int().positive().default(20),
+    /** The GitHub deployment environment Vercel reports the project's previews in. */
+    previewEnvironment: z.string().min(1).optional(),
+    /** The preview's hostname, as a regular expression. */
+    previewHost: z.string().refine(compiles, "must be a regular expression").optional(),
+    stagingOrigin: z.string().refine(bareOrigin, "must be a bare https origin").optional(),
+    rcOrigin: z.string().refine(bareOrigin, "must be a bare https origin").optional(),
+    /** URL patterns a page may load from besides its own origin, e.g. the app's sign-in API. */
+    extraAllowedUrlPatterns: z.array(z.string().min(1)).default([]),
+    chromePath: z.string().default("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"),
+    headless: z.boolean().default(true),
+    personas: z.array(PersonaSchema).default([]),
+    /** Changed paths no user sees: a diff of only these is not browser-tested. */
+    skipPaths: z.array(z.string()).default([".claude/**", ".github/**", "docs/**", "**/__tests__/**", "**/*.test.*", "**/*.spec.*", "e2e/**", "**/*.md"]),
+  })
+  .superRefine((u, ctx) => {
+    if (!u.enabled) return
+    for (const key of ["previewEnvironment", "previewHost", "stagingOrigin"] as const) {
+      if (!u[key]) ctx.addIssue({ code: "custom", path: [key], message: "is needed when the browser test is on" })
     }
   })
 
@@ -229,6 +296,7 @@ export const ConfigSchema = z.object({
       wallClockMinutes: z.number().int().positive().default(60),
     })
     .prefault({}),
+  usertest: UserTestSchema.prefault({}),
   bridges: z.object({ monday: MondayBridgeSchema.optional() }).prefault({}),
 })
 

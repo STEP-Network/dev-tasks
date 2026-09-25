@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { afterEach, describe, expect, it } from "vitest"
-import { agentPaths, assertProfileMini, loadConfig, MINI_RE, readProfile, readProfileMini } from "../config.ts"
+import { agentPaths, assertProfileMini, ConfigSchema, loadConfig, MINI_RE, readProfile, readProfileMini } from "../config.ts"
 
 const MINIMAL = {
   mini: "eve",
@@ -140,5 +140,32 @@ describe("the mini has one name (decision 2)", () => {
     expect(() => assertProfileMini(config, "eve", paths.config)).not.toThrow()
     expect(() => assertProfileMini(config, "bob", paths.config)).toThrow(/mini "eve".*mini "bob"/)
     expect(() => assertProfileMini(config, null, paths.config)).toThrow(/mini "eve".*no mini.*no jq/)
+  })
+})
+
+describe("usertest config", () => {
+  const base = { mini: "eve", repo: { path: "/r" }, pluginRoot: "/p", slack: { allowedUsers: ["U0EXAMPLE"] } }
+
+  it("is off by default and needs nothing then", () => {
+    expect(ConfigSchema.parse(base).usertest.enabled).toBe(false)
+  })
+
+  it("needs the preview environment, the preview host and the staging origin when on", () => {
+    expect(ConfigSchema.safeParse({ ...base, usertest: { enabled: true } }).success).toBe(false)
+    const on = ConfigSchema.parse({
+      ...base,
+      usertest: { enabled: true, previewEnvironment: "Preview – example", previewHost: "^app-[a-z0-9-]+\\.vercel\\.app$", stagingOrigin: "https://staging.example.com" },
+    })
+    expect(on.usertest.skipPaths).toContain("docs/**")
+  })
+
+  it("refuses a preview host that is not a regular expression, and an origin with a path", () => {
+    const bad = { enabled: true, previewEnvironment: "P", previewHost: "(", stagingOrigin: "https://s.example.com" }
+    expect(ConfigSchema.safeParse({ ...base, usertest: bad }).success).toBe(false)
+    expect(ConfigSchema.safeParse({ ...base, usertest: { ...bad, previewHost: "x", stagingOrigin: "https://s.example.com/app" } }).success).toBe(false)
+  })
+
+  it("keeps its runs under ~/.agentd/usertest", () => {
+    expect(agentPaths("/Users/eve").usertest).toBe("/Users/eve/.agentd/usertest")
   })
 })
