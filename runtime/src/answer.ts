@@ -138,8 +138,8 @@ export function secondAnswerText(first: RecordedAnswer): string {
  */
 export function planTransition(issue: Pick<TrackerIssue, "labels">, a: { decided?: Decided; words?: string }): { addLabels?: string[]; removeLabels?: string[] } {
   if (!issue.labels.includes("plan-to-approve")) return {}
-  // A yes to it, or the same written out: "Build it as planned" either way.
-  const said = a.decided ? (a.decided.agreed ? a.decided.recommendation : a.decided.text) : (a.words ?? "")
+  // A yes to it, or the person's own words saying it: never how the front door worded their decision.
+  const said = a.decided?.agreed ? a.decided.recommendation : (a.words ?? "")
   const approved = answerCore(said) === answerCore(PLAN_RECOMMENDATION)
   return approved ? { removeLabels: ["plan-to-approve"], addLabels: ["plan-approved"] } : { removeLabels: ["plan-to-approve"] }
 }

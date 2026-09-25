@@ -166,13 +166,45 @@ describe("the Requests board (spec 4 and 6)", () => {
     expect([...fake.issues.values()]).toEqual([])
   })
 
-  it("leaves a request still on the Needs-you board to the migration (Task 11): the old flow no longer runs", async () => {
-    const { bridge, monday, paths } = setup([issue({ id: "STEP-5", state: "Released" })], { keepOldGroups: true })
-    const old = monday.request("111", "Old request", undefined, "g_work", BOARD)
-    saveRecord(paths, { key: `request-${old}`, kind: "request", issue: "STEP-5", itemId: old, state: "Waiting on agent", bodyHash: null, createdAt: T0.toISOString(), doneAt: null, handled: [], linked: true })
+  it("keeps a request still on the Needs-you board up to date until the migration moves it (Task 11)", async () => {
+    const { bridge, monday, paths, texts } = setup([issue({ id: "STEP-5", state: "Released" }), issue({ id: "STEP-6", state: "On hold" })], { keepOldGroups: true })
+    const released = monday.request("111", "Old request", undefined, "g_work", BOARD)
+    const held = monday.request("111", "Held request", undefined, "g_work", BOARD)
+    for (const [itemId, id] of [[released, "STEP-5"], [held, "STEP-6"]]) {
+      saveRecord(paths, { key: `request-${itemId}`, kind: "request", issue: id, itemId, state: "Waiting on agent", bodyHash: null, createdAt: T0.toISOString(), doneAt: null, handled: [], linked: true })
+    }
     await bridge.sync()
-    expect(monday.items.get(old)!.groupId).toBe("g_work")
-    expect(monday.writes().filter((c) => (c.args as unknown[]).includes(old))).toEqual([])
+    expect(monday.items.get(released)!.groupId).toBe("g_done")
+    expect(texts(released)).toEqual(["Eve: Done: STEP-5 is released. Nothing needed from you."])
+    expect(monday.items.get(held)!.columns["color_mm7hvyyt"]?.text).toBe("Blocked")
+  })
+
+  it("says a stage change once, even when what follows it fails", async () => {
+    const { bridge, monday, fake, paths, later, texts } = setup([issue({ id: "STEP-10", state: "In Progress" }), issue({ id: "STEP-11", state: "In Progress" })], { parents: { "STEP-11": "STEP-10" } })
+    const itemId = requestRecord(monday, "STEP-10", paths)
+    await bridge.sync()
+    fake.issues.set("STEP-11", { ...fake.issues.get("STEP-11")!, state: "Released" })
+    const update = fake.tracker.updateIssue
+    fake.tracker.updateIssue = async () => {
+      throw new Error("Linear: 503")
+    }
+    later(2)
+    await bridge.sync()
+    fake.tracker.updateIssue = update
+    later(2)
+    await bridge.sync()
+    expect(texts(itemId).filter((t) => t.includes("is released"))).toHaveLength(1)
+    expect(fake.issues.get("STEP-10")!.state).toBe("Released")
+  })
+
+  it("releases the anchor even when its comment fails", async () => {
+    const { bridge, monday, fake, paths } = setup([issue({ id: "STEP-10", state: "In Progress" }), issue({ id: "STEP-11", state: "Released" })], { parents: { "STEP-11": "STEP-10" } })
+    requestRecord(monday, "STEP-10", paths)
+    fake.tracker.comment = async () => {
+      throw new Error("Linear: 503")
+    }
+    await bridge.sync()
+    expect(fake.issues.get("STEP-10")!.state).toBe("Released")
   })
 
   it("says a stage change only when there was one before: a new record says nothing the first time", async () => {
