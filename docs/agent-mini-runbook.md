@@ -984,6 +984,71 @@ Monday is out of reach, replies wait, in order, and agentd goes on.
 To turn it off: `"enabled": false`, and restart agentd. The items stay on
 the board as they are.
 
+### No agent session writes as a person (the people-doors guard, STEP-3330)
+
+The bridge takes a Monday user's update or Answer column as that person's
+words, and the Slack bridge takes a Slack member's reply as theirs. The
+claude.ai Monday and Slack connectors write as the person whose account
+they use, so an agent session that used them would be taken for one of
+the people. The rule: **an agent session never writes on the
+people's boards, in their Slack channels or to the agents as a person.**
+
+The dev-tasks plugin's people-doors guard holds to it in every Claude
+session that has the plugin, on both profiles, with no opt-in. It refuses:
+
+- On Monday: a new or changed item, and a move, on a people's board. An
+  update anywhere, since an update names only its item. The generic API
+  tools (`all_api_write`, `all_monday_api`, `execute_code`) when they
+  touch an item. Reads, and board structure (columns, groups, a board's
+  name), pass.
+- On Slack: a message, reply, schedule or edit in a people's channel, or one
+  that mentions an agent's bot anywhere. A draft passes, since the person
+  sends it themselves.
+- On Linear: an answer entry (`<!-- slack:…`, `<!-- monday:…`) in a
+  description or comment, and the answer recorder's plan labels.
+- Any change to its own list, other than a plain `cat` of it or the add
+  command below.
+
+Its list is local to each machine, since this repository is public:
+`~/.config/dev-tasks/people-doors.json`.
+
+```json
+{
+  "mondayBoards": ["1234567890"],
+  "slackChannels": ["C0123456789", "polads-questions", "C0123456790", "polads-intake"],
+  "agentBots": ["U0123456789"]
+}
+```
+
+- `mondayBoards` are the people's boards: today the Needs-you board, later
+  the Requests board too.
+- `slackChannels` are the four channels, by id and by name, since a
+  connector may take either.
+- `agentBots` are the agents' bot users, whose mention in any channel reaches
+  an agent.
+
+With no list, or one it cannot read, the guard refuses every Monday item
+write and every Slack send: it cannot tell which are the people's.
+
+To place the list, or add to it, run one command from any dev-tasks
+checkout. The orchestrator may run it for a person who asks. The ids are not
+secrets:
+
+- the board id is in the coordinator mini's `config.json` (`bridges.monday.boardId`);
+- the agents' bot ids are in each mini's `~/.agentd/state/bridge.json` (`botUserId`);
+- the channel names are in `slack.channels`, and their ids are in each channel's details in Slack.
+
+```bash
+node <dev-tasks>/plugin/hooks/people-doors-guard.mjs add --board 1234567890 \
+  --channel C0123456789 --channel polads-questions --bot U0123456789
+```
+
+It only ever adds, never takes anything out. A new list needs at least a
+board, a channel and a bot, so it never guards nothing. Taking an entry out
+is a person's own edit, in an editor outside Claude. A hook change needs the
+plugin cache cleared and a reload before it runs (the plugin version goes up
+with it).
+
 ## The browser test (WS5)
 
 Before any person looks at an agent's PR, the agent clicks it through in a
