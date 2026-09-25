@@ -162,6 +162,20 @@ export async function commitsAhead(exec: Exec, path: string, base: string): Prom
   return Number.parseInt((await mustGit(exec, ["-C", path, "rev-list", "--count", `origin/${base}..HEAD`])).trim(), 10) || 0
 }
 
+/** The branch's own commits, newest first: each one's subject and body. */
+export async function commitMessages(exec: Exec, path: string, base: string): Promise<Array<{ subject: string; body: string }>> {
+  // Unit and record separators: a commit message never holds either.
+  const out = await mustGit(exec, ["-C", path, "log", "--format=%s%x1f%b%x1e", `origin/${base}..HEAD`])
+  return out
+    .split("\x1e")
+    .map((record) => record.replace(/^\n+/, ""))
+    .filter((record) => record.includes("\x1f"))
+    .map((record) => {
+      const [subject, body] = record.split("\x1f")
+      return { subject: subject.trim(), body: (body ?? "").trim() }
+    })
+}
+
 /**
  * Submodules are never entered: git would run itself inside one with that
  * repository's own config, which the worker could have written, and this runs

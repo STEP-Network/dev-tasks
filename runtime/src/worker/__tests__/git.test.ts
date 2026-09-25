@@ -3,7 +3,8 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { describe, expect, it } from "vitest"
 import { fakeExec } from "../../__tests__/fakes.ts"
-import { assertPushable, commitsAhead, isDirty, prepareWorktree, pushBranch, realExec, removeWorktree, WorktreeRefused } from "../git.ts"
+import { execFileSync } from "node:child_process"
+import { assertPushable, commitMessages, commitsAhead, isDirty, prepareWorktree, pushBranch, realExec, removeWorktree, WorktreeRefused } from "../git.ts"
 
 const OPTS = { repo: "/Users/eve/polads", worktreesDir: "/Users/eve/.agentd/worktrees", branch: "STEP-7-fix-the-date", base: "staging" }
 const WT = "/Users/eve/.agentd/worktrees/STEP-7-fix-the-date"
@@ -140,6 +141,24 @@ describe("commitsAhead, isDirty and removeWorktree", () => {
       `${GIT} -C ${WT} status --porcelain --ignore-submodules=all`,
       `${GIT} -C /Users/eve/polads worktree remove --force ${WT}`,
     ])
+  })
+})
+
+describe("commitMessages", () => {
+  it("reads the branch's own commits, newest first, as git writes them", async () => {
+    const repo = mkdtempSync(join(tmpdir(), "commit-messages-"))
+    const git = (...args: string[]) => execFileSync("git", ["-C", repo, "-c", "user.name=t", "-c", "user.email=t@localhost", ...args], { stdio: "ignore" })
+    execFileSync("git", ["init", "-q", "-b", "staging", repo])
+    git("commit", "-q", "--allow-empty", "-m", "base")
+    git("update-ref", "refs/remotes/origin/staging", "HEAD")
+    git("commit", "-q", "--allow-empty", "-m", "wip: first pass (STEP-7)")
+    git("commit", "-q", "--allow-empty", "-m", "fix: rotate the token (STEP-7)", "-m", "Two paragraphs.\n\nThe second one.")
+    expect(await commitMessages(realExec, repo, "staging")).toEqual([
+      { subject: "fix: rotate the token (STEP-7)", body: "Two paragraphs.\n\nThe second one." },
+      { subject: "wip: first pass (STEP-7)", body: "" },
+    ])
+    git("update-ref", "refs/remotes/origin/staging", "HEAD")
+    expect(await commitMessages(realExec, repo, "staging")).toEqual([])
   })
 })
 

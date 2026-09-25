@@ -46,6 +46,7 @@ describe("templates/claude-settings.json, the front door's settings", () => {
         "Read(~/Library/Application Support/com.vercel.cli/**)",
         "Edit(~/.agentd/**)",
         "Bash(~/.agentd/bin/agentctl resume:*)",
+        "Bash(~/.agentd/bin/agentctl retry:*)",
         "Bash(~/.agentd/bin/agentctl probe-hooks:*)",
         "Bash(~/.agentd/bin/agentctl probe-sandbox:*)",
         "Bash(git push:*)",

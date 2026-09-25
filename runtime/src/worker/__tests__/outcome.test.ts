@@ -26,6 +26,25 @@ describe("toOutcome", () => {
     expect(toOutcome(result({ structured_output: { status: "finished", summary: "x" } }), ctx).status).toBe("blocked")
   })
 
+  it("marks a block whose only fault is the report's form, and no other", () => {
+    // The runner asks the same session once more for these, and with commits ahead titles the PR from them (STEP-3270).
+    expect(toOutcome(result({ structured_output: { ...report, prTitle: undefined } }), ctx).reportProblem).toBe("prTitle")
+    expect(toOutcome(result({ structured_output: { ...report, prTitle: "  " } }), ctx).reportProblem).toBe("prTitle")
+    expect(toOutcome(result({ structured_output: undefined }), ctx).reportProblem).toBe("report")
+    expect(toOutcome(result({ structured_output: { status: "done" } }), ctx).reportProblem).toBe("report")
+    expect(toOutcome(result({ subtype: "error_max_structured_output_retries" }), ctx).reportProblem).toBe("report")
+    for (const other of [
+      toOutcome(result({ structured_output: report }), ctx),
+      toOutcome(result({ structured_output: { status: "blocked", summary: "The migration needs a person." } }), ctx),
+      toOutcome(result({ structured_output: { status: "needs_input", summary: "Two readings." } }), ctx),
+      toOutcome(result({ subtype: "error_max_turns" }), ctx),
+      toOutcome(result({ structured_output: report }), { ...ctx, abortedByClock: true }),
+      toOutcome(null, { ...ctx, thrown: "Claude Code process exited with code 1" }),
+    ]) {
+      expect(other.reportProblem, other.reason).toBeUndefined()
+    }
+  })
+
   it("is blocked with the worker's own first line when it reports blocked, without its full stop", () => {
     expect(toOutcome(result({ structured_output: { status: "blocked", summary: "pnpm install fails offline.\nThe lockfile names a package the store lacks." } }), ctx)).toMatchObject({
       status: "blocked", reason: "pnpm install fails offline", report: { status: "blocked" },

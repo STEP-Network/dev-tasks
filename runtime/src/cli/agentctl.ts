@@ -1,7 +1,7 @@
 /**
  * agentctl: the agent mini's local control, for the front door (tick, ack,
  * job submit, ask, slack post and reply), a person on the machine (status,
- * report, pause, resume, doctor, probe-sandbox, probe-hooks --scripted) and
+ * report, pause, resume, retry, doctor, probe-sandbox, probe-hooks --scripted) and
  * the rehearsal (probe-hooks). One line of output per call: JSON, or text for
  * status, report, doctor and the free probes. Usage errors exit 64, anything
  * else 1.
@@ -14,7 +14,7 @@ import { join, sep } from "node:path"
 import { fileURLToPath } from "node:url"
 import { agentPaths, loadConfig, readProfile, readProfileMini } from "../config.ts"
 import { ack, readJson } from "../fsq.ts"
-import { heldBackIssues, listJobs, submitJob } from "../jobs.ts"
+import { heldBackIssues, jobPath, listJobs, submitJob, type JobRecord } from "../jobs.ts"
 import { enqueueSlack, type ChannelKey } from "../outbox.ts"
 import { loadClaudeOauthToken } from "../secrets.ts"
 import { buildDigest, pauseReason } from "../tick.ts"
@@ -37,7 +37,7 @@ const CHANNELS: ChannelKey[] = ["agents", "questions", "intake", "releases"]
 /** A Slack channel id, as the digest's events carry it: a reply names the channel by id, never by name. */
 const CHANNEL_ID_RE = /^[CGD][A-Z0-9]+$/
 const THREAD_TS_RE = /^\d+\.\d+$/
-const PERSON_ONLY = new Set(["resume", "probe-hooks", "probe-sandbox"])
+const PERSON_ONLY = new Set(["resume", "retry", "probe-hooks", "probe-sandbox"])
 const RUNTIME_DIR = fileURLToPath(new URL("../..", import.meta.url))
 
 export interface AgentctlDeps {
@@ -157,6 +157,19 @@ export async function run(argv: string[], out: (line: string) => void, overrides
         return 0
       }
       throw new UsageError("usage: agentctl job submit --issue STEP-n [--model m] | agentctl job list")
+    }
+    case "retry": {
+      // A blocked job again, on its issue's branch: prepareWorktree carries the
+      // commits on, and the runner takes the issue On hold. A person decides
+      // that the block is lifted, so the front door may not.
+      const id = rest[0]
+      if (!id || rest.length > 1) throw new UsageError("usage: agentctl retry <jobId> (agentctl job list shows the ids)")
+      if (!/^STEP-\d+-\d{14}$/.test(id)) throw new UsageError(`${id} is not a job id, like STEP-7-20260925071840`)
+      const old = readJson<JobRecord>(jobPath(paths, "done", id))
+      if (!old) throw new Error(`no finished job ${id}: agentctl job list shows the last ten`)
+      if (old.result?.status !== "blocked") throw new Error(`${id} ended ${old.result?.status ?? "without a result"}: only a blocked job is retried`)
+      print(submitJob(paths, old.issue, old.model, now(), { retryOf: old.id }))
+      return 0
     }
     case "ask": {
       print({ queued: enqueueSlack(paths, { kind: "issue", issue: issueFlag(), text: textFlag(), question: true }, now()) })
@@ -335,7 +348,7 @@ export async function run(argv: string[], out: (line: string) => void, overrides
     }
     default:
       throw new UsageError(
-        "usage: agentctl <tick|ack|job|ask|slack|pause|resume|status|report|doctor|probe-hooks|probe-sandbox> (see runtime/src/cli/agentctl.ts)",
+        "usage: agentctl <tick|ack|job|ask|slack|pause|resume|retry|status|report|doctor|probe-hooks|probe-sandbox> (see runtime/src/cli/agentctl.ts)",
       )
   }
 }
