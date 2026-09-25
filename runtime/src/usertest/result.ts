@@ -78,7 +78,7 @@ export function neutralise(text: string, max = 1000): string {
     .replace(/:\/\//g, ":\u200b//")
     .replace(/\.(?=\w)/g, ".\u200b")
     // GitHub takes a zero-width space as part of a host, so only a broken "www." is no autolink.
-    .replace(/\b(w)(ww\.)/gi, "$1\u200b$2")
+    .replace(/w(?=ww\.)/gi, "$&\u200b")
     .replace(/#(?=\d)/g, "#\u200b")
     .replace(/\bGH-(?=\d)/gi, "$&\u200b")
     .replace(/@(?=[\w-])/g, "@\u200b")
