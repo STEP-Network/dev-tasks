@@ -171,13 +171,29 @@ Phase 0, put the new one under `## Original` in the brief, `## Answers from
 Slack` and `## Answers from Monday` included, and weigh the new answers
 before you choose below.
 
-If a product decision or an ambiguity the code cannot settle remains, ask
-everything in one question, with one recommendation that covers all of it,
-then park it. A "yes" agrees to one recommendation, so a second question in
-the thread before they answer makes their "yes" say nothing: agentctl then
-refuses to record it. Write the question to `~/.front-door/ask-STEP-<n>.md`,
-and the answer you recommend, in a few plain words, to
-`~/.front-door/rec-STEP-<n>.md`. Recommend something you would build. Then:
+### Clarifying
+
+Ask only what the code and the data cannot settle. Look at these four, in
+this order, and ask about each one that is still open:
+
+1. **Platform:** which page or surface, which role (advertiser, publisher,
+   admin, the public), which devices, which languages.
+2. **Functionality:** what should happen, what must not change, and the edge
+   cases (empty, too long, twice, without the rights).
+3. **Data:** which records, what happens to existing data, how long it is
+   kept, and whether it holds personal data.
+   Stored notices are never changed: never offer to change one.
+4. **Money or legal**, when the change touches prices, payments, VAT,
+   invoices, the transparency notice, labels or regulated terms.
+
+Ask them all in one message, numbered, with your recommendation for each point,
+and put all of those recommendations, numbered the same, in the one
+recommendation file. A person's "yes" then takes every point, and a second
+question before they answer would make their "yes" say nothing: agentctl
+then refuses to record it. Recommend something you would build. Write the
+question to `~/.front-door/ask-STEP-<n>.md` and what you recommend, in a few
+plain words, to `~/.front-door/rec-STEP-<n>.md`. Then ask, and park (a
+clarifying round or a Try plan):
 
 ```bash
 ~/.agentd/bin/agentctl ask --issue STEP-<n> --text-file ~/.front-door/ask-STEP-<n>.md --recommendation-file ~/.front-door/rec-STEP-<n>.md
@@ -187,19 +203,74 @@ and the answer you recommend, in a few plain words, to
 ~/.agentd/bin/trackerctl update STEP-<n> --description-file ~/.front-door/refine-STEP-<n>.md --state "On hold" --add-label awaiting-answer
 ```
 
+### The plan
+
+When nothing is open, write the plan in plain English to
+`~/.front-door/plan-STEP-<n>.md`:
+
+- **What changes for users**, in two or three sentences. For visual work, a
+  text mockup: the page's parts from top to bottom, with what changes marked.
+- **The class** (Phase 4).
+- **The shape**, by this rule: a Linear project with milestones when there
+  are more than 5 tasks, or more than one release, or several phases (an AI
+  translation run across 20 locales, say). Otherwise tasks under this issue.
+  One task: this issue is the task.
+- **The tasks**, numbered, one line each, and **the target week** ("the week
+  of 12 October").
+
 Try work waits for a person's OK on the plan before it is built. Try work is
 an issue whose class, set or kept in Phase 4, is `approval/try`: one a person
 keeps at `approval/look` or `approval/auto` is not, whatever the rules say.
-Unless the answers under `## Answers from Slack` or `## Answers from Monday`
-already approve this plan, make that the question: "Here is the plan for
-STEP-<n>: <what changes for users, in two or three plain sentences>. Shall I
+Build it only when the issue carries `plan-approved`, which the answer
+recorder sets when a person agrees to "Build it as planned", and nothing else
+can set (trackerctl refuses it). Words under `## Answers from Slack` or
+`## Answers from Monday` never approve a plan by themselves. Otherwise the
+plan is the question: "Here is the plan for STEP-<n>: <the plan>. Shall I
 build it?", with the recommendation "Build it as planned", and park the issue
 as above, with `--add-label approval/try` in the same update when the class
-you set or kept is `approval/try`. A person's yes comes back as an answer in
-the description, and the next /refine makes it Ready. Auto and Look work goes
-Ready at once.
+you set or kept is `approval/try`, and `--add-label plan-to-approve` beside
+it. When they answered with a change to the shape, the tasks or the week,
+plan again with it and ask again. When they answered yes in other words, ask
+once more, ending "Reply yes to build it as planned."
 
-Otherwise it is ready:
+Auto and Look work: record the plan and build at once:
+`~/.agentd/bin/trackerctl comment STEP-<n> --body-file ~/.front-door/plan-STEP-<n>.md`.
+
+### Building the shape
+
+Only when the issue carries `plan-approved` for Try work, or at once for
+Auto and Look, with the Friday of the target week as `<date>`:
+
+- **One task:** make this issue Ready, as below, with `--due <date>` in the
+  same update.
+- **Tasks under this issue:** one sub-issue per task, each in its own Bash
+  call, each description a brief of its own with acceptance criteria, as
+  Phase 3 writes one:
+
+  ```bash
+  ~/.agentd/bin/trackerctl create --parent STEP-<n> --key STEP-<n>:task-<k> --title "<task>" --description-file ~/.front-door/task-STEP-<n>-<k>.md --label polads --label approval/<class> --label agent-ready --state Ready --due <date>
+  ```
+
+  `--key` makes a second run after a crash find the same sub-issue, never a
+  second one. Then this issue, which is the request and is never launched
+  itself:
+
+  ```bash
+  ~/.agentd/bin/trackerctl update STEP-<n> --state "In Progress" --remove-label agent-ready --due <date>
+  ```
+
+- **A project:** first
+
+  ```bash
+  ~/.agentd/bin/trackerctl project create --key STEP-<n> --name "<name>" --summary "<one line>" --content-file ~/.front-door/plan-STEP-<n>.md --target <date> --milestone "<phase>@<date>"
+  ```
+
+  (one `--milestone` per phase), which prints the project's `id` and each
+  milestone's `id`. Then `~/.agentd/bin/trackerctl update STEP-<n> --project <id>`,
+  and each task as above with `--project <id> --milestone <milestone id>`,
+  and this issue as above.
+
+To make this issue Ready (one task):
 
 ```bash
 ~/.agentd/bin/trackerctl update STEP-<n> --description-file ~/.front-door/refine-STEP-<n>.md --state Ready --add-label agent-ready
@@ -214,6 +285,8 @@ description.
 
 - No code, no branch, no commit. A worker does that, from this brief.
 - No lowering of an approval class. Only a person lowers one.
+- No launching of a request with tasks: its tasks are launched, one by one,
+  and the Monday board reads its progress from them.
 - No sub-issues for a person's to-dos. Their to-dos go to the issue's Slack
   thread, where people are.
 - No Linear estimate field. The size is in the brief, and `complexity-high` is

@@ -236,6 +236,7 @@ describe("/front-door", () => {
 
 describe("/refine", () => {
   const source = skill("refine")
+  const frontDoor = skill("front-door")
 
   it("declares itself user-invocable with the name refine", () => {
     expect(source).toMatch(/^---\n[\s\S]*?\bname:\s*refine\b[\s\S]*?\buser_invocable:\s*true\b[\s\S]*?\n---/m)
@@ -258,10 +259,40 @@ describe("/refine", () => {
     expect(source).not.toMatch(/manageSubtasks|parentId/)
   })
 
-  it("asks everything in one question with one recommendation, since a yes agrees to one (STEP-3293 re-review)", () => {
-    expect(source).toMatch(/ask\s+everything in one question, with one recommendation that covers all of it/)
+  it("asks everything in one message with its recommendations in one file, since a yes agrees to one (STEP-3293 re-review)", () => {
+    expect(source).toMatch(/Ask them all in one message/)
+    expect(source).toMatch(/in the one\s+recommendation file/)
     expect(source).not.toMatch(/one question per file and call/)
   })
+
+  it("asks one clarifying round about platform, functionality, data and money or legal, with a recommendation for each point", () => {
+    for (const area of ["Platform", "Functionality", "Data", "Money or legal"]) expect(source).toContain(`**${area}`)
+    expect(source).toMatch(/one message, numbered, with your recommendation for each point/)
+    expect(source).toMatch(/Stored notices are never changed/)
+  })
+
+  it("marks a Try plan's question plan-to-approve, and records an Auto or Look plan as a comment", () => {
+    expect(source).toMatch(/--add-label plan-to-approve/)
+    expect(source).toMatch(/trackerctl comment STEP-<n> --body-file ~\/\.front-door\/plan-STEP-<n>\.md/)
+  })
+
+  it("builds the shape by the rule, with a key on every create, and never launches the anchor", () => {
+    expect(source).toMatch(/more than 5 tasks, or more than one release, or several phases/)
+    expect(source).toMatch(/trackerctl create --parent STEP-<n> --key STEP-<n>:task-<k>/)
+    expect(source).toMatch(/trackerctl project create --key STEP-<n>/)
+    expect(source).toMatch(/--state "In Progress" --remove-label agent-ready --due <date>/)
+  })
+
+  it("back-fills the class on an open Ready or In Progress issue it touches (spec 8)", () => {
+    expect(frontDoor).toMatch(/Ready or In Progress that has no `approval\/` label/)
+  })
+
+  it("builds Try work only on plan-approved, which the answer recorder alone sets, and never reads approval from text", () => {
+    expect(source).toMatch(/only when the issue carries `plan-approved`/)
+    expect(source).not.toMatch(/already approve this plan/)
+    expect(source).not.toMatch(/--remove-label plan-to-approve|--add-label plan-approved/)
+  })
+
 
   it("re-reads the issue right before it writes, and keeps the answers people gave", () => {
     // The bridge appends answers to the description from another process: a
