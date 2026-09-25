@@ -48,6 +48,24 @@ describe("sendOutboxMessage", () => {
     expect(posts).toEqual([{ channel: "CAG", text: "eve: claimed STEP-7" }])
   })
 
+  it("never lets a message notify a whole channel: <!…> goes out as text, a person's <@U…> stays a mention (STEP-3353)", async () => {
+    const { ctx, posts } = context({ describeIssue: async () => ({ title: "Title <!everyone>", url: "https://linear.app/x" }) })
+    // A worker's stop reason, which a PR or an issue it read may have written.
+    const reason = "I had to stop: <!channel> the build <!here|here> failed <!everyone> <!subteam^S1|@devs>. <@U0ADA|ada> <@U0BEN> can look."
+    await sendOutboxMessage(ctx, { kind: "post", channel: "agents", text: `STEP-7: ${reason}` })
+    await sendOutboxMessage(ctx, { kind: "issue", issue: "STEP-7", text: reason, question: true })
+    await sendOutboxMessage(ctx, { kind: "issue", issue: "STEP-7", text: reason, question: false })
+    await sendOutboxMessage(ctx, { kind: "reply", channelId: "CQ", threadTs: "9002.1", text: reason })
+    const escaped = "I had to stop: &lt;!channel> the build &lt;!here|here> failed &lt;!everyone> &lt;!subteam^S1|@devs>. <@U0ADA|ada> <@U0BEN> can look."
+    expect(posts.map((p) => p.text)).toEqual([
+      `eve: STEP-7: ${escaped}`,
+      `eve: STEP-7 Title &lt;!everyone>\nhttps://linear.app/x\n\n${escaped}`,
+      `eve: ${escaped}`,
+      `eve: ${escaped}`,
+    ])
+    expect(posts.some((p) => p.text.includes("<!"))).toBe(false)
+  })
+
   it("opens the issue's thread in #polads-questions with title and link, stores it on the issue, then replies in it", async () => {
     const { ctx, posts, attached } = context()
     await sendOutboxMessage(ctx, { kind: "issue", issue: "STEP-7", text: "Which date?", question: true })
