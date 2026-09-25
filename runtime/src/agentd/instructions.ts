@@ -161,7 +161,8 @@ async function act(deps: InstructionDeps, entry: AnyInstructionEntry): Promise<s
             ...(usertestFindings ? { usertestFindings } : {}),
           },
         })
-        updateWatchedPr(paths, { ...pr, revise: { rounds: round, handled: pr.revise?.handled ?? [], lastRoundAt: now.toISOString(), asked: pr.revise?.asked } })
+        // The head the round cap asked at stays: findings at a later head ask again (WS5).
+        updateWatchedPr(paths, { ...pr, revise: { rounds: round, handled: pr.revise?.handled ?? [], lastRoundAt: now.toISOString(), asked: pr.revise?.asked, askedHead: pr.revise?.askedHead } })
         appendLedger(paths, { type: "pr.revise", issue, url: v.url, round, reasons: [`asked by ${who}`] }, now)
         const past = round > MAX_REVISE_ROUNDS ? ` This is try ${round}, past my usual ${MAX_REVISE_ROUNDS}, because you asked.` : ""
         lines.push(`I am fixing ${prLink(v.url)} now, as you asked.${past}`)

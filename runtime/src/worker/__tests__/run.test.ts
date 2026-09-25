@@ -444,6 +444,12 @@ describe("runJob", () => {
       return s
     }
 
+    it("says in the issue's thread when a round runs out of usage, and how to have it try again", async () => {
+      const { deps, job, outbox } = revising({ messages: [INIT], thrown: "Claude usage limit reached" })
+      expect(await runJob(deps, job.id)).toMatchObject({ status: "limited" })
+      expect(outbox()).toContain(`I ran out of usage while fixing the review comments and the failing checks on <${PR_URL}|PR #1674>. Once the limit resets, reply "fix it" here and I will try again.`)
+    })
+
     it("tests a revise round's push in a browser however the round ended (WS5)", async () => {
       const stopped: SdkMessage = { ...DONE, structured_output: { status: "blocked", summary: "Half done: the rest needs a person." } }
       const usertest = { enabled: true, previewEnvironment: "Preview – example", previewHost: "^app-[a-z0-9-]+\\.vercel\\.app$", stagingOrigin: "https://staging.example.com" }

@@ -67,8 +67,6 @@ export async function runUserTestJob(deps: RunDeps, job: JobRecord, finish: (r: 
 }
 
 const GH = 120_000
-const NOT_VISIBLE = "nothing in this change shows in a browser"
-const sentence = (text: string) => `${text[0].toUpperCase()}${text.slice(1)}`
 
 /**
  * After the PR is open (develop) or pushed (revise): the browser test on the
@@ -106,15 +104,22 @@ export async function userTestStep(
       return null
     }
   }
-  const arm = async () => {
-    if (!mayArm) return
+  /** Whether auto-merge is on after it. */
+  const arm = async (): Promise<boolean> => {
+    if (!mayArm) return false
     const r = await exec("gh", ["pr", "merge", ctx.prUrl, "--auto", "--squash", "--delete-branch"], opts)
-    if (r.code === 0) return
+    if (r.code === 0) return true
     log.warn("could not arm auto-merge after the browser test", { url: ctx.prUrl, stderr: r.stderr.trim() })
     // A PR a person merged or closed meanwhile needs no one.
     const state = await prState(ctx.prUrl)
-    if (state === "MERGED" || state === "CLOSED") return
+    if (state === "MERGED" || state === "CLOSED") return false
     enqueueSlack(paths, { kind: "post", channel: "agents", text: `${ctx.issue.id}: I could not switch on automatic merging for ${prLink(ctx.prUrl)}. A person needs to merge it once the checks pass.` }, deps.now())
+    return false
+  }
+  // Every arm without a pass says so on the PR: the checks and the review gate it, as before the browser test.
+  const untested = async (reason: string) => {
+    const on = await arm()
+    await note(`${on ? "Auto-merge is on without a browser test" : "The browser test gave no verdict"}: ${reason}. The checks and the review still decide.`)
   }
   try {
     // First: agentd gives the test its own minutes from here, and names the PR if it has to stop the job.
@@ -131,21 +136,21 @@ export async function userTestStep(
       // Nothing new to test. Findings at this head that this round answered without a change go out with the answer.
       const answered = ctx.revise.reasons.includes(BROWSER_TEST_REASON) || Boolean(ctx.revise.usertestFindings?.length)
       if (last?.head === pr.headRefOid && last.verdict === "findings" && answered) {
-        await note("The browser test's findings were answered without a code change, in the reply above. The checks and the review decide from here.")
-        await arm()
+        await untested("this round answered the browser test's findings without a code change, in the reply above")
       }
       return
     }
     const diff = await exec("gh", ["pr", "diff", ctx.prUrl, "--name-only"], opts)
     if (diff.code !== 0) {
-      await note("The browser test did not run: gh could not list the PR's files. The checks and the review still decide.")
-      await arm()
+      await untested("gh could not list the PR's files")
       return
     }
     const changedPaths = diff.stdout.split("\n").map((l) => l.trim()).filter(Boolean)
+    let stillOn = false
     if (mayArm && pr.autoMergeRequest) {
       const off = await exec("gh", ["pr", "merge", ctx.prUrl, "--disable-auto"], opts)
-      if (off.code !== 0) {
+      stillOn = off.code !== 0
+      if (stillOn) {
         log.warn("could not switch auto-merge off for the browser test", { url: ctx.prUrl, stderr: off.stderr.trim() })
         await note("Automatic merging could not be switched off while the browser test ran, so this head may go in before its test ends.")
       }
@@ -160,14 +165,24 @@ export async function userTestStep(
       },
     )
     appendLedger(paths, { type: "usertest.end", issue: ctx.issue.id, url: ctx.prUrl, verdict: outcome.verdict, costUsd: outcome.costUsd }, deps.now())
-    if (outcome.verdict === "findings") return
-    // Said on the PR only when its own report is not: "Could not finish" already says why.
-    if (outcome.verdict === "skipped" && outcome.reason !== NOT_VISIBLE) await note(`The browser test did not run: ${outcome.reason}. The checks and the review still decide.`)
-    if (outcome.verdict === "error" && !outcome.commentUrl) await note(`${sentence(outcome.reason)}. The checks and the review still decide.`)
-    await arm()
+    if (outcome.verdict === "findings") {
+      // Findings hold auto-merge off: when it could not be switched off, a person must, or they go in.
+      if (stillOn) {
+        enqueueSlack(
+          paths,
+          { kind: "post", channel: "agents", text: `${ctx.issue.id}: the browser test found problems on ${prLink(ctx.prUrl)}, but I could not switch off automatic merging, so it may go in before they are fixed. A person needs to switch it off on the PR.` },
+          deps.now(),
+        )
+      }
+      return
+    }
+    if (outcome.verdict === "pass") {
+      await arm()
+      return
+    }
+    await untested(outcome.reason)
   } catch (error) {
     log.warn("browser test step failed", { url: ctx.prUrl, error: error instanceof Error ? error.message : String(error) })
-    await note("The browser test could not run. The checks and the review still decide.")
-    await arm()
+    await untested("the browser test could not run")
   }
 }

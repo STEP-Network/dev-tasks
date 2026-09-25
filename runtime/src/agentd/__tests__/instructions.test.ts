@@ -6,6 +6,7 @@ import { agentPaths, ConfigSchema } from "../../config.ts"
 import { listNew, putOnce } from "../../fsq.ts"
 import { listJobs, moveJob, readWatchedPrs, recordPr, submitJob, updateWatchedPr } from "../../jobs.ts"
 import { saveUserTestState } from "../../usertest/state.ts"
+import { planRevision } from "../revise.ts"
 import type { Logger } from "../../log.ts"
 import { mondayOutbox } from "../../monday/store.ts"
 import { parseInstruction, type InstructionEntry, type MondayInstructionEntry } from "../../slack/instruction.ts"
@@ -49,6 +50,20 @@ function setup(opts: { worker?: Record<string, unknown>; policy?: string; state?
 }
 
 describe("a fix-it round and the browser test (WS5)", () => {
+  it("keeps the head the round cap asked at, so findings at a new head ask again", async () => {
+    const { deps, paths, say } = setup()
+    const [pr] = readWatchedPrs(paths)
+    updateWatchedPr(paths, { ...pr, revise: { rounds: 3, handled: [], asked: true, askedHead: "abc1234def" } })
+    say("fix it")
+    await actOnInstructions(deps)
+    const after = readWatchedPrs(paths)[0]
+    expect(after.revise).toMatchObject({ rounds: 4, asked: true, askedHead: "abc1234def" })
+    // The next head's findings are nobody's question yet.
+    const view = { url: PR, number: 1679, state: "OPEN", headRefName: "STEP-7-fix-the-date", headRefOid: "h2", author: { login: "agent-bot" }, statusCheckRollup: [] }
+    const found = { issue: "STEP-7", url: PR, head: "h2", verdict: "findings" as const, findings: ["major: X (/en)"], at: NOW.toISOString() }
+    expect(planRevision(view, after, { mini: "eve", required: [], infra: {}, usertest: found })).toMatchObject({ kind: "ask" })
+  })
+
   it("hands the round the browser test's findings at this head, and none from another head", async () => {
     const { deps, paths, say } = setup()
     saveUserTestState(paths, { issue: "STEP-7", url: PR, head: "abc1234def", verdict: "findings", findings: ["major: X (/en)"], at: NOW.toISOString() })

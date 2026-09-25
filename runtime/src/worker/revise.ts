@@ -194,7 +194,11 @@ export async function finalizeRevise(ctx: ReviseFinalizeContext, outcome: Outcom
   const what = feedbackFor(revise.reasons)
   const before = previousRound(ctx.paths, revise.url)
 
-  if (status === "limited") return { status, reason: outcome.reason, prUrl: revise.url, pushed }
+  if (status === "limited") {
+    // Nothing else picks the round up again: a person's "fix it" does, once the limit resets.
+    inThread(`I ran out of usage while fixing ${what} on ${pr}. Once the limit resets, reply "fix it" here and I will try again.`, true)
+    return { status, reason: outcome.reason, prUrl: revise.url, pushed }
+  }
 
   if (status === "done") {
     const report = outcome.report!

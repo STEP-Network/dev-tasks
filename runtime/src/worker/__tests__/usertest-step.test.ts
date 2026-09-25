@@ -87,21 +87,41 @@ describe("userTestStep", () => {
     expect(input.approvalClass).toBe("look")
   })
 
-  it("arms when the test could not run, and says so on the PR", async () => {
+  it("arms when the test could not run, and says on the PR that auto-merge is on without it", async () => {
     const { f, step, note, comments } = setup()
     mocked.mockResolvedValue(outcome("skipped", "the preview was not ready within 20 minutes"))
     await step("deferred")
     expect(f.lines().filter((l) => l === ARM)).toHaveLength(1)
     expect(comments()).toHaveLength(1)
-    expect(note()).toBe("The browser test did not run: the preview was not ready within 20 minutes. The checks and the review still decide.")
+    expect(note()).toBe("Auto-merge is on without a browser test: the preview was not ready within 20 minutes. The checks and the review still decide.")
   })
 
-  it("arms without a note when nothing in the change shows in a browser", async () => {
-    const { f, step, comments } = setup()
-    mocked.mockResolvedValue(outcome("skipped", "nothing in this change shows in a browser"))
-    await step("deferred")
-    expect(f.lines().filter((l) => l === ARM)).toHaveLength(1)
-    expect(comments()).toEqual([])
+  it("says so on the PR whenever it arms without a pass, a change no user sees included", async () => {
+    for (const [verdict, reason] of [
+      ["skipped", "nothing in this change shows in a browser"],
+      ["error", "the browser test could not test the change"],
+    ] as const) {
+      const { f, step, note } = setup()
+      mocked.mockResolvedValue(outcome(verdict, reason))
+      await step("deferred")
+      expect(f.lines().filter((l) => l === ARM)).toHaveLength(1)
+      expect(note()).toBe(`Auto-merge is on without a browser test: ${reason}. The checks and the review still decide.`)
+    }
+  })
+
+  it("says only that there is no verdict when a person merges, since nothing is switched on", async () => {
+    const { step, note } = setup()
+    mocked.mockResolvedValue(outcome("skipped", "the preview was not ready within 20 minutes"))
+    await step("person")
+    expect(note()).toBe("The browser test gave no verdict: the preview was not ready within 20 minutes. The checks and the review still decide.")
+  })
+
+  it("tells the agents channel when the test found problems but auto-merge could not be switched off", async () => {
+    const { step, paths } = setup({ autoMergeRequest: { enabledAt: "2026-09-25T10:10:00Z" }, exec: [[/--disable-auto/, { code: 1, stderr: "no" }]] })
+    mocked.mockResolvedValue(outcome("findings", "1 problem a user would meet"))
+    await step("auto", { pushed: true, revise: revise(["changes requested by someone"]) })
+    const posts = listNew<{ text: string }>(paths.outbox).map((e) => e.payload.text)
+    expect(posts).toEqual([`STEP-7: the browser test found problems on <${PR}|PR #7>, but I could not switch off automatic merging, so it may go in before they are fixed. A person needs to switch it off on the PR.`])
   })
 
   it("arms after a revise round that answered this head's findings without a change, and runs no new test", async () => {
@@ -110,7 +130,7 @@ describe("userTestStep", () => {
     await step("auto", { pushed: false, revise: revise([REASON]) })
     expect(mocked).not.toHaveBeenCalled()
     expect(f.lines().filter((l) => l === ARM)).toHaveLength(1)
-    expect(note()).toContain("answered without a code change")
+    expect(note()).toBe("Auto-merge is on without a browser test: this round answered the browser test's findings without a code change, in the reply above. The checks and the review still decide.")
   })
 
   it("leaves a revise round that pushed nothing alone when the findings are not what brought it back", async () => {
@@ -179,7 +199,7 @@ describe("userTestStep", () => {
     await step("deferred")
     expect(listJobs(paths, "running")[0]).toMatchObject({ userTestStartedAt: "2026-09-25T10:40:00.000Z", userTestPr: PR })
     expect(f.lines().filter((l) => l === ARM)).toHaveLength(1)
-    expect(note()).toBe("The browser test could not run. The checks and the review still decide.")
+    expect(note()).toBe("Auto-merge is on without a browser test: the browser test could not run. The checks and the review still decide.")
   })
 
   it("leaves a PR a person merged or closed alone", async () => {
@@ -214,18 +234,14 @@ describe("userTestStep", () => {
     await step("deferred")
     expect(mocked).not.toHaveBeenCalled()
     expect(f.lines().filter((l) => l === ARM)).toHaveLength(1)
-    expect(note()).toBe("The browser test did not run: gh could not list the PR's files. The checks and the review still decide.")
+    expect(note()).toBe("Auto-merge is on without a browser test: gh could not list the PR's files. The checks and the review still decide.")
   })
 
-  it("adds no note when a test that could not finish already put its report on the PR, and a plain one when it did not", async () => {
+  it("says auto-merge is on without a browser test even when the test's own report is on the PR", async () => {
     const posted = setup()
     mocked.mockResolvedValue({ ...outcome("error", "the browser test ran out of time (25 minutes)"), commentUrl: `${PR}#issuecomment-1` })
     await posted.step("deferred")
-    expect(posted.comments()).toEqual([])
-    const bare = setup()
-    mocked.mockResolvedValue(outcome("error", "the browser test could not run: boom"))
-    await bare.step("deferred")
-    expect(bare.note()).toBe("The browser test could not run: boom. The checks and the review still decide.")
+    expect(posted.note()).toBe("Auto-merge is on without a browser test: the browser test ran out of time (25 minutes). The checks and the review still decide.")
   })
 
   it("arms after a round a person asked for that answered this head's findings without a change", async () => {
