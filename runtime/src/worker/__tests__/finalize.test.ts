@@ -120,6 +120,16 @@ describe("finalize: done", () => {
     expect(outbox().map((m) => m.kind)).toEqual(["issue", "post"])
   })
 
+  it("is blocked, with no push and no PR, when the commits leave a conflict marker (STEP-3340)", async () => {
+    const diff = "diff --git a/docs/a.md b/docs/a.md\n--- a/docs/a.md\n+++ b/docs/a.md\n@@ -1 +1,5 @@\n+<<<<<<< HEAD\n+ours\n+=======\n+theirs\n+>>>>>>> origin/staging\n"
+    const { ctx, fake, f, outbox } = setup("2\n", [[/ diff --no-color --no-ext-diff --no-textconv -U0 origin\/staging HEAD$/, { stdout: diff }]])
+    expect(await finalize(ctx, done)).toMatchObject({ status: "blocked", reason: "leftover conflict marker in docs/a.md", pushed: false })
+    expect(f.lines().some((l) => l.includes(" push "))).toBe(false)
+    expect(f.lines().some((l) => l.startsWith("gh pr"))).toBe(false)
+    expect(fake.issues.get("STEP-7")!.state).toBe("On hold")
+    expect(outbox().find((m) => m.kind === "issue")?.text).toContain("leftover conflict marker in docs/a.md")
+  })
+
   it("keeps the PR it opened, recorded and announced, when Linear fails after it (Review Focus 5)", async () => {
     const { ctx, paths, outbox } = setup("2\n", [], ["attachLink"])
     const error = await failure(finalize(ctx, done))

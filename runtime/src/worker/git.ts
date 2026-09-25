@@ -188,6 +188,40 @@ export async function startMerge(exec: Exec, path: string, base: string): Promis
   return { conflicts }
 }
 
+/** An added line that opens or closes a conflict: `=======` alone is also a Markdown heading's underline. */
+const MARKER = /^\+(<{7}|>{7})(\s|$)/
+
+/**
+ * The files where HEAD adds a conflict marker over every one of `refs`
+ * (STEP-3340). A Markdown or YAML file passes CI with one, so the runner
+ * never pushes it. Over every ref: a merge of the base brings the base's own
+ * lines, which are not the round's. The diff as git stores it: no external
+ * diff and no textconv, which the branch's attributes could name.
+ */
+export async function conflictMarkers(exec: Exec, path: string, refs: readonly string[]): Promise<string[]> {
+  let found: string[] | null = null
+  for (const ref of refs) {
+    const out = await mustGit(exec, ["-C", path, "diff", "--no-color", "--no-ext-diff", "--no-textconv", "-U0", ref, "HEAD"])
+    const files = new Set<string>()
+    let file = ""
+    let header = false
+    for (const line of out.split("\n")) {
+      if (line.startsWith("diff --git ")) header = true
+      else if (line.startsWith("@@")) header = false
+      // Only in a file's header: an added line "++ x" reads "+++ x" in a hunk.
+      else if (header && line.startsWith("+++ ")) file = line.slice(4).replace(/^"(.*)"$/, "$1").replace(/^b\//, "")
+      else if (!header && MARKER.test(line)) files.add(file)
+    }
+    found = found ? found.filter((f) => files.has(f)) : [...files].sort()
+    if (!found.length) return []
+  }
+  return found ?? []
+}
+
+/** The stop reason for commits that leave a conflict marker. */
+export const leftoverMarkers = (files: readonly string[]) =>
+  `leftover conflict marker in ${files.slice(0, 5).join(", ")}${files.length > 5 ? ` and ${files.length - 5} more files` : ""}`
+
 /**
  * Of `files`, those that still differ from origin's copy of `base`: what a
  * round changed itself, not what merging the base in brought (STEP-3340).

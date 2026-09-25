@@ -18,7 +18,7 @@ import type { TrackerIssue } from "../tracker.ts"
 import { failingRequired, MAX_CONFLICT_ROUNDS, MAX_REVISE_ROUNDS, type OwnPrView } from "../agentd/revise.ts"
 import type { BriefInput } from "./brief.ts"
 import { selfCheckSections, type FinalizeResult } from "./finalize.ts"
-import { commitsAhead, isDirty, must, pushBranch, removeWorktree, type Exec } from "./git.ts"
+import { commitsAhead, conflictMarkers, isDirty, leftoverMarkers, must, pushBranch, removeWorktree, type Exec } from "./git.ts"
 import { clause, type Outcome } from "./outcome.ts"
 
 const GH_TIMEOUT_MS = 2 * 60_000
@@ -234,13 +234,16 @@ export async function finalizeRevise(ctx: ReviseFinalizeContext, givenOutcome: O
   const round = roundLabel(revise)
   // First parent: a merge of the base counts once, not as every commit it brought in.
   const ahead = ctx.worktree ? await commitsAhead(ctx.exec, ctx.worktree, revise.branch, { firstParent: true }) : 0
+  // Commits that leave a conflict marker never go out, however the round ended: the round stops, asking what next.
+  const markers = ahead > 0 && ctx.worktree ? await conflictMarkers(ctx.exec, ctx.worktree, [`origin/${revise.branch}`, `origin/${config.repo.base}`]) : []
   // A merge round done with nothing to push still clashes: it ends the way a stuck round does, asking what next.
-  const outcome: Outcome =
-    givenOutcome.status === "done" && ahead === 0 && isConflictOnly(revise.reasons)
+  const outcome: Outcome = markers.length
+    ? { ...givenOutcome, status: "blocked", reason: leftoverMarkers(markers) }
+    : givenOutcome.status === "done" && ahead === 0 && isConflictOnly(revise.reasons)
       ? { ...givenOutcome, status: "blocked", reason: `the merge of ${ctx.config.repo.base} was not committed, so the PR still clashes with it` }
       : givenOutcome
   const dirty = ctx.worktree ? await isDirty(ctx.exec, ctx.worktree) : false
-  const pushed = ahead > 0 && ctx.worktree !== null
+  const pushed = ahead > 0 && ctx.worktree !== null && !markers.length
   if (pushed) await pushBranch(ctx.exec, ctx.worktree!, revise.branch, issue.id)
   const post = (text: string) => enqueueSlack(ctx.paths, { kind: "post", channel: "agents", text: `${issue.id}: ${text}` }, ctx.now())
   const inThread = (text: string, question: boolean) => enqueueSlack(ctx.paths, { kind: "issue", issue: issue.id, text, question }, ctx.now())

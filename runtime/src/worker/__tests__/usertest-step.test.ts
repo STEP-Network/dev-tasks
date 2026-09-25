@@ -291,7 +291,7 @@ describe("userTestStep", () => {
 describe("buildReviseBrief for a PR that clashes with its base (STEP-3340)", () => {
   const input = { mini: "eve", issue: issue({ id: "STEP-7" }), worktree: "/w", branch: "STEP-7-x", base: "staging", resumed: true } as Parameters<typeof buildReviseBrief>[0]
   const CONFLICT = "merge conflict with staging"
-  const feedback = { points: [{ who: "nate", where: "PR comment", at: "2026-09-25T10:05:00Z", body: "Rename it." }], logs: [] }
+  const feedback = { points: [{ who: "ada", where: "PR comment", at: "2026-09-25T10:05:00Z", body: "Rename it." }], logs: [] }
 
   it("names the conflicted files and how to finish the merge: hunk by hunk, a merge never a rebase, never aborted, a question for a product decision", () => {
     const brief = buildReviseBrief(input, revise([CONFLICT]), feedback, { conflicts: ["lib/a.ts", "pnpm-lock.yaml"] })
@@ -317,7 +317,7 @@ describe("buildReviseBrief for a PR that clashes with its base (STEP-3340)", () 
   })
 
   it("keeps the feedback, and the round's own count, when the merge rides along with it", () => {
-    const brief = buildReviseBrief(input, revise(["changes requested by nate", CONFLICT]), feedback, { conflicts: ["lib/a.ts"] })
+    const brief = buildReviseBrief(input, revise(["changes requested by ada", CONFLICT]), feedback, { conflicts: ["lib/a.ts"] })
     expect(brief).toMatch(/\(revise, round 1 of 3\)/)
     expect(brief).toContain("## Finish the merge of the base")
     expect(brief).toContain("## Review feedback since")
