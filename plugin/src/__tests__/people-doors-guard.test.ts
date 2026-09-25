@@ -314,6 +314,19 @@ describe("Bash: no call to Monday or Linear at all, no write to Slack, and no su
     expect(await denied("Bash", { command })).toBe(expected)
   })
 
+  it.each(["https://api.monday.com/v2", "https://api.linear.app/graphql", "https://client-api.linear.app/graphql"])("refuses every tool that names %s, reads included", async (url) => {
+    for (const command of [
+      `curl ${url} -d '{"query":"{ me { id } }"}'`,
+      `wget -qO- --post-data='{"query":"{ me { id } }"}' ${url}`,
+      `python3 -c "import urllib.request; urllib.request.urlopen(urllib.request.Request('${url}', data=open('q.json','rb').read()))"`,
+      `node -e 'fetch("${url}", { method: "POST", body: require("fs").readFileSync("q.json") })'`,
+      `http POST ${url} query='{ me { id } }'`,
+    ]) {
+      expect(await denied("Bash", { command }), command).toBe(true)
+    }
+    expect(await denied("Bash", { command: "curl https://example.test/graphql -d @q.json" })).toBe(false)
+  })
+
   it("says a read is refused too, and what to use instead", async () => {
     expect(await denial("Bash", { command: "curl https://api.linear.app/graphql -d '{\"query\":\"{ viewer { id } }\"}'" })).toMatch(/reads included[\s\S]*Monday and Linear tools, or trackerctl[\s\S]*Grep tool/)
   })
