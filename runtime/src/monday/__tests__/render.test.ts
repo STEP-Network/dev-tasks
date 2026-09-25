@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest"
 import { JARGON } from "../../plain.ts"
+import { fakeTracker, LINEAR_CLIENT_ID } from "../../__tests__/fakes.ts"
 import { aboutText, needBody, needKind, needName, plainText, requestIssue, say, stableUuid, toHtml, uatBody, uatName, type NeedSource } from "../render.ts"
 
 const SOURCES: NeedSource[] = ["decision", "awaiting-answer", "human-todo", "needs-human"]
@@ -112,9 +113,30 @@ describe("requestIssue", () => {
   it("names the Linear issue by the item, so a retry after a crash finds the first one rather than filing a second", () => {
     const a = requestIssue(item, { name: "Kristoffer" }, [], { product: "polads", label: "intake/monday" }).clientId
     expect(a).toBe(requestIssue({ ...item, name: "changed" }, { name: "Nate" }, ["more"], { product: "polads", label: "x" }).clientId)
-    expect(a).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-5[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/)
+    expect(a).toMatch(LINEAR_CLIENT_ID)
     expect(requestIssue({ ...item, id: "9002" }, { name: "Kristoffer" }, [], { product: "polads", label: "intake/monday" }).clientId).not.toBe(a)
     expect(stableUuid("x")).toBe(stableUuid("x"))
+  })
+
+  // STEP-3323: Linear refuses any other version as a client-chosen issue id, so no request or Test day issue was ever filed.
+  it("makes a v4 UUID, the one Linear accepts as a client id, and the same one for the same name every time", () => {
+    const V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
+    for (const name of ["x", "monday-request:9001", "monday-uat-fail:42", "retro:eve:2026-09-25", ""]) {
+      expect(stableUuid(name), name).toMatch(V4)
+      expect(stableUuid(name), name).toBe(stableUuid(name))
+    }
+    expect(stableUuid("monday-request:9001")).not.toBe(stableUuid("monday-request:9002"))
+    // SHA-256 of "x" is 2d711642b726b044..., cut into a v4 shape: pinned, so the id never drifts between versions.
+    expect(stableUuid("x")).toBe("2d711642-b726-4044-8162-7ca9fbac32f5")
+  })
+
+  it("is refused by the tests' fake tracker in any other version, as Linear refuses it, so every suite catches the mistake", async () => {
+    const { tracker } = fakeTracker()
+    const v5 = stableUuid("x").replace(/^(.{14})4/, "$15")
+    await expect(tracker.createIssue({ title: "t", clientId: v5 })).rejects.toThrow("Linear: Argument Validation Error: id must be a UUID")
+    await expect(tracker.createIssue({ title: "t", clientId: "STEP-5" })).rejects.toThrow("id must be a UUID")
+    await expect(tracker.createIssue({ title: "t", clientId: stableUuid("x") })).resolves.toMatchObject({ uuid: stableUuid("x") })
+    await expect(tracker.createIssue({ title: "t" })).resolves.toMatchObject({ title: "t" })
   })
 
   it("gives an item with no words a title still", () => {

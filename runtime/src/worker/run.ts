@@ -533,7 +533,8 @@ export async function runJob(deps: RunDeps, jobId: string): Promise<JobResult> {
   return finishWith(worktree.path, outcome)
 }
 
-if (process.argv[1]?.endsWith("run.ts")) {
+// Only as the worker itself: retro/run.ts imports this module too.
+if (process.argv[1]?.endsWith("/worker/run.ts")) {
   const jobId = process.argv[2]
   const paths = agentPaths()
   const log = createLogger(paths, "worker")
