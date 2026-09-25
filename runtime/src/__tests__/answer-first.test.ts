@@ -1,4 +1,4 @@
-import { mkdtempSync } from "node:fs"
+import { mkdirSync, mkdtempSync, utimesSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { describe, expect, it } from "vitest"
@@ -80,6 +80,37 @@ describe("the first answer counts (spec 6)", () => {
     await recordAnswer(deps, { ...ben, words: "the publication date" }, { since: Q })
     const r = await recordAnswer(deps, { ...ada, ts: "1790000099.000100", at: "2026-09-25T10:05:00.000Z", words: "no, the publication date" }, { since: Q })
     expect(r.outcome).toBe("recorded")
+  })
+
+  it("counts an answer up to a minute before the question: the Slack and mini clocks may differ", async () => {
+    const skewed = setup()
+    await recordAnswer(skewed.deps, { ...ada, at: "2026-09-25T09:59:30.000Z", words: "use the order date" }, { since: null })
+    skewed.fake.issues.set("STEP-7", { ...skewed.fake.issues.get("STEP-7")!, state: "On hold", labels: ["awaiting-answer"] })
+    expect((await recordAnswer(skewed.deps, { ...ben, words: "the publication date" }, { since: Q })).outcome).toBe("second")
+    const earlier = setup()
+    await recordAnswer(earlier.deps, { ...ada, at: "2026-09-25T09:58:50.000Z", words: "use the order date" }, { since: null })
+    earlier.fake.issues.set("STEP-7", { ...earlier.fake.issues.get("STEP-7")!, state: "On hold", labels: ["awaiting-answer"] })
+    expect((await recordAnswer(earlier.deps, { ...ben, words: "the publication date" }, { since: Q })).outcome).toBe("recorded")
+  })
+
+  it("records two answers arriving at once one after the other: the Slack door and the Monday bridge never both apply", async () => {
+    const { deps, fake } = setup()
+    const both = await Promise.all([
+      recordAnswer(deps, { ...ada, words: "use the order date" }, { since: Q }),
+      recordAnswer(deps, { ...ben, words: "the publication date" }, { since: Q }),
+    ])
+    expect(both.map((r) => r.outcome)).toEqual(["recorded", "second"])
+    expect(recordedAnswers(fake.issues.get("STEP-7")!.description).map((a) => [a.who, a.applied])).toEqual([["Ada", true], ["Ben", false]])
+  })
+
+  it("takes over a lock its holder left when it died", async () => {
+    const { deps, paths } = setup()
+    mkdirSync(join(paths.state, "answer-locks"), { recursive: true })
+    const lock = join(paths.state, "answer-locks", "STEP-7.lock")
+    writeFileSync(lock, "4242")
+    const old = new Date(Date.now() - 10 * 60_000)
+    utimesSync(lock, old, old)
+    expect((await recordAnswer(deps, { ...ada, words: "use the order date" }, { since: Q })).outcome).toBe("recorded")
   })
 
   it("does not count an answer from before the question as the first", async () => {

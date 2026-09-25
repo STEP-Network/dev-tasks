@@ -46,7 +46,7 @@ import { prRef, recommendationOf } from "../plain.ts"
 import { openDecisions, questionText, type Decision } from "../agentd/decisions.ts"
 import { truncateChars } from "../slack/text.ts"
 import { threadFor } from "../threads.ts"
-import { extractAcceptanceCriteria, isIssueGone, PLAN_RECOMMENDATION, type Tracker } from "../tracker.ts"
+import { extractAcceptanceCriteria, isIssueGone, type Tracker } from "../tracker.ts"
 import { MondayRefused, type MondayApi, type MondayBoard, type MondayItem } from "./client.ts"
 import type { PeopleIssue, PeopleView } from "./people.ts"
 import { aboutText, lookBody, lookName, needBody, needKind, needName, plainText, planBody, planName, quote, requestIssue, say, stableUuid, toHtml, uatBody, uatName, type MondayKind, type NeedSource } from "./render.ts"
@@ -511,7 +511,7 @@ export function createMondayBridge(deps: MondayBridgeDeps): MondayBridge {
     if (cfg!.groups.approvePlan && source === "awaiting-answer" && issue.labels.includes("plan-to-approve")) {
       return {
         ...base, group: "approvePlan", name: planName(issue.title, agent), body: planBody({ title: issue.title, agent, question }),
-        mondayKind: "Approval", recommendation: recommendationOf(question) ?? PLAN_RECOMMENDATION,
+        mondayKind: "Approval", recommendation: recommendationOf(question),
       }
     }
     return {
@@ -554,8 +554,8 @@ export function createMondayBridge(deps: MondayBridgeDeps): MondayBridge {
       rec = {
         key: need.key, kind: need.kind, issue: need.issue.id, itemId, state: "Needs you", bodyHash: null,
         createdAt: pass.now.toISOString(), doneAt: null, handled: adopted ? adopted.updates.map((u) => u.id) : [], thread: { state: "wanted" },
-        // A new item carries its Request link already (columnsFor); an adopted one gets it below.
-        ...(need.request && !adopted ? { requestItem: need.request } : {}),
+        // A new item carries its Request link already (columnsFor), where the board has the column; an adopted one gets it below.
+        ...(cfg!.columns.request && need.request && !adopted ? { requestItem: need.request } : {}),
       }
       save(rec)
       if (!adopted) appendLedger(paths, { type: "monday.item", issue: need.issue.id, kind: need.kind }, pass.now)
