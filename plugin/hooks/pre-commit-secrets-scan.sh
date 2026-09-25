@@ -75,14 +75,16 @@ fi
 #
 # A merge in progress is the file git writes for one, never the name: a
 # branch called MERGE_HEAD is no merge (STEP-3351). Its first line is the
-# commit merged in.
+# commit merged in, and only a commit id (sha1 or sha256) counts: any other
+# line is no merge, as one that starts with a dash would reach git diff as an
+# option (--output= writes a file). The strict scan, against HEAD, then runs.
 MERGE_HEAD_FILE=$(git rev-parse --git-path MERGE_HEAD 2>/dev/null)
 MERGED_IN=""
 if [ -n "$MERGE_HEAD_FILE" ] && [ -f "$MERGE_HEAD_FILE" ]; then
-  MERGED_IN=$(head -n 1 "$MERGE_HEAD_FILE")
+  MERGED_IN=$(head -n 1 "$MERGE_HEAD_FILE" | grep -E '^[0-9a-f]{40}([0-9a-f]{24})?$')
 fi
 if [ -n "$MERGED_IN" ]; then
-  DIFF=$(git diff --cached --no-color "$MERGED_IN" 2>/dev/null | grep -E '^\+' | grep -vE '^\+\+\+')
+  DIFF=$(git diff --cached --no-color --end-of-options "$MERGED_IN" 2>/dev/null | grep -E '^\+' | grep -vE '^\+\+\+')
 else
   DIFF=$(git diff --cached --no-color 2>/dev/null | grep -E '^\+' | grep -vE '^\+\+\+')
 fi
