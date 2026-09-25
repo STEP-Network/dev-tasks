@@ -79,7 +79,7 @@ export async function sendOutboxMessage(ctx: SendContext, msg: OutboxMessage, po
       if (existing) {
         await ctx.web.postMessage({ channel: existing.channelId, thread_ts: existing.ts, text: say(msg.text) })
         posted()
-        const thread = msg.question ? { ...existing, lastQuestionAt: nowIso } : existing
+        const thread = msg.question ? { ...existing, lastQuestionAt: nowIso, lastQuestion: msg.text } : existing
         if (msg.question) saveThread(ctx.paths, thread)
         return existing.permalink ? {} : linkThread(ctx, thread)
       }
@@ -90,7 +90,7 @@ export async function sendOutboxMessage(ctx: SendContext, msg: OutboxMessage, po
       // The message is out: nothing below may throw. The thread is recorded
       // before any call that can wait, so a restart replies in it, where a
       // second thread would leave answers in the first one unread.
-      const thread = { issue: msg.issue, channelId: channel, ts, permalink: null, createdAt: nowIso, lastQuestionAt: msg.question ? nowIso : null }
+      const thread = { issue: msg.issue, channelId: channel, ts, permalink: null, createdAt: nowIso, lastQuestionAt: msg.question ? nowIso : null, lastQuestion: msg.question ? msg.text : null }
       saveThread(ctx.paths, thread)
       posted()
       return linkThread(ctx, thread)

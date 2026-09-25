@@ -37,6 +37,7 @@ export const WORKER_RESULT_SCHEMA = {
     summary: { type: "string", description: "What changed and why, two to five lines. For blocked: what stopped you." },
     verification: { type: "array", items: { type: "string" }, description: "Each check you ran and its result." },
     question: { type: "string", description: "Required when status is needs_input: one question a product owner can answer in Slack, in plain words someone who does not write code follows." },
+    recommendation: { type: "string", description: "Required when status is needs_input: the answer you recommend, in a few plain words, which a reply of yes agrees to." },
     notes: { type: "string", description: "Anything left out on purpose, or a risk a reviewer should look at." },
     checklist: {
       type: "object",

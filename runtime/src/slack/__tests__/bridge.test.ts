@@ -9,6 +9,7 @@ import { agentPaths, ConfigSchema } from "../../config.ts"
 import { countIn, listNew, putOnce } from "../../fsq.ts"
 import type { Logger } from "../../log.ts"
 import { threadFor } from "../../threads.ts"
+import { writeChannelState } from "../../channel/state.ts"
 import { createLinearTracker } from "../../tracker.ts"
 import { fakeTracker, issue } from "../../__tests__/fakes.ts"
 import {
@@ -237,102 +238,88 @@ describe("intake", () => {
   })
 })
 
-describe("answers", () => {
-  const reply = (ts: string, text: string): SlackEnvelope => ({
+describe("replies in a thread the mini owns (STEP-3293)", () => {
+  const reply = (ts: string, text: string, extra: Record<string, unknown> = {}): SlackEnvelope => ({
     team_id: "T1",
-    event: { type: "message", user: "UNATE", channel: "CQ", ts, thread_ts: "1700.1", text },
+    event: { type: "message", user: "UNATE", channel: "CQ", ts, thread_ts: "1700.1", text, ...extra },
   })
+  const PARKED = issue({ id: "STEP-7", state: "On hold", labels: ["polads", "agent-ready", "awaiting-answer"], description: "## Goal\n\nFix it." })
+  /** The front door's session holds the channel open: its heartbeat is fresh. */
+  const up = (paths: BridgeDeps["paths"], at = "2026-09-24T07:59:30.000Z") =>
+    writeChannelState(paths, { pid: 1, at, connectedAt: "2026-09-24T07:00:00.000Z", delivered: {} })
+  const down = (paths: BridgeDeps["paths"]) => up(paths, "2026-09-24T07:50:00.000Z")
 
-  it("apply to a parked issue once, put it back in Ready, and tick the reply", async () => {
-    const { deps, fake, paths } = setup([issue({ id: "STEP-7", state: "On hold", labels: ["polads", "agent-ready", "awaiting-answer"], description: "## Goal\n\nFix it." })])
-    await handleEnvelope(deps, reply("1700.5", "Use the publication date"))
-    await handleEnvelope(deps, reply("1700.5", "Use the publication date"))
-    const updates = fake.called("updateIssue")
-    expect(updates).toHaveLength(1)
-    expect(updates[0][1]).toMatchObject({ state: "Ready", removeLabels: ["awaiting-answer"] })
-    expect(fake.issues.get("STEP-7")!.description).toContain("**Nate** ([Slack](https://step.slack.com/archives/CQ/p17005)): Use the publication date")
-    expect(listNew(paths.inbox)).toEqual([])
-    // Words, and a ✅ beside them: never a bare ✅ (STEP-3285).
-    expect(listNew<{ kind: string; name?: string; text?: string }>(paths.outbox).map((e) => e.payload)).toEqual([
-      expect.objectContaining({ kind: "reply", channelId: "CQ", threadTs: "1700.1", text: "Added your answer to STEP-7, and it goes back to Ready." }),
-      expect.objectContaining({ kind: "react", name: "white_check_mark" }),
-    ])
-  })
-
-  it("turn into an instruction for agentd when they answer the mini's own post about a PR or job (STEP-3285)", async () => {
-    // Nate, 2026-09-25, under Eve's "a person needs to look": a ✅ and nothing else, until now.
-    const { deps, fake, paths } = setup([issue({ id: "STEP-7", state: "In Review", labels: ["polads", "agent-ready"] })])
-    await handleEnvelope(deps, reply("1700.5", "fix it and merge"))
+  it("go to the front door as they are, and the bridge records nothing: Nate's 'what do you recommend?' on STEP-3225", async () => {
+    const { deps, fake, paths } = setup([PARKED])
+    up(paths)
+    await handleEnvelope(deps, reply("1700.5", "what do you recommend?"))
+    await handleEnvelope(deps, reply("1700.5", "what do you recommend?"))
+    await retryPending(deps)
+    expect(fake.called("readIssue")).toEqual([])
     expect(fake.called("updateIssue")).toEqual([])
+    expect(fake.issues.get("STEP-7")).toMatchObject({ state: "On hold", labels: ["polads", "agent-ready", "awaiting-answer"] })
     expect(listNew(paths.inbox).map((e) => e.payload)).toEqual([
       expect.objectContaining({
-        type: "instruction", key: "instr:CQ:1700.5", issue: "STEP-7", channel: "CQ", ts: "1700.5", threadTs: "1700.1",
-        user: "UNATE", userName: "Nate", text: "fix it and merge", actions: ["revise", "merge"],
+        type: "reply", key: "msg:CQ:1700.5", issue: "STEP-7", channel: "CQ", ts: "1700.5", threadTs: "1700.1", user: "UNATE", userName: "Nate",
+        text: "what do you recommend?", readableText: "what do you recommend?", permalink: "https://step.slack.com/archives/CQ/p17005",
       }),
     ])
-    // agentd acts, and replies in words: the bridge sends nothing, least of all a bare ✅.
+    // Nothing said, nothing ticked: the front door answers.
     expect(listNew(paths.outbox)).toEqual([])
   })
 
-  it("stay answers when the issue waits on one, or on a person's to-do, whatever words they use", async () => {
-    for (const label of ["awaiting-answer", "human-todo"]) {
-      const { deps, fake, paths } = setup([issue({ id: "STEP-7", state: "On hold", labels: ["agent-ready", label], description: "## Goal\n\nFix it." })])
-      await handleEnvelope(deps, reply("1700.5", "Done: the key is in, and please fix the label too"))
-      expect(fake.called("updateIssue"), label).toHaveLength(1)
-      expect(listNew(paths.inbox), label).toEqual([])
-      expect(fake.issues.get("STEP-7")!.description, label).toContain("fix the label too")
-    }
+  it("that name one of the fixed actions go to the front door too, which reads them, while it is up", async () => {
+    const { deps, paths } = setup([issue({ id: "STEP-7", state: "In Review", labels: ["polads", "agent-ready"] })])
+    up(paths)
+    await handleEnvelope(deps, reply("1700.5", "fix it and merge"))
+    expect(listNew<{ type: string }>(paths.inbox).map((e) => e.payload.type)).toEqual(["reply"])
+    expect(listNew(paths.outbox)).toEqual([])
   })
 
-  it("keep both of two replies that arrive together, applying one at a time", async () => {
-    // Each apply reads the description and writes it back: two at once would
-    // both read the same text, and the second write would drop the first answer.
-    const { deps, fake, paths } = setup([issue({ id: "STEP-7", state: "On hold", labels: ["agent-ready", "awaiting-answer"], description: "## Goal\n\nFix it." })])
-    const permalink = deps.web.permalink
-    deps.web.permalink = (channel, ts) => new Promise((resolve) => setTimeout(() => resolve(permalink(channel, ts)), 20))
-    await Promise.all([handleEnvelope(deps, reply("1700.5", "Use the publication date")), handleEnvelope(deps, reply("1700.6", "And the Danish label"))])
+  it("while the front door is down: pause and leave act through agentd, and anything else waits for it, with one note", async () => {
+    const { deps, paths } = setup([PARKED])
+    down(paths)
+    await handleEnvelope(deps, reply("1700.5", "pause for now"))
+    await handleEnvelope(deps, reply("1700.6", "leave it, I'll take it"))
+    await handleEnvelope(deps, reply("1700.7", "fix it and merge"))
+    await handleEnvelope(deps, reply("1700.8", "don't pause, what do you recommend?"))
     await retryPending(deps)
-    const description = fake.issues.get("STEP-7")!.description
-    expect(description).toContain("Use the publication date")
-    expect(description).toContain("And the Danish label")
-    expect(listNew(paths.inbox)).toEqual([])
+    const inbox = listNew<{ type: string; actions?: string[]; key: string }>(paths.inbox).map((e) => e.payload)
+    expect(inbox.filter((p) => p.type === "instruction").map((p) => [p.key, p.actions])).toEqual([
+      ["instr:CQ:1700.5", ["pause"]],
+      ["instr:CQ:1700.6", ["leave"]],
+    ])
+    // Nothing is recorded or revised on the bridge's own reading: those two wait for the front door.
+    expect(inbox.filter((p) => p.type === "reply").map((p) => p.key)).toEqual(["msg:CQ:1700.7", "msg:CQ:1700.8"])
+    expect(outboxTexts(paths)).toEqual(["I am restarting and will reply here shortly.", "I am restarting and will reply here shortly."])
   })
 
-  it("are written into the issue readably", async () => {
-    const { deps, fake } = setup([issue({ id: "STEP-7", state: "On hold", labels: ["agent-ready", "awaiting-answer"] })])
+  it("judge a front door that never had a channel by its last wakeup", async () => {
+    const quiet = setup([PARKED])
+    mkdirSync(quiet.paths.state, { recursive: true })
+    writeFileSync(join(quiet.paths.state, "frontdoor-tick.json"), JSON.stringify({ at: "2026-09-24T07:30:00.000Z" }))
+    await handleEnvelope(quiet.deps, reply("1700.5", "what do you recommend?"))
+    expect(listNew(quiet.paths.outbox)).toEqual([])
+    const gone = setup([PARKED])
+    mkdirSync(gone.paths.state, { recursive: true })
+    writeFileSync(join(gone.paths.state, "frontdoor-tick.json"), JSON.stringify({ at: "2026-09-24T06:30:00.000Z" }))
+    await handleEnvelope(gone.deps, reply("1700.5", "what do you recommend?"))
+    expect(outboxTexts(gone.paths)).toEqual(["I am restarting and will reply here shortly."])
+  })
+
+  it("carry their words readably, for the front door and for the decision a person makes", async () => {
+    const { deps, paths } = setup([PARKED])
+    up(paths)
     await handleEnvelope(deps, reply("1700.5", "Use <https://x.eu/d|the publication date> &amp; ask <@UKARL>"))
-    expect(fake.issues.get("STEP-7")!.description).toContain("): Use [the publication date](https://x.eu/d) & ask @Karl")
+    expect(listNew<{ readableText: string }>(paths.inbox)[0].payload.readableText).toBe("Use [the publication date](https://x.eu/d) & ask @Karl")
   })
 
-  it("to an issue Linear no longer has go to failed, with one reply saying so", async () => {
-    const { deps, paths } = setup([])
-    await handleEnvelope(deps, reply("1700.5", "Use the publication date"))
-    await retryPending(deps)
+  it("come only from the people on the allowlist: another person's, or a bot's, never reaches the front door", async () => {
+    const { deps, paths } = setup([PARKED])
+    up(paths)
+    expect(await handleEnvelope(deps, reply("1700.5", "merge it", { user: "USTRANGER" }))).toBe("ignore")
+    expect(await handleEnvelope(deps, reply("1700.6", "merge it", { bot_id: "B1" }))).toBe("ignore")
     expect(listNew(paths.inbox)).toEqual([])
-    expect(countIn(paths.inbox, "failed")).toBe(1)
-    expect(outboxTexts(paths)).toEqual(["I could not add this answer to STEP-7, because STEP-7 is no longer in Linear."])
-  })
-
-  it("that Linear has refused for a whole day go to failed, with one reply saying so", async () => {
-    const { deps, paths } = setup([issue({ id: "STEP-7", state: "On hold" })], ["updateIssue"])
-    putOnce(paths.inbox, "msg:CQ:1700.5", {
-      type: "answer", key: "msg:CQ:1700.5", issue: "STEP-7", channel: "CQ", ts: "1700.5", threadTs: "1700.1",
-      user: "UNATE", userName: "Nate", text: "Yes", receivedAt: "2026-09-23T06:00:00.000Z", failingSince: "2026-09-23T07:00:00.000Z",
-    })
-    await retryPending(deps)
-    expect(countIn(paths.inbox, "failed")).toBe(1)
-    expect(outboxTexts(paths)).toEqual(["Linear refused this answer for a whole day, so I have stopped trying to add it to STEP-7. Please post it again."])
-  })
-
-  it("that Linear refuses for the first time start their day then", async () => {
-    const { deps, paths } = setup([issue({ id: "STEP-7", state: "On hold" })], ["updateIssue"])
-    putOnce(paths.inbox, "msg:CQ:1700.5", {
-      type: "answer", key: "msg:CQ:1700.5", issue: "STEP-7", channel: "CQ", ts: "1700.5", threadTs: "1700.1",
-      user: "UNATE", userName: "Nate", text: "Yes", receivedAt: "2026-09-22T08:00:00.000Z",
-    })
-    await retryPending(deps)
-    expect(countIn(paths.inbox, "failed")).toBe(0)
-    expect(listNew<{ failingSince: string }>(paths.inbox)[0].payload.failingSince).toBe("2026-09-24T08:00:00.000Z")
   })
 
   it("know an issue Linear does not have by the real adapter's own words", async () => {
@@ -349,17 +336,6 @@ describe("answers", () => {
       if (inherited === undefined) delete process.env.LINEAR_API_KEY
       else process.env.LINEAR_API_KEY = inherited
     }
-  })
-
-  it("stay in the inbox when Linear is down and apply on a later retry", async () => {
-    const { deps, paths } = setup([issue({ id: "STEP-7", state: "On hold", labels: ["agent-ready", "awaiting-answer"] })], ["updateIssue"])
-    await handleEnvelope(deps, reply("1700.5", "Yes"))
-    expect(listNew(paths.inbox)).toHaveLength(1)
-    const working = fakeTracker([issue({ id: "STEP-7", state: "On hold", labels: ["agent-ready", "awaiting-answer"] })])
-    deps.tracker = working.tracker
-    await retryPending(deps)
-    expect(working.issues.get("STEP-7")!.state).toBe("Ready")
-    expect(listNew(paths.inbox)).toEqual([])
   })
 })
 
@@ -382,15 +358,21 @@ describe("mentions", () => {
   })
 })
 
-describe("mentions that name a PR (STEP-3285)", () => {
-  it("become an instruction for agentd, and one that names nothing stays the front door's", async () => {
-    const { deps, paths } = setup()
+describe("mentions that name a PR (STEP-3293)", () => {
+  it("go to the front door, which reads them, and act on the bridge's reading only while it is down, for pause and leave", async () => {
     const at = (ts: string, text: string): SlackEnvelope => ({ team_id: "T1", event: { type: "app_mention", user: "UNATE", channel: "CAG", ts, text } })
-    await handleEnvelope(deps, at("1950.1", "<@UBOT> fix <https://github.com/STEP-Network/v0-politiske-annoncer/pull/1679|#1679> and merge"))
-    await handleEnvelope(deps, at("1950.2", "<@UBOT> fix the login page"))
-    expect(listNew<{ type: string; target?: unknown; threadTs?: string }>(paths.inbox).map((e) => e.payload)).toEqual([
-      expect.objectContaining({ type: "instruction", issue: null, threadTs: "1950.1", actions: ["revise", "merge"], target: { url: "https://github.com/STEP-Network/v0-politiske-annoncer/pull/1679", pr: 1679 } }),
-      expect.objectContaining({ type: "mention", ts: "1950.2" }),
+    const upNow = setup()
+    writeChannelState(upNow.paths, { pid: 1, at: "2026-09-24T07:59:30.000Z", connectedAt: "2026-09-24T07:00:00.000Z", delivered: {} })
+    await handleEnvelope(upNow.deps, at("1950.1", "<@UBOT> fix <https://github.com/STEP-Network/v0-politiske-annoncer/pull/1679|#1679> and merge"))
+    expect(listNew<{ type: string }>(upNow.paths.inbox).map((e) => e.payload.type)).toEqual(["mention"])
+    const downNow = setup()
+    writeChannelState(downNow.paths, { pid: 1, at: "2026-09-24T07:50:00.000Z", connectedAt: "2026-09-24T07:00:00.000Z", delivered: {} })
+    await handleEnvelope(downNow.deps, at("1950.2", "<@UBOT> pause #1679"))
+    await handleEnvelope(downNow.deps, at("1950.3", "<@UBOT> pause for a bit"))
+    expect(listNew<{ type: string; actions?: string[]; target?: unknown }>(downNow.paths.inbox).map((e) => e.payload)).toEqual([
+      expect.objectContaining({ type: "instruction", issue: null, threadTs: "1950.2", actions: ["pause"], target: { pr: 1679 } }),
+      // A mention that names no issue or PR waits for the front door.
+      expect.objectContaining({ type: "mention", ts: "1950.3" }),
     ])
   })
 })

@@ -121,7 +121,7 @@ describe("watchPrs, and the revise loop (STEP-3274)", () => {
     await w.run()
     expect(outbox(paths).filter((p) => p.kind === "issue").map((p) => p.text)).toEqual([
       // One question with its options and a default, never "a person needs to look" (STEP-3285). 13:00 UTC is 15:00 in Copenhagen.
-      `The automatic checks on <${PR1}|PR #1> failed again for a reason that has nothing to do with the code (Test on abc1234), even after I started them again. Reply "re-run" to have me start them once more (the default: I do it at 15:00 if nobody answers), or "leave it" to leave the PR to a person.`,
+      `The automatic checks on <${PR1}|PR #1> failed again for a reason that has nothing to do with the code (Test on abc1234), even after I started them again.\n\nMy recommendation: have me start them once more. Reply yes to go with it, or tell me what you want instead. You can also reply "leave it" to leave the PR to a person. If nobody answers, I do it at 15:00.`,
     ])
   })
 
@@ -142,7 +142,7 @@ describe("watchPrs, and the revise loop (STEP-3274)", () => {
     expect(listJobs(paths, "pending").map((j) => [j.issue, j.kind])).toEqual([["STEP-7", "revise"]])
     // STEP-8's infrastructure failed again at the same head: one question, with a default.
     expect(sent.filter((p) => p.kind === "issue")).toEqual([
-      expect.objectContaining({ issue: "STEP-8", question: true, text: expect.stringMatching(/^The automatic checks on .*\/pull\/2\|PR #2> failed again .* Reply "re-run" .*\(the default: I do it at \d\d:\d\d if nobody answers\), or "leave it"/) }),
+      expect.objectContaining({ issue: "STEP-8", question: true, text: expect.stringMatching(/^The automatic checks on .*\/pull\/2\|PR #2> failed again .*\n\nMy recommendation: have me start them once more\. Reply yes .* If nobody answers, I do it at \d\d:\d\d\.$/) }),
     ])
   })
 
@@ -219,7 +219,7 @@ describe("watchPrs, and the revise loop (STEP-3274)", () => {
         kind: "issue",
         issue: "STEP-7",
         question: true,
-        text: `<${PR1}|PR #1> still has review feedback after I worked on it 3 times (changes requested by nate). Reply "fix it" to have me try once more, or "leave it" to leave it to a person (the default: I do it at 15:00 if nobody answers).`,
+        text: `<${PR1}|PR #1> still has review feedback after I worked on it 3 times (changes requested by nate).\n\nMy recommendation: leave it to a person. Reply yes to go with it, or tell me what you want instead. You can also reply "fix it" to have me try once more. If nobody answers, I do it at 15:00.`,
       }),
     ])
   })

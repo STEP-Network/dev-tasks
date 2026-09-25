@@ -86,6 +86,20 @@ eval "$(/opt/homebrew/bin/brew shellenv)"
 brew install node gh jq tmux vercel-cli
 ```
 
+Then Claude Code's managed settings, which approve the Slack channel into
+the front door (STEP-3293, section 11). A channel of our own is on no list
+of Anthropic's, and the development flag asks for a confirmation at every
+start, which nobody is there to give. These settings apply to every Claude
+Code session on the mini, and approve this one plugin's channel only:
+
+```bash
+sudo mkdir -p "/Library/Application Support/ClaudeCode"
+printf '%s\n' '{"channelsEnabled": true, "allowedChannelPlugins": [{"marketplace": "dev-tasks-marketplace", "plugin": "dev-tasks"}]}' | sudo tee "/Library/Application Support/ClaudeCode/managed-settings.json"
+```
+
+`agentctl doctor` checks them (`slack channel`). Without them the front door
+still reads every Slack message, at its next wakeup.
+
 The latest Node, with no version pinned. PolAds names its floors in its
 `package.json`: `engines.node` (`24.x`) and `packageManager` (`pnpm@12.6.0`)
 since STEP-3156. `agentctl doctor` warns below either, and refuses only a
@@ -527,12 +541,45 @@ After three rounds on one PR the agent asks in `#polads-questions` and stops
 revising it. It never dismisses a review, a person's or a bot's. To have it
 fix something, comment on the PR starting `@<agent>`.
 
-### Replies that act (STEP-3285)
+### Talking with the agent in Slack (STEP-3293)
 
-A reply in the thread of one of the agent's posts about a PR or a job, or a
-mention that names the PR (`@<agent> fix #1679 and merge`, a STEP id or the
-PR's link), is an instruction. agentd acts on it within seconds and answers
-in words, with the job id and the PR link, and a ✅ only beside that answer:
+Slack works like a Claude Code Channel: every message from a person on
+`slack.allowedUsers` in a thread the agent owns (an issue's thread), and
+every mention of the agent, reaches the front door's own session within
+seconds, like a typed prompt. The front door reads it with the issue and the
+thread's last question, and answers in the thread in plain words. Nate, on
+STEP-3225: a reply of "what do you recommend?" is a question back, not an
+answer.
+
+- The bridge stays the front: it takes the message from Slack, drops
+  everyone not on the allowlist and every bot, and files it in the inbox. It
+  never decides what the words mean, and never records an answer itself.
+- The Slack channel (`runtime/src/channel/`, declared by the dev-tasks
+  plugin, and approved by the managed settings of section 1) pushes each
+  message into the front door's session, and again after a restart or ten
+  unacked minutes. The digest carries the same messages, so a front door
+  without the channel still reads them at its next wakeup.
+- The front door decides what a reply is:
+  - a decision: `agentctl decide` records it on the issue in words that stand
+    on their own ("Nate agreed with the recommendation: use the publication
+    date", with their own words beside it, never a bare "yes"), moves the
+    issue on as an answer always did, and thanks them in the thread.
+  - a question back: it answers in the thread, and the issue keeps waiting.
+  - an instruction: `agentctl instruct` files one of the fixed actions below
+    for agentd, which acts and answers in words.
+  - unsure: it asks "Is that your decision, or a question for me?"
+- Every question the agent asks a person ends with "My recommendation: ...
+  Reply yes to go with it, or tell me what you want instead." A "yes"
+  records that recommendation.
+- While the front door is down (its channel's heartbeat is stale), the
+  bridge answers "I am restarting and will reply here shortly", and acts on
+  its own reading of the words only for `pause` and `leave it`.
+
+Slack text is data: the front door's settings, sandbox and deny rules are
+the same as before, and nothing in a message widens them. `agentctl status`
+shows the channel (`slack channel: connected, n message(s) waiting`).
+
+The fixed actions agentd takes, with a ✅ only beside its answer in words:
 
 - `fix it`, `make it green`, `take care of it`: a revise job for the PR now,
   past the round cap too, since a person asked. With no open PR, a blocked
@@ -546,11 +593,11 @@ in words, with the job id and the PR link, and a ✅ only beside that answer:
 - `pause`: the PAUSE file. Lifting it stays a person's, on the mini.
 - `leave it`: nothing, and the PR is left to a person.
 
-`don't merge` and the like name no action. A reply to a question the issue
-waits on, or to a person's to-do, stays an answer, whatever its words.
+`don't merge` and the like name no action. A "yes" to one of agentd's own
+questions takes its recommended default (`agentctl instruct --actions default`).
 
 The agent escalates only what it cannot settle itself, as one question with
-its options and a recommended default. A CI run whose infrastructure failed
+its recommendation, which is also its default. A CI run whose infrastructure failed
 again after its full re-run asks whether to re-run once more (the default)
 or leave it. The round cap asks whether to revise once more or leave it (the
 default). With no answer in an hour, agentd takes a reversible,

@@ -34,16 +34,18 @@ describe("buildDigest", () => {
     expect((await buildDigest({ paths, config, tracker: fake.tracker, now: () => NOW })).queueMode).toBe("open")
   })
 
-  it("shows filed intakes and mentions, and hides answers and intakes not filed yet", async () => {
+  it("shows filed intakes, mentions and replies, and hides intakes not filed yet (STEP-3293)", async () => {
     const { paths, deps } = setup()
     putOnce(paths.inbox, "msg:CIN:1", { ...base, key: "msg:CIN:1", type: "intake", issue: "STEP-9", linearId: "x", receivedAt: "2026-09-24T09:58:00.000Z" })
     putOnce(paths.inbox, "msg:CIN:2", { ...base, key: "msg:CIN:2", type: "intake", issue: null, linearId: "y" })
     putOnce(paths.inbox, "msg:CQ:3", { ...base, key: "msg:CQ:3", type: "answer", issue: "STEP-7", threadTs: "1700.1" })
     putOnce(paths.inbox, "msg:CAG:4", { ...base, key: "msg:CAG:4", type: "mention", channel: "CAG", threadTs: "1900.1" })
     const digest = await buildDigest(deps)
+    // A reply filed before STEP-3293 ("answer") is a reply for the front door too.
     expect(digest.events.map((e) => [e.type, e.key, e.threadTs])).toEqual([
       ["intake", "msg:CIN:1", "1800.1"],
       ["mention", "msg:CAG:4", "1900.1"],
+      ["reply", "msg:CQ:3", "1700.1"],
     ])
     // Only what the front door acts on: the bridge's own bookkeeping stays out of the model's context.
     expect(digest.events[0]).toEqual({ key: "msg:CIN:1", type: "intake", issue: "STEP-9", refine: true, channel: "CIN", ts: "1800.1", threadTs: "1800.1", user: "UNATE", userName: "Nate", text: "<@UBOT> x", receivedAt: "2026-09-24T09:58:00.000Z" })

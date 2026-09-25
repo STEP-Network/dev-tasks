@@ -181,10 +181,18 @@ export function shellQuote(s: string): string {
 }
 
 /** The front door's command line (spec 6.1), as one shell string for tmux. */
-export function claudeCommand(o: { claudePath: string; resumeId: string | null; model: string; settingsPath: string }): string {
+/**
+ * The Slack channel (STEP-3293), as the dev-tasks plugin declares it. An
+ * approved channel, never a development one: `--dangerously-load-development-channels`
+ * asks for a confirmation at every start, which nobody is there to give.
+ */
+export const CHANNEL_PLUGIN = "plugin:dev-tasks@dev-tasks-marketplace"
+
+export function claudeCommand(o: { claudePath: string; resumeId: string | null; model: string; settingsPath: string; channel?: boolean }): string {
   return [
     o.claudePath,
     ...(o.resumeId ? ["--resume", o.resumeId] : []),
+    ...(o.channel ? ["--channels", CHANNEL_PLUGIN] : []),
     "--settings",
     o.settingsPath,
     "--model",
@@ -269,6 +277,7 @@ export async function applyFrontDoor(deps: FrontDoorDeps, state: FrontDoorState,
     resumeId,
     model: deps.config.frontDoor.model,
     settingsPath: frontDoorSettingsPath(deps.paths),
+    channel: deps.config.frontDoor.channel,
   })
   const r = await tmux(["new-session", "-d", "-s", session, "-e", "AGENTD_FRONT_DOOR=1", "-x", "220", "-y", "60", "-c", deps.config.repo.path, command])
   if (r.code !== 0) throw new Error(`tmux new-session failed (${r.code}): ${r.stderr.trim()}`)

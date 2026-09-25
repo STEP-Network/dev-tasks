@@ -8,8 +8,11 @@
 
 import { existsSync } from "node:fs"
 import { join } from "node:path"
+import { openDecisions } from "./agentd/decisions.ts"
+import { inFlight, readChannelState } from "./channel/state.ts"
 import type { AgentConfig, AgentPaths } from "./config.ts"
 import { listNew, readJson, writeJsonAtomic } from "./fsq.ts"
+import { threadFor } from "./threads.ts"
 import { coolingIssues, heldBackIssues, listJobs, updateJob } from "./jobs.ts"
 import { nextWakeupSeconds, selectNext, type QueuePolicy } from "./select.ts"
 import { onQueue } from "./select.ts"
@@ -18,8 +21,9 @@ import { developBlockedByUsage, readUsage } from "./usage.ts"
 
 export interface InboxEvent {
   key: string
-  type: "intake" | "mention"
-  /** Set on intake: the Triage issue the bridge filed. */
+  /** reply: a person's message in a thread this mini owns, which the front door reads and decides about (STEP-3293). */
+  type: "intake" | "mention" | "reply"
+  /** Set on intake: the Triage issue the bridge filed. On reply: the thread's issue. */
   issue?: string
   /** Set on intake: whether this mini refines it (open mode, or the id on queue.allow). The bridge's reply said which. */
   refine?: boolean
@@ -33,6 +37,10 @@ export interface InboxEvent {
   receivedAt: string
   /** Set on a mention in an intake request another agent was named first in: that agent files it, so the front door must not. */
   filedBy?: string
+  /** Set on reply: the last question this mini asked in the thread, whose recommendation a "yes" agrees to. */
+  question?: string
+  /** Set on reply: the decision agentd waits on for the issue, with the reply it takes by default. */
+  decision?: { id: string; defaultReply: string; replies: string[] }
 }
 
 export interface Digest {
@@ -80,6 +88,9 @@ type StoredEntry = {
   filedBy?: string
 }
 
+/** The types the front door reads. "answer" is a reply filed before STEP-3293, read the same way. */
+const FOR_FRONT_DOOR = new Set(["mention", "reply", "answer"])
+
 export const tickPath = (paths: AgentPaths) => join(paths.state, "frontdoor-tick.json")
 
 /**
@@ -94,11 +105,15 @@ export function pauseReason(paths: AgentPaths): string | null {
 }
 
 /** What the front door acts on, and nothing of the bridge's own bookkeeping (linearId, retry marks): every wakeup reads it. */
-function toEvent(p: StoredEntry, queue: AgentConfig["queue"]): InboxEvent {
+function toEvent(paths: AgentPaths, p: StoredEntry, queue: AgentConfig["queue"]): InboxEvent {
+  const reply = p.type === "reply" || p.type === "answer"
+  const decision = reply && p.issue ? openDecisions(paths, p.issue)[0] : undefined
+  const question = reply && p.issue ? threadFor(paths, p.issue)?.lastQuestion : undefined
   return {
     key: p.key,
-    type: p.type === "intake" ? "intake" : "mention",
+    type: p.type === "intake" ? "intake" : reply ? "reply" : "mention",
     ...(p.type === "intake" && p.issue ? { issue: p.issue, refine: onQueue(p.issue, queue) } : {}),
+    ...(reply && p.issue ? { issue: p.issue } : {}),
     channel: p.channel,
     ts: p.ts,
     threadTs: p.threadTs ?? p.ts,
@@ -107,7 +122,22 @@ function toEvent(p: StoredEntry, queue: AgentConfig["queue"]): InboxEvent {
     text: p.text,
     receivedAt: p.receivedAt,
     ...(p.filedBy ? { filedBy: p.filedBy } : {}),
+    ...(question ? { question } : {}),
+    ...(decision ? { decision: { id: decision.id, defaultReply: decision.defaultReply, replies: decision.options.map((o) => o.reply) } } : {}),
   }
+}
+
+/**
+ * Every message waiting for the front door, oldest first: the digest's events
+ * and what the Slack channel pushes (channel/server.ts). Intakes the bridge
+ * has not filed yet are the bridge's to finish.
+ */
+export function inboxEvents(paths: AgentPaths, config: AgentConfig): InboxEvent[] {
+  return listNew<StoredEntry>(paths.inbox)
+    .map((e) => e.payload)
+    .filter((p) => FOR_FRONT_DOOR.has(p.type) || (p.type === "intake" && Boolean(p.issue)))
+    .map((p) => toEvent(paths, p, config.queue))
+    .sort((a, b) => a.receivedAt.localeCompare(b.receivedAt))
 }
 
 export async function buildDigest(deps: DigestDeps): Promise<Digest> {
@@ -116,12 +146,10 @@ export async function buildDigest(deps: DigestDeps): Promise<Digest> {
   writeJsonAtomic(tickPath(paths), { at: now.toISOString() })
   const paused = existsSync(paths.pauseFile)
 
-  // Answers and intakes the bridge has not filed yet are the bridge's to finish.
-  const events = listNew<StoredEntry>(paths.inbox)
-    .map((e) => e.payload)
-    .filter((p) => p.type === "mention" || (p.type === "intake" && Boolean(p.issue)))
-    .map((p) => toEvent(p, config.queue))
-    .sort((a, b) => a.receivedAt.localeCompare(b.receivedAt))
+  // What the Slack channel pushed into this session minutes ago, the front door is on already (STEP-3293).
+  const channel = readChannelState(paths)
+  const events = inboxEvents(paths, config)
+    .filter((e) => !inFlight(channel, e.key, now))
     .slice(0, 10)
 
   const finished = listJobs(paths, "done").filter((j) => !j.reported)

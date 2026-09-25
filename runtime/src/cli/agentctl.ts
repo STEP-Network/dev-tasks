@@ -16,8 +16,12 @@ import { agentPaths, loadConfig, readProfile, readProfileMini } from "../config.
 import { ack, readJson } from "../fsq.ts"
 import { heldBackIssues, jobPath, listJobs, submitJob, type JobRecord } from "../jobs.ts"
 import { enqueueSlack, type ChannelKey } from "../outbox.ts"
+import { decisionText, defaultActions, fileInstructionFor, personEntry, recordDecision } from "../decide.ts"
+import { withRecommendation } from "../plain.ts"
+import type { Action, InstructionEntry } from "../slack/instruction.ts"
 import { loadClaudeOauthToken } from "../secrets.ts"
-import { buildDigest, pauseReason } from "../tick.ts"
+import { buildDigest, inboxEvents, pauseReason } from "../tick.ts"
+import { readChannelState } from "../channel/state.ts"
 import { assertNoSecretText, createLinearTracker, readTextFile, type Tracker } from "../tracker.ts"
 import { readUsage } from "../usage.ts"
 import { frontDoorAlive, lastTickAt, readFrontDoorState } from "../agentd/frontdoor.ts"
@@ -110,6 +114,25 @@ export async function run(argv: string[], out: (line: string) => void, overrides
       }
     }
   }
+  const recommendationFlag = (): string => {
+    const inline = typeof flags.recommendation === "string" ? flags.recommendation : undefined
+    const file = typeof flags["recommendation-file"] === "string" ? flags["recommendation-file"] : undefined
+    if (inline === undefined && file === undefined) {
+      throw new UsageError("--recommendation or --recommendation-file is required: every question says what you recommend, and a reply of yes agrees to it")
+    }
+    if (inline !== undefined && file !== undefined) throw new UsageError("--recommendation and --recommendation-file are two ways to give one text: give one")
+    let text: string
+    try {
+      text = file !== undefined ? readTextFile(file, "--recommendation-file") : (inline as string)
+      assertNoSecretText(text, file !== undefined ? "--recommendation-file" : "--recommendation")
+    } catch (error) {
+      if (error instanceof UsageError) throw error
+      throw new UsageError(message(error).replace(/^usage: /, ""))
+    }
+    if (!text.trim()) throw new UsageError("the recommendation is empty")
+    if (file !== undefined) textFiles.push(file)
+    return text.trim()
+  }
   const issueFlag = () => {
     const issue = need("issue")
     if (!ISSUE_RE.test(issue)) throw new UsageError(`--issue must look like STEP-123, got ${issue}`)
@@ -172,8 +195,54 @@ export async function run(argv: string[], out: (line: string) => void, overrides
       return 0
     }
     case "ask": {
-      print({ queued: enqueueSlack(paths, { kind: "issue", issue: issueFlag(), text: textFlag(), question: true }, now()) })
+      // Every question a person must answer carries this mini's recommendation (STEP-3293), which a "yes" agrees to.
+      const issue = issueFlag()
+      const question = textFlag()
+      const recommendation = recommendationFlag()
+      print({ queued: enqueueSlack(paths, { kind: "issue", issue, text: withRecommendation(question, recommendation), question: true }, now()) })
       spend()
+      return 0
+    }
+    case "decide": {
+      // A person's reply the front door read as a decision (STEP-3293): recorded on the issue as words that stand on their own.
+      const entry = personEntry(paths, need("key"))
+      const agree = flags.agree === true
+      if (agree && (flags.text !== undefined || flags["text-file"] !== undefined)) throw new UsageError("--agree records the recommendation: give it without --text or --text-file")
+      let decision: string
+      try {
+        decision = decisionText(paths, entry, agree ? { agree: true } : { text: textFlag() })
+      } catch (error) {
+        if (error instanceof UsageError) throw error
+        throw new UsageError(message(error))
+      }
+      print({ decided: await recordDecision({ paths, tracker: deps.tracker(), now }, entry, decision), decision })
+      spend()
+      return 0
+    }
+    case "instruct": {
+      // A person's reply the front door read as one of the fixed actions: agentd acts on it and replies (agentd/instructions.ts).
+      const entry = personEntry(paths, need("key"))
+      const named = need("actions").split(",").map((a) => a.trim()).filter(Boolean)
+      // "default": a yes to agentd's decision takes the reply it recommended.
+      let actions: Action[]
+      try {
+        actions = named.length === 1 && named[0] === "default" ? defaultActions(paths, entry) : (named as Action[])
+      } catch (error) {
+        throw new UsageError(message(error))
+      }
+      const target: InstructionEntry["target"] = {}
+      const aimed = typeof flags.target === "string" ? flags.target : undefined
+      if (aimed !== undefined) {
+        if (ISSUE_RE.test(aimed)) target.issue = aimed
+        else if (/^#?\d{2,6}$/.test(aimed)) target.pr = Number(aimed.replace("#", ""))
+        else throw new UsageError(`--target must be STEP-<n> or #<number>, got ${aimed}`)
+      }
+      try {
+        const filed = fileInstructionFor(paths, entry, actions, target, now())
+        print({ filed: filed.key, actions: filed.actions })
+      } catch (error) {
+        throw new UsageError(message(error))
+      }
       return 0
     }
     case "slack": {
@@ -253,6 +322,7 @@ export async function run(argv: string[], out: (line: string) => void, overrides
           pending: listJobs(paths, "pending").map((j) => j.issue),
           heldBack,
           bridge: readJson<NonNullable<StatusInput["bridge"]>>(join(paths.state, "bridge.json")),
+          channel: { at: readChannelState(paths)?.at ?? null, waiting: inboxEvents(paths, config).length, enabled: config.frontDoor.channel },
           usage: readUsage(paths),
           linear,
           now: now(),
@@ -348,7 +418,7 @@ export async function run(argv: string[], out: (line: string) => void, overrides
     }
     default:
       throw new UsageError(
-        "usage: agentctl <tick|ack|job|ask|slack|pause|resume|retry|status|report|doctor|probe-hooks|probe-sandbox> (see runtime/src/cli/agentctl.ts)",
+        "usage: agentctl <tick|ack|job|ask|decide|instruct|slack|pause|resume|retry|status|report|doctor|probe-hooks|probe-sandbox> (see runtime/src/cli/agentctl.ts)",
       )
   }
 }

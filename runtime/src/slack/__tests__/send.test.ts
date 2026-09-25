@@ -58,6 +58,16 @@ describe("sendOutboxMessage", () => {
     expect(attached).toEqual([["STEP-7", "https://step.slack.com/archives/CQ/p90011"]])
   })
 
+  it("keeps the last question it asked in a thread, which a reply of yes agrees to (STEP-3293), and a notice leaves it be", async () => {
+    const { ctx } = context()
+    await sendOutboxMessage(ctx, { kind: "issue", issue: "STEP-7", text: "Which date?\n\nMy recommendation: the publication date. Reply yes to go with it, or tell me what you want instead.", question: true })
+    expect(threadFor(ctx.paths, "STEP-7")?.lastQuestion).toMatch(/^Which date\?\n\nMy recommendation: the publication date\./)
+    await sendOutboxMessage(ctx, { kind: "issue", issue: "STEP-7", text: "I started on it.", question: false })
+    expect(threadFor(ctx.paths, "STEP-7")?.lastQuestion).toMatch(/^Which date\?/)
+    await sendOutboxMessage(ctx, { kind: "issue", issue: "STEP-7", text: "And the label?\n\nMy recommendation: keep it. Reply yes to go with it, or tell me what you want instead.", question: true })
+    expect(threadFor(ctx.paths, "STEP-7")?.lastQuestion).toMatch(/^And the label\?/)
+  })
+
   it("fetches and stores a thread's link on its next message when it had none", async () => {
     const { ctx, attached } = context()
     let calls = 0

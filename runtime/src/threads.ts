@@ -18,6 +18,8 @@ export interface ThreadRecord {
   permalink: string | null
   createdAt: string
   lastQuestionAt: string | null
+  /** The last question the mini asked in the thread, as posted: what a reply of "yes" agrees to (STEP-3293). */
+  lastQuestion?: string | null
 }
 
 const fileFor = (paths: AgentPaths, issue: string) => join(paths.threads, `${issue}.json`)

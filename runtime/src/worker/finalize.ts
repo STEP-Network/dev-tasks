@@ -26,7 +26,7 @@ import type { AgentConfig, AgentPaths } from "../config.ts"
 import { recordPr } from "../jobs.ts"
 import { appendLedger } from "../log.ts"
 import { enqueueSlack } from "../outbox.ts"
-import { NOTHING_NEEDED, plainReason, prLink } from "../plain.ts"
+import { askWithRecommendation, NOTHING_NEEDED, plainReason, prLink } from "../plain.ts"
 import { truncateChars } from "../slack/text.ts"
 import type { Tracker, TrackerIssue } from "../tracker.ts"
 import { commitsAhead, isDirty, must, pushBranch, removeWorktree, type Exec } from "./git.ts"
@@ -222,7 +222,7 @@ async function settle(ctx: FinalizeContext, outcome: Outcome, progress: { pushed
     // The question first, as a local write. Should the park then fail, the
     // runner reports it, and the answer still reaches the issue: the bridge
     // appends it whatever the state.
-    inThread(outcome.report!.question!)
+    inThread(askWithRecommendation(outcome.report!.question!, outcome.report!.recommendation))
     post(`${issue.id}: I have a question before I can go on. It is in the issue's thread: please answer there.`)
     await ctx.tracker.updateIssue(issue.id, { state: "On hold", addLabels: ["awaiting-answer"] })
     return { status, reason, prUrl: null, pushed }

@@ -69,7 +69,8 @@ export interface ClassifyContext {
 
 export type Classified =
   | { type: "intake"; key: string; channel: string; ts: string; user: string; text: string }
-  | { type: "answer"; key: string; issue: string; channel: string; ts: string; threadTs: string; user: string; text: string }
+  /** A person's message in a thread the mini owns (an issue's thread): the front door reads it and decides what it is (STEP-3293). */
+  | { type: "reply"; key: string; issue: string; channel: string; ts: string; threadTs: string; user: string; text: string }
   | {
       type: "mention"
       key: string
@@ -111,7 +112,7 @@ export function classify(envelope: SlackEnvelope, ctx: ClassifyContext): Classif
 
   if (threadTs) {
     const issue = ctx.issueForThread(e.channel, threadTs)
-    if (issue) return { type: "answer", key, issue, channel: e.channel, ts: e.ts, threadTs, user: e.user, text }
+    if (issue) return { type: "reply", key, issue, channel: e.channel, ts: e.ts, threadTs, user: e.user, text }
   }
   if (!mentioned.includes(ctx.botUserId)) return { type: "ignore", reason: "not addressed to the bot" }
   const firstAgent = mentioned.find((id) => id === ctx.botUserId || ctx.otherAgentBots.includes(id))

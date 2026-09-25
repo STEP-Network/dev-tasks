@@ -13,7 +13,7 @@ import type { AgentConfig, AgentPaths } from "../config.ts"
 import { listJobs, type JobRecord, type ReviseRequest } from "../jobs.ts"
 import { appendLedger } from "../log.ts"
 import { enqueueSlack } from "../outbox.ts"
-import { feedbackFor, NOTHING_NEEDED, plainReason, prLink } from "../plain.ts"
+import { askWithRecommendation, feedbackFor, NOTHING_NEEDED, plainReason, prLink } from "../plain.ts"
 import type { TrackerIssue } from "../tracker.ts"
 import { failingRequired, MAX_REVISE_ROUNDS, type OwnPrView } from "../agentd/revise.ts"
 import type { BriefInput } from "./brief.ts"
@@ -199,7 +199,7 @@ export async function finalizeRevise(ctx: ReviseFinalizeContext, outcome: Outcom
   if (status === "needs_input") {
     const question = outcome.report!.question!
     await reply([`${config.mini}'s revision, ${round}, needs an answer before it goes on:`, "", question, "", commits].join("\n"))
-    inThread(`Before I can finish the fixes for ${what} on ${pr}, I need an answer: ${question}`, true)
+    inThread(askWithRecommendation(`Before I can finish the fixes for ${what} on ${pr}, I need an answer: ${question}`, outcome.report!.recommendation), true)
     post(`I have a question about ${pr} before I can finish. It is in the issue's thread: please answer there.`)
     return { status, reason: outcome.reason, prUrl: revise.url, pushed }
   }

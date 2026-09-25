@@ -5,7 +5,8 @@ import { beforeEach, describe, expect, it } from "vitest"
 import { agentPaths, type AgentPaths } from "../../config.ts"
 import { fakeExec } from "../../__tests__/fakes.ts"
 import type { ExecResult } from "../../worker/git.ts"
-import { doctorChecks, formatDoctor, repoToolchain, type DoctorDeps } from "../doctor.ts"
+import { doctorChecks, formatDoctor, repoToolchain, slackChannelCheck, type DoctorDeps } from "../doctor.ts"
+import { ConfigSchema } from "../../config.ts"
 import { recordHooksProbe, type HooksProbe } from "../hooks-probe.ts"
 import { recordSandboxProbe } from "../sandbox-probe.ts"
 
@@ -43,6 +44,8 @@ beforeEach(() => {
   writeFileSync(join(paths.root, "front-door-settings.json"), JSON.stringify({ sandbox: { enabled: true, allowUnsandboxedCommands: false } }))
   recordSandboxProbe(paths, { at: "2026-09-24T12:00:00.000Z", claudePath: "claude", claudeVersion: "2.1.281 (Claude Code)", ok: true, checks: [] })
   recordHooksProbe(paths, hooksProbe({}))
+  // The admin account's managed settings approve the Slack channel (STEP-3293).
+  writeFileSync(join(home, "managed-settings.json"), JSON.stringify({ channelsEnabled: true, allowedChannelPlugins: [{ marketplace: "dev-tasks-marketplace", plugin: "dev-tasks" }] }))
 })
 
 /** A hooks probe that passed on the SDK's binary, which workers run (SDK below). */
@@ -71,7 +74,7 @@ const READY: Responses = [
 function deps(over: Partial<DoctorDeps> = {}, responses: Responses = []): DoctorDeps {
   // The first matching pattern answers, so a test's own answers go first.
   const withHome = [...responses, ...READY].map(([re, r]) => [re, r.stdout === undefined ? r : { ...r, stdout: r.stdout.replace("HOME", home) }] as [RegExp, typeof r])
-  return { paths, exec: fakeExec(withHome).exec, env: {}, nodeVersion: "20.20.2", profile: () => "agent", profileMini: () => "eve", workerClaude: () => SDK, ...over }
+  return { paths, exec: fakeExec(withHome).exec, env: {}, nodeVersion: "20.20.2", profile: () => "agent", profileMini: () => "eve", workerClaude: () => SDK, managedSettings: join(home, "managed-settings.json"), ...over }
 }
 
 const failed = async (d: DoctorDeps) => (await doctorChecks(d)).filter((c) => c.level === "fail").map((c) => `${c.name}: ${c.detail}`)
@@ -301,5 +304,36 @@ describe("doctorChecks", () => {
       expect.stringMatching(/^monday: MONDAY_API_KEY is set.*read-only for agents/),
     ])
     expect(warnings.join()).not.toContain("=x")
+  })
+})
+
+describe("slackChannelCheck (STEP-3293)", () => {
+  const config = (channel?: boolean) => ConfigSchema.parse({ mini: "eve", repo: { path: "/r" }, pluginRoot: "/p", slack: { allowedUsers: ["UNATE"] }, frontDoor: { channel } })
+  const managed = (json: unknown) => {
+    const file = join(mkdtempSync(join(tmpdir(), "managed-")), "managed-settings.json")
+    writeFileSync(file, JSON.stringify(json))
+    return file
+  }
+  const approved = { channelsEnabled: true, allowedChannelPlugins: [{ marketplace: "dev-tasks-marketplace", plugin: "dev-tasks" }] }
+
+  it("passes managed settings that turn channels on and approve the dev-tasks plugin's", () => {
+    expect(slackChannelCheck(config(), managed(approved))).toMatchObject({ level: "ok", name: "slack channel" })
+  })
+
+  it("warns, naming the settings to write, when they are missing, off, or approve another plugin", () => {
+    for (const file of [
+      "/nonexistent/managed-settings.json",
+      managed({ ...approved, channelsEnabled: false }),
+      managed({ channelsEnabled: true }),
+      managed({ channelsEnabled: true, allowedChannelPlugins: [{ marketplace: "claude-plugins-official", plugin: "telegram" }] }),
+    ]) {
+      const check = slackChannelCheck(config(), file)
+      expect(check.level, file).toBe("warn")
+      expect(check.detail, file).toContain('{"channelsEnabled": true, "allowedChannelPlugins": [{"marketplace": "dev-tasks-marketplace", "plugin": "dev-tasks"}]}')
+    }
+  })
+
+  it("is fine with the channel turned off in config.json: messages wait for the next wakeup", () => {
+    expect(slackChannelCheck(config(false), "/nonexistent/managed-settings.json")).toMatchObject({ level: "ok", detail: expect.stringMatching(/^off in config\.json/) })
   })
 })

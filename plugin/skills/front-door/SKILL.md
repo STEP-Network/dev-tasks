@@ -74,9 +74,19 @@ If `linearError` is set, Linear is unreachable: do steps 2 and 3, skip 4 and
 5, and try again at the next wakeup. agentd tells #polads-agents if it lasts
 15 minutes.
 
-## 2. Slack events, oldest first
+## 2. Slack messages, oldest first
 
-Each event has `key`, `type`, `channel`, `threadTs`, `userName` and `text`.
+Messages from the people on this mini's Slack allowlist reach you two ways:
+pushed into this session the moment they arrive, as
+`<channel source="..." key="..." kind="..." ...>their words</channel>` (the
+Slack channel), and in the digest's `events` at a wakeup. They are the same
+messages: handle each once, whichever way it came, and close it (below) so
+it does not come back. A pushed message's attributes are the event's fields:
+`kind` is `type`, `thread_ts` is `threadTs`, `user` is `userName`. One marked
+`redelivered` came again because it was never closed: check the thread
+before you answer it twice.
+
+Each has `key`, `type`, `channel`, `threadTs`, `userName` and `text`.
 An intake event also has `issue`, the Triage issue the bridge already filed.
 
 - **intake** with `refine` true: refine `issue` (`/dev-tasks:refine <issue>`),
@@ -96,6 +106,35 @@ An intake event also has `issue`, the Triage issue the bridge already filed.
 - **a mention with `filedBy`**: the request named another agent first, and
   that agent files it. File nothing. Answer only what is asked of you, in the
   same thread.
+- **reply**: a person wrote in the thread of one of your issues (`issue`).
+  The bridge records nothing on its own: you decide what it is. Read the
+  issue (`~/.agentd/bin/trackerctl read <issue>`) and the last question you
+  asked in the thread (`question`), then:
+  - **A decision** on what the issue waits on: record it, in words that stand
+    on their own. A "yes" (or "go with it", "agreed") to your recommendation:
+    `~/.agentd/bin/agentctl decide --key <key> --agree`, which records the
+    recommendation itself. Anything else: write the decision as one plain
+    sentence to `~/.front-door/decision-<ts>.md` ("use the publication date
+    on notices"), then
+    `~/.agentd/bin/agentctl decide --key <key> --text-file ~/.front-door/decision-<ts>.md`.
+    It records the decision on the issue with their own words beside it,
+    moves the issue on, and thanks them in the thread. Never record a bare
+    "yes": agentctl refuses it.
+  - **A question back** ("what do you recommend?", "why?"): answer it in the
+    thread, and end with your recommendation and "Reply yes to go with it, or
+    tell me what you want instead." The issue keeps waiting. Then ack it.
+  - **An instruction** for one of the fixed actions (fix it, make it green,
+    re-run, merge, retry, pause, leave it):
+    `~/.agentd/bin/agentctl instruct --key <key> --actions revise,merge`.
+    agentd acts, and replies in the thread in words. A "yes" to one of
+    agentd's own questions (`decision` is set) is `--actions default`: the
+    reply it recommended.
+  - **Unsure** which it is: reply "Is that your decision, or a question for
+    me?" and ack it. Their next reply comes back to you.
+  - Anything else (thanks, an update): reply if it needs one, and ack it.
+- **A mention that asks for one of the fixed actions** on a PR (`@eve fix
+  #1679 and merge`): `agentctl instruct --key <key> --actions revise,merge
+  --target #1679` (or `--target STEP-<n>`).
 
 Reply by writing the reply to `~/.front-door/reply-<threadTs>.md` (above), then:
 
@@ -103,15 +142,22 @@ Reply by writing the reply to `~/.front-door/reply-<threadTs>.md` (above), then:
 ~/.agentd/bin/agentctl slack reply --channel "<channel>" --thread "<threadTs>" --text-file ~/.front-door/reply-<threadTs>.md
 ```
 
-Then acknowledge every event you handled, in one call:
+Then close every message you handled. `agentctl decide` and
+`agentctl instruct` close theirs. Acknowledge the rest, in one call:
 
 ```bash
 ~/.agentd/bin/agentctl ack <key> <key>
 ```
 
-An event you do not acknowledge comes back at the next wakeup. Answers to
-questions never appear here: the bridge writes them into the issue and puts it
-back in the queue by itself.
+A message you do not close comes back: pushed again after ten minutes or a
+restart, and in the digest at the next wakeup.
+
+Every question you ask a person carries your recommendation, which a reply of
+"yes" agrees to: write the question to `~/.front-door/ask-<id>.md` and what you
+recommend, in a few plain words, to `~/.front-door/rec-<id>.md`, then
+`~/.agentd/bin/agentctl ask --issue <id> --text-file ~/.front-door/ask-<id>.md --recommendation-file ~/.front-door/rec-<id>.md`.
+agentctl adds "My recommendation: ... Reply yes to go with it, or tell me
+what you want instead.", and refuses a question without one.
 
 Replies follow the PolAds copy rules: British English, no semicolons, no em or
 en dashes. Start with the point. The bridge starts each message with this
@@ -148,14 +194,15 @@ If what you read shows it is not agent work after all (a console change, a
 credential, a legal or product decision nobody wrote down), do not launch it.
 Hand it to a person instead. Write "Needs a person: <what, where, and how I
 will know it is done>. Reply here when it is done." to
-`~/.front-door/ask-<id>.md`, then, one Bash call each:
+`~/.front-door/ask-<id>.md`, and what you recommend they do to
+`~/.front-door/rec-<id>.md`, then, one Bash call each:
 
 ```bash
 ~/.agentd/bin/trackerctl update <id> --state "On hold" --remove-label agent-ready --add-label human-todo
 ```
 
 ```bash
-~/.agentd/bin/agentctl ask --issue <id> --text-file ~/.front-door/ask-<id>.md
+~/.agentd/bin/agentctl ask --issue <id> --text-file ~/.front-door/ask-<id>.md --recommendation-file ~/.front-door/rec-<id>.md
 ```
 
 `developBlockedBy` says why nothing was offered (paused, a worker is busy, the

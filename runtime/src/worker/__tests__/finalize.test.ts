@@ -133,21 +133,29 @@ describe("finalize: done", () => {
 })
 
 describe("finalize: the other outcomes", () => {
-  const question: Outcome = { ...done, status: "needs_input", reason: "a question", report: { status: "needs_input", summary: "Two readings.", question: "Which date?" } }
+  const question: Outcome = { ...done, status: "needs_input", reason: "a question", report: { status: "needs_input", summary: "Two readings.", question: "Which date?", recommendation: "the publication date" } }
+  const ASKED = "Which date?\n\nMy recommendation: the publication date. Reply yes to go with it, or tell me what you want instead."
 
   it("needs_input parks with awaiting-answer and puts the question in the issue's thread", async () => {
     const { ctx, fake, f, outbox } = setup("1\n")
     expect(await finalize(ctx, question)).toMatchObject({ status: "needs_input", pushed: true, prUrl: null })
     expect(fake.issues.get("STEP-7")).toMatchObject({ state: "On hold", labels: ["awaiting-answer"] })
-    expect(outbox()[0]).toEqual(expect.objectContaining({ kind: "issue", text: "Which date?", question: true }))
+    expect(outbox()[0]).toEqual(expect.objectContaining({ kind: "issue", text: ASKED, question: true }))
     expect(outbox()[1].text).toBe("STEP-7: I have a question before I can go on. It is in the issue's thread: please answer there.")
     expect(f.lines().some((l) => l.startsWith("gh pr create"))).toBe(false)
+  })
+
+  it("asks with the worker's recommendation, and says plainly when it has none, so a yes never agrees to nothing (STEP-3293)", async () => {
+    const without = { ...question, report: { ...question.report!, recommendation: undefined } }
+    const { ctx, outbox } = setup("1\n")
+    await finalize(ctx, without)
+    expect(outbox()[0].text).toBe("Which date?\n\nI have no recommendation of my own on this one. Tell me what you want.")
   })
 
   it("needs_input asks the question even when Linear then fails to park the issue", async () => {
     const { ctx, outbox } = setup("1\n", [], ["updateIssue"])
     expect(await failure(finalize(ctx, question))).toMatchObject({ pushed: true, prUrl: null })
-    expect(outbox().map((m) => m.text)).toEqual(["Which date?", "STEP-7: I have a question before I can go on. It is in the issue's thread: please answer there."])
+    expect(outbox().map((m) => m.text)).toEqual([ASKED, "STEP-7: I have a question before I can go on. It is in the issue's thread: please answer there."])
   })
 
   it("limited goes back to Ready, still held, with a comment and no Slack", async () => {

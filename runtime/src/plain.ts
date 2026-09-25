@@ -66,3 +66,32 @@ export function prLink(url: string): string {
   const ref = prRef(url)
   return ref === url ? url : `<${url}|${ref}>`
 }
+
+/**
+ * A question a person must answer, as posted: the question, then the mini's
+ * recommendation and how to take it (STEP-3293). A reply of "yes" agrees to
+ * exactly that recommendation, which agentctl decide --agree records.
+ */
+export const RECOMMENDATION_LEAD = "My recommendation:"
+export const RECOMMENDATION_TAIL = "Reply yes to go with it, or tell me what you want instead."
+
+export function withRecommendation(question: string, recommendation: string): string {
+  const rec = recommendation.trim().replace(/[\s.!?:;,]+$/, "")
+  return `${question.trim()}\n\n${RECOMMENDATION_LEAD} ${rec}. ${RECOMMENDATION_TAIL}`
+}
+
+/** The recommendation a posted question carries, or null when it carries none. */
+export function recommendationOf(question: string | null | undefined): string | null {
+  if (!question) return null
+  const at = question.lastIndexOf(RECOMMENDATION_LEAD)
+  if (at === -1) return null
+  const rest = question.slice(at + RECOMMENDATION_LEAD.length)
+  const end = rest.indexOf(RECOMMENDATION_TAIL)
+  const rec = (end === -1 ? rest : rest.slice(0, end)).trim().replace(/[\s.]+$/, "")
+  return rec || null
+}
+
+/** A worker's question as a person reads it: with its recommendation, or saying plainly there is none to agree to. */
+export function askWithRecommendation(question: string, recommendation: string | undefined): string {
+  return recommendation?.trim() ? withRecommendation(question, recommendation) : `${question.trim()}\n\nI have no recommendation of my own on this one. Tell me what you want.`
+}

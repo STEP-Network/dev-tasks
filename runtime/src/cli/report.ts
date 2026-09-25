@@ -14,6 +14,8 @@ export interface StatusInput {
   /** Issues whose last two workers were lost early (heldBackIssues). */
   heldBack: string[]
   bridge: { at: string; connected: boolean; outboxWaiting: number; outboxFailed: number; error?: string; stopped?: boolean } | null
+  /** The Slack channel into the front door's session (STEP-3293): its heartbeat, and the messages waiting for the front door. */
+  channel?: { at: string | null; waiting: number; enabled: boolean }
   usage: UsageSnapshot | null
   linear: { ok: true; email: string } | { ok: false; error: string }
   now: Date
@@ -52,6 +54,15 @@ function bridgeLine(s: StatusInput): string {
   return `${b.connected ? "connected" : "DISCONNECTED"}${paused}, heartbeat ${minutesAgo(s.now, at)}, outbox ${b.outboxWaiting} waiting, ${b.outboxFailed} failed`
 }
 
+function channelLine(s: StatusInput): string {
+  const c = s.channel!
+  const waiting = `${c.waiting} message(s) waiting for the front door`
+  if (!c.enabled) return `off (frontDoor.channel), ${waiting}`
+  if (!c.at) return `never connected: messages wait for the front door's next wakeup, ${waiting}`
+  const at = new Date(c.at)
+  return s.now.getTime() - at.getTime() > 2 * 60_000 ? `NOT CONNECTED for ${minutes(s.now, at)} min, ${waiting}` : `connected, ${waiting}`
+}
+
 export function statusReport(s: StatusInput): string {
   const fd = s.frontDoor
   return [
@@ -63,6 +74,7 @@ export function statusReport(s: StatusInput): string {
       ? [`held back: ${s.heldBack.join(", ")}. Its last two workers were lost early. agentctl job submit --issue <id> runs one by hand`]
       : []),
     `bridge: ${bridgeLine(s)}`,
+    ...(s.channel ? [`slack channel: ${channelLine(s)}`] : []),
     `usage: ${s.usage ? `5h ${pct(s.usage.fiveHourPct)}, 7d ${pct(s.usage.sevenDayPct)}` : "no snapshot yet"}`,
     `linear: ${s.linear.ok ? `ok (${s.linear.email})` : `ERROR ${s.linear.error}`}`,
   ].join("\n")

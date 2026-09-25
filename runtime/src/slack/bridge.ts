@@ -2,9 +2,16 @@
  * The Slack bridge, launchd job eu.polads.slack-bridge: one Socket Mode
  * connection per mini, to that mini's own Slack app (decision 3). It
  * acknowledges each delivery at once, then files #polads-intake mentions into
- * Linear itself (spec 8: intake works while the front door is busy), applies
- * answers to parked issues itself, queues mentions for the front door, and
- * drains the outbox. It is the only process that reads the Slack tokens.
+ * Linear itself (spec 8: intake works while the front door is busy), files
+ * every allowlisted person's reply in a thread the mini owns and every mention
+ * for the front door, and drains the outbox. It is the only process that reads
+ * the Slack tokens.
+ *
+ * It never decides what a person's words mean (STEP-3293): the front door
+ * reads each reply in its own session, pushed by the Slack channel
+ * (channel/server.ts), and answers, records a decision or acts. Only while
+ * the front door is down does the bridge act on words itself, and only on
+ * "pause" and "leave it". Anything else waits, with a note that it will.
  */
 
 import { randomUUID } from "node:crypto"
@@ -24,7 +31,9 @@ import { createLinearTracker, type Tracker } from "../tracker.ts"
 import { classify, type Classified, type ClassifyContext, type SlackEnvelope } from "./classify.ts"
 import { parseInstruction, type InstructionEntry } from "./instruction.ts"
 import { isSlackTrouble, slackErrorCode, startOutbox, type SendContext, type SlackWeb } from "./send.ts"
-import { answerTransition, appendAnswer, fromSlack, intakeIssue, mentionedUsers } from "./text.ts"
+import { fromSlack, intakeIssue, mentionedUsers } from "./text.ts"
+import { frontDoorUp } from "../channel/state.ts"
+import { tickPath } from "../tick.ts"
 
 export interface BridgeWeb extends SlackWeb {
   userName(userId: string): Promise<string>
@@ -52,7 +61,7 @@ type IntakeEntry = Extract<Classified, { type: "intake" }> & {
   /** When Linear first refused it: the give-up day counts from here, not from the delivery. */
   failingSince?: string
 }
-type AnswerEntry = Extract<Classified, { type: "answer" }> & { userName: string; receivedAt: string; failingSince?: string }
+type PersonEntry = Extract<Classified, { type: "reply" | "mention" }> & { userName: string; receivedAt: string; heldReplySent?: boolean }
 
 export async function handleEnvelope(deps: BridgeDeps, envelope: SlackEnvelope): Promise<Classified["type"]> {
   const c = classify(envelope, deps.classifyContext)
@@ -70,23 +79,46 @@ export async function handleEnvelope(deps: BridgeDeps, envelope: SlackEnvelope):
   if (!putOnce(deps.paths.inbox, c.key, { ...c, userName: c.user, receivedAt, ...intake })) return c.type
   // The sender's name, for the front door, the issue and the answer. Their user id when Slack cannot say.
   const userName = await deps.web.userName(c.user).catch(() => c.user)
-  if (userName !== c.user) {
+  // For the front door and for the record a decision leaves on the issue: names for Slack's mention markup, and the message's link.
+  const person = c.type === "reply" || c.type === "mention"
+  const readableText = person ? fromSlack(c.text, await namesFor(deps, c.text)) : undefined
+  const permalink = person ? await deps.web.permalink(c.channel, c.ts).catch(() => null) : undefined
+  if (userName !== c.user || person) {
     const path = entryPath(deps.paths.inbox, c.key)
     const entry = readJson<Record<string, unknown>>(path)
-    if (entry) writeJsonAtomic(path, { ...entry, userName })
+    if (entry) writeJsonAtomic(path, { ...entry, userName, ...(person ? { readableText, permalink } : {}) })
   }
-  if (c.type === "mention" && !c.filedBy) {
-    // "@eve fix #1679 and merge": an instruction for agentd, when it names what it means.
-    const said = parseInstruction(c.text)
-    if (said.actions.length && (said.target.issue || said.target.pr)) {
-      fileInstruction(deps, { issue: null, channel: c.channel, ts: c.ts, threadTs: c.threadTs, user: c.user, userName, text: c.text, ...said })
-      ack(deps.paths.inbox, c.key)
-      return c.type
-    }
-  }
-  if (c.type === "answer") await applyAnswer(deps, c.key)
   if (c.type === "intake") await fileIntake(deps, c.key)
+  if (person) holdIfDown(deps, c.key)
   return c.type
+}
+
+/**
+ * A person's reply or mention is the front door's to read. While the front
+ * door is down, the bridge acts on "pause" and "leave it" alone, through
+ * agentd, and tells everyone else it will be back: it never records an answer
+ * or reads other words itself. The message stays for the front door.
+ */
+export function holdIfDown(deps: BridgeDeps, key: string): void {
+  const path = entryPath(deps.paths.inbox, key)
+  const entry = readJson<PersonEntry>(path)
+  if (!entry || entry.heldReplySent) return
+  const now = deps.now()
+  const tick = readJson<{ at: string }>(tickPath(deps.paths))
+  if (frontDoorUp(deps.paths, deps.config, now, tick ? new Date(tick.at) : null)) return
+  const said = parseInstruction(entry.text)
+  const actions = said.actions.filter((a) => a === "pause" || a === "leave")
+  const issue = entry.type === "reply" ? entry.issue : null
+  if (actions.length && (issue || said.target.issue || said.target.pr)) {
+    fileInstruction(deps, {
+      issue, channel: entry.channel, ts: entry.ts, threadTs: entry.threadTs, user: entry.user, userName: entry.userName, text: entry.text, actions, target: said.target,
+    })
+    ack(deps.paths.inbox, key)
+    return
+  }
+  writeJsonAtomic(path, { ...entry, heldReplySent: true })
+  enqueueSlack(deps.paths, { kind: "reply", channelId: entry.channel, threadTs: entry.threadTs, text: "I am restarting and will reply here shortly." }, now)
+  deps.log.info("front door down: held a message for it", { key })
 }
 
 /**
@@ -198,67 +230,11 @@ export async function fileIntake(deps: BridgeDeps, key: string): Promise<void> {
   })
 }
 
-export async function applyAnswer(deps: BridgeDeps, key: string): Promise<void> {
-  await once(deps, key, async () => {
-    const path = entryPath(deps.paths.inbox, key)
-    const entry = readJson<AnswerEntry>(path)
-    if (!entry) return
-    // One answer per issue at a time: an apply reads the description and
-    // writes it back, so two at once would both read the same text and the
-    // second write would drop the first answer. The one that finds the issue
-    // busy stays in the inbox for the next retry.
-    await once(deps, `issue:${entry.issue}`, async () => {
-      try {
-        const current = await deps.tracker.readIssue(entry.issue)
-        // A reply to one of the mini's own posts about the issue's PR or job
-        // ("fix it and merge") is an instruction, not an answer. A reply to a
-        // question the issue waits on, or to a person's to-do, stays an
-        // answer, whatever words it uses.
-        const said = parseInstruction(entry.text)
-        const waits = current.labels.includes("awaiting-answer") || current.labels.includes("human-todo")
-        if (said.actions.length && !waits) {
-          fileInstruction(deps, {
-            issue: entry.issue, channel: entry.channel, ts: entry.ts, threadTs: entry.threadTs,
-            user: entry.user, userName: entry.userName, text: entry.text, actions: said.actions, target: said.target,
-          })
-          ack(deps.paths.inbox, key)
-          return
-        }
-        const permalink = await deps.web.permalink(entry.channel, entry.ts).catch(() => null)
-        const text = fromSlack(entry.text, await namesFor(deps, entry.text))
-        const description = appendAnswer(current.description, { ts: entry.ts, userName: entry.userName, text, permalink })
-        const move = answerTransition(current)
-        await deps.tracker.updateIssue(entry.issue, { ...(description !== current.description ? { description } : {}), ...move })
-        ack(deps.paths.inbox, key)
-        // Words first, and a ✅ beside them: never a bare ✅ (STEP-3285).
-        const moved = move.state ? `, and it goes back to ${move.state}` : ""
-        enqueueSlack(deps.paths, { kind: "reply", channelId: entry.channel, threadTs: entry.threadTs, text: `Added your answer to ${entry.issue}${moved}.` }, deps.now())
-        enqueueSlack(deps.paths, { kind: "react", channelId: entry.channel, ts: entry.ts, name: "white_check_mark" }, deps.now())
-        appendLedger(deps.paths, { type: "answer.applied", issue: entry.issue, movedTo: move.state ?? null }, deps.now())
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error)
-        const gone = isIssueGone(error)
-        if (gone || refusedForADay(deps, path, entry)) {
-          fail(deps.paths.inbox, key)
-          const text = gone
-            ? `I could not add this answer to ${entry.issue}, because ${entry.issue} is no longer in Linear.`
-            : `Linear refused this answer for a whole day, so I have stopped trying to add it to ${entry.issue}. Please post it again.`
-          enqueueSlack(deps.paths, { kind: "reply", channelId: entry.channel, threadTs: entry.threadTs, text }, deps.now())
-          deps.log.error("answer given up", { issue: entry.issue, error: message })
-          return
-        }
-        // Left in the inbox: retryPending tries again every minute.
-        deps.log.warn("answer not applied yet", { issue: entry.issue, error: message })
-      }
-    })
-  })
-}
-
-/** Every minute: intakes not yet filed and answers not yet applied. */
+/** Every minute: intakes not yet filed, and a note to anyone whose message waits while the front door is down. */
 export async function retryPending(deps: BridgeDeps): Promise<void> {
   for (const { key, payload } of listNew<{ type: string; issue?: string | null }>(deps.paths.inbox)) {
     if (payload.type === "intake" && !payload.issue) await fileIntake(deps, key)
-    if (payload.type === "answer") await applyAnswer(deps, key)
+    if (payload.type === "reply" || payload.type === "mention") holdIfDown(deps, key)
   }
 }
 

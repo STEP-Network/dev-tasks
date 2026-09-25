@@ -62,14 +62,15 @@ product decision beyond what the issue and its answers already say.
 
 If it is not, hand it to a person. Write "Needs a person: <what exactly,
 where, and how I will know it is done>. Reply here when it is done." to
-`~/.front-door/ask-STEP-<n>.md`, then, one Bash call each:
+`~/.front-door/ask-STEP-<n>.md`, and what you recommend they do, in a few
+plain words, to `~/.front-door/rec-STEP-<n>.md`, then, one Bash call each:
 
 ```bash
 ~/.agentd/bin/trackerctl update STEP-<n> --state "On hold" --add-label human-todo
 ```
 
 ```bash
-~/.agentd/bin/agentctl ask --issue STEP-<n> --text-file ~/.front-door/ask-STEP-<n>.md
+~/.agentd/bin/agentctl ask --issue STEP-<n> --text-file ~/.front-door/ask-STEP-<n>.md --recommendation-file ~/.front-door/rec-STEP-<n>.md
 ```
 
 and stop.
@@ -133,18 +134,21 @@ remove the old label and add the new one in the same update.
 
 ## Phase 5: questions, or Ready
 
-The bridge appends a person's answers to the description from another
-process, at any time. So read it again right before you write
+A person's decisions are appended to the description as they come
+(`agentctl decide`, section 2 of /front-door), at any time.
+So read it again right before you write
 (`~/.agentd/bin/trackerctl read STEP-<n>`). If the description changed since
 Phase 0, put the new one under `## Original` in the brief, `## Answers from
 Slack` included, and weigh the new answers before you choose below.
 
 If a product decision or an ambiguity the code cannot settle remains, ask,
 one question per file and call (they share the issue's thread), then park it.
-Write the question to `~/.front-door/ask-STEP-<n>.md`, then:
+Write the question to `~/.front-door/ask-STEP-<n>.md`, and the answer you
+recommend, in a few plain words, to `~/.front-door/rec-STEP-<n>.md`. A reply
+of "yes" agrees to it, so recommend something you would build. Then:
 
 ```bash
-~/.agentd/bin/agentctl ask --issue STEP-<n> --text-file ~/.front-door/ask-STEP-<n>.md
+~/.agentd/bin/agentctl ask --issue STEP-<n> --text-file ~/.front-door/ask-STEP-<n>.md --recommendation-file ~/.front-door/rec-STEP-<n>.md
 ```
 
 ```bash

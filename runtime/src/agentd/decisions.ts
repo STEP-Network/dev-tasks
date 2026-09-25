@@ -7,6 +7,7 @@
  * alone), and says so in the thread, the PR body and the issue.
  */
 
+import { withRecommendation } from "../plain.ts"
 import { existsSync, mkdirSync, readdirSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import type { AgentConfig, AgentPaths } from "../config.ts"
@@ -61,10 +62,11 @@ function clock(at: Date, timeZone: string): string {
 
 /** The question as Slack shows it: the situation, then each reply and what it does, the default marked with its time. */
 export function questionText(d: Decision, timeZone: string): string {
-  const options = d.options.map((o) =>
-    o.reply === d.defaultReply ? `"${o.reply}" to ${o.does} (the default: I do it at ${clock(new Date(d.deadlineAt), timeZone)} if nobody answers)` : `"${o.reply}" to ${o.does}`,
-  )
-  return `${d.question} Reply ${options.join(", or ")}.`
+  // The default is what this mini recommends, and a "yes" takes it (STEP-3293).
+  const byDefault = d.options.find((o) => o.reply === d.defaultReply)
+  const others = d.options.filter((o) => o.reply !== d.defaultReply).map((o) => `"${o.reply}" to ${o.does}`)
+  const recommended = withRecommendation(d.question, byDefault ? byDefault.does : d.defaultReply)
+  return `${recommended}${others.length ? ` You can also reply ${others.join(", or ")}.` : ""} If nobody answers, I do it at ${clock(new Date(d.deadlineAt), timeZone)}.`
 }
 
 /** Asks once: a question for this id already asked is not asked again. */

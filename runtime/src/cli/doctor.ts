@@ -41,6 +41,40 @@ export interface DoctorDeps {
    * install is found again and recorded, not refused.
    */
   fresh?: boolean
+  /** Claude Code's managed settings on this machine. Default: MANAGED_SETTINGS. */
+  managedSettings?: string
+}
+
+/** Where Claude Code reads managed settings on macOS: root-owned, written from the admin account (runbook, section 8). */
+export const MANAGED_SETTINGS = "/Library/Application Support/ClaudeCode/managed-settings.json"
+
+/**
+ * The Slack channel into the front door (STEP-3293) registers only when the
+ * machine's managed settings turn channels on and approve the dev-tasks
+ * plugin's: a custom channel is on no list of Anthropic's, and the
+ * development flag asks for a confirmation at every start. Without them the
+ * front door still reads every message, at its next wakeup: a warning.
+ */
+export function slackChannelCheck(config: AgentConfig, file: string): Check {
+  const name = "slack channel"
+  if (!config.frontDoor.channel) return { level: "ok", name, detail: "off in config.json (frontDoor.channel): Slack messages wait for the front door's next wakeup" }
+  let managed: { channelsEnabled?: unknown; allowedChannelPlugins?: unknown } | null = null
+  try {
+    managed = JSON.parse(readFileSync(file, "utf8"))
+  } catch {
+    managed = null
+  }
+  const approved =
+    Array.isArray(managed?.allowedChannelPlugins) &&
+    managed.allowedChannelPlugins.some((p: { plugin?: unknown; marketplace?: unknown }) => p?.plugin === "dev-tasks" && p?.marketplace === "dev-tasks-marketplace")
+  if (managed?.channelsEnabled === true && approved) return { level: "ok", name, detail: `approved in ${file}` }
+  return {
+    level: "warn",
+    name,
+    detail:
+      `${file} does not turn channels on and approve dev-tasks@dev-tasks-marketplace, so Slack messages reach the front door only at its next wakeup. ` +
+      'From the admin account: {"channelsEnabled": true, "allowedChannelPlugins": [{"marketplace": "dev-tasks-marketplace", "plugin": "dev-tasks"}]} (runbook, section 8)',
+  }
 }
 
 /** runtime/package.json's engines floor. */
@@ -385,6 +419,7 @@ export async function doctorChecks(d: DoctorDeps): Promise<Check[]> {
         : { level: "fail", name: "plugin", detail: `${manifest} is missing: pluginRoot must be the plugin/ directory of the dev-tasks checkout` },
     )
     add(frontDoorPlugin(d, config))
+    add(slackChannelCheck(config, d.managedSettings ?? MANAGED_SETTINGS))
     // install.sh writes it after doctor --fresh passes, so only a later doctor looks for it.
     if (!d.fresh) {
       const problem = frontDoorSettingsProblem(d.paths)

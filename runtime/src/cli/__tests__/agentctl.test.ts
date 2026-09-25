@@ -63,9 +63,14 @@ describe("run", () => {
     expect(listJobs(agentPaths(), "pending").map((j) => j.issue)).toEqual(["STEP-8"])
   })
 
-  it("queues a question in the issue's thread", async () => {
-    await run(["ask", "--issue", "STEP-7", "--text", "Which date?"], out, deps())
-    expect(listNew(agentPaths().outbox)[0].payload).toMatchObject({ kind: "issue", issue: "STEP-7", text: "Which date?", question: true })
+  it("queues a question in the issue's thread, always with this mini's recommendation (STEP-3293)", async () => {
+    await run(["ask", "--issue", "STEP-7", "--text", "Which date?", "--recommendation", "the publication date"], out, deps())
+    expect(listNew(agentPaths().outbox)[0].payload).toMatchObject({
+      kind: "issue", issue: "STEP-7", question: true,
+      text: "Which date?\n\nMy recommendation: the publication date. Reply yes to go with it, or tell me what you want instead.",
+    })
+    await expect(run(["ask", "--issue", "STEP-7", "--text", "Which date?"], out, deps())).rejects.toThrow(/--recommendation or --recommendation-file is required/)
+    await expect(run(["ask", "--issue", "STEP-7", "--text", "Which date?", "--recommendation", "  "], out, deps())).rejects.toThrow(/the recommendation is empty/)
   })
 
   it("queues a post in one of the four channels, and a reply in a thread", async () => {
@@ -78,7 +83,7 @@ describe("run", () => {
   })
 
   it("refuses a bad issue id, an unknown channel, a bad thread and a missing text as usage errors", async () => {
-    await expect(run(["ask", "--issue", "7", "--text", "x"], out, deps())).rejects.toBeInstanceOf(UsageError)
+    await expect(run(["ask", "--issue", "7", "--text", "x", "--recommendation", "y"], out, deps())).rejects.toBeInstanceOf(UsageError)
     await expect(run(["slack", "post", "--channel", "general", "--text", "x"], out, deps())).rejects.toBeInstanceOf(UsageError)
     await expect(run(["slack", "reply", "--channel", "C1", "--thread", "1.1"], out, deps())).rejects.toBeInstanceOf(UsageError)
     await expect(run(["slack", "reply", "--channel", "polads-intake", "--thread", "1.1", "--text", "x"], out, deps())).rejects.toBeInstanceOf(UsageError)
@@ -91,13 +96,13 @@ describe("run", () => {
     const file = join(root, "reply.md")
     writeFileSync(file, "They asked for $(touch pwned) and `this`.\nSecond line.\n")
     await run(["slack", "reply", "--channel", "C0INTAKE", "--thread", "1790000000.000100", "--text-file", file], out, deps())
-    await run(["ask", "--issue", "STEP-7", "--text-file", file], out, deps())
+    await run(["ask", "--issue", "STEP-7", "--text-file", file, "--recommendation", "no"], out, deps())
     expect(listNew<{ text: string }>(agentPaths().outbox).map((e) => e.payload.text)).toEqual([
       "They asked for $(touch pwned) and `this`.\nSecond line.",
-      "They asked for $(touch pwned) and `this`.\nSecond line.",
+      "They asked for $(touch pwned) and `this`.\nSecond line.\n\nMy recommendation: no. Reply yes to go with it, or tell me what you want instead.",
     ])
-    await expect(run(["ask", "--issue", "STEP-7", "--text", "x", "--text-file", file], out, deps())).rejects.toBeInstanceOf(UsageError)
-    await expect(run(["ask", "--issue", "STEP-7"], out, deps())).rejects.toThrow(/--text or --text-file/)
+    await expect(run(["ask", "--issue", "STEP-7", "--text", "x", "--text-file", file, "--recommendation", "y"], out, deps())).rejects.toBeInstanceOf(UsageError)
+    await expect(run(["ask", "--issue", "STEP-7", "--recommendation", "y"], out, deps())).rejects.toThrow(/--text or --text-file/)
   })
 
   it("spends a reply file in ~/.front-door once it is queued, and leaves any other file alone", async () => {

@@ -43,6 +43,8 @@ export interface WorkerReport {
   prTitle?: string
   verification?: string[]
   question?: string
+  /** With a question: the answer the worker recommends, which a reply of "yes" agrees to (STEP-3293). */
+  recommendation?: string
   notes?: string
   checklist?: Partial<Record<ChecklistKey, string>>
   mutations?: MutationCheck[]
@@ -143,6 +145,7 @@ export function parseReport(value: unknown): WorkerReport | null {
     prTitle: text(v.prTitle),
     verification: Array.isArray(v.verification) ? v.verification.filter((s): s is string => typeof s === "string") : [],
     question: text(v.question),
+    recommendation: text(v.recommendation),
     notes: text(v.notes),
     ...(checklist ? { checklist } : {}),
     mutations,
