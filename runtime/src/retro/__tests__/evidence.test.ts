@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { issue } from "../../__tests__/fakes.ts"
+import { assertLinearClientId, issue } from "../../__tests__/fakes.ts"
 import type { CreateIssueInput } from "../../tracker.ts"
 import { linearEvidence, noEvidence } from "../evidence.ts"
 
@@ -16,6 +16,8 @@ function fakeLinear(hasRetroLabel: boolean) {
   const tracker = {
     createIssue: async (input: CreateIssueInput) => {
       created.push(input)
+      // As Linear itself: a client id that is not a v4 UUID is refused (STEP-3323).
+      assertLinearClientId(input.clientId)
       return issue({ id: "STEP-900", url: "https://linear.app/step/issue/STEP-900", title: input.title, labels: input.labels ?? [] })
     },
     attachLink: async (ref: string, url: string, title?: string) => void links.push([ref, url, title]),
@@ -32,7 +34,7 @@ describe("the retro's evidence issue (STEP-3290)", () => {
     expect(l.requests.map((r) => (r.query.includes("issueLabelCreate") ? "create" : "read"))).toEqual(["read", "create"])
     expect(l.requests[0].variables).toEqual({ key: "STEP", name: "retro" })
     expect(l.requests[1].variables).toEqual({ input: { name: "retro", teamId: "team-step" } })
-    expect(l.created).toEqual([{ title: INPUT.title, description: INPUT.description, state: "Triage", labels: ["dev-tasks", "retro"], clientId: expect.stringMatching(/^[0-9a-f]{8}-[0-9a-f]{4}-5[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/) }])
+    expect(l.created).toEqual([{ title: INPUT.title, description: INPUT.description, state: "Triage", labels: ["dev-tasks", "retro"], clientId: expect.stringMatching(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/) }])
   })
 
   it("creates no label that exists, and sends the same client id for the same retro, so a retry opens no second issue", async () => {
