@@ -175,9 +175,11 @@ export function denyWorkerPaths(scope: WorkerScope) {
  * Never billed to an API key or a cloud account (spec 1: subscriptions),
  * never holding a secret the worker does not need. The Monday key would let
  * the plugin's hooks write to Monday. The runner's own children (git, gh,
- * pnpm) get the same: gh then uses the mini's own login (decision 5).
+ * pnpm) get the same: gh then uses the mini's own login (decision 5). The
+ * browser test's two secrets (WS5) are the runtime's own, never a session's.
  */
-const DROP = /^(ANTHROPIC_[A-Z0-9_]+|CLAUDE_CODE_USE_[A-Z0-9_]+|LINEAR_API_KEY|MONDAY_API_KEY|SLACK_[A-Z0-9_]+|SENTRY_[A-Z0-9_]+|GH_TOKEN|GITHUB_TOKEN|DATABASE_URL)$/
+const DROP =
+  /^(ANTHROPIC_[A-Z0-9_]+|CLAUDE_CODE_USE_[A-Z0-9_]+|LINEAR_API_KEY|MONDAY_API_KEY|SLACK_[A-Z0-9_]+|SENTRY_[A-Z0-9_]+|GH_TOKEN|GITHUB_TOKEN|DATABASE_URL|TEST_LOGIN_SECRET|VERCEL_AUTOMATION_BYPASS_SECRET)$/
 
 export function workerEnv(base: NodeJS.ProcessEnv, extra: Record<string, string>): Record<string, string> {
   const env: Record<string, string> = {}
