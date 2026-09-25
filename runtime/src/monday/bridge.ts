@@ -558,7 +558,9 @@ export function createMondayBridge(deps: MondayBridgeDeps): MondayBridge {
       const itemId = adopted?.id ?? (await api.createItem(cfg!.boardId, group, truncateChars(need.name, 250), columnsFor(need, true)))
       rec = {
         key: need.key, kind: need.kind, issue: need.issue.id, itemId, state: "Needs you", bodyHash: null,
-        createdAt: pass.now.toISOString(), doneAt: null, handled: adopted ? adopted.updates.map((u) => u.id) : [], thread: { state: "wanted" },
+        createdAt: pass.now.toISOString(), doneAt: null, handled: adopted ? adopted.updates.map((u) => u.id) : [],
+        // Its Slack thread, once the board has the column: before that it waits like any older item.
+        ...(doors ? { thread: { state: "wanted" as const } } : {}),
         // A new item carries its Request link already (columnsFor), where the board has the column; an adopted one gets it below.
         ...(cfg!.columns.request && need.request && !adopted ? { requestItem: need.request } : {}),
       }
