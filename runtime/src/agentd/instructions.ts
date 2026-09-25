@@ -22,7 +22,7 @@
 import { existsSync, mkdirSync, writeFileSync } from "node:fs"
 import type { AgentConfig, AgentPaths } from "../config.ts"
 import { ack, listNew } from "../fsq.ts"
-import { listJobs, readWatchedPrs, submitJob, updateWatchedPr, type JobRecord, type WatchedPr } from "../jobs.ts"
+import { listJobs, readWatchedPrs, retryFields, submitJob, updateWatchedPr, type JobRecord, type WatchedPr } from "../jobs.ts"
 import { appendLedger, type Logger } from "../log.ts"
 import { enqueueMonday } from "../monday/store.ts"
 import { enqueueSlack } from "../outbox.ts"
@@ -246,6 +246,6 @@ function retry(paths: AgentPaths, issue: string, now: Date): string[] {
   if (busy) return [`I am already working on ${issue}.`]
   const blocked = lastBlocked(paths, issue)
   if (!blocked) return [`My last try at ${issue} did not stop on a problem, so there is nothing to try again.`]
-  submitJob(paths, issue, blocked.model, now, { retryOf: blocked.id })
+  submitJob(paths, issue, blocked.model, now, retryFields(blocked))
   return [`I am trying ${issue} again from where I stopped (last time: ${plainReason(blocked.result?.reason ?? "no reason recorded")}).`]
 }

@@ -232,6 +232,24 @@ describe("run", () => {
     await expect(run(["retry", "STEP-5-20260925060000"], out, deps())).rejects.toThrow(/ended done: only a blocked job is retried/)
     await expect(run(["retry", "STEP-6-20260925060000"], out, deps())).rejects.toThrow(/no finished job STEP-6-20260925060000/)
     for (const bad of [[], ["../../config"], ["STEP-3184"], ["a", "b"]]) await expect(run(["retry", ...bad], out, deps()), bad.join(" ")).rejects.toBeInstanceOf(UsageError)
+    // A develop job comes back as one.
+    expect(listJobs(agentPaths(), "pending")[0].kind).toBe("develop")
+  })
+
+  it("retries a blocked revise round as the same round on the same PR, a merge round included (STEP-3348)", async () => {
+    const revise = {
+      url: "https://github.com/example/repo/pull/7", number: 7, branch: "STEP-7-x", round: 2, since: "2026-09-25T10:00:00.000Z",
+      reasons: ["merge conflict with staging"],
+    }
+    mkdirSync(join(root, "jobs", "done"), { recursive: true })
+    writeFileSync(
+      join(root, "jobs", "done", "STEP-7-20260925230000.json"),
+      JSON.stringify({ id: "STEP-7-20260925230000", issue: "STEP-7", kind: "revise", model: null, submittedAt: NOW.toISOString(), revise, result: { status: "blocked", reason: "i18n locale parity" } }),
+    )
+    expect(await run(["retry", "STEP-7-20260925230000"], out, deps())).toBe(0)
+    expect(listJobs(agentPaths(), "pending")).toEqual([
+      expect.objectContaining({ issue: "STEP-7", kind: "revise", retryOf: "STEP-7-20260925230000", revise }),
+    ])
   })
 
   it("probes only the front door's own claude: the record is what agentd starts it on", async () => {
