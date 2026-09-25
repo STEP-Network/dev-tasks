@@ -24,6 +24,8 @@ import { loadClaudeOauthToken } from "../secrets.ts"
 import { buildDigest, inboxEvents, pauseReason } from "../tick.ts"
 import { readChannelState } from "../channel/state.ts"
 import { assertNoSecretText, createLinearTracker, readTextFile, type Tracker } from "../tracker.ts"
+import { createPeopleView, type PeopleView } from "../monday/people.ts"
+import { parseVerdict, recordVerdict, verdictReply } from "../verdict.ts"
 import { readUsage } from "../usage.ts"
 import { frontDoorAlive, lastTickAt, readFrontDoorState } from "../agentd/frontdoor.ts"
 import { realExec, type Exec } from "../worker/git.ts"
@@ -65,6 +67,8 @@ export interface AgentctlDeps {
   workerClaude: () => string | null
   /** Claude Code's managed settings on this machine, which approve the Slack channel. */
   managedSettings: string
+  /** Linear's people-facing reads: a UAT fix's parent and its adoption (verdict). */
+  people: () => Pick<PeopleView, "adoptFix" | "parentOf">
 }
 
 const DEFAULTS: AgentctlDeps = {
@@ -76,6 +80,7 @@ const DEFAULTS: AgentctlDeps = {
   query: async () => (await import("@anthropic-ai/claude-agent-sdk")).query as unknown as QueryFn,
   workerClaude: workerClaudePath,
   managedSettings: MANAGED_SETTINGS,
+  people: () => createPeopleView(),
 }
 
 /** Why agentd starts the front door without the Slack channel, or null when it opens it (agentd/frontdoor.ts). */
@@ -264,6 +269,32 @@ export async function run(argv: string[], out: (line: string) => void, overrides
         if (!(error instanceof Error) || !/human-todo|not in an issue's thread/.test(error.message)) throw error
         throw new UsageError(error.message)
       }
+      spend()
+      return 0
+    }
+    case "verdict": {
+      // A person's PASS or FAIL (on a Look also "looks good" or "change") in the thread of an issue waiting to be tried.
+      // The verdict is read from their own words, never from the front door's (spec 9: fixed verbs only).
+      const entry = personEntry(paths, need("key"))
+      if (entry.type !== "reply" || !entry.issue) throw new UsageError(`${entry.key} is not a reply in an issue's thread`)
+      const tracker = deps.tracker()
+      const current = await tracker.readIssue(entry.issue)
+      const look = current.labels.includes("approval/look")
+      const who = entry.userName || entry.user
+      const verdict = parseVerdict(entry.readableText ?? entry.text, look)
+      if (!verdict) {
+        throw new UsageError(`${who}'s words do not start with PASS or FAIL${look ? ', "looks good" or "change"' : ""}, so they are not a verdict: answer them in the thread`)
+      }
+      const out = await recordVerdict(
+        { paths, tracker, people: deps.people(), product: loadConfig(paths).repo.product, now },
+        { issue: entry.issue, who, verdict, where: entry.permalink ?? "Slack", source: "slack", key: `${entry.channel}:${entry.ts}` },
+      )
+      const threadTs = entry.threadTs ?? entry.ts
+      enqueueSlack(paths, { kind: "reply", channelId: entry.channel, threadTs, text: verdictReply(who, out) }, now())
+      // Words first, and a tick beside them only when something was recorded.
+      if (out.outcome !== "not-waiting") enqueueSlack(paths, { kind: "react", channelId: entry.channel, ts: entry.ts, name: "white_check_mark" }, now())
+      ack(paths.inbox, entry.key)
+      print({ issue: entry.issue, ...out })
       spend()
       return 0
     }
@@ -487,7 +518,7 @@ export async function run(argv: string[], out: (line: string) => void, overrides
     }
     default:
       throw new UsageError(
-        "usage: agentctl <tick|ack|job|usertest|ask|decide|instruct|slack|pause|resume|retry|status|report|retro|doctor|probe-hooks|probe-sandbox|probe-browser> (see runtime/src/cli/agentctl.ts)",
+        "usage: agentctl <tick|ack|job|usertest|ask|decide|verdict|instruct|slack|pause|resume|retry|status|report|retro|doctor|probe-hooks|probe-sandbox|probe-browser> (see runtime/src/cli/agentctl.ts)",
       )
   }
 }
