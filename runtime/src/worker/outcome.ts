@@ -4,6 +4,9 @@
  *   needs_input  a valid report with a question for a product owner
  *   limited      the subscription limit ended it: nobody is pinged, it resumes later
  *   blocked      everything else, with a reason a person can read
+ * A blocked outcome whose only fault is the report's form says so
+ * (reportProblem): the runner asks the same session for the report once, and
+ * with commits ahead titles the PR from them rather than strand the work.
  */
 
 import { USAGE_LIMIT_ERROR_PREFIXES } from "@anthropic-ai/claude-agent-sdk"
@@ -39,6 +42,8 @@ export interface Outcome {
   costUsd: number | null
   turns: number | null
   sessionId: string | null
+  /** Set when the session ended well but its report was malformed: prTitle missing from a done report, or no valid report at all. */
+  reportProblem?: "prTitle" | "report"
 }
 
 const LIMIT_RE = /usage limit|rate.?limit|\b429\b|limit reached/i
@@ -88,7 +93,7 @@ export function toOutcome(
     case "error_max_budget_usd":
       return blocked(`the budget of USD ${ctx.limits.maxBudgetUsd}`)
     case "error_max_structured_output_retries":
-      return blocked("no valid final report")
+      return { ...blocked("no valid final report"), reportProblem: "report" }
     case "error_during_execution": {
       // The reason reaches Slack, where the copy rules allow no semicolons.
       const text = (result.errors ?? []).join(". ")
@@ -103,9 +108,9 @@ export function toOutcome(
         return isLimit(text, result.api_error_status) ? limited : blocked(`an API error: ${text || "unknown"}`)
       }
       const report = parseReport(result.structured_output)
-      if (!report) return blocked("the worker ended without a valid report")
+      if (!report) return { ...blocked("the worker ended without a valid report"), reportProblem: "report" }
       if (report.status === "done") {
-        return report.prTitle ? { status: "done", reason: "done", report, ...base } : blocked("the report has no PR title", report)
+        return report.prTitle ? { status: "done", reason: "done", report, ...base } : { ...blocked("the report has no PR title", report), reportProblem: "prTitle" }
       }
       if (report.status === "needs_input") {
         return report.question

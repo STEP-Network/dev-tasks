@@ -46,6 +46,8 @@ export interface JobRecord {
   result?: JobResult
   /** Set once `agentctl tick` has shown the finished job to the front door. */
   reported?: boolean
+  /** A blocked job a person retried (agentctl retry): the runner takes its issue On hold, and the branch's commits carry on. */
+  retryOf?: string
 }
 
 export const jobPath = (paths: AgentPaths, state: JobState, id: string) => join(paths.jobs, state, `${id}.json`)
@@ -60,12 +62,12 @@ export function listJobs(paths: AgentPaths, state: JobState): JobRecord[] {
     .sort((a, b) => a.submittedAt.localeCompare(b.submittedAt))
 }
 
-export function submitJob(paths: AgentPaths, issue: string, model: string | null, now: Date): JobRecord {
+export function submitJob(paths: AgentPaths, issue: string, model: string | null, now: Date, extra: Pick<JobRecord, "retryOf"> = {}): JobRecord {
   for (const state of ["pending", "running"] as const) {
     if (listJobs(paths, state).some((j) => j.issue === issue)) throw new Error(`a job for ${issue} is already ${state}`)
   }
   const stamp = now.toISOString().replace(/[-:TZ]/g, "").slice(0, 14)
-  const job: JobRecord = { id: `${issue}-${stamp}`, issue, kind: "develop", model, submittedAt: now.toISOString() }
+  const job: JobRecord = { id: `${issue}-${stamp}`, issue, kind: "develop", model, submittedAt: now.toISOString(), ...extra }
   writeJsonAtomic(jobPath(paths, "pending", job.id), job)
   return job
 }

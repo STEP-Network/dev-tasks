@@ -4,14 +4,19 @@
  *   1. read the issue; skip it when it is no longer Ready, is held by someone
  *      else, or already has an open PR; otherwise claim it
  *   2. prepare the worktree (fetch, worktree add, pnpm install)
- *   3. run the SDK session: plugin hooks, the worker's guard, the sandbox, the limits
+ *   3. run the SDK session: plugin hooks, the worker's guard, the sandbox, the limits.
+ *      A report whose only fault is its form, with commits ahead, is asked
+ *      for once more in the same session, then taken from the commits
  *   4. finalize: push, PR, auto-merge, Linear, Slack
  *   5. move the job to done with its result, exactly once
+ * A retry (agentctl retry) takes its issue On hold too, and prepareWorktree
+ * carries the branch's commits on.
  */
 
 import type { Options } from "@anthropic-ai/claude-agent-sdk"
 import { existsSync, readFileSync, writeFileSync } from "node:fs"
 import { basename, join } from "node:path"
+import { FINISH_GRACE_MINUTES } from "../agentd/jobrunner.ts"
 import { agentPaths, assertProfileMini, loadConfig, readProfileMini, type AgentConfig, type AgentPaths } from "../config.ts"
 import { readJson } from "../fsq.ts"
 import { jobPath, moveJob, updateJob, type JobRecord, type JobResult } from "../jobs.ts"
@@ -21,9 +26,9 @@ import { loadClaudeOauthToken } from "../secrets.ts"
 import { branchNameFor, createLinearTracker, type Tracker, type TrackerIssue } from "../tracker.ts"
 import { buildBrief, WORKER_RESULT_SCHEMA, workerRules, type BriefInput } from "./brief.ts"
 import { finalize, FinalizeFailed, type MergeMode } from "./finalize.ts"
-import { historyRewrite, prepareWorktree, realExec, WorktreeRefused, type Exec } from "./git.ts"
+import { commitMessages, commitsAhead, historyRewrite, prepareWorktree, realExec, WorktreeRefused, type Exec } from "./git.ts"
 import { denyBannedBash, denyWorkerPaths, ENV_TEMPLATE, workerEnv, workerToolDenial } from "./guard.ts"
-import { toOutcome, type Outcome, type ResultMessageLike } from "./outcome.ts"
+import { clause, toOutcome, type Outcome, type ResultMessageLike } from "./outcome.ts"
 
 export type SdkMessage = { type: string; subtype?: string; [key: string]: unknown }
 /** The SDK's query(), narrowed to what the runner uses, so tests can pass a generator. */
@@ -200,6 +205,107 @@ export interface RunDeps {
   claudeToken: string | null
 }
 
+/** What one SDK session ended with. */
+interface SessionEnd {
+  result: ResultMessageLike | null
+  thrown: string | null
+  initProblem: string | null
+  abortedByClock: boolean
+}
+
+/**
+ * One SDK session, read to its end. The plugin and billing checks come from
+ * its init message, and a session that breaks them is stopped at once.
+ */
+async function runSession(query: QueryFn, prompt: string, options: Options, minutes: number): Promise<SessionEnd> {
+  const abortController = options.abortController ?? new AbortController()
+  options.abortController = abortController
+  const end: SessionEnd = { result: null, thrown: null, initProblem: null, abortedByClock: false }
+  const timer = setTimeout(() => {
+    end.abortedByClock = true
+    abortController.abort()
+  }, minutes * 60_000)
+  try {
+    let sawInit = false
+    for await (const message of query({ prompt, options })) {
+      if (message.type === "system" && message.subtype === "init") {
+        sawInit = true
+        end.initProblem = checkPlugins(message.plugins) ?? checkBilling(message.apiKeySource)
+      } else if (!sawInit && ["assistant", "user", "result"].includes(message.type)) {
+        // The conversation began, or ended, without the checks (hook events may
+        // come first). A session that failed to start says why in its result.
+        const said = [...(Array.isArray(message.errors) ? message.errors : []), typeof message.result === "string" ? message.result : ""].filter(Boolean).join(". ")
+        end.initProblem = `the session sent no init message, so the plugin and billing checks could not run${said ? ` (${said})` : ""}`
+      }
+      if (end.initProblem) {
+        abortController.abort()
+        break
+      }
+      if (message.type === "result") end.result = message as unknown as ResultMessageLike
+    }
+  } catch (error) {
+    end.thrown = error instanceof Error ? error.message : String(error)
+  } finally {
+    clearTimeout(timer)
+  }
+  return end
+}
+
+/** The correction the same session gets once, when its report's form was the only fault. */
+export function correctionPrompt(problem: NonNullable<Outcome["reportProblem"]>): string {
+  const what = problem === "prTitle" ? "Your final report has no prTitle." : "Your session ended without a valid final report."
+  return [
+    `${what} Your commits are in place, so change nothing and run no tool.`,
+    "Reply with the final report only, in the report's schema: status, summary, verification, notes, and for status done a prTitle, a conventional commit title such as `fix: the notice date`.",
+  ].join(" ")
+}
+
+/** How long, and how many turns, the correction may take: it only writes a report. */
+const CORRECTION_MINUTES = 10
+const CORRECTION_TURNS = 4
+/** What the correction leaves of agentd's grace after the wall clock, for the push, the PR and Linear. */
+const FINISH_MINUTES = 5
+
+/** The correction's minutes: at most CORRECTION_MINUTES, and never into the finish agentd's backstop allows. */
+export function correctionMinutes(wallClockMinutes: number, elapsedMinutes: number): number {
+  return Math.min(CORRECTION_MINUTES, wallClockMinutes + FINISH_GRACE_MINUTES - FINISH_MINUTES - elapsedMinutes)
+}
+
+/** Two sessions' spend or turns, to the micro-dollar, so a sum never reads 2.4499999999999997. */
+const add = (a: number | null, b: number | null) => (a === null && b === null ? null : Math.round(((a ?? 0) + (b ?? 0)) * 1e6) / 1e6)
+
+/**
+ * A done report built from the branch's commits, when the worker's own report
+ * stayed malformed: the newest subject titles the PR (its issue id dropped,
+ * since the PR title carries it already), and the messages describe it.
+ */
+export async function outcomeFromCommits(exec: Exec, worktree: string, base: string, issueId: string, outcome: Outcome): Promise<Outcome | null> {
+  const commits = await commitMessages(exec, worktree, base)
+  if (!commits.length) return null
+  const id = issueId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+  const title = commits[0].subject
+    .replace(new RegExp(`^${id}:\\s*`), "")
+    .replace(new RegExp(`\\s*\\(${id}\\)$`), "")
+    .trim()
+  const summary = commits.map((c) => (c.body ? `${c.subject}\n\n${c.body}` : c.subject)).join("\n\n")
+  const note = `The worker's final report was malformed (${clause(outcome.reason)}), so the runner took this PR's title and description from its commits.`
+  return {
+    status: "done",
+    reason: `done, titled from the commits: ${clause(outcome.reason)}`,
+    report: {
+      status: "done",
+      summary,
+      prTitle: title || commits[0].subject,
+      verification: outcome.report?.verification ?? [],
+      notes: [note, outcome.report?.notes].filter(Boolean).join("\n"),
+    },
+    costUsd: outcome.costUsd,
+    turns: outcome.turns,
+    sessionId: outcome.sessionId,
+  }
+}
+
+
 export async function runJob(deps: RunDeps, jobId: string): Promise<JobResult> {
   const { paths, config, tracker, exec, log } = deps
   const job = readJson<JobRecord>(jobPath(paths, "running", jobId))
@@ -241,7 +347,11 @@ export async function runJob(deps: RunDeps, jobId: string): Promise<JobResult> {
   try {
     current = await tracker.readIssue(job.issue)
     const me = await tracker.whoami()
-    if (current.state !== "Ready") return finish({ ...nothing, status: "skipped", reason: `the issue is ${current.state}, not Ready` })
+    // A retry picks up a blocked job, whose issue the runner put On hold.
+    const takes = job.retryOf ? ["Ready", "On hold", "In Progress"] : ["Ready"]
+    if (!takes.includes(current.state)) {
+      return finish({ ...nothing, status: "skipped", reason: `the issue is ${current.state}, not ${job.retryOf ? "Ready or On hold" : "Ready"}` })
+    }
     if (current.assigneeId && current.assigneeId !== me.id) return finish({ ...nothing, status: "skipped", reason: "someone else holds the issue" })
     branch = branchNameFor(current.id, current.title)
     const open = await exec("gh", ["pr", "list", "--repo", config.repo.slug, "--head", branch, "--state", "open", "--json", "url", "--jq", ".[0].url // empty"], { cwd: config.repo.path })
@@ -297,57 +407,57 @@ export async function runJob(deps: RunDeps, jobId: string): Promise<JobResult> {
   }
 
   // 3. the session
-  const brief: BriefInput = { mini: config.mini, issue, worktree: worktree.path, branch, base: config.repo.base, resumed: worktree.resumed, limits }
-  const abortController = new AbortController()
-  let abortedByClock = false
-  const timer = setTimeout(() => {
-    abortedByClock = true
-    abortController.abort()
-  }, config.worker.wallClockMinutes * 60_000)
-  let result: ResultMessageLike | null = null
-  let thrown: string | null = null
-  let initProblem: string | null = null
-  // agentd's backstop counts the wall clock from here, not from the spawn: preparing the worktree can take 20 minutes.
-  updateJob(paths, "running", jobId, { sessionStartedAt: deps.now().toISOString() })
-  log.info("worker session starting", { issue: issue.id, model, worktree: worktree.path, resumed: worktree.resumed })
-  try {
-    const stream = deps.query({
-      prompt: buildBrief(brief),
-      options: sdkOptions({
-        config,
-        cwd: worktree.path,
-        model,
-        abortController,
-        rules: workerRules(brief),
-        pnpmStore: deps.pnpmStore,
-        env: workerEnv(process.env, { DEV_TASKS_PROFILE: "agent", ...(deps.claudeToken ? { CLAUDE_CODE_OAUTH_TOKEN: deps.claudeToken } : {}) }),
-        home: paths.home,
-      }),
+  const earlier = job.retryOf ? readJson<JobRecord>(jobPath(paths, "done", job.retryOf))?.result?.reason : undefined
+  const brief: BriefInput = { mini: config.mini, issue, worktree: worktree.path, branch, base: config.repo.base, resumed: worktree.resumed, limits, ...(earlier ? { earlier } : {}) }
+  const options = () =>
+    sdkOptions({
+      config,
+      cwd: worktree.path,
+      model,
+      abortController: new AbortController(),
+      rules: workerRules(brief),
+      pnpmStore: deps.pnpmStore,
+      env: workerEnv(process.env, { DEV_TASKS_PROFILE: "agent", ...(deps.claudeToken ? { CLAUDE_CODE_OAUTH_TOKEN: deps.claudeToken } : {}) }),
+      home: paths.home,
     })
-    let sawInit = false
-    for await (const message of stream) {
-      if (message.type === "system" && message.subtype === "init") {
-        sawInit = true
-        initProblem = checkPlugins(message.plugins) ?? checkBilling(message.apiKeySource)
-      } else if (!sawInit && ["assistant", "user", "result"].includes(message.type)) {
-        // The conversation began, or ended, without the checks (hook events may
-        // come first). A session that failed to start says why in its result.
-        const said = [...(Array.isArray(message.errors) ? message.errors : []), typeof message.result === "string" ? message.result : ""].filter(Boolean).join(". ")
-        initProblem = `the session sent no init message, so the plugin and billing checks could not run${said ? ` (${said})` : ""}`
-      }
-      if (initProblem) {
-        abortController.abort()
-        break
-      }
-      if (message.type === "result") result = message as unknown as ResultMessageLike
-    }
-  } catch (error) {
-    thrown = error instanceof Error ? error.message : String(error)
-  } finally {
-    clearTimeout(timer)
-  }
-  const outcome = initProblem ? blockedBefore(initProblem) : toOutcome(result, { abortedByClock, thrown, limits })
+  // agentd's backstop counts the wall clock from here, not from the spawn: preparing the worktree can take 20 minutes.
+  const sessionStart = deps.now()
+  updateJob(paths, "running", jobId, { sessionStartedAt: sessionStart.toISOString() })
+  log.info("worker session starting", { issue: issue.id, model, worktree: worktree.path, resumed: worktree.resumed, retryOf: job.retryOf ?? null })
+  const first = await runSession(deps.query, buildBrief(brief), options(), config.worker.wallClockMinutes)
+  let outcome = first.initProblem ? blockedBefore(first.initProblem) : toOutcome(first.result, { abortedByClock: first.abortedByClock, thrown: first.thrown, limits })
   log.info("worker session ended", { issue: issue.id, status: outcome.status, reason: outcome.reason, costUsd: outcome.costUsd, turns: outcome.turns })
+
+  // A malformed report is a formatting miss, not a reason to strand finished
+  // work. With commits ahead, the same session is asked for the report once,
+  // then the PR is titled from the commits. With none, it stays blocked.
+  if (outcome.reportProblem && (await commitsAhead(exec, worktree.path, config.repo.base).catch(() => 0)) > 0) {
+    const problem = outcome.reportProblem
+    let repaired: Outcome | null = null
+    const budget = correctionMinutes(config.worker.wallClockMinutes, (deps.now().getTime() - sessionStart.getTime()) / 60_000)
+    if (outcome.sessionId && budget >= 1) {
+      const again = options()
+      again.resume = outcome.sessionId
+      again.maxTurns = CORRECTION_TURNS
+      const second = await runSession(deps.query, correctionPrompt(problem), again, budget)
+      const corrected = second.initProblem ? null : toOutcome(second.result, { abortedByClock: second.abortedByClock, thrown: second.thrown, limits })
+      if (corrected?.report && !corrected.reportProblem) {
+        repaired = { ...corrected, costUsd: add(outcome.costUsd, corrected.costUsd), turns: add(outcome.turns, corrected.turns) }
+        appendLedger(paths, { type: "report.corrected", issue: issue.id, problem }, deps.now())
+      } else if (corrected) {
+        outcome = { ...outcome, costUsd: add(outcome.costUsd, corrected.costUsd), turns: add(outcome.turns, corrected.turns) }
+      }
+    }
+    if (!repaired) {
+      repaired = await outcomeFromCommits(exec, worktree.path, config.repo.base, issue.id, outcome).catch((error: unknown) => {
+        log.warn("the commits could not be read", { issue: issue.id, error: String(error) })
+        return null
+      })
+      if (repaired) appendLedger(paths, { type: "report.fromCommits", issue: issue.id, problem }, deps.now())
+    }
+    if (repaired) outcome = repaired
+    log.info("worker report repaired", { issue: issue.id, problem, status: outcome.status, reason: outcome.reason })
+  }
 
   // 4 and 5
   return finishWith(worktree.path, outcome)

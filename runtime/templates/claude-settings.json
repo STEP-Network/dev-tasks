@@ -16,6 +16,7 @@
       "Edit(/__REPO__/**)",
       "Write(/__REPO__/**)",
       "Bash(~/.agentd/bin/agentctl resume:*)",
+      "Bash(~/.agentd/bin/agentctl retry:*)",
       "Bash(~/.agentd/bin/agentctl probe-hooks:*)",
       "Bash(~/.agentd/bin/agentctl probe-sandbox:*)",
       "Bash(git push:*)",

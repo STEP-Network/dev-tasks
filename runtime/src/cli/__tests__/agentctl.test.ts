@@ -189,6 +189,28 @@ describe("run", () => {
     }
   })
 
+  it("retries a blocked job as a new one on its issue, for a person only", async () => {
+    const done = (id: string, status: string) => {
+      mkdirSync(join(root, "jobs", "done"), { recursive: true })
+      writeFileSync(
+        join(root, "jobs", "done", `${id}.json`),
+        JSON.stringify({ id, issue: id.replace(/-\d{14}$/, ""), kind: "develop", model: "opus", submittedAt: NOW.toISOString(), result: { status, reason: "the report has no PR title" } }),
+      )
+    }
+    done("STEP-3184-20260925071840", "blocked")
+    done("STEP-5-20260925060000", "done")
+    await expect(run(["retry", "STEP-3184-20260925071840"], out, deps({ env: { AGENTD_FRONT_DOOR: "1" } }))).rejects.toThrow(/for a person at a terminal/)
+    await expect(run(["retry", "STEP-3184-20260925071840"], out, deps({ isTTY: () => false }))).rejects.toThrow(/for a person at a terminal/)
+    expect(await run(["retry", "STEP-3184-20260925071840"], out, deps())).toBe(0)
+    expect(listJobs(agentPaths(), "pending")).toEqual([
+      expect.objectContaining({ issue: "STEP-3184", model: "opus", retryOf: "STEP-3184-20260925071840" }),
+    ])
+    await expect(run(["retry", "STEP-3184-20260925071840"], out, deps())).rejects.toThrow(/already pending/)
+    await expect(run(["retry", "STEP-5-20260925060000"], out, deps())).rejects.toThrow(/ended done: only a blocked job is retried/)
+    await expect(run(["retry", "STEP-6-20260925060000"], out, deps())).rejects.toThrow(/no finished job STEP-6-20260925060000/)
+    for (const bad of [[], ["../../config"], ["STEP-3184"], ["a", "b"]]) await expect(run(["retry", ...bad], out, deps()), bad.join(" ")).rejects.toBeInstanceOf(UsageError)
+  })
+
   it("probes only the front door's own claude: the record is what agentd starts it on", async () => {
     writeConfig()
     await expect(run(["probe-sandbox", "--claude", "/elsewhere/claude"], out, deps())).rejects.toThrow(/front door's own claude/)

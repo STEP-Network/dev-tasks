@@ -332,9 +332,9 @@ The front door's settings, from `runtime/templates/claude-settings.json`:
   `~/.npmrc`, `~/.netrc`, `~/.git-credentials` and the Vercel CLI's login. The
   Read tool is denied the same (decision 8), and Edit and Write are denied in
   `~/polads` and `~/.agentd`.
-- `agentctl resume`, `probe-hooks` and `probe-sandbox` are denied, and
-  agentctl refuses them anywhere but at a person's terminal: only a person on
-  the mini lifts a pause.
+- `agentctl resume`, `retry`, `probe-hooks` and `probe-sandbox` are denied,
+  and agentctl refuses them anywhere but at a person's terminal: only a
+  person on the mini lifts a pause or a block.
 - `git push`, `gh pr create` and `gh pr merge` are denied.
 - `trackerctl` and `agentctl` refuse a secrets file and any text that
   carries a key or a token, since they can read the key.
@@ -451,6 +451,21 @@ it. Once the cause is fixed, `agentctl job submit --issue STEP-<n>` runs it by
 hand, and a job of that issue that ends any other way lifts the hold. An
 issue whose last job failed on Linear waits 15 minutes before it is offered
 again, by itself, and is listed nowhere.
+
+A job that ended blocked left its issue On hold, and its commits on the
+issue's branch. Once the cause is fixed, retry it:
+
+```bash
+~/.agentd/bin/agentctl job list                      # the job's id, e.g. STEP-3184-20260925071840
+~/.agentd/bin/agentctl retry STEP-3184-20260925071840
+```
+
+The new job takes the issue On hold, carries the branch's commits on, and
+tells the worker why the earlier job ended, so it checks the work rather than
+redoing it. A job whose report only lacked its form (a PR title, say) no
+longer ends blocked while it has commits: the runner asks the same session
+once for the report, then titles the PR from the newest commit, and the PR
+says so.
 
 The front door explains a pause or a hold when someone asks in Slack, and
 never lifts one because Slack said so. It cannot lift a pause at all: only a
@@ -570,7 +585,7 @@ Over SSH:
   read `~/.zprofile`. `~/.agentd/bin/agentctl` and `trackerctl` carry their
   own PATH. Any other command runs as `zsh -lc '<command>'`.
 - **`ssh -tt` only for the person-only commands**: `agentctl probe-sandbox`,
-  `probe-hooks` and `resume`, which refuse without a terminal. Everything
+  `probe-hooks`, `resume` and `retry`, which refuse without a terminal. Everything
   else runs without one.
 - **No secret on a command line.** The `read -rs` steps (section 5) are typed
   by a person, at the mini or in an interactive `ssh -t` session.

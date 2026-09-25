@@ -22,6 +22,8 @@ export interface BriefInput {
   /** The branch already existed on origin: an earlier run pushed work to it. */
   resumed: boolean
   limits: WorkerLimits
+  /** A retry (agentctl retry): why the earlier job on this branch ended. */
+  earlier?: string
 }
 
 /** The SDK validates the final message against this (outputFormat json_schema). */
@@ -74,5 +76,11 @@ export function buildBrief(input: BriefInput): string {
     "## Your job",
     "",
     "Implement the issue so that every acceptance criterion holds, with tests, then report.",
+    ...(input.earlier
+      ? [
+          "",
+          `An earlier job on this issue ended blocked: ${input.earlier}. Its commits are on this branch. Check them against the acceptance criteria, do only what is missing, and report. If nothing is missing, change nothing and report done.`,
+        ]
+      : []),
   ].join("\n")
 }
