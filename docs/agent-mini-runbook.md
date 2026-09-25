@@ -1085,9 +1085,10 @@ guard, by root only:
 **What it does not do.** It stops a misled session, not a determined one: a
 session set on writing as a person can still find another way (a script
 file, a host built from parts, its own environment). The detection layer is
-#polads-agents: every lowering of an approval class, and from Wave 2 every
-plan approval, is announced there, with who lowered or approved it and
-where, so a forged one shows.
+#polads-agents: from Wave 2, every plan approval and every lowering of an
+approval class from Monday or Slack is announced there, with who approved or
+lowered it and where, so a forged one shows. Until then a class is lowered
+only in Linear, by the person's own account.
 
 A hook change needs the plugin cache cleared and a reload before it runs
 (the plugin version goes up with it).
