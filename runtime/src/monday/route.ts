@@ -90,7 +90,7 @@ export async function routeWords(
   // No agreement, no move. Their words stay on the issue unless they are only a yes, which says nothing now.
   if (!said && asked && askedSince(asked.at, words.at)) {
     if (!BARE.test(words.text)) {
-      await recordAnswer({ paths, tracker }, { issue, who: who.name, words: words.text, ts: words.id, permalink: words.permalink, source: "monday", ...when }, { current, move: false })
+      await recordAnswer({ paths, tracker }, { issue, who: who.name, words: words.text, ts: words.id, permalink: words.permalink, source: "monday", ...when }, { move: false })
     }
     appendLedger(paths, { type: "answer.before_question", issue, via: "monday" }, now)
     return { to: "newer-question", question: asked.text }
@@ -100,10 +100,11 @@ export async function routeWords(
   const question = asked?.text ?? (input.recommendation ? withRecommendation("", input.recommendation) : null)
   const decided = said ? null : agreedTo(words.text, question, current)
   // One recorder for Slack and Monday (answer.ts). An instruction leaves the issue where it is: agentd acts on it.
+  // Only an answer is weighed against the first one: an instruction ("merge it") after another person's answer is agentd's still.
   const out = await recordAnswer(
     { paths, tracker },
     { issue, who: who.name, words: words.text, ts: words.id, permalink: words.permalink, source: "monday", ...(decided ? { decided } : {}), ...when },
-    { current, move: !said, since: input.since },
+    { move: !said, since: said ? null : input.since },
   )
   const { movedTo } = out
   if (out.outcome === "same" || out.outcome === "second") {

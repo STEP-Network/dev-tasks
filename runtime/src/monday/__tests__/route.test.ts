@@ -48,6 +48,14 @@ describe("routeWords: the first answer counts (Wave 2)", () => {
     expect(await say("Use the order date!", "U3", "2026-09-25T10:01:00.000Z", { since: NOW.toISOString() })).toMatchObject({ to: "same", first: { who: "Ada" } })
   })
 
+  it("files an instruction after another person's answer for agentd: it is not a second answer", async () => {
+    const { paths, fake, say } = setup(["awaiting-answer", "polads"])
+    recordPr(paths, { issue: "STEP-7", url: "https://github.com/STEP-Network/v0-politiske-annoncer/pull/1679", openedAt: NOW.toISOString() })
+    await say("use the order date", "U1", "2026-09-25T10:00:10.000Z", { who: ADA, since: NOW.toISOString() })
+    expect(await say("merge it", "U2", "2026-09-25T10:00:40.000Z", { since: NOW.toISOString() })).toMatchObject({ to: "agentd" })
+    expect(fake.issues.get("STEP-7")!.description).not.toContain("(Not applied")
+  })
+
   it("takes a bare yes as agreement to the item's own recommendation when this mini asked no question on the issue (another mini's plan)", async () => {
     const { fake, say } = setup(["awaiting-answer", "polads"])
     await say("yes", "U1", NOW.toISOString(), { recommendation: "Build it as planned" })
