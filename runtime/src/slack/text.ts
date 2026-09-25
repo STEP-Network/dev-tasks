@@ -99,14 +99,14 @@ export function intakeIssue(text: string, meta: IntakeMeta): CreateIssueInput | 
 }
 
 /**
- * Who asked, as the footer keeps it: the Slack id in the last
- * `<!-- slack-user:U… -->` line of its own before the answers begin. A
- * person's words come before the footer, quoted or escaped, so a marker they
- * typed is never the one read.
+ * Who asked, as the footer keeps it: the Slack id in the first
+ * `<!-- slack-user:U… -->` line of its own. Everything before the footer is
+ * quoted or escaped (a person's words, the summary), so nothing there can be
+ * one, and nothing they typed (an answers heading, say) can hide it. Answers
+ * come after the footer.
  */
 export function slackAskerOf(description: string): string | null {
-  const head = description.split(/\n## Answers from /)[0]
-  return [...head.matchAll(/^<!-- slack-user:([UW][A-Z0-9]+) -->$/gm)].at(-1)?.[1] ?? null
+  return /^<!-- slack-user:([UW][A-Z0-9]+) -->$/m.exec(description)?.[1] ?? null
 }
 
 export interface SlackAnswer {

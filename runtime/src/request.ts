@@ -14,6 +14,7 @@ import { appendLedger, redact } from "./log.ts"
 import { oneLine, quote, stableUuid } from "./monday/render.ts"
 import { enqueueSlack } from "./outbox.ts"
 import { NOTHING_NEEDED } from "./plain.ts"
+import { onQueue } from "./select.ts"
 import { INTAKE_SLACK, truncateChars } from "./slack/text.ts"
 import { issueForThread, saveThread, threadFor } from "./threads.ts"
 import type { CreateIssueInput, Tracker } from "./tracker.ts"
@@ -50,6 +51,7 @@ export async function fileMentionRequest(deps: RequestDeps, entry: PersonEntry, 
   const input: CreateIssueInput = {
     title: oneLine(ask.title, 80),
     description: [
+      // One line of plain text: an HTML comment in it is gone, so it never passes for the footer's marker.
       oneLine(ask.summary, 400),
       "",
       "## Request",
@@ -78,9 +80,11 @@ export async function fileMentionRequest(deps: RequestDeps, entry: PersonEntry, 
     const first = threadFor(deps.paths, owner!)!
     saveThread(deps.paths, { ...first, alsoFor: [...new Set([...(first.alsoFor ?? []), filed.id])] })
   }
+  // On the allowlist a new issue is not on it: a person decides when this mini works on it, as the intake reply says.
+  const next = onQueue(filed.id, deps.config.queue) ? NOTHING_NEEDED : "A person decides when I work on it."
   enqueueSlack(
     deps.paths,
-    { kind: "reply", channelId: entry.channel, threadTs, text: `Thanks, ${who}. I filed this as ${filed.id} ${filed.url}. It goes on the Monday Requests board within a few minutes, and I will post its progress here. ${NOTHING_NEEDED}` },
+    { kind: "reply", channelId: entry.channel, threadTs, text: `Thanks, ${who}. I filed this as ${filed.id} ${filed.url}. It goes on the Monday Requests board within a few minutes, and I will post its progress here. ${next}` },
     now,
   )
   if (entry.permalink) await deps.tracker.attachLink(filed.id, entry.permalink, "Slack intake thread").catch(() => {})
