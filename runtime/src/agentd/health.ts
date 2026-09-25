@@ -25,6 +25,7 @@ import { listNew } from "../fsq.ts"
 import { forgetWatchedPr, listJobs, readWatchedPrs } from "../jobs.ts"
 import { appendLedger, type Logger } from "../log.ts"
 import { plural } from "../plain.ts"
+import type { Tracker } from "../tracker.ts"
 import { pruneJsonl } from "../retro/jsonl.ts"
 import { lessonsFile } from "../retro/lessons.ts"
 import { retrosFile } from "../retro/retro.ts"
@@ -43,7 +44,15 @@ export function requiredChecks(repo: string): string[] {
   }
 }
 
-export async function watchPrs(deps: { exec: Exec; paths: AgentPaths; config: AgentConfig; now: () => Date; log: Logger }): Promise<void> {
+export async function watchPrs(deps: {
+  exec: Exec
+  paths: AgentPaths
+  config: AgentConfig
+  now: () => Date
+  log: Logger
+  /** To raise an issue's approval class the Approval class check found too low (revise.ts). */
+  tracker?: Pick<Tracker, "readIssue" | "updateIssue">
+}): Promise<void> {
   const required = requiredChecks(deps.config.repo.path)
   if (!required.length) deps.log.warn("no required checks in the project config: the PR watcher reports nothing red", { repo: deps.config.repo.path })
   for (const pr of readWatchedPrs(deps.paths)) {

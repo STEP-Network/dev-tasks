@@ -8,6 +8,8 @@ export { createLinearTracker } from "../../plugin/src/tracker/linear.ts"
 export { linearRequest } from "../../plugin/src/tracker/linear-client.ts"
 export { branchNameFor, byPriorityThenAge, extractAcceptanceCriteria, LINEAR_TEAM_KEY } from "../../plugin/src/tracker/types.ts"
 export { assertNoSecretText, readTextFile } from "../../plugin/src/tracker/secrets-guard.ts"
+/** Approval classes (the human-agent flow spec, section 3), as trackerctl applies them. */
+export { approvalLabel, approvalPatch, classOfLabels, classRank, type ApprovalClass } from "../../plugin/src/tracker/approval.ts"
 export type {
   ClaimRecord,
   CreateIssueInput,

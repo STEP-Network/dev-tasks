@@ -34,6 +34,7 @@ import { appendLedger, type Logger } from "../log.ts"
 import { askDecision } from "./decisions.ts"
 import { enqueueSlack } from "../outbox.ts"
 import { feedbackFor, NOTHING_NEEDED, prLink } from "../plain.ts"
+import { approvalLabel, approvalPatch, classOfLabels, classRank, type ApprovalClass, type Tracker } from "../tracker.ts"
 import type { Exec } from "../worker/git.ts"
 
 export const MAX_REVISE_ROUNDS = 3
@@ -65,9 +66,20 @@ export interface OwnPrView {
   comments?: Array<{ id: string; author?: PrActor; authorAssociation?: string; body?: string; createdAt?: string }>
   statusCheckRollup: PrRollupEntry[]
   autoMergeRequest?: unknown
+  /** The PR's labels: the Approval class check puts the diff's class there (approval/<class>). */
+  labels?: Array<{ name: string }>
 }
 
-export const PR_FIELDS = "url,number,state,headRefName,headRefOid,author,reviews,comments,statusCheckRollup,autoMergeRequest"
+export const PR_FIELDS = "url,number,state,headRefName,headRefOid,author,reviews,comments,statusCheckRollup,autoMergeRequest,labels"
+
+/**
+ * The PolAds check that sets a PR's approval class from its diff (WS1). Its
+ * failure is never the code's: the issue's label is lower than the diff's
+ * floor. agentd raises the label and re-runs the check, and no worker is sent.
+ */
+export const APPROVAL_CHECK = "Approval class"
+/** The check's job that puts the diff's class on the PR as a label (approval/<class>). */
+export const APPROVAL_LABEL_CHECK = "Approval class label"
 
 const RED = new Set(["FAILURE", "CANCELLED", "TIMED_OUT", "ACTION_REQUIRED", "ERROR", "STARTUP_FAILURE"])
 /** Conclusions that say nothing about the code. */
@@ -117,6 +129,7 @@ export function failingRequired(view: OwnPrView, required: readonly string[]): F
   const out = new Map<string, FailingCheck>()
   for (const c of view.statusCheckRollup) {
     const name = checkName(c)
+    if (name === APPROVAL_CHECK) continue
     const base = requiredBase(name, required)
     if (!base) continue
     const conclusion = String(c.conclusion ?? c.state ?? "").toUpperCase()
@@ -189,9 +202,141 @@ export interface ReviseDeps {
   config: AgentConfig
   now: () => Date
   log: Logger
+  /** Linear, to raise an issue's approval class the Approval class check found too low. Without it, the class is left as it is. */
+  tracker?: Pick<Tracker, "readIssue" | "updateIssue">
 }
 
 const GH_TIMEOUT_MS = 2 * 60_000
+
+const conclusionOf = (c: PrRollupEntry) => String(c.conclusion || c.state || "").toUpperCase()
+/** No verdict yet: queued or still running. */
+const UNDECIDED = new Set(["", "PENDING", "EXPECTED", "QUEUED", "IN_PROGRESS", "WAITING", "REQUESTED"])
+
+/**
+ * Where the Approval class check stands at the head. Only red is acted on,
+ * and nothing else marks the head done, so a check still running, or not
+ * there yet, that goes red later at the same head is still seen.
+ */
+export function approvalCheckAt(view: OwnPrView): "none" | "running" | "green" | "red" {
+  const check = view.statusCheckRollup.find((c) => checkName(c) === APPROVAL_CHECK)
+  if (!check) return "none"
+  const conclusion = conclusionOf(check)
+  if (UNDECIDED.has(conclusion)) return "running"
+  return RED.has(conclusion) ? "red" : "green"
+}
+
+/**
+ * Where this head's label job stands: not there, still running, passed (the
+ * PR's class label is this head's), or finished without a class, as when
+ * the check could not read Linear and skipped it. Only a pass makes the label
+ * this head's: otherwise it may be an older head's, and a person may have
+ * lowered the class since.
+ */
+export function labelJobAt(view: OwnPrView): "none" | "running" | "passed" | "without" {
+  const job = view.statusCheckRollup.find((c) => checkName(c) === APPROVAL_LABEL_CHECK)
+  if (!job) return "none"
+  const conclusion = conclusionOf(job)
+  if (UNDECIDED.has(conclusion)) return "running"
+  return conclusion === "SUCCESS" ? "passed" : "without"
+}
+
+export const labelledAtHead = (view: OwnPrView): boolean => labelJobAt(view) === "passed"
+
+/**
+ * When the Approval class check is red at the head and this head's label job
+ * has labelled the PR with a class above the issue's: the class to raise the
+ * issue to, and the Actions run to start again once it is. Pure. null:
+ * nothing to raise.
+ */
+export function classRaise(view: OwnPrView, issueLabels: readonly string[]): { to: ApprovalClass; runId: string | null } | null {
+  const check = view.statusCheckRollup.find((c) => checkName(c) === APPROVAL_CHECK)
+  if (!check || approvalCheckAt(view) !== "red" || !labelledAtHead(view)) return null
+  const floor = classOfLabels((view.labels ?? []).map((l) => l.name))
+  if (!floor) return null
+  const current = classOfLabels(issueLabels)
+  if (current && classRank(current) >= classRank(floor)) return null
+  return { to: floor, runId: actionsJob(check)?.runId ?? null }
+}
+
+const NEEDS: Record<ApprovalClass, string> = {
+  auto: "approval by the agents",
+  look: "a visual check by a person before release",
+  try: "a hands-on test by a person before release",
+}
+
+async function rerunCheck(deps: ReviseDeps, pr: WatchedPr, runId: string | null): Promise<void> {
+  if (!runId) return
+  const r = await deps.exec("gh", ["run", "rerun", runId, "--repo", deps.config.repo.slug], { timeoutMs: GH_TIMEOUT_MS })
+  if (r.code !== 0) deps.log.warn("gh run rerun failed", { url: pr.url, run: runId, stderr: r.stderr.trim() })
+}
+
+/**
+ * Raises the issue's class to what the check found, once per head. It waits,
+ * marking nothing, while the check is not there yet or still running, and
+ * while this head's label job is not there or still running. Never throws: a
+ * failure is logged and tried again at the next watch.
+ */
+async function raiseClass(deps: ReviseDeps, pr: WatchedPr, view: OwnPrView): Promise<WatchedPr> {
+  const head = view.headRefOid
+  if (!deps.tracker || pr.classRaised === head) return pr
+  const label = labelJobAt(view)
+  if (approvalCheckAt(view) !== "red" || label === "none" || label === "running") return pr
+  const check = view.statusCheckRollup.find((c) => checkName(c) === APPROVAL_CHECK)
+  const runId = check ? (actionsJob(check)?.runId ?? null) : null
+  try {
+    // Red, and the label job finished without a class (the check could not read Linear): nothing to raise from.
+    if (label === "without") return await nothingToRaise(deps, pr, head, runId, "no class")
+    const issue = await deps.tracker.readIssue(pr.issue)
+    const raise = classRaise(view, issue.labels)
+    if (!raise) return await nothingToRaise(deps, pr, head, runId, "already")
+    const had = classOfLabels(issue.labels)
+    await deps.tracker.updateIssue(pr.issue, approvalPatch(issue.labels, { addLabels: [approvalLabel(raise.to)] }))
+    await rerunCheck(deps, pr, raise.runId)
+    appendLedger(deps.paths, { type: "class.raised", issue: pr.issue, url: pr.url, to: raise.to }, deps.now())
+    enqueueSlack(
+      deps.paths,
+      { kind: "post", channel: "agents", text: `${pr.issue}: the change in ${prLink(pr.url)} needs ${NEEDS[raise.to]}, so I ${had ? "raised" : "set"} ${pr.issue}'s approval level to match. ${NOTHING_NEEDED}` },
+      deps.now(),
+    )
+    return { ...pr, classRaised: head }
+  } catch (error) {
+    deps.log.warn("could not raise the approval class", { url: pr.url, error: error instanceof Error ? error.message : String(error) })
+    return pr
+  }
+}
+
+/**
+ * Red, with nothing to raise: the issue's class is already where this head's
+ * label puts it, or the check gave no class (it could not read Linear). The
+ * check reads Linear when it runs, so it may have run before the class
+ * changed, or while Linear was out of reach: start it once more at this head.
+ * Still red after that, ask a person once, as a failure the infrastructure
+ * keeps causing does.
+ */
+async function nothingToRaise(deps: ReviseDeps, pr: WatchedPr, head: string, runId: string | null, why: "already" | "no class"): Promise<WatchedPr> {
+  if (pr.classRerun !== head) {
+    await rerunCheck(deps, pr, runId)
+    return { ...pr, classRerun: head }
+  }
+  askDecision(
+    deps.paths,
+    deps.config,
+    {
+      id: `class-${pr.issue}-${head.slice(0, 12)}`,
+      issue: pr.issue,
+      url: pr.url,
+      question: `The approval check on ${prLink(pr.url)} is still red after I started it again, and ${
+        why === "already" ? `${pr.issue} already has the approval level the change needs` : "it did not say which approval level the change needs"
+      }, so I have nothing to raise. A person needs to see why: the check's summary says what it found.`,
+      options: [{ reply: "leave it", does: "leave the PR to a person" }],
+      defaultReply: "leave it",
+      defaultAction: { kind: "leave" },
+    },
+    deps.now(),
+  )
+  appendLedger(deps.paths, { type: "class.stuck", issue: pr.issue, url: pr.url }, deps.now())
+  return { ...pr, classRaised: head }
+}
 
 /**
  * Which failing checks at the head failed on the infrastructure, reading each
@@ -221,7 +366,7 @@ export async function classifyFailures(deps: ReviseDeps, view: OwnPrView, pr: Wa
 export async function reviseOwnPr(deps: ReviseDeps, pr: WatchedPr, view: OwnPrView, required: readonly string[]): Promise<void> {
   const verdicts = await classifyFailures(deps, view, pr, required)
   const infra = Object.fromEntries(Object.entries(verdicts).map(([name, v]) => [`${view.headRefOid}:${name}`, v]))
-  let record: WatchedPr = { ...pr, infra }
+  let record: WatchedPr = { ...(await raiseClass(deps, pr, view)), infra }
   const plan = planRevision(view, pr, { mini: deps.config.mini, required, infra: verdicts })
   const now = deps.now()
   switch (plan.kind) {
