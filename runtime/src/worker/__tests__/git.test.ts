@@ -4,7 +4,7 @@ import { join } from "node:path"
 import { describe, expect, it } from "vitest"
 import { fakeExec } from "../../__tests__/fakes.ts"
 import { execFileSync } from "node:child_process"
-import { assertPushable, commitMessages, commitsAhead, isDirty, prepareWorktree, pushBranch, realExec, removeWorktree, WorktreeRefused } from "../git.ts"
+import { assertPushable, changedFiles, commitMessages, commitsAhead, isDirty, ownChanges, prepareWorktree, pushBranch, realExec, removeWorktree, startMerge, WorktreeRefused } from "../git.ts"
 
 const OPTS = { repo: "/Users/eve/polads", worktreesDir: "/Users/eve/.agentd/worktrees", branch: "STEP-7-fix-the-date", base: "staging" }
 const WT = "/Users/eve/.agentd/worktrees/STEP-7-fix-the-date"
@@ -149,6 +149,60 @@ describe("commitsAhead, isDirty and removeWorktree", () => {
       `${GIT} -C ${WT} status --porcelain --ignore-submodules=all`,
       `${GIT} -C /Users/eve/polads worktree remove --force ${WT}`,
     ])
+  })
+})
+
+describe("startMerge, commitsAhead by first parent and ownChanges (STEP-3340)", () => {
+  const repoWith = () => {
+    const repo = mkdtempSync(join(tmpdir(), "start-merge-"))
+    const git = (...args: string[]) => execFileSync("git", ["-C", repo, ...args], { stdio: "pipe" }).toString()
+    const write = (file: string, text: string) => writeFileSync(join(repo, file), text)
+    execFileSync("git", ["init", "-q", "-b", "staging", repo])
+    git("config", "user.name", "t")
+    git("config", "user.email", "t@localhost")
+    write("a.ts", "one\n")
+    git("add", ".")
+    git("commit", "-q", "-m", "base")
+    git("checkout", "-q", "-b", "STEP-7-x")
+    write("a.ts", "the PR's\n")
+    git("commit", "-q", "-am", "feat: the PR (STEP-7)")
+    git("update-ref", "refs/remotes/origin/STEP-7-x", "HEAD")
+    git("checkout", "-q", "staging")
+    write("b.test.ts", "staging's test\n")
+    git("add", ".")
+    git("commit", "-q", "-m", "staging moves on")
+    return { repo, git, write }
+  }
+
+  it("leaves a clash marked and named for the worker, and a merge commit counts once", async () => {
+    const { repo, git, write } = repoWith()
+    write("a.ts", "staging's\n")
+    git("commit", "-q", "-am", "staging changes the same line")
+    git("update-ref", "refs/remotes/origin/staging", "HEAD")
+    git("checkout", "-q", "STEP-7-x")
+    expect(await startMerge(realExec, repo, "staging")).toEqual({ conflicts: ["a.ts"] })
+    write("a.ts", "the PR's, and staging's\n")
+    git("add", "a.ts")
+    git("commit", "-q", "--no-edit")
+    expect(await commitsAhead(realExec, repo, "STEP-7-x")).toBe(3)
+    expect(await commitsAhead(realExec, repo, "STEP-7-x", { firstParent: true })).toBe(1)
+    // What the round did itself: not staging's test, which the merge brought.
+    expect(await ownChanges(realExec, repo, "staging", await changedFiles(realExec, repo, "STEP-7-x"))).toEqual(["a.ts"])
+  })
+
+  it("commits a merge with no clash itself, and names no file", async () => {
+    const { repo, git } = repoWith()
+    git("update-ref", "refs/remotes/origin/staging", "HEAD")
+    git("checkout", "-q", "STEP-7-x")
+    expect(await startMerge(realExec, repo, "staging")).toEqual({ conflicts: [] })
+    expect(git("rev-list", "--parents", "-n", "1", "HEAD").trim().split(" ")).toHaveLength(3)
+    expect(await commitsAhead(realExec, repo, "STEP-7-x", { firstParent: true })).toBe(1)
+  })
+
+  it("throws, naming the command, when the merge fails without a clash", async () => {
+    const { repo, git } = repoWith()
+    git("checkout", "-q", "STEP-7-x")
+    await expect(startMerge(realExec, repo, "no-such-base")).rejects.toThrow(/^git -C \S+ merge --no-ff --no-edit origin\/no-such-base failed \(\d+\)/)
   })
 })
 
