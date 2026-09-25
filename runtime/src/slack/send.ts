@@ -10,7 +10,7 @@ import { ack, fail, listNew } from "../fsq.ts"
 import { appendLedger, redact, type Logger } from "../log.ts"
 import type { ChannelKey, OutboxMessage } from "../outbox.ts"
 import { issueForThread, saveThread, threadFor, type ThreadRecord } from "../threads.ts"
-import { prefixed } from "./text.ts"
+import { noBroadcast, prefixed } from "./text.ts"
 
 /** The Web API calls a send makes. Tests pass a fake. */
 export interface SlackWeb {
@@ -55,8 +55,8 @@ async function linkThread(ctx: SendContext, thread: ThreadRecord): Promise<{ war
  * it off the queue then: a crash in those calls must not post it again.
  */
 export async function sendOutboxMessage(ctx: SendContext, msg: OutboxMessage, posted: () => void = () => {}): Promise<{ warning?: string }> {
-  // Worker and git error text reach Slack through here: no token-shaped string does.
-  const say = (text: string) => prefixed(ctx.mini, redact(text))
+  // Worker and git error text reach Slack through here: no token-shaped string does, and no <!channel> (STEP-3353).
+  const say = (text: string) => prefixed(ctx.mini, noBroadcast(redact(text)))
   switch (msg.kind) {
     case "post":
       await ctx.web.postMessage({ channel: ctx.channelIds[msg.channel], text: say(msg.text) })
