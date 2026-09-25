@@ -546,6 +546,26 @@ describe("cleanup", () => {
     expect(existsSync(join(paths.logs, "agentd.log"))).toBe(true)
     expect(f.lines()).toEqual([`${GIT} -C /r worktree remove --force ${join(paths.worktrees, "STEP-1-x")}`, `${GIT} -C /r worktree prune`])
   })
+
+  it("keeps the retro's lessons and history to 90 days, and removes an old retro worktree from dev-tasks, not the project (STEP-3290)", async () => {
+    const paths = agentPaths(mkdtempSync(join(tmpdir(), "agentd-clean-retro-")))
+    const config = ConfigSchema.parse({ mini: "eve", repo: { path: "/r" }, pluginRoot: "/d/plugin", slack: { allowedUsers: ["UNATE"] } })
+    const at = (days: number) => new Date(NOW.getTime() - days * 86_400_000).toISOString()
+    mkdirSync(paths.state, { recursive: true })
+    const lessons = join(paths.state, "lessons.jsonl")
+    writeFileSync(lessons, [{ at: at(100), key: "old" }, { at: at(89), key: "kept" }, { at: at(1), key: "new" }].map((l) => JSON.stringify(l)).join("\n") + "\nnot json\n")
+    const retros = join(paths.state, "retros.jsonl")
+    writeFileSync(retros, [{ at: at(91), slot: "a" }, { at: at(7), slot: "b" }].map((l) => JSON.stringify(l)).join("\n") + "\n")
+    mkdirSync(join(paths.worktrees, "retro-2026-09-18"), { recursive: true })
+    const old = new Date(NOW.getTime() - 5 * 86_400_000)
+    utimesSync(join(paths.worktrees, "retro-2026-09-18"), old, old)
+    const f = fakeExec()
+    const { removed } = await cleanup({ paths, config, exec: f.exec, now: () => NOW })
+    expect(readFileSync(lessons, "utf8").trim().split("\n").map((l) => JSON.parse(l).key)).toEqual(["kept", "new"])
+    expect(readFileSync(retros, "utf8").trim().split("\n").map((l) => JSON.parse(l).slot)).toEqual(["b"])
+    expect(removed).toBe(4)
+    expect(f.lines()).toEqual([`${GIT} -C /d worktree remove --force ${join(paths.worktrees, "retro-2026-09-18")}`, `${GIT} -C /r worktree prune`])
+  })
 })
 
 describe("Every", () => {

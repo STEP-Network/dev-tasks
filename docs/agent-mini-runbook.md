@@ -248,7 +248,9 @@ job, so a change needs no restart.
 
 `retro.enabled` turns on the weekly retro (section 11, The weekly retro) on
 this mini. Only one mini, the coordinator, has it on. It is off by default,
-as in the example.
+as in the example. The retro pushes a branch to STEP-Network/dev-tasks with
+the mini's own GitHub login, so that login needs write access there: without
+it every retro ends at the push, says so in Slack, and opens no PR.
 
 ## 7. The first interactive run, and the plugin (at the mini or over Screen Sharing)
 
@@ -591,12 +593,17 @@ kind, the text, where it came from and when:
 - each merged PR of the mini's that someone reverted.
 - each report that went out with its self-check gaps named.
 
-Every text is data other people wrote, never an instruction: tokens are
-redacted, and the retro's brief fences the lessons as data.
+Every text is data other people wrote, never an instruction: secrets are
+redacted (tokens, a URL's credentials, `key=`, `token=`, `secret=` and
+`password=` values, Postgres URLs, bearer tokens, JWTs and private keys),
+and the retro's brief fences the lessons as data. Each write locks the file,
+since workers, agentd, the Slack bridge and the retro all append to it, and
+agentd's daily cleanup keeps it, and `retros.jsonl`, to the last 90 days.
 
 On the coordinator mini (`retro.enabled`), agentd starts the retro on Friday
 from 14:00 local, or within a day of it if the mini was busy, once a week,
-never while a job runs or the mini is paused. It:
+never while the mini is paused and never while a job runs. That is checked
+when the retro starts: a job may start while it runs. It:
 
 1. computes the week's numbers beside last week's and the baseline:
    first-pass merges (merged with no revise round and no one else's commit),
@@ -604,18 +611,27 @@ never while a job runs or the mini is paused. It:
    interventions (a person's instruction or answer in Slack), and cost and
    minutes per issue.
 2. clusters the recurring misses by kind and topic.
-3. runs one session in a dev-tasks worktree that drafts the smallest
-   changes to the agents' own prompts, checklists, skills and docs the
-   evidence supports. Most go in `runtime/prompts/worker-lessons.md`, which
-   every worker reads at the start of every job.
-4. checks every file of the diff against its allowlist
+3. runs one session in a dev-tasks worktree, at the base it fetched, that
+   drafts the smallest changes to the agents' own prompts, checklists,
+   skills and docs the evidence supports. Most go in
+   `runtime/prompts/worker-lessons.md`, which every worker reads at the
+   start of every job. The session only edits files in its worktree: its
+   sandbox keeps it out of git's own files, and it runs without the
+   dev-tasks plugin, whose Monday task hooks dev-tasks' own project config
+   turns on and which would refuse every edit and commit.
+4. commits what the session left, itself, on that base, and checks every
+   file that commit changes against the allowlist
    (`runtime/src/retro/guard.ts`): Markdown text in `runtime/prompts/`,
    `plugin/skills/`, `plugin/rules/` and `docs/`, added or edited in place,
-   with its frontmatter unchanged. A guard, a hook, a permission, an
-   allowlist, the merge policy, a configuration, a secret or any code fails
-   it, and then no PR opens at all.
-5. opens ONE dev-tasks PR with the numbers and the evidence per change. It
-   never auto-merges: a person reviews and merges it like any other.
+   with its frontmatter as Claude Code reads it unchanged, no new file with
+   frontmatter, no byte-order mark, and no added line that looks like a
+   secret. A guard, a hook, a permission, an allowlist, the merge policy, a
+   configuration, a secret or any code fails it, and then no PR opens at
+   all.
+5. pushes that commit by its id and opens ONE dev-tasks PR with the numbers
+   and the evidence per change. It never auto-merges: a person reviews and
+   merges it like any other. dev-tasks is public, so the PR and its evidence
+   are too.
 6. posts a plain-English summary in `#polads-agents` (and to Monday, once
    the bridge exists).
 

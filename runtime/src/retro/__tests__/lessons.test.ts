@@ -1,9 +1,10 @@
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs"
+import { spawn } from "node:child_process"
+import { existsSync, mkdtempSync, readFileSync, utimesSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { describe, expect, it } from "vitest"
 import { agentPaths } from "../../config.ts"
-import { fixFindings, isCorrection, lessonsFile, lessonsFromFeedback, readLessons, recordLessons } from "../lessons.ts"
+import { fixFindings, isCorrection, lessonsFile, lessonsFromFeedback, readLessons, recordLessons, redactSecrets } from "../lessons.ts"
 
 const NOW = new Date("2026-09-25T10:00:00.000Z")
 const paths = () => agentPaths(mkdtempSync(join(tmpdir(), "agentd-lessons-")))
@@ -27,6 +28,56 @@ describe("recordLessons", () => {
     expect(a.text).toBe("use [redacted] here please")
     expect(b.text).toHaveLength(1500 + " [cut]".length)
     expect(readFileSync(lessonsFile(p), "utf8")).not.toContain("xoxb-1234")
+  })
+
+  it("redacts credentials in URLs, key=, token=, secret= and password= values, Postgres URLs and the like, and leaves prose alone (review IMP-4)", () => {
+    const cases: Array<[string, string]> = [
+      ["clone https://eve:ghs_notatoken@github.com/x.git", "clone https://[redacted]@github.com/x.git"],
+      ["redis://:hunter2@cache:6379/0", "redis://[redacted]@cache:6379/0"],
+      ["DATABASE_URL=postgres://polads:hunter2@ep-x.eu-central-1.aws.neon.tech/neondb?sslmode=require", "DATABASE_URL=postgres://[redacted]"],
+      ["see postgresql://u@host/db for it", "see postgres://[redacted] for it"],
+      ["RESEND_API_KEY=re_abc123 and PADDLE_SECRET='s p'", "RESEND_API_KEY=[redacted] and PADDLE_SECRET=[redacted]"],
+      ["curl 'https://x.test/cb?token=abc123&page=2'", "curl 'https://x.test/cb?token=[redacted]&page=2'"],
+      ["set password=hunter2; then db_passwd=x", "set password=[redacted]; then db_passwd=[redacted]"],
+      ['{"apiKey": "abc123", "name": "x"}', '{"apiKey": "[redacted]", "name": "x"}'],
+      ["client_secret: 'abc'", 'client_secret: "[redacted]"'],
+      ["Authorization: Bearer abcdefgh.ijkl", "Authorization: Bearer [redacted]"],
+      ["jwt eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.sig here", "jwt [redacted] here"],
+      ["-----BEGIN RSA PRIVATE KEY-----\nMIIE\n-----END RSA PRIVATE KEY-----\nafter", "[redacted private key]\nafter"],
+      // Prose about tokens and keys is not a secret.
+      ["the token expired, so check the key and the password rules", "the token expired, so check the key and the password rules"],
+      ["keyboard=qwerty and https://github.com/x/pull/1", "keyboard=qwerty and https://github.com/x/pull/1"],
+    ]
+    for (const [text, kept] of cases) expect(redactSecrets(text), text).toBe(kept)
+    const p = paths()
+    recordLessons(p, [lesson("k1", "DATABASE_URL=postgres://polads:hunter2@ep-x.neon.tech/db")], NOW)
+    expect(readFileSync(lessonsFile(p), "utf8")).not.toContain("hunter2")
+  })
+
+  it("waits for another process's lock before it reads, dedupes and appends, and breaks one a dead holder left (review IMP-5)", () => {
+    const p = paths()
+    recordLessons(p, [lesson("k1")], NOW)
+    const lock = `${lessonsFile(p)}.lock`
+    // Another process holds the lock for 300 ms, then appends k2 and lets go.
+    const holder = spawn(process.execPath, [
+      "-e",
+      `const fs = require("node:fs"); fs.writeFileSync(${JSON.stringify(lock)}, "1"); setTimeout(() => { fs.appendFileSync(${JSON.stringify(lessonsFile(p))}, JSON.stringify(${JSON.stringify({ ...lesson("k2"), at: NOW.toISOString() })}) + "\\n"); fs.rmSync(${JSON.stringify(lock)}) }, 300)`,
+    ])
+    const started = Date.now()
+    while (!existsSync(lock) && Date.now() - started < 5000) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5)
+    expect(existsSync(lock)).toBe(true)
+    // k2 is the holder's: read after it let go, it is not written twice.
+    expect(recordLessons(p, [lesson("k2"), lesson("k3")], NOW)).toBe(1)
+    expect(Date.now() - started).toBeGreaterThanOrEqual(200)
+    expect(readLessons(p).map((l) => l.key)).toEqual(["k1", "k2", "k3"])
+    expect(existsSync(lock)).toBe(false)
+    holder.kill()
+    // A lock nobody has touched for a minute is a holder that died mid-write.
+    writeFileSync(lock, "99999")
+    const stale = new Date(Date.now() - 60_000)
+    utimesSync(lock, stale, stale)
+    expect(recordLessons(p, [lesson("k4")], NOW)).toBe(1)
+    expect(existsSync(lock)).toBe(false)
   })
 
   it("skips a line it cannot read, and a category it does not know", () => {

@@ -52,8 +52,46 @@ describe("what a retro PR may change (STEP-3290)", () => {
       "plugin/skills/front-door/SKILL.md: its frontmatter changed, where tools and permissions live",
     ])
     expect(retroDiffProblems([{ status: "A", path: "plugin/skills/new/SKILL.md", mode: "100644" }], texts({}, { "plugin/skills/new/SKILL.md": SKILL }))).toEqual([
-      "plugin/skills/new/SKILL.md: its frontmatter changed, where tools and permissions live",
+      "plugin/skills/new/SKILL.md: a new file with frontmatter, where tools and permissions live",
     ])
+  })
+
+  it("reads frontmatter as Claude Code's loader does, so no fence it accepts slips past (review B2)", () => {
+    const TOOLS = "name: helper\ndescription: always use\nallowed-tools: Bash(*), Read(**)\n"
+    const added = (text: string) => retroDiffProblems([{ status: "A", path: "plugin/skills/helper/SKILL.md", mode: "100644" }], texts({}, { "plugin/skills/helper/SKILL.md": text }))
+    const NEW = "plugin/skills/helper/SKILL.md: a new file with frontmatter, where tools and permissions live"
+    // The loader reads allowed-tools from each of these. The old check saw no frontmatter in the first three.
+    expect(added(`\uFEFF---\n${TOOLS}---\n# Helper\n`)).toEqual(["plugin/skills/helper/SKILL.md: carries a byte-order mark, which hides frontmatter from the check"])
+    expect(added(`---   \n${TOOLS}---\n# Helper\n`)).toEqual([NEW])
+    expect(added(`---\n${TOOLS}---   \n# Helper\n`)).toEqual([NEW])
+    expect(added(`---\r\n${TOOLS.replace(/\n/g, "\r\n")}---\r\n# Helper\r\n`)).toEqual([NEW])
+    expect(added(`---\n\n${TOOLS}---\n# Helper\n`)).toEqual([NEW])
+    // Frontmatter with nothing in it is still frontmatter, in a new file.
+    expect(added("---\n---\n# Helper\n")).toEqual([NEW])
+    // A fence Claude Code does not read but another reader might.
+    expect(added(`\n---\n${TOOLS}---\n# Helper\n`)).toEqual(["plugin/skills/helper/SKILL.md: opens with a --- fence, where frontmatter would go"])
+    // A rule in the middle of the text is a rule.
+    expect(added("# Helper\n\n---\n\nStep one.\n")).toEqual([])
+  })
+
+  it("refuses an edit that reshapes the frontmatter's fences or adds a byte-order mark, and lets a body edit through", () => {
+    const path = "plugin/skills/front-door/SKILL.md"
+    const edited = (after: string) => retroDiffProblems([edit(path)], texts({ [path]: SKILL }, { [path]: after }))
+    expect(edited(SKILL.replace("Step one.", "Step one, then two."))).toEqual([])
+    expect(edited(SKILL.replace("One wakeup.\n---\n", "One wakeup.\n---   \n"))).toEqual([`${path}: its frontmatter changed, where tools and permissions live`])
+    expect(edited(`\uFEFF${SKILL}`)).toEqual([`${path}: carries a byte-order mark, which hides frontmatter from the check`])
+    const doc = "docs/agent-mini-runbook.md"
+    expect(retroDiffProblems([edit(doc)], texts({ [doc]: "# Runbook\n" }, { [doc]: "\uFEFF# Runbook\n" }))).toEqual([`${doc}: carries a byte-order mark, which hides frontmatter from the check`])
+  })
+
+  it("refuses a changed line that adds what looks like a secret, and not one that was there already", () => {
+    const doc = "docs/agent-mini-runbook.md"
+    const before = "# Runbook\n\nExample: `LINEAR_API_KEY=lin_api_example` goes in ~/.config.\n"
+    const edited = (after: string) => retroDiffProblems([edit(doc)], texts({ [doc]: before }, { [doc]: after }))
+    for (const leak of ["postgres://polads:hunter2@ep-x.neon.tech/neondb", "https://eve:s3cret@github.com/x", "RESEND_API_KEY=re_live_abc123", "Authorization: Bearer abcdefghijkl", "use xoxb-1234-abcd"]) {
+      expect(edited(`${before}\nSee ${leak}.\n`), leak).toEqual([`${doc}: adds what looks like a secret`])
+    }
+    expect(edited(`${before}\nA plain line.\n`)).toEqual([])
   })
 
   it("refuses a deletion, a rename out of the allowed places, a symlink and an executable", () => {
@@ -76,7 +114,9 @@ describe("what a retro PR may change (STEP-3290)", () => {
       { status: "A", path: "runtime/prompts/x.md" },
       { status: "R", path: "docs/new.md", from: "docs/old.md" },
     ])
-    expect(frontmatter(SKILL)).toBe("name: front-door\ndescription: One wakeup.")
-    expect(frontmatter("# No frontmatter\n---\nnot: it\n---\n")).toBe("")
+    // The loader's closing fence takes the blank lines after it too.
+    expect(frontmatter(SKILL)).toBe("---\nname: front-door\ndescription: One wakeup.\n---\n\n")
+    expect(frontmatter(`\uFEFF${SKILL}`)).toBe("---\nname: front-door\ndescription: One wakeup.\n---\n\n")
+    expect(frontmatter("# No frontmatter\n---\nnot: it\n---\n")).toBeNull()
   })
 })

@@ -8,8 +8,12 @@
  * Markdown only, in four places, added or modified in place (a deletion, a
  * rename, a symlink or an executable is refused). A file's frontmatter stays
  * as it was: a skill's or an agent's frontmatter is where its tools and
- * permissions live.
+ * permissions live. So a new file brings none, and no file carries a
+ * byte-order mark. Nor does a changed line add what looks like a secret:
+ * dev-tasks is public.
  */
+
+import { redactSecrets } from "./lessons.ts"
 
 export const RETRO_ALLOWED: ReadonlyArray<{ re: RegExp; what: string }> = [
   { re: /^runtime\/prompts\/[\w.-]+\.md$/, what: "the worker's prompts (runtime/prompts/*.md)" },
@@ -42,10 +46,19 @@ export function parseNameStatus(out: string): DiffEntry[] {
     })
 }
 
-/** A Markdown file's frontmatter: the block between a leading `---` and the next, or "" when it has none. */
-export function frontmatter(text: string): string {
-  const m = /^---\r?\n([\s\S]*?)\r?\n---(\r?\n|$)/.exec(text)
-  return m ? m[1] : ""
+/**
+ * Claude Code's own frontmatter reader (2.1.282), which loads a skill's
+ * allowed-tools: it drops one leading byte-order mark, then matches this.
+ * Its closing `---` need not start a line, and `\s*` lets a fence carry
+ * spaces or a carriage return.
+ */
+const LOADER_FRONTMATTER = /^---\s*\n([\s\S]*?)---\s*\n?/
+const OPENING_FENCE = /^\s*---/
+const BOM = "\uFEFF"
+
+/** A Markdown file's frontmatter block as Claude Code reads it, fences included, or null when it has none. */
+export function frontmatter(text: string): string | null {
+  return LOADER_FRONTMATTER.exec(text.startsWith(BOM) ? text.slice(1) : text)?.[0] ?? null
 }
 
 /**
@@ -70,13 +83,30 @@ export function retroDiffProblems(entries: DiffEntry[], texts: { before(path: st
       problems.push(`${e.path}: mode ${e.mode}, where the retro writes only plain files`)
       continue
     }
-    const before = e.status === "M" ? texts.before(e.path) : ""
+    const before = e.status === "M" ? texts.before(e.path) : null
     const after = texts.after(e.path)
     if (after === null) {
       problems.push(`${e.path}: unreadable at the branch head`)
       continue
     }
-    if (frontmatter(before ?? "") !== frontmatter(after)) problems.push(`${e.path}: its frontmatter changed, where tools and permissions live`)
+    if (after.includes(BOM)) {
+      problems.push(`${e.path}: carries a byte-order mark, which hides frontmatter from the check`)
+      continue
+    }
+    // A new file's "before" is none, so any frontmatter at all is a change.
+    const was = frontmatter(before ?? "")
+    const now = frontmatter(after)
+    if (now !== was) {
+      problems.push(e.status === "A" ? `${e.path}: a new file with frontmatter, where tools and permissions live` : `${e.path}: its frontmatter changed, where tools and permissions live`)
+      continue
+    }
+    // No frontmatter to Claude Code, but a fence another reader might take for one.
+    if (now === null && OPENING_FENCE.test(after) && !OPENING_FENCE.test(before ?? "")) {
+      problems.push(`${e.path}: opens with a --- fence, where frontmatter would go`)
+      continue
+    }
+    const had = new Set((before ?? "").split("\n"))
+    if (after.split("\n").some((line) => !had.has(line) && redactSecrets(line) !== line)) problems.push(`${e.path}: adds what looks like a secret`)
   }
   return problems
 }

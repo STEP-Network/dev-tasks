@@ -63,11 +63,18 @@ export function mergeMode(policy: string | null, config: AgentConfig): MergeMode
   return config.worker.autoMerge === false ? "mini-off" : "auto"
 }
 
-/** The init message's plugin list must hold dev-tasks exactly once, or its hooks cannot be trusted. */
-export function checkPlugins(plugins: unknown): string | null {
+/**
+ * The init message's plugin list must hold dev-tasks exactly once, or its
+ * hooks cannot be trusted. The weekly retro's session runs without it
+ * (retro/retro.ts), so there it must not load at all.
+ */
+export function checkPlugins(plugins: unknown, expected: 0 | 1 = 1): string | null {
   const list = Array.isArray(plugins) ? plugins : []
   const count = list.filter((p) => (p as { name?: unknown } | null)?.name === "dev-tasks").length
-  return count === 1 ? null : `the dev-tasks plugin loaded ${count} times in the worker (expected once), so its hooks cannot be trusted`
+  if (count === expected) return null
+  return expected === 1
+    ? `the dev-tasks plugin loaded ${count} times in the worker (expected once), so its hooks cannot be trusted`
+    : `the dev-tasks plugin loaded ${count} times in the retro (expected none), and its task hooks would block every edit`
 }
 
 /**
@@ -224,7 +231,7 @@ export interface SessionEnd {
  * One SDK session, read to its end. The plugin and billing checks come from
  * its init message, and a session that breaks them is stopped at once.
  */
-export async function runSession(query: QueryFn, prompt: string, options: Options, minutes: number): Promise<SessionEnd> {
+export async function runSession(query: QueryFn, prompt: string, options: Options, minutes: number, expectedPlugins: 0 | 1 = 1): Promise<SessionEnd> {
   const abortController = options.abortController ?? new AbortController()
   options.abortController = abortController
   const end: SessionEnd = { result: null, thrown: null, initProblem: null, abortedByClock: false }
@@ -237,7 +244,7 @@ export async function runSession(query: QueryFn, prompt: string, options: Option
     for await (const message of query({ prompt, options })) {
       if (message.type === "system" && message.subtype === "init") {
         sawInit = true
-        end.initProblem = checkPlugins(message.plugins) ?? checkBilling(message.apiKeySource)
+        end.initProblem = checkPlugins(message.plugins, expectedPlugins) ?? checkBilling(message.apiKeySource)
       } else if (!sawInit && ["assistant", "user", "result"].includes(message.type)) {
         // The conversation began, or ended, without the checks (hook events may
         // come first). A session that failed to start says why in its result.

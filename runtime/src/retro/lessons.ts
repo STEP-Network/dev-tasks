@@ -12,13 +12,14 @@
  *   self-check  a report that went out with STEP-3284's gaps named
  *
  * Every text is data a person or a reviewer wrote, never an instruction: the
- * retro's brief fences it as such. Tokens are redacted and texts cut short.
+ * retro's brief fences it as such. Secrets are redacted and texts cut short.
  */
 
 import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs"
 import { join } from "node:path"
 import type { AgentPaths } from "../config.ts"
 import { redact } from "../log.ts"
+import { withFileLock } from "./jsonl.ts"
 
 export const LESSON_CATEGORIES = ["review", "fix", "check", "correction", "blocked", "revert", "self-check"] as const
 export type LessonCategory = (typeof LESSON_CATEGORIES)[number]
@@ -43,10 +44,32 @@ const MAX_TEXT = 1500
 
 export const lessonsFile = (paths: AgentPaths) => join(paths.state, "lessons.jsonl")
 
-/** A lesson's text as it is kept: tokens redacted, control characters gone, cut at MAX_TEXT. */
+/**
+ * What a review or a Slack message can carry besides the tokens log.ts knows:
+ * a URL's credentials, a Postgres connection string (its host and database
+ * too), a `key=`, `token=`, `secret=` or `password=` value, a quoted one in
+ * JSON or YAML, a bearer token, a JWT and a private key. dev-tasks is public,
+ * and the retro's PR quotes lessons.
+ */
+const SECRETS: Array<[RegExp, string]> = [
+  [/-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(-----END [A-Z ]*PRIVATE KEY-----|$)/g, "[redacted private key]"],
+  [/\bpostgres(?:ql)?:\/\/[^\s"'`<>)\]]+/gi, "postgres://[redacted]"],
+  [/\b([a-z][a-z0-9+.-]*:\/\/)[^\s/?#@:]*:[^\s/?#@]+@/gi, "$1[redacted]@"],
+  [/\b([\w.-]*?(?:key|token|secret|passw(?:or)?d|pwd)s?)=("[^"]*"|'[^']*'|[^\s&;,]+)/gi, "$1=[redacted]"],
+  [/(["']?)\b([\w.-]*?(?:key|token|secret|passw(?:or)?d|pwd)s?)\1(\s*:\s*)("[^"]*"|'[^']*')/gi, '$1$2$1$3"[redacted]"'],
+  [/\b(bearer\s+)[\w.~+/-]{8,}=*/gi, "$1[redacted]"],
+  [/\beyJ[\w-]{8,}\.eyJ[\w-]{8,}\.[\w-]+/g, "[redacted]"],
+]
+
+/** Text with every secret log.ts or SECRETS knows replaced by a marker. */
+export function redactSecrets(text: string): string {
+  return SECRETS.reduce((out, [re, to]) => out.replace(re, to), redact(text))
+}
+
+/** A lesson's text as it is kept: secrets redacted, control characters gone, cut at MAX_TEXT. */
 export function keepText(text: string): string {
   // eslint-disable-next-line no-control-regex
-  const clean = redact(text).replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, "").trim()
+  const clean = redactSecrets(text).replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, "").trim()
   return clean.length > MAX_TEXT ? `${clean.slice(0, MAX_TEXT)} [cut]` : clean
 }
 
@@ -66,20 +89,26 @@ export function readLessons(paths: AgentPaths): Lesson[] {
     })
 }
 
-/** Appends the lessons not recorded yet, by key. Returns how many were new. */
+/**
+ * Appends the lessons not recorded yet, by key. Returns how many were new.
+ * Workers, agentd, the Slack bridge and the retro all record, so the read,
+ * the dedupe and the append happen under one lock (jsonl.ts).
+ */
 export function recordLessons(paths: AgentPaths, lessons: Array<Omit<Lesson, "at"> & { at?: string }>, now: Date = new Date()): number {
   if (!lessons.length) return 0
-  const seen = new Set(readLessons(paths).map((l) => l.key))
   mkdirSync(paths.state, { recursive: true })
-  let added = 0
-  for (const l of lessons) {
-    if (seen.has(l.key)) continue
-    seen.add(l.key)
-    const kept: Lesson = { ...l, at: l.at ?? now.toISOString(), text: keepText(l.text) }
-    appendFileSync(lessonsFile(paths), `${JSON.stringify(kept)}\n`)
-    added++
-  }
-  return added
+  return withFileLock(lessonsFile(paths), () => {
+    const seen = new Set(readLessons(paths).map((l) => l.key))
+    const lines: string[] = []
+    for (const l of lessons) {
+      if (seen.has(l.key)) continue
+      seen.add(l.key)
+      const kept: Lesson = { ...l, at: l.at ?? now.toISOString(), text: keepText(l.text) }
+      lines.push(JSON.stringify(kept))
+    }
+    if (lines.length) appendFileSync(lessonsFile(paths), `${lines.join("\n")}\n`)
+    return lines.length
+  })
 }
 
 // A finding the review tagged must-fix: "BLOCKER" (PolAds's Claude review) or
