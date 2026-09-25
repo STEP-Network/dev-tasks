@@ -12,7 +12,7 @@ import { fakeExec, fakeTracker, issue, SWEEP } from "../../__tests__/fakes.ts"
 import { JARGON } from "../../plain.ts"
 import { readLessons } from "../../retro/lessons.ts"
 import type { ExecResult } from "../git.ts"
-import { acceptWithGaps, checkBilling, checkPlugins, correctionMinutes, correctionPrompt, mergeMode, requireMutations, modelFor, runJob, sdkOptions, type QueryFn, type RunDeps, type SdkMessage } from "../run.ts"
+import { acceptWithGaps, checkBilling, checkPlugins, correctionMinutes, correctionPrompt, mergeMode, requireMutations, modelFor, runJob, runSession, sdkOptions, type QueryFn, type RunDeps, type SdkMessage } from "../run.ts"
 
 const quiet: Logger = { info() {}, warn() {}, error() {} }
 const PR = "https://github.com/STEP-Network/v0-politiske-annoncer/pull/1701"
@@ -733,6 +733,17 @@ describe("modelFor, checkPlugins and checkBilling", () => {
     expect(checkBilling("none")).toBeNull()
     expect(checkBilling(undefined)).toBeNull()
     for (const source of ["ANTHROPIC_API_KEY", "apiKeyHelper", "/login managed key"]) expect(checkBilling(source), source).toMatch(/would bill an API key/)
+  })
+})
+
+describe("runSession's own init check (WS5)", () => {
+  it("stops a session whose init message fails the caller's check, after the plugin and billing checks pass", async () => {
+    const { query } = queryOf([[INIT, DONE]])
+    const end = await runSession(query, "go", {}, 1, 1, () => "no browser")
+    expect(end).toMatchObject({ initProblem: "no browser", result: null })
+    const ok = await runSession(queryOf([[INIT, DONE]]).query, "go", {}, 1, 1, () => null)
+    expect(ok.initProblem).toBeNull()
+    expect(ok.result).toMatchObject({ subtype: "success" })
   })
 })
 
