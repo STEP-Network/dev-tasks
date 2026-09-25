@@ -120,11 +120,22 @@ def added(*against):
                 keys.add(match.group(1))
     return keys
 
+# The commit a merge in progress merges in, from the file git writes for one,
+# or None. Never the name: a branch called MERGE_HEAD is no merge (STEP-3351).
+def merged_in():
+    path = subprocess.run(['git', 'rev-parse', '--git-path', 'MERGE_HEAD'], capture_output=True, text=True).stdout.strip()
+    try:
+        with open(path) as f:
+            return f.readline().strip() or None
+    except OSError:
+        return None
+
 added_keys = added()
 # A merge commit's own keys are new over both parents (STEP-3348): a key the
 # branch merged in already has came with it, checked where it was added.
-if subprocess.run(['git', 'rev-parse', '-q', '--verify', 'MERGE_HEAD'], capture_output=True).returncode == 0:
-    added_keys &= added('MERGE_HEAD')
+merge_head = merged_in()
+if merge_head:
+    added_keys &= added(merge_head)
 
 if not added_keys:
     print('OK')
@@ -206,9 +217,20 @@ def staged_names(*against):
         capture_output=True, text=True
     ).stdout.strip().split('\n')
 
+# The commit a merge in progress merges in, from the file git writes for one:
+# never the name, which a branch can take (STEP-3351).
+def merged_in():
+    path = subprocess.run(['git', 'rev-parse', '--git-path', 'MERGE_HEAD'], capture_output=True, text=True).stdout.strip()
+    try:
+        with open(path) as f:
+            return f.readline().strip() or None
+    except OSError:
+        return None
+
 staged = staged_names()
-if subprocess.run(['git', 'rev-parse', '-q', '--verify', 'MERGE_HEAD'], capture_output=True).returncode == 0:
-    merged = set(staged_names('MERGE_HEAD'))
+merge_head = merged_in()
+if merge_head:
+    merged = set(staged_names(merge_head))
     staged = [f for f in staged if f in merged]
 
 # Combine: branch diff + staged

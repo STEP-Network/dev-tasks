@@ -86,6 +86,18 @@ echo "--- gate (d) outside a merge ---"
 json A Z ',\n  "goodbye": "Goodbye"' > messages/en.json
 git add messages/en.json
 assert 2 "locale parity" "a commit's own new key, in en only, still blocks"
+# A branch named MERGE_HEAD is no merge in progress, whatever it holds: the
+# file git writes for one is (STEP-3351). Each branch holds the staged tree.
+branch_like_staged() { git branch --quiet -f MERGE_HEAD "$(git commit-tree "$(git write-tree)" -p HEAD -m 'a branch named MERGE_HEAD')"; }
+branch_like_staged
+assert 2 "locale parity" "a branch named MERGE_HEAD holding the new key does not let it through (d)"
+git branch --quiet -D MERGE_HEAD
+git checkout --quiet HEAD -- messages/en.json
+json A2 Z > messages/en.json
+git add messages/en.json
+branch_like_staged
+assert 2 "completeness" "a branch named MERGE_HEAD holding the same file does not let a partial change through (e)"
+git branch --quiet -D MERGE_HEAD
 git checkout --quiet HEAD -- messages/en.json
 
 # --- (e): main changes values in da and de only; the PR touches no messages.

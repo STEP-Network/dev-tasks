@@ -72,8 +72,17 @@ fi
 # (STEP-3340): that branch's lines were committed, and scanned, where they
 # were written. Against HEAD, a merge of a moving base would carry every line
 # the base gained since, and any fixture among them would block it.
-if git rev-parse -q --verify MERGE_HEAD >/dev/null 2>&1; then
-  DIFF=$(git diff --cached --no-color MERGE_HEAD 2>/dev/null | grep -E '^\+' | grep -vE '^\+\+\+')
+#
+# A merge in progress is the file git writes for one, never the name: a
+# branch called MERGE_HEAD is no merge (STEP-3351). Its first line is the
+# commit merged in.
+MERGE_HEAD_FILE=$(git rev-parse --git-path MERGE_HEAD 2>/dev/null)
+MERGED_IN=""
+if [ -n "$MERGE_HEAD_FILE" ] && [ -f "$MERGE_HEAD_FILE" ]; then
+  MERGED_IN=$(head -n 1 "$MERGE_HEAD_FILE")
+fi
+if [ -n "$MERGED_IN" ]; then
+  DIFF=$(git diff --cached --no-color "$MERGED_IN" 2>/dev/null | grep -E '^\+' | grep -vE '^\+\+\+')
 else
   DIFF=$(git diff --cached --no-color 2>/dev/null | grep -E '^\+' | grep -vE '^\+\+\+')
 fi
