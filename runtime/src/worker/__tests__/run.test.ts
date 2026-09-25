@@ -7,16 +7,16 @@ import { agentPaths, ConfigSchema } from "../../config.ts"
 import { listNew } from "../../fsq.ts"
 import { listJobs, moveJob, submitJob } from "../../jobs.ts"
 import type { Logger } from "../../log.ts"
-import { fakeExec, fakeTracker, issue } from "../../__tests__/fakes.ts"
+import { fakeExec, fakeTracker, issue, SWEEP } from "../../__tests__/fakes.ts"
 import type { ExecResult } from "../git.ts"
-import { checkBilling, checkPlugins, correctionMinutes, correctionPrompt, mergeMode, modelFor, runJob, sdkOptions, type QueryFn, type RunDeps, type SdkMessage } from "../run.ts"
+import { acceptWithGaps, checkBilling, checkPlugins, correctionMinutes, correctionPrompt, mergeMode, requireMutations, modelFor, runJob, sdkOptions, type QueryFn, type RunDeps, type SdkMessage } from "../run.ts"
 
 const quiet: Logger = { info() {}, warn() {}, error() {} }
 const PR = "https://github.com/STEP-Network/v0-politiske-annoncer/pull/1701"
 const INIT: SdkMessage = { type: "system", subtype: "init", apiKeySource: "none", plugins: [{ name: "dev-tasks", path: "/Users/eve/dev-tasks/plugin" }] }
 const DONE: SdkMessage = {
   type: "result", subtype: "success", total_cost_usd: 2.4, num_turns: 31, session_id: "s-1",
-  structured_output: { status: "done", prTitle: "fix: the notice date", summary: "Uses the publication date.", verification: ["pnpm typecheck: pass"] },
+  structured_output: { status: "done", prTitle: "fix: the notice date", summary: "Uses the publication date.", verification: ["pnpm typecheck: pass"], checklist: SWEEP },
 }
 
 /** Each call gets the next session's messages (the last one repeats), and `thrown` ends the first. */
@@ -193,7 +193,10 @@ describe("runJob", () => {
     // Eve's STEP-3184 job committed a real fix, then reported without a PR title, and ended blocked.
     const NO_TITLE: SdkMessage = { ...DONE, structured_output: { status: "done", summary: "Rotates the token.", verification: ["pnpm test: pass"] } }
     const NO_REPORT: SdkMessage = { ...DONE, structured_output: { status: "done" } }
-    const CORRECTED: SdkMessage = { ...DONE, total_cost_usd: 0.05, num_turns: 1, structured_output: { status: "done", summary: "Rotates the token.", prTitle: "fix: rotate the DPA signing token" } }
+    const CORRECTED: SdkMessage = {
+      ...DONE, total_cost_usd: 0.05, num_turns: 1,
+      structured_output: { status: "done", summary: "Rotates the token.", prTitle: "fix: rotate the DPA signing token", checklist: SWEEP },
+    }
     const LOG = "fix: rotate the DPA signing token for a new signer (STEP-7)\x1fDrops status from the enquiry summary too.\n\x1e\nwip: first pass (STEP-7)\x1f\x1e\n"
     const ledger = (paths: RunDeps["paths"]) => readFileSync(join(paths.logs, "ledger.jsonl"), "utf8").trim().split("\n").map((l) => JSON.parse(l).type)
 
@@ -310,6 +313,84 @@ describe("runJob", () => {
     expect(done.fake.called("claimIssue")).toEqual([])
   })
 
+  describe("the self-check (STEP-3284)", () => {
+    const NO_SWEEP: SdkMessage = { ...DONE, structured_output: { status: "done", prTitle: "fix: the notice date", summary: "Uses the publication date." } }
+    const TESTED = "lib/notice.ts\nlib/__tests__/notice.test.ts\n"
+    const MUTATED: SdkMessage = {
+      ...DONE, total_cost_usd: 0.3, num_turns: 6,
+      structured_output: {
+        status: "done", prTitle: "fix: the notice date", summary: "Uses the publication date.", checklist: SWEEP,
+        mutations: [{ test: "lib/__tests__/notice.test.ts > keeps the date", mutation: "returned createdAt instead", result: "expected 2026-09-01, got 2026-08-31" }],
+      },
+    }
+    const body = (paths: RunDeps["paths"]) => readFileSync(join(paths.state, "pr-body-STEP-7.md"), "utf8")
+
+    it("asks the same session for the missing sweep, with turns to do it, and opens the PR with its answers", async () => {
+      const { deps, job, q, paths } = setup({ sessions: [[INIT, NO_SWEEP], [INIT, DONE]] })
+      expect(await runJob(deps, job.id)).toMatchObject({ status: "done", prUrl: PR, costUsd: 4.8 })
+      expect(q.seen).toHaveLength(2)
+      expect(q.seen[1].options).toMatchObject({ resume: "s-1", maxTurns: 30 })
+      expect(q.seen[1].prompt).toBe(correctionPrompt("checklist", "the report's self-check is incomplete: siblings, publicOutputs, caches, coupled, docs, translations"))
+      expect(q.seen[1].prompt).toMatch(/^The report's self-check is incomplete: siblings.*Do the one-hop sweep.*every checklist key, siblings and docs with the command you ran/)
+      expect(body(paths)).toContain("## Sweep checklist\n- Sibling call sites: rg -n 'createdAt' lib app")
+      expect(body(paths)).not.toContain("Not answered by the worker")
+    })
+
+    it("opens the PR with the gaps named, and its own title, when the sweep stays unanswered", async () => {
+      const { deps, job, f, paths, fake } = setup({ sessions: [[INIT, NO_SWEEP], [INIT, NO_SWEEP]] })
+      expect(await runJob(deps, job.id)).toMatchObject({
+        status: "done",
+        reason: "done, with an incomplete self-check: the report's self-check is incomplete: siblings, publicOutputs, caches, coupled, docs, translations",
+      })
+      expect(f.lines().find((l) => l.startsWith("gh pr create"))).toContain("--title STEP-7: fix: the notice date --body-file")
+      expect(body(paths)).toContain("Not answered by the worker: siblings, publicOutputs, caches, coupled, docs, translations. A reviewer should check these.")
+      expect(body(paths)).toContain("The worker's self-check was incomplete (the report's self-check is incomplete: siblings")
+      expect(fake.issues.get("STEP-7")!.state).toBe("In Review")
+    })
+
+    it("asks for mutation checks when the branch changes tests and the report lists none, and shows them in the PR", async () => {
+      const { deps, job, q, paths } = setup({ sessions: [[INIT, DONE], [INIT, MUTATED]], exec: [[/diff --name-only origin\/staging\.\.\.HEAD/, { stdout: TESTED }]] })
+      expect(await runJob(deps, job.id)).toMatchObject({ status: "done", prUrl: PR })
+      expect(q.seen[1].options).toMatchObject({ resume: "s-1", maxTurns: 30 })
+      expect(q.seen[1].prompt).toMatch(/^The branch changes tests \(lib\/__tests__\/notice\.test\.ts\) but the report lists no mutation check\. .*one deliberate mutation of the invariant.*git checkout -- <file>\. Commit no mutation\./)
+      expect(body(paths)).toContain(
+        "## Mutation checks\n- `lib/__tests__/notice.test.ts > keeps the date`: returned createdAt instead. It failed: expected 2026-09-01, got 2026-08-31. Reverted.",
+      )
+    })
+
+    it("needs no mutation check when no test changed, and says in the PR when none came", async () => {
+      const plain = setup({ exec: [[/diff --name-only origin\/staging\.\.\.HEAD/, { stdout: "lib/notice.ts\n" }]] })
+      expect(await runJob(plain.deps, plain.job.id)).toMatchObject({ status: "done" })
+      expect(plain.q.seen).toHaveLength(1)
+      const stubborn = setup({ sessions: [[INIT, DONE], [INIT, DONE]], exec: [[/diff --name-only origin\/staging\.\.\.HEAD/, { stdout: TESTED }]] })
+      expect(await runJob(stubborn.deps, stubborn.job.id)).toMatchObject({
+        status: "done",
+        reason: "done, with an incomplete self-check: the branch changes tests (lib/__tests__/notice.test.ts) but the report lists no mutation check",
+      })
+      expect(body(stubborn.paths)).toContain("## Mutation checks\n- None listed.")
+    })
+
+    it("stays blocked, asking nothing, when an incomplete report comes with nothing committed", async () => {
+      const { deps, job, q } = setup({ messages: [INIT, NO_SWEEP], exec: [[/rev-list --count/, { stdout: "0\n" }]] })
+      expect(await runJob(deps, job.id)).toMatchObject({ status: "blocked", reason: expect.stringMatching(/^the report's self-check is incomplete/) })
+      expect(q.seen).toHaveLength(1)
+    })
+
+    it("counts only test files, and leaves a report with its checks, or any other status, as it is", () => {
+      const done = { status: "done" as const, reason: "done", report: { status: "done" as const, summary: "x" }, costUsd: null, turns: null, sessionId: null }
+      expect(requireMutations(done, ["lib/notice.ts", "docs/testing.md", "lib/latest.ts"])).toBe(done)
+      for (const file of ["lib/__tests__/a.ts", "a.test.ts", "b.spec.tsx", "c.test.mjs"]) expect(requireMutations(done, [file]).reportProblem, file).toBe("mutations")
+      const checked = { ...done, report: { ...done.report, mutations: [{ test: "a", mutation: "m", result: "r" }] } }
+      expect(requireMutations(checked, ["a.test.ts"])).toBe(checked)
+      const blocked = { ...done, status: "blocked" as const }
+      expect(requireMutations(blocked, ["a.test.ts"])).toBe(blocked)
+      // What goes out despite the gaps says so, and is no longer a problem.
+      expect(acceptWithGaps({ ...requireMutations(done, ["a.test.ts"]), report: { ...done.report, notes: "Mine." } })).toMatchObject({
+        status: "done", reportProblem: undefined, report: { notes: expect.stringMatching(/^The worker's self-check was incomplete .*\nMine\.$/) },
+      })
+    })
+  })
+
   describe("a revise job (STEP-3274)", () => {
     const PR_URL = "https://github.com/STEP-Network/v0-politiske-annoncer/pull/1674"
     const REVISE = {
@@ -330,7 +411,10 @@ describe("runJob", () => {
     const INLINE =
       '{"user":"nate","path":"lib/notice.ts","line":12,"body":"This reads the wrong field.","created_at":"2026-09-24T11:01:00Z"}\n' +
       '{"user":"eve-polads","path":"lib/x.ts","line":1,"body":"Eve on her own code.","created_at":"2026-09-24T11:02:00Z"}\n'
-    const REVISED: SdkMessage = { ...DONE, structured_output: { status: "done", summary: "Use the publication date: done, in lib/notice.ts.\nTest: fixed the assertion." } }
+    const REVISED: SdkMessage = {
+      ...DONE,
+      structured_output: { status: "done", summary: "Use the publication date: done, in lib/notice.ts.\nTest: fixed the assertion.", checklist: SWEEP },
+    }
     const answers = (over: Array<[RegExp, Partial<ExecResult>]> = []): Array<[RegExp, Partial<ExecResult>]> => [
       ...over,
       [/^gh pr view \S+ --json state$/, { stdout: '{"state":"OPEN"}' }],
@@ -363,7 +447,15 @@ describe("runJob", () => {
       const replyFile = join(paths.state, "pr-reply-STEP-7.md")
       expect(lines).toContain(`gh pr comment ${PR_URL} --repo STEP-Network/v0-politiske-annoncer --body-file ${replyFile}`)
       expect(readFileSync(replyFile, "utf8")).toBe(
-        "eve's revision, round 1 of 3:\n\nUse the publication date: done, in lib/notice.ts.\nTest: fixed the assertion.\n\n1 commit pushed to STEP-7-fix-the-date.\n",
+        "eve's revision, round 1 of 3:\n\nUse the publication date: done, in lib/notice.ts.\nTest: fixed the assertion.\n\n1 commit pushed to STEP-7-fix-the-date.\n\n" +
+          "## Sweep checklist\n" +
+          "- Sibling call sites: rg -n 'createdAt' lib app: one other reader, lib/feed.ts, changed too\n" +
+          "- Public outputs and exports: the notice page and its PDF, both through the same helper\n" +
+          "- Caches and version keys: none: the notice cache keys on the id, and its output keeps its meaning\n" +
+          "- Crons, reminders and emails: none: no cron, reminder or email reads the date\n" +
+          "- Docs and comments: rg -n 'createdAt' API_DOCUMENTATION.md .claude/reference: one line updated\n" +
+          "- Translations: none: no messages changed\n\n" +
+          "## Mutation checks\n- None listed.\n",
       )
       const brief = q.seen[0].prompt
       expect(brief).toMatch(/^# STEP-7: Fix the date \(revise, round 1 of 3\)/)

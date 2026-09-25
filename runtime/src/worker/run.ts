@@ -30,7 +30,7 @@ import { loadClaudeOauthToken } from "../secrets.ts"
 import { branchNameFor, createLinearTracker, type Tracker, type TrackerIssue } from "../tracker.ts"
 import { buildBrief, WORKER_RESULT_SCHEMA, workerRules, type BriefInput } from "./brief.ts"
 import { finalize, FinalizeFailed, type MergeMode } from "./finalize.ts"
-import { commitMessages, commitsAhead, historyRewrite, prepareWorktree, realExec, WorktreeRefused, type Exec } from "./git.ts"
+import { changedFiles, commitMessages, commitsAhead, historyRewrite, prepareWorktree, realExec, WorktreeRefused, type Exec } from "./git.ts"
 import { denyBannedBash, denyWorkerPaths, ENV_TEMPLATE, workerEnv, workerToolDenial } from "./guard.ts"
 import { clause, toOutcome, type Outcome, type ResultMessageLike } from "./outcome.ts"
 import { buildReviseBrief, finalizeRevise, gatherFeedback } from "./revise.ts"
@@ -256,18 +256,70 @@ async function runSession(query: QueryFn, prompt: string, options: Options, minu
   return end
 }
 
-/** The correction the same session gets once, when its report's form was the only fault. */
-export function correctionPrompt(problem: NonNullable<Outcome["reportProblem"]>): string {
+/**
+ * The correction the same session gets once, when its report's form was the
+ * only fault. `detail` is the outcome's reason: which checklist answers or
+ * which tests it concerns.
+ */
+export function correctionPrompt(problem: NonNullable<Outcome["reportProblem"]>, detail = ""): string {
+  const report =
+    "Then reply with the final report only, in the report's schema: status, summary, verification, notes, checklist, mutations, and for status done a prTitle, a conventional commit title such as `fix: the notice date`."
+  const sentence = (text: string, fallback: string) => {
+    const said = clause(text) || fallback
+    return `${said[0].toUpperCase()}${said.slice(1)}.`
+  }
+  if (problem === "checklist") {
+    return [
+      sentence(detail, "your report's self-check is incomplete"),
+      "Do the one-hop sweep in your rules for what is missing: search for it (grep or rg), fix and commit what it finds, and answer every checklist key, siblings and docs with the command you ran.",
+      report,
+    ].join(" ")
+  }
+  if (problem === "mutations") {
+    return [
+      sentence(detail, "your branch changes tests, but your report lists no mutation check"),
+      "For each new guard or invariant test: apply one deliberate mutation of the invariant in the implementation, run that test and see it fail, then revert the mutation with git checkout -- <file>. Commit no mutation. If a test passes against its mutation, fix the test and commit that.",
+      report,
+    ].join(" ")
+  }
   const what = problem === "prTitle" ? "Your final report has no prTitle." : "Your session ended without a valid final report."
-  return [
-    `${what} Your commits are in place, so change nothing and run no tool.`,
-    "Reply with the final report only, in the report's schema: status, summary, verification, notes, and for status done a prTitle, a conventional commit title such as `fix: the notice date`.",
-  ].join(" ")
+  return [`${what} Your commits are in place, so change nothing and run no tool.`, report.replace(/^Then reply/, "Reply")].join(" ")
 }
 
-/** How long, and how many turns, the correction may take: it only writes a report. */
+/** How long, and how many turns, the correction may take. A report alone takes a few, a sweep or a mutation check more. */
 const CORRECTION_MINUTES = 10
-const CORRECTION_TURNS = 4
+const CORRECTION_TURNS: Record<NonNullable<Outcome["reportProblem"]>, number> = { prTitle: 4, report: 4, checklist: 30, mutations: 30 }
+
+/** Test files, whose new guards need a mutation check (STEP-3284). */
+const TEST_FILE_RE = /(^|\/)__tests__\/|\.(test|spec)\.[cm]?[jt]sx?$/
+
+/**
+ * A done report on a branch that changes tests must list its mutation checks:
+ * otherwise a guard test may prove only its fixture. Returns the outcome as
+ * is, or blocked with reportProblem "mutations".
+ */
+export function requireMutations(outcome: Outcome, changed: readonly string[]): Outcome {
+  if (outcome.status !== "done" || !outcome.report || outcome.report.mutations?.length) return outcome
+  const tests = changed.filter((f) => TEST_FILE_RE.test(f))
+  if (!tests.length) return outcome
+  const shown = tests.slice(0, 5).join(", ") + (tests.length > 5 ? `, and ${tests.length - 5} more` : "")
+  return { ...outcome, status: "blocked", reason: `the branch changes tests (${shown}) but the report lists no mutation check`, reportProblem: "mutations" }
+}
+
+/**
+ * A done report whose only fault stayed its self-check: the work goes out, and
+ * the PR says what the worker did not check, for the reviewer.
+ */
+export function acceptWithGaps(outcome: Outcome): Outcome {
+  const note = `The worker's self-check was incomplete (${clause(outcome.reason)}): a reviewer should sweep one hop from the change, and mutation-check its new tests.`
+  return {
+    ...outcome,
+    status: "done",
+    reason: `done, with an incomplete self-check: ${clause(outcome.reason)}`,
+    report: { ...outcome.report!, status: "done", notes: [note, outcome.report?.notes].filter(Boolean).join("\n") },
+    reportProblem: undefined,
+  }
+}
 /** What the correction leaves of agentd's grace after the wall clock, for the push, the PR and Linear. */
 const FINISH_MINUTES = 5
 
@@ -462,30 +514,45 @@ export async function runJob(deps: RunDeps, jobId: string): Promise<JobResult> {
   // A revise job's PR has its title: its report needs none.
   const requireTitle = !revise
   const first = await runSession(deps.query, prompt, options(), config.worker.wallClockMinutes)
-  let outcome = first.initProblem ? blockedBefore(first.initProblem) : toOutcome(first.result, { abortedByClock: first.abortedByClock, thrown: first.thrown, limits, requireTitle })
+  // A revise job's own commits are those past the PR's head on origin.
+  const since = revise ? revise.branch : config.repo.base
+  const changed = await changedFiles(exec, worktree.path, since).catch(() => [] as string[])
+  const judge = (end: typeof first) =>
+    requireMutations(toOutcome(end.result, { abortedByClock: end.abortedByClock, thrown: end.thrown, limits, requireTitle }), changed)
+  let outcome = first.initProblem ? blockedBefore(first.initProblem) : judge(first)
   log.info("worker session ended", { issue: issue.id, status: outcome.status, reason: outcome.reason, costUsd: outcome.costUsd, turns: outcome.turns })
 
   // A malformed report is a formatting miss, not a reason to strand finished
-  // work. With commits ahead, the same session is asked for the report once,
-  // then the PR is titled from the commits. With none, it stays blocked.
-  // A revise job's own commits are those past the PR's head on origin.
-  const since = revise ? revise.branch : config.repo.base
+  // work. With commits ahead, the same session is asked for the report once
+  // (a sweep or a mutation check included, when those were missing). Then a
+  // report still short of its self-check goes out with its gaps named, and
+  // one without a title or at all is titled from the commits. With no
+  // commits, it stays blocked.
+  const selfCheck = (o: Outcome | null) => Boolean(o?.report) && (o!.reportProblem === "checklist" || o!.reportProblem === "mutations")
   if (outcome.reportProblem && (await commitsAhead(exec, worktree.path, since).catch(() => 0)) > 0) {
     const problem = outcome.reportProblem
     let repaired: Outcome | null = null
+    let closest: Outcome | null = selfCheck(outcome) ? outcome : null
     const budget = correctionMinutes(config.worker.wallClockMinutes, (deps.now().getTime() - sessionStart.getTime()) / 60_000)
     if (outcome.sessionId && budget >= 1) {
       const again = options()
       again.resume = outcome.sessionId
-      again.maxTurns = CORRECTION_TURNS
-      const second = await runSession(deps.query, correctionPrompt(problem), again, budget)
-      const corrected = second.initProblem ? null : toOutcome(second.result, { abortedByClock: second.abortedByClock, thrown: second.thrown, limits, requireTitle })
+      again.maxTurns = CORRECTION_TURNS[problem]
+      const second = await runSession(deps.query, correctionPrompt(problem, outcome.reason), again, budget)
+      const corrected = second.initProblem ? null : judge(second)
+      const spent = corrected ? { costUsd: add(outcome.costUsd, corrected.costUsd), turns: add(outcome.turns, corrected.turns) } : {}
       if (corrected?.report && !corrected.reportProblem) {
-        repaired = { ...corrected, costUsd: add(outcome.costUsd, corrected.costUsd), turns: add(outcome.turns, corrected.turns) }
+        repaired = { ...corrected, ...spent }
         appendLedger(paths, { type: "report.corrected", issue: issue.id, problem }, deps.now())
       } else if (corrected) {
-        outcome = { ...outcome, costUsd: add(outcome.costUsd, corrected.costUsd), turns: add(outcome.turns, corrected.turns) }
+        outcome = { ...outcome, ...spent }
+        if (selfCheck(corrected)) closest = { ...corrected, ...spent }
+        else if (closest) closest = { ...closest, ...spent }
       }
+    }
+    if (!repaired && closest) {
+      repaired = acceptWithGaps(closest)
+      appendLedger(paths, { type: "report.selfCheckGaps", issue: issue.id, problem: closest.reportProblem }, deps.now())
     }
     if (!repaired) {
       repaired = await outcomeFromCommits(exec, worktree.path, since, issue.id, outcome).catch((error: unknown) => {

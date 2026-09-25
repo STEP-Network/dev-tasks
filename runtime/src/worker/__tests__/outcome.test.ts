@@ -1,12 +1,13 @@
 import { describe, expect, it } from "vitest"
-import { parseReport, toOutcome, type ResultMessageLike } from "../outcome.ts"
+import { SWEEP } from "../../__tests__/fakes.ts"
+import { checklistGaps, parseReport, toOutcome, type ResultMessageLike, type WorkerReport } from "../outcome.ts"
 
 const limits = { maxTurns: 250, maxBudgetUsd: 15, wallClockMinutes: 90 }
 const ctx = { abortedByClock: false, thrown: null, limits }
 const result = (over: Partial<ResultMessageLike>): ResultMessageLike => ({
   type: "result", subtype: "success", total_cost_usd: 3.1, num_turns: 42, session_id: "s-1", ...over,
 })
-const report = { status: "done", prTitle: "fix: the notice date", summary: "Uses the publication date.", verification: ["pnpm typecheck: pass"] }
+const report = { status: "done", prTitle: "fix: the notice date", summary: "Uses the publication date.", verification: ["pnpm typecheck: pass"], checklist: SWEEP }
 
 describe("toOutcome", () => {
   it("is done with the report, the cost and the turns", () => {
@@ -91,10 +92,51 @@ describe("toOutcome", () => {
   })
 })
 
+describe("the self-check a done report carries (STEP-3284)", () => {
+  const done = (checklist: WorkerReport["checklist"]): WorkerReport => ({ status: "done", summary: "x", checklist })
+
+  it("names every checklist answer that is missing, and each search answer without its command", () => {
+    expect(checklistGaps(done(SWEEP))).toEqual([])
+    expect(checklistGaps(done(undefined))).toEqual(["siblings", "publicOutputs", "caches", "coupled", "docs", "translations"])
+    expect(checklistGaps(done({ ...SWEEP, caches: "  ", translations: undefined }))).toEqual(["caches", "translations"])
+    // A search is shown by its command, not claimed: "grepped" or "none" is not a search.
+    expect(checklistGaps(done({ ...SWEEP, siblings: "none: I grepped and found nothing", docs: "none" }))).toEqual(["siblings (no search command)", "docs (no search command)"])
+    for (const command of ["git grep -n limiter", "`rg -n limiter app`: none", "grep -rn limiter lib"]) {
+      expect(checklistGaps(done({ ...SWEEP, siblings: command })), command).toEqual([])
+    }
+  })
+
+  it("blocks a done report with an incomplete checklist, as a problem of its form, for develop and revise alike", () => {
+    const partial = { ...report, checklist: { ...SWEEP, caches: undefined, docs: "none" } }
+    for (const requireTitle of [true, false]) {
+      expect(toOutcome(result({ structured_output: partial }), { ...ctx, requireTitle })).toMatchObject({
+        status: "blocked",
+        reason: "the report's self-check is incomplete: caches, docs (no search command)",
+        reportProblem: "checklist",
+        report: { prTitle: "fix: the notice date" },
+      })
+    }
+    // A missing title is the first problem, and asks for the whole report again anyway.
+    expect(toOutcome(result({ structured_output: { ...partial, prTitle: undefined } }), ctx).reportProblem).toBe("prTitle")
+    // Neither blocked nor needs_input reports carry the sweep.
+    expect(toOutcome(result({ structured_output: { status: "blocked", summary: "No." } }), ctx).reportProblem).toBeUndefined()
+  })
+
+  it("keeps the checklist keys and whole mutation checks, and drops the rest", () => {
+    const parsed = parseReport({
+      status: "done", summary: "x",
+      checklist: { ...SWEEP, caches: "  none: no cache  ", extra: "dropped", docs: 3 },
+      mutations: [{ test: "a.test.ts", mutation: "m", result: "failed" }, { test: "b.test.ts", mutation: "m" }, "no"],
+    })
+    expect(parsed?.checklist).toEqual({ ...Object.fromEntries(Object.entries(SWEEP).filter(([k]) => k !== "docs")), caches: "none: no cache" })
+    expect(parsed?.mutations).toEqual([{ test: "a.test.ts", mutation: "m", result: "failed" }])
+  })
+})
+
 describe("parseReport", () => {
   it("keeps the strings it knows, trims them, and drops anything else", () => {
     expect(parseReport({ status: "done", summary: "  x  ", prTitle: " fix: y ", verification: ["a", 3], extra: true })).toEqual({
-      status: "done", summary: "x", prTitle: "fix: y", verification: ["a"], question: undefined, notes: undefined,
+      status: "done", summary: "x", prTitle: "fix: y", verification: ["a"], question: undefined, notes: undefined, mutations: [],
     })
     expect(parseReport({ status: "done", summary: "   " })).toBeNull()
   })

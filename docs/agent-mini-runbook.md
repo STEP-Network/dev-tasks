@@ -467,6 +467,17 @@ longer ends blocked while it has commits: the runner asks the same session
 once for the report, then titles the PR from the newest commit, and the PR
 says so.
 
+Every develop and revise worker runs a self-check before it reports
+(STEP-3284): a one-hop sweep from each change (sibling call sites, public
+outputs and exports, caches and their version keys, crons, reminders and
+emails, docs and comments, translations), and one deliberate mutation of the
+invariant per new guard test, shown failing and then reverted. Its report
+answers the checklist, the searches with their commands, and lists the
+mutations, and the PR shows both. A report without them is asked for again
+the same way, with turns for the sweep. If they still do not come, the PR
+goes out with the gaps named for the reviewer. `agentctl report` counts how
+often each happened.
+
 ### Its own PRs
 
 A PR the mini opened comes back to it on review feedback (STEP-3274):

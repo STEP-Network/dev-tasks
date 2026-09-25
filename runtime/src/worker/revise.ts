@@ -16,7 +16,7 @@ import { enqueueSlack } from "../outbox.ts"
 import type { TrackerIssue } from "../tracker.ts"
 import { failingRequired, MAX_REVISE_ROUNDS, type OwnPrView } from "../agentd/revise.ts"
 import type { BriefInput } from "./brief.ts"
-import type { FinalizeResult } from "./finalize.ts"
+import { selfCheckSections, type FinalizeResult } from "./finalize.ts"
 import { commitsAhead, isDirty, must, pushBranch, removeWorktree, type Exec } from "./git.ts"
 import { clause, type Outcome } from "./outcome.ts"
 
@@ -118,7 +118,7 @@ export function buildReviseBrief(input: BriefInput, revise: ReviseRequest, feedb
       : []),
     "## Your job",
     "",
-    "Fix every point that needs a change, with tests, and commit. Never undo or rewrite a commit someone else pushed. For a point that needs no change, say why.",
+    "Fix every point that needs a change, with tests, and commit. Never undo or rewrite a commit someone else pushed. For a point that needs no change, say why. Then run the self-check in your rules (the one-hop sweep, and a mutation check per new guard test).",
     "Report done with summary as your reply to the reviewers, one line per point: `<the point, in a few words>: <what you changed, or why not>`. The PR has its title, so prTitle is not needed.",
     "",
     "## The issue, as refined",
@@ -164,7 +164,7 @@ export async function finalizeRevise(ctx: ReviseFinalizeContext, outcome: Outcom
 
   if (status === "done") {
     const report = outcome.report!
-    await reply([`${config.mini}'s revision, ${round}:`, "", report.summary, "", commits, ...(report.notes ? ["", report.notes] : [])].join("\n"))
+    await reply([`${config.mini}'s revision, ${round}:`, "", report.summary, "", commits, "", ...selfCheckSections(report), ...(report.notes ? ["", report.notes] : [])].join("\n"))
     post(`${issue.id} revised ${revise.url} (${round}): ${pushed ? commits.replace(/\.$/, "") : "replied, nothing to change"}`)
     appendLedger(ctx.paths, { type: "pr.revised", issue: issue.id, url: revise.url, round: revise.round, commits: ahead }, ctx.now())
     if (ctx.worktree && !dirty) await removeWorktree(ctx.exec, config.repo.path, ctx.worktree)

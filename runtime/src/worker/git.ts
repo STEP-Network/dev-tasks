@@ -168,6 +168,12 @@ export async function commitsAhead(exec: Exec, path: string, base: string): Prom
   return Number.parseInt((await mustGit(exec, ["-C", path, "rev-list", "--count", `origin/${base}..HEAD`])).trim(), 10) || 0
 }
 
+/** The files the branch changes against origin's copy of `base`. */
+export async function changedFiles(exec: Exec, path: string, base: string): Promise<string[]> {
+  const out = await mustGit(exec, ["-C", path, "diff", "--name-only", `origin/${base}...HEAD`])
+  return out.split("\n").map((f) => f.trim()).filter(Boolean)
+}
+
 /** The branch's own commits, newest first: each one's subject and body. */
 export async function commitMessages(exec: Exec, path: string, base: string): Promise<Array<{ subject: string; body: string }>> {
   // Unit and record separators: a commit message never holds either.

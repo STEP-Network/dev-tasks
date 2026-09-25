@@ -99,6 +99,8 @@ export function summariseLedger(events: LedgerLine[], since: Date): string {
     `since ${since.toISOString().slice(0, 10)}`,
     `jobs: ${ends.length} (${[...byStatus].map(([k, v]) => `${k} ${v}`).join(", ") || "none"})`,
     `PRs opened: ${of("pr.opened").length}, median job minutes for a PR: ${median(doneMinutes) ?? "n/a"}`,
+    // STEP-3284's measure starts here: how often a report had to be asked for again, and how often review sent a PR back.
+    `reports asked for again: ${of("report.corrected").length}, gone out with self-check gaps: ${of("report.selfCheckGaps").length}, titled from commits: ${of("report.fromCommits").length}, revise rounds: ${of("pr.revise").length}`,
     `estimated spend: USD ${spend.toFixed(2)}`,
     `questions: ${asked.length} asked, ${answered.length} answered, median answer ${answerMedian === null ? "n/a" : `${answerMedian} min`}`,
     `front door starts: ${of("frontdoor.start").length}, claims released: ${of("released").length}, pauses: ${of("paused").length}`,

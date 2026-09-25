@@ -56,6 +56,33 @@ describe("workerRules", () => {
   })
 })
 
+describe("the self-check (STEP-3284)", () => {
+  it("has every develop worker sweep one hop and mutation-check its new guard tests before it reports", () => {
+    const rules = workerRules(input)
+    for (const phrase of [
+      /sweep one hop from every change/,
+      /sibling call sites with the same pattern/,
+      /public outputs and exports/,
+      /caches and their version keys: bump a version when cached output changes meaning/,
+      /crons, reminders and emails coupled to the changed flow/,
+      /API_DOCUMENTATION\.md, \.claude\/reference notes, code comments/,
+      /one deliberate mutation of the invariant itself/,
+      /revert the mutation with git checkout -- <file> before you commit/,
+      /checklist \(siblings, publicOutputs, caches, coupled, docs, translations\)/,
+      /The runner refuses a done report without them/,
+    ]) {
+      expect(rules, String(phrase)).toMatch(phrase)
+    }
+    expect(buildBrief(input)).toMatch(/run the self-check in your rules/)
+  })
+
+  it("asks the report for the checklist and the mutation checks, and requires neither of a blocked report", () => {
+    expect(Object.keys(WORKER_RESULT_SCHEMA.properties.checklist.properties)).toEqual(["siblings", "publicOutputs", "caches", "coupled", "docs", "translations"])
+    expect(WORKER_RESULT_SCHEMA.properties.mutations.items.required).toEqual(["test", "mutation", "result"])
+    expect(WORKER_RESULT_SCHEMA.required).toEqual(["status", "summary"])
+  })
+})
+
 describe("WORKER_RESULT_SCHEMA", () => {
   it("requires a status and a summary and allows only the three statuses", () => {
     expect(WORKER_RESULT_SCHEMA.required).toEqual(["status", "summary"])

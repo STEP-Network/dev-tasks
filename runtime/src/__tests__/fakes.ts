@@ -118,3 +118,13 @@ export function fakeExec(responses: Array<[RegExp, Partial<ExecResult>]> = []) {
   }
   return { exec, calls, lines: () => calls.map((c) => c.line) }
 }
+
+/** A done report's one-hop sweep, answered in full (STEP-3284), for tests whose report must pass the runner's self-check. */
+export const SWEEP = {
+  siblings: "rg -n 'createdAt' lib app: one other reader, lib/feed.ts, changed too",
+  publicOutputs: "the notice page and its PDF, both through the same helper",
+  caches: "none: the notice cache keys on the id, and its output keeps its meaning",
+  coupled: "none: no cron, reminder or email reads the date",
+  docs: "rg -n 'createdAt' API_DOCUMENTATION.md .claude/reference: one line updated",
+  translations: "none: no messages changed",
+}

@@ -29,7 +29,7 @@ import { enqueueSlack } from "../outbox.ts"
 import { truncateChars } from "../slack/text.ts"
 import type { Tracker, TrackerIssue } from "../tracker.ts"
 import { commitsAhead, isDirty, must, pushBranch, removeWorktree, type Exec } from "./git.ts"
-import { clause, type Outcome, type WorkerReport } from "./outcome.ts"
+import { CHECKLIST, checklistGaps, clause, type Outcome, type WorkerReport } from "./outcome.ts"
 
 /**
  * Who merges the PR. auto: auto-merge is armed, as the project's policy
@@ -67,6 +67,26 @@ export function prTitle(issueId: string, report: WorkerReport, fallback: string)
   return truncateChars(`${issueId}: ${subject}`, 120)
 }
 
+/**
+ * The worker's self-check, as the PR and a revise reply show it (STEP-3284):
+ * the one-hop sweep's answers, what it left unanswered, and each mutation check.
+ */
+export function selfCheckSections(report: WorkerReport): string[] {
+  const gaps = checklistGaps(report)
+  const answers = CHECKLIST.filter((item) => report.checklist?.[item.key]).map((item) => `- ${item.label}: ${report.checklist![item.key]}`)
+  const mutations = report.mutations?.length
+    ? report.mutations.map((m) => `- \`${m.test}\`: ${m.mutation}. It failed: ${clause(m.result)}. Reverted.`)
+    : ["- None listed."]
+  return [
+    "## Sweep checklist",
+    ...answers,
+    ...(gaps.length ? [`Not answered by the worker: ${gaps.join(", ")}. A reviewer should check these.`] : []),
+    "",
+    "## Mutation checks",
+    ...mutations,
+  ]
+}
+
 export function prBody(
   issueId: string,
   report: WorkerReport,
@@ -84,6 +104,8 @@ export function prBody(
     "## How it was checked",
     checks,
     "Everything else runs in CI.",
+    "",
+    ...selfCheckSections(report),
     "",
     "## Notes",
     notes,
