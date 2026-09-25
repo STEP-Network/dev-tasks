@@ -49,6 +49,34 @@ function setup(opts: { worker?: Record<string, unknown>; policy?: string; state?
   return { paths, config, f, deps, say, outbox }
 }
 
+describe("a fix-it round on a PR that clashes with its base (STEP-3340)", () => {
+  const clashing = (over: Record<string, unknown> = {}) =>
+    JSON.stringify({ url: PR, number: 1679, state: "OPEN", headRefName: "STEP-7-fix-the-date", headRefOid: "abc1234def", baseRefName: "staging", mergeable: "CONFLICTING", mergeStateStatus: "DIRTY", statusCheckRollup: [], ...over })
+
+  it("merges the base in as part of the round, so agentd sends no merge round of its own at that head, and keeps the merge rounds' count", async () => {
+    const { deps, paths, say, f } = setup({ exec: [[/^gh pr view /, { stdout: clashing() }]] })
+    const [pr] = readWatchedPrs(paths)
+    updateWatchedPr(paths, { ...pr, revise: { rounds: 1, handled: [], conflictRounds: 3 } })
+    say("fix it")
+    await actOnInstructions(deps)
+    expect(f.lines().find((l) => l.startsWith("gh pr view"))).toContain("mergeable,mergeStateStatus")
+    expect(listJobs(paths, "pending")[0].revise).toMatchObject({ round: 2, reasons: ["asked by Nate in Slack", "merge conflict with staging"] })
+    const after = readWatchedPrs(paths)[0]
+    expect(after.revise).toMatchObject({ rounds: 2, conflictRounds: 3, handled: ["conflict:abc1234def"] })
+    expect(planRevision(JSON.parse(clashing()), after, { mini: "eve", required: [], infra: {}, base: "staging" })).toEqual({ kind: "none" })
+  })
+
+  it("adds no merge to a round on a PR that does not clash, or clashes with another base", async () => {
+    for (const view of [clashing({ mergeable: "MERGEABLE", mergeStateStatus: "CLEAN" }), clashing({ baseRefName: "main" })]) {
+      const { deps, paths, say } = setup({ exec: [[/^gh pr view /, { stdout: view }]] })
+      say("fix it")
+      await actOnInstructions(deps)
+      expect(listJobs(paths, "pending")[0].revise?.reasons).toEqual(["asked by Nate in Slack"])
+      expect(readWatchedPrs(paths)[0].revise?.handled).toEqual([])
+    }
+  })
+})
+
 describe("a fix-it round and the browser test (WS5)", () => {
   it("keeps the head the round cap asked at, so findings at a new head ask again", async () => {
     const { deps, paths, say } = setup()

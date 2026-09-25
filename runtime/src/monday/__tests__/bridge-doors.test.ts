@@ -69,6 +69,8 @@ describe("a Slack thread for every new item (spec 6)", () => {
     expect(monday.items.get(tried.id)!.groupId).toBe("g_done")
     expect(slack()).toEqual([])
     expect(texts(tried.id).filter((t) => t.startsWith("Eve: Done:"))).toEqual([])
+    // Items made before go-live want no thread: at go-live they are given one like any older item, Test day aside.
+    expect(readRecords(paths).map((r) => r.thread)).toEqual([undefined, undefined, undefined])
   })
 
   it("gives an open item made before this change its thread, a back-fill", async () => {
