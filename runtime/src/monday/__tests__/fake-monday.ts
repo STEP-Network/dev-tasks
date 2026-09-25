@@ -218,6 +218,10 @@ export function fakePeople(issues: Map<string, TrackerIssue>, extra: Record<stri
       const p = byUuid(parent)
       if (c && p) parentOf.set(c.id, p.id)
     },
+    async childrenOf(anchorUuids) {
+      const anchors = [...issues.values()].filter((i) => anchorUuids.includes(i.uuid)).map((i) => i.id)
+      return new Map(anchors.map((a) => [a, [...parentOf].filter(([, p]) => p === a).flatMap(([c]) => (issues.has(c) ? [view(issues.get(c)!)] : []))]))
+    },
     async parentOf(id) {
       const parent = issues.get(parentOf.get(id) ?? "")
       if (!parent) return null
@@ -235,13 +239,31 @@ export const LAYOUT = [
   { id: "g_fyi", title: "FYI" }, { id: "g_done", title: "Done" }, { id: "g_req", title: "Requests" }, { id: "g_work", title: "Agents working on" },
 ]
 export const THREAD = "https://acme.slack.com/archives/CQ/p1790000000000100"
+/** The Requests board (Wave 2): its three groups and nine columns, made up. */
+export const REQ = "777"
+export const REQUEST_GROUPS = [{ id: "r_active", title: "Active" }, { id: "r_released", title: "Released" }, { id: "r_closed", title: "Declined and on hold" }]
+export const REQUEST_COLUMNS = {
+  requester: "r_person", type: "r_type", class: "r_class", size: "r_size", stage: "r_stage", progress: "r_progress", targetWeek: "r_week", linear: "r_linear", slackThread: "r_thread",
+}
 
 /**
  * A bridge on the Wave 2 layout (made-up people Ada and Ben), or on today's
  * with newLayout false: the new groups and columns switch on only with their
  * config.
  */
-export function doorsSetup(seed: TrackerIssue[] = [], opts: { extra?: Record<string, Partial<PeopleIssue>>; parents?: Record<string, string>; newLayout?: boolean } = {}) {
+export function doorsSetup(
+  seed: TrackerIssue[] = [],
+  opts: {
+    extra?: Record<string, Partial<PeopleIssue>>
+    parents?: Record<string, string>
+    newLayout?: boolean
+    /** The Requests board configured (Task 7): the Needs-you board then keeps no request groups, unless keepOldGroups. */
+    requests?: boolean
+    keepOldGroups?: boolean
+    requestsBoardMissing?: boolean
+    dailyLimit?: number | null
+  } = {},
+) {
   const newLayout = opts.newLayout ?? true
   const paths = agentPaths(mkdtempSync(join(tmpdir(), "agentd-doors-")))
   const config = ConfigSchema.parse({
@@ -254,11 +276,16 @@ export function doorsSetup(seed: TrackerIssue[] = [], opts: { extra?: Record<str
         ...(newLayout
           ? { columns: { recommendation: "col_rec", request: "col_request", slackThread: "col_thread" }, groups: { needsYou: "Decide", approvePlan: "Approve plan", looks: "Looks good?", fyi: "FYI" } }
           : {}),
+        ...(opts.requests ? { requests: { boardId: REQ, columns: REQUEST_COLUMNS } } : {}),
       },
     },
   })
   const fake = fakeTracker(seed)
-  const monday = fakeMonday(undefined, null, newLayout ? { [BOARD]: LAYOUT } : undefined)
+  const needsBoard = opts.requests && !opts.keepOldGroups ? LAYOUT.filter((g) => g.id !== "g_req" && g.id !== "g_work") : LAYOUT
+  const monday = fakeMonday(undefined, opts.dailyLimit ?? null, {
+    [BOARD]: newLayout ? needsBoard : GROUPS,
+    ...(opts.requests && !opts.requestsBoardMissing ? { [REQ]: REQUEST_GROUPS } : {}),
+  })
   const { people } = fakePeople(fake.issues, opts.extra, opts.parents)
   const warned: string[] = []
   const log: Logger = { info: () => {}, warn: (m) => warned.push(m), error: (m) => warned.push(m) }

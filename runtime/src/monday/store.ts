@@ -17,6 +17,7 @@ import { join } from "node:path"
 import type { AgentPaths } from "../config.ts"
 import { putOnce, readJson, safeKey, writeJsonAtomic } from "../fsq.ts"
 import { redact } from "../log.ts"
+import type { Stage } from "./stage.ts"
 
 /** The State column's labels. */
 export type MondayState = "Needs you" | "Waiting on agent" | "Done" | "Blocked"
@@ -58,6 +59,12 @@ export interface ItemRecord {
   retry?: Record<string, { userId: string; text: string; at?: string }>
   /** A request whose Linear link, State and group are written to the board. */
   linked?: boolean
+  /** A request's Stage when the bridge last wrote it (Requests board): a change is said once. */
+  stage?: Stage
+  /** Each Requests board column the bridge last wrote, as JSON: written again only when Linear changes it, so a person's edit stands. */
+  written?: Record<string, string>
+  /** The request's own Slack thread, when it came from Slack (Task 8). */
+  slack?: { permalink: string }
 }
 
 const root = (paths: AgentPaths) => join(paths.state, "monday")

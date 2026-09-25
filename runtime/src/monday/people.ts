@@ -54,6 +54,8 @@ export interface PeopleView {
   adoptFix(childUuid: string, parentUuid: string, priority: number): Promise<void>
   /** An issue's parent, with the parent's UAT fixes still open. null when it has no parent. */
   parentOf(id: string): Promise<{ id: string; state: string; openFixes: string[] } | null>
+  /** The sub-issues of each anchor (by uuid), canceled ones too, keyed by the anchor's identifier: a request's tasks (Wave 2). */
+  childrenOf(anchorUuids: string[]): Promise<Map<string, PeopleIssue[]>>
 }
 
 export const NEEDS_LABELS = ["needs-human", "human-todo", "awaiting-answer"]
@@ -197,6 +199,14 @@ export function createPeopleView(request: LinearRequest = linearRequest): People
       if (!numbers.length) return []
       // Linear prices a query by the page it asks for, not by what comes back.
       return all(`number: { in: $numbers }`, ", $numbers: [Float!]", { numbers, first: Math.min(PAGE_SIZE, numbers.length) })
+    },
+
+    async childrenOf(anchorUuids) {
+      if (!anchorUuids.length) return new Map()
+      const found = await all(`parent: { id: { in: $parents } }`, ", $parents: [ID!]", { parents: anchorUuids })
+      const byParent = new Map<string, PeopleIssue[]>()
+      for (const child of found) if (child.parent) byParent.set(child.parent, [...(byParent.get(child.parent) ?? []), child])
+      return byParent
     },
 
     async adoptFix(childUuid, parentUuid, priority) {
