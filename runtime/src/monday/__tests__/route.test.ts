@@ -11,6 +11,7 @@ import { answerText } from "../../answer.ts"
 import { agentPaths } from "../../config.ts"
 import { enqueueSlack } from "../../outbox.ts"
 import { withRecommendation } from "../../plain.ts"
+import { saveThread, threadFor } from "../../threads.ts"
 import { fakeTracker, issue } from "../../__tests__/fakes.ts"
 import { routeWords } from "../route.ts"
 
@@ -48,6 +49,13 @@ describe("routeWords: answers on the Monday board (STEP-3293 re-review)", () => 
     enqueueSlack(plain.paths, { kind: "issue", issue: "STEP-7", text: "Which date goes on the notice?", question: true }, NOW)
     await plain.say("yes")
     expect(plain.fake.issues.get("STEP-7")!.description).toMatch(/\*\*Nate\*\*: yes$/)
+  })
+
+  it("leaves no question open in the issue's Slack thread once it is answered on the board: one conversation, answered in either place", async () => {
+    const { paths, say } = setup()
+    saveThread(paths, { issue: "STEP-7", channelId: "CQ", ts: "1700.1", permalink: null, createdAt: NOW.toISOString(), lastQuestionAt: NOW.toISOString(), lastQuestion: QUESTION, openQuestions: 2 })
+    await say("use the publication date, and leave the footer")
+    expect(threadFor(paths, "STEP-7")?.openQuestions).toBe(0)
   })
 
   it("never turns a yes on a person's to-do into agreement: it means they will do it", async () => {
