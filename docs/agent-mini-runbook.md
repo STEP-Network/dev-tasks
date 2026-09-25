@@ -1047,7 +1047,10 @@ the preview and staging.
 4. `~/.agentd/bin/agentctl doctor`: the "browser test" lines are Chrome, the
    browser tool, Node and the secrets file, and all must be ok. Then
    `~/.agentd/bin/agentctl probe-browser`, which opens staging and shows that
-   any other site is refused, on the real Chrome and with no model.
+   any other site is refused, in the page and in a new page, on the real
+   Chrome and with no model. A refusal counts only in the browser tool's own
+   words ("is blocked by blocklist/allowlist rules"): any other failure says
+   the allowlist is not proven, and the test stays off.
 
 ### In develop and revise jobs
 

@@ -61,6 +61,10 @@ export function chromeMcpArgs(o: { bin: string; port: number; patterns: readonly
     // Traces and heap snapshots: tools the test never uses, so the browser tool does not offer them.
     "--categoryPerformance=false",
     "--categoryMemory=false",
+    // 1.9.0 otherwise requires a pageId on every page tool, for several agents
+    // sharing one browser (STEP-3328). One session drives one browser here, and
+    // mcp-contract.test.ts checks the tools' real arguments.
+    "--no-page-id-routing",
     `--workspace=${o.shotsDir}`,
   ]
 }

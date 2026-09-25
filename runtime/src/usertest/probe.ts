@@ -29,8 +29,18 @@ interface ToolResult {
 }
 
 const OTHER_SITE = "https://example.com/"
+const OPENED = "it opened"
 
-/** The browser tool answers a blocked navigation in text, not as an error: only its own "Successfully navigated" counts as opened. */
+/**
+ * How the pinned chrome-devtools-mcp (1.9.0) says its --allowedUrlPattern
+ * stopped a navigation: puppeteer's goto refuses the URL, and navigate_page
+ * answers "Unable to navigate in the selected page: Navigation to <url> is
+ * blocked by blocklist/allowlist rules." Only these words prove the allowlist
+ * held (STEP-3328: a refused argument once passed for a refusal).
+ */
+export const allowlistRefusal = (url: string) => `Navigation to ${url} is blocked by blocklist/allowlist rules`
+
+/** The browser tool answers a navigation in text: only its own "Successfully navigated" is opened, and only the allowlist's own words are refused. */
 export function judgeNavigation(url: string, result: ToolResult, want: "opens" | "refused"): { ok: boolean; detail: string } {
   const text = (result.content ?? [])
     .map((c) => c.text ?? "")
@@ -38,22 +48,34 @@ export function judgeNavigation(url: string, result: ToolResult, want: "opens" |
     .trim()
   const opened = !result.isError && text.includes(`Successfully navigated to ${url}`)
   if (want === "opens") return opened ? { ok: true, detail: "opened" } : { ok: false, detail: text || "no answer" }
-  return opened ? { ok: false, detail: "it opened" } : { ok: true, detail: `refused: ${text || "an error"}` }
+  if (opened) return { ok: false, detail: OPENED }
+  return text.includes(allowlistRefusal(url)) ? { ok: true, detail: `refused: ${text}` } : { ok: false, detail: `not refused by the allowlist, it failed another way: ${text || "no answer"}` }
+}
+
+const message = (error: unknown) => (error instanceof Error ? error.message : String(error))
+
+/** One navigation. A call the browser tool throws on (its arguments refused, the tool gone) proves nothing either way. */
+export async function tryNavigation(url: string, want: "opens" | "refused", call: (url: string) => Promise<ToolResult>): Promise<{ ok: boolean; detail: string }> {
+  try {
+    return judgeNavigation(url, await call(url), want)
+  } catch (error) {
+    return { ok: false, detail: `the browser tool failed: ${message(error)}` }
+  }
 }
 
 export function formatBrowserProbe(checks: readonly ProbeCheck[]): { text: string; ok: boolean } {
   const ok = checks.every((c) => c.ok)
   const verdict = ok
     ? "the browser opens staging and nothing else"
-    : checks.some((c) => c.kind === "refused" && !c.ok)
+    : checks.some((c) => c.kind === "refused" && c.detail === OPENED)
       ? "the browser's allowlist does NOT hold: keep the browser test off"
       : checks.some((c) => c.kind === "opens" && !c.ok)
         ? "staging did not open, so the allowlist is not proven: keep the browser test off until this passes"
-        : "the browser did not start, so the allowlist is not proven: keep the browser test off until this passes"
+        : checks.some((c) => c.kind === "refused" && !c.ok)
+          ? "the other site was not refused by the allowlist itself, so the allowlist is not proven: keep the browser test off until this passes"
+          : "the browser did not start, so the allowlist is not proven: keep the browser test off until this passes"
   return { ok, text: [...checks.map((c) => `${c.ok ? "ok  " : "FAIL"} ${c.name}: ${c.detail}`), verdict].join("\n") }
 }
-
-const message = (error: unknown) => (error instanceof Error ? error.message : String(error))
 
 export async function probeBrowser(config: AgentConfig): Promise<ProbeCheck[]> {
   const u = config.usertest
@@ -68,17 +90,14 @@ export async function probeBrowser(config: AgentConfig): Promise<ProbeCheck[]> {
     const args = chromeMcpArgs({ bin: chromeDevtoolsMcp().bin, port: chrome.port, patterns: allowedUrlPatterns([u.stagingOrigin], u.extraAllowedUrlPatterns), shotsDir })
     client = new Client({ name: "agentctl-probe-browser", version: "1.0.0" })
     await client.connect(new StdioClientTransport({ command: process.execPath, args, env: { PATH: process.env.PATH ?? "", CHROME_DEVTOOLS_MCP_NO_USAGE_STATISTICS: "1" }, stderr: "ignore" }))
-    // Each call on its own: a failed staging call still leaves the other site's check.
-    const go = async (url: string, want: "opens" | "refused") => {
-      try {
-        return judgeNavigation(url, (await client!.callTool({ name: "navigate_page", arguments: { type: "url", url } })) as ToolResult, want)
-      } catch (error) {
-        return want === "opens" ? { ok: false, detail: message(error) } : { ok: true, detail: `refused: ${message(error)}` }
-      }
-    }
+    // Each call on its own, with the arguments the session's model sends: a failed staging call still leaves the other site's check.
+    const navigate = async (url: string) => (await client!.callTool({ name: "navigate_page", arguments: { type: "url", url } })) as ToolResult
+    const newPage = async (url: string) => (await client!.callTool({ name: "new_page", arguments: { url } })) as ToolResult
     return [
-      { name: `${u.stagingOrigin} opens`, kind: "opens", ...(await go(u.stagingOrigin, "opens")) },
-      { name: `${OTHER_SITE} is refused`, kind: "refused", ...(await go(OTHER_SITE, "refused")) },
+      { name: `${u.stagingOrigin} opens`, kind: "opens", ...(await tryNavigation(u.stagingOrigin, "opens", navigate)) },
+      { name: `${OTHER_SITE} is refused`, kind: "refused", ...(await tryNavigation(OTHER_SITE, "refused", navigate)) },
+      // The other tool that opens a page: the allowlist must hold there too.
+      { name: `${OTHER_SITE} is refused in a new page`, kind: "refused", ...(await tryNavigation(OTHER_SITE, "refused", newPage)) },
     ]
   } catch (error) {
     return [{ name: "the browser test's browser", kind: "setup", ok: false, detail: message(error) }]
