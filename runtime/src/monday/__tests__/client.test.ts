@@ -18,7 +18,7 @@ function fakeFetch(answers: Array<{ status?: number; json?: unknown }>) {
 }
 
 const noSleep = async () => {}
-const WATCH = { columnId: "long_text_mm7hzj39", since: new Date("2026-09-25T08:00:00.000Z") }
+const WATCH = { columnIds: ["long_text_mm7hzj39"], since: new Date("2026-09-25T08:00:00.000Z") }
 
 describe("the Monday API client (STEP-3289)", () => {
   it("sends the token only in the Authorization header, on a pinned version, and never follows a redirect with it", async () => {
@@ -91,7 +91,7 @@ describe("the Monday API client (STEP-3289)", () => {
       { json: { data: { next_items_page: { cursor: null, items: [item("11", { creator_id: null })] } } } },
     ])
     const since = new Date("2026-09-25T08:00:00.000Z")
-    const board = await createMondayApi(TOKEN, { fetch: f, sleep: noSleep }).readBoard("5104953028", ["color_mm7hvyyt"], { columnId: "long_text_mm7hzj39", since })
+    const board = await createMondayApi(TOKEN, { fetch: f, sleep: noSleep }).readBoard("5104953028", ["color_mm7hvyyt"], { columnIds: ["long_text_mm7hzj39"], since })
     expect(board.groups).toEqual([{ id: "topics", title: "Needs you" }])
     expect(board.items.map((i) => i.id)).toEqual(["10", "11"])
     expect(board.items[0]).toMatchObject({ groupId: "topics", creatorId: "111", columns: { color_mm7hvyyt: { text: "Needs you", value: '{"index":1}' } } })
@@ -100,7 +100,7 @@ describe("the Monday API client (STEP-3289)", () => {
       { id: "r1", creatorId: "222", text: "agreed", createdAt: "2026-09-25T09:05:00Z", threadId: "u1" },
     ])
     expect(board.items[1].creatorId).toBeNull()
-    expect(board.changes).toEqual([{ id: "a1", itemId: "10", userId: "111", text: "leave it", at: "2025-09-30T13:20:00.000Z" }])
+    expect(board.changes).toEqual([{ id: "a1", itemId: "10", userId: "111", text: "leave it", at: "2025-09-30T13:20:00.000Z", columnId: "long_text_mm7hzj39" }])
     // The log rides on the board's own call: a second call only for the items past the first 100.
     expect(sent).toHaveLength(2)
     expect(sent[0].body.variables).toEqual({ board: ["5104953028"], columns: ["color_mm7hvyyt"] })
@@ -135,6 +135,60 @@ describe("the Monday API client (STEP-3289)", () => {
   it("puts only ids and column ids it has checked into a query", async () => {
     const api = createMondayApi(TOKEN, { fetch: fakeFetch([]).f, sleep: noSleep })
     await expect(api.readBoard('1"] } }', [], WATCH)).rejects.toThrow(/not a Monday id/)
-    await expect(api.readBoard("1", [], { ...WATCH, columnId: 'x"] ' })).rejects.toThrow(/not a Monday column id/)
+    await expect(api.readBoard("1", [], { ...WATCH, columnIds: ["long_text_mm7hzj39", 'x"] '] })).rejects.toThrow(/not a Monday column id/)
+  })
+it("watches several columns and says which one changed", async () => {
+    const log = (id: string, column: string, text: string) => ({ id, event: "update_column_value", user_id: "111", created_at: "2026-09-25T08:01:00.000Z", data: JSON.stringify({ column_id: column, pulse_id: 42, value: { label: { text } }, textual_value: text }) })
+    const { f, sent } = fakeFetch([{ json: { data: { boards: [{ groups: [], items_page: { cursor: null, items: [] }, activity_logs: [log("1", "col_answer", "yes"), log("2", "col_class", "Look"), log("3", "col_other", "x")] }] } } }])
+    const board = await createMondayApi(TOKEN, { fetch: f, sleep: noSleep }).readBoard("5", ["col_answer", "col_class"], { columnIds: ["col_answer", "col_class"], since: new Date("2026-09-25T08:00:00.000Z") })
+    expect(sent[0].body.query).toContain('activity_logs(column_ids: ["col_answer","col_class"]')
+    expect(board.changes.map((c) => [c.columnId, c.text])).toEqual([["col_answer", "yes"], ["col_class", "Look"]])
+  })
+
+  it("reads a status column's new label from its log entry", async () => {
+    const entry = { id: "9", event: "update_column_value", user_id: "111", created_at: "2026-09-25T08:01:00.000Z", data: JSON.stringify({ column_id: "col_class", pulse_id: 42, value: { label: { text: "Look", style: {} } } }) }
+    const { f } = fakeFetch([{ json: { data: { boards: [{ groups: [], items_page: { cursor: null, items: [] }, activity_logs: [entry] }] } } }])
+    const board = await createMondayApi(TOKEN, { fetch: f, sleep: noSleep }).readBoard("5", [], { columnIds: ["col_class"], since: new Date("2026-09-25T08:00:00.000Z") })
+    expect(board.changes.map((c) => c.text)).toEqual(["Look"])
+  })
+
+  it("reads no activity log when no column is watched", async () => {
+    const { f, sent } = fakeFetch([{ json: { data: { boards: [{ groups: [], items_page: { cursor: null, items: [] } }] } } }])
+    const board = await createMondayApi(TOKEN, { fetch: f, sleep: noSleep }).readBoard("5", ["col_stage"], { columnIds: [], since: new Date("2026-09-25T08:00:00.000Z") })
+    expect(sent[0].body.query).not.toContain("activity_logs")
+    expect(board.changes).toEqual([])
+  })
+
+  it("reads the items a connect-boards column links", async () => {
+    const item = {
+      id: "42", name: "Pick a date", url: "u", created_at: "2026-09-25T08:00:00Z", creator_id: "900", group: { id: "g1" }, updates: [],
+      column_values: [{ id: "col_request", text: "Better dates", value: null, linked_item_ids: ["77"] }, { id: "col_kind", text: "Decision", value: "{\"index\":1}" }],
+    }
+    const { f, sent } = fakeFetch([{ json: { data: { boards: [{ groups: [{ id: "g1", title: "Decide" }], items_page: { cursor: null, items: [item] }, activity_logs: [] }] } } }])
+    const board = await createMondayApi(TOKEN, { fetch: f, sleep: noSleep }).readBoard("5", ["col_request", "col_kind"], { columnIds: ["col_answer"], since: new Date("2026-09-25T08:00:00.000Z") })
+    expect(sent[0].body.query).toContain("... on BoardRelationValue { linked_item_ids }")
+    expect(board.items[0].columns.col_request).toEqual({ text: "Better dates", value: null, linked: ["77"] })
+    expect(board.items[0].columns.col_kind).toEqual({ text: "Decision", value: "{\"index\":1}" })
+  })
+
+  it("lists a board's columns", async () => {
+    const { f, sent } = fakeFetch([{ json: { data: { boards: [{ columns: [{ id: "name", title: "Name", type: "name" }, { id: "col_kind", title: "Kind", type: "status" }] }] } } }])
+    const columns = await createMondayApi(TOKEN, { fetch: f, sleep: noSleep }).boardColumns("5")
+    expect(sent[0].body.variables).toEqual({ board: ["5"] })
+    expect(columns).toEqual([{ id: "name", title: "Name", type: "name" }, { id: "col_kind", title: "Kind", type: "status" }])
+    const none = fakeFetch([{ json: { data: { boards: [] } } }])
+    await expect(createMondayApi(TOKEN, { fetch: none.f, sleep: noSleep }).boardColumns("5")).rejects.toThrow(/no board 5/)
+  })
+
+  it("moves an item to another board with every column mapped, and checks each id first", async () => {
+    const { f, sent } = fakeFetch([{ json: { data: { move_item_to_board: { id: "42" } } } }])
+    const api = createMondayApi(TOKEN, { fetch: f, sleep: noSleep })
+    await api.moveItemToBoard("88", "g_active", "42", [{ source: "col_linear", target: "col_req_linear" }, { source: "col_agent", target: null }])
+    expect(sent[0].body.query).toContain("move_item_to_board(board_id: $board, group_id: $group, item_id: $item, columns_mapping: $mapping)")
+    expect(sent[0].body.variables).toEqual({ board: "88", group: "g_active", item: "42", mapping: [{ source: "col_linear", target: "col_req_linear" }, { source: "col_agent", target: null }] })
+    await expect(api.moveItemToBoard("88", "g_active", "42", [{ source: "col linear", target: null }])).rejects.toThrow(/Monday column id/)
+    await expect(api.moveItemToBoard("88", "g_active", "42", [{ source: "col_linear", target: "col-x" }])).rejects.toThrow(/Monday column id/)
+    await expect(api.moveItemToBoard("88", "g_active", "4x", [])).rejects.toThrow(/Monday id/)
+    expect(sent).toHaveLength(1)
   })
 })

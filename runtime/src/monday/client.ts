@@ -1,7 +1,8 @@
 /**
  * The Monday API, as the Monday bridge uses it (STEP-3289) and no more: read
- * one board and who changed its Answer column (one call), read the account's
- * daily call limit, and write items, updates and column values. The token is the agent's own Monday user's, from
+ * a board and who changed the columns it watches (one call), list a board's
+ * columns, read the account's daily call limit, and write items, updates and
+ * column values, and move an item to another board (Wave 2). The token is the agent's own Monday user's, from
  * ~/.config/agentd/monday.env. It travels only in the Authorization header:
  * never in a query, a log line, an error or an argv, and a redirect is
  * refused rather than followed with it.
@@ -31,8 +32,8 @@ export interface MondayItem {
   groupId: string
   creatorId: string | null
   createdAt: string
-  /** The columns the bridge asked for, by id. */
-  columns: Record<string, { text: string | null; value: string | null }>
+  /** The columns the bridge asked for, by id. `linked` is set for a connect-boards column: the items it links. */
+  columns: Record<string, { text: string | null; value: string | null; linked?: string[] }>
   /** The newest updates and their replies, flat. */
   updates: MondayUpdate[]
 }
@@ -41,8 +42,15 @@ export interface MondayBoard {
   groups: Array<{ id: string; title: string }>
   /** Active items only: Monday leaves archived and deleted ones out. */
   items: MondayItem[]
-  /** The watched column's changes since the time asked for, oldest first. */
+  /** The watched columns' changes since the time asked for, oldest first. */
   changes: ColumnChange[]
+}
+
+/** A board's column, as a move between boards needs to map it. */
+export interface MondayColumn {
+  id: string
+  title: string
+  type: string
 }
 
 /** One change to a column, from the board's activity log: who, which item, and what it now says. */
@@ -52,6 +60,8 @@ export interface ColumnChange {
   userId: string
   text: string
   at: string
+  /** The column that changed: a board may watch several (Task 12 watches the Requests board's Class column). */
+  columnId: string
 }
 
 /**
@@ -65,10 +75,11 @@ export interface MondayApi {
   me(): Promise<{ id: string; name: string; isAdmin: boolean }>
   /**
    * The board in one call: its groups, its items (a further call per 100
-   * past the first 100), and who changed `watch.columnId` since `watch.since`,
-   * from its activity log. A column value carries no author, the log does.
+   * past the first 100), and who changed any of `watch.columnIds` since
+   * `watch.since`, from its activity log. A column value carries no author,
+   * the log does. No column watched, no log read (`changes: []`).
    */
-  readBoard(boardId: string, columnIds: string[], watch: { columnId: string; since: Date }): Promise<MondayBoard>
+  readBoard(boardId: string, columnIds: string[], watch: { columnIds: string[]; since: Date }): Promise<MondayBoard>
   /** The account's API calls a day (monday's plans allow 1,000 to 25,000), or null when Monday does not say. */
   dailyLimit(): Promise<number | null>
   createItem(boardId: string, groupId: string, name: string, values: Record<string, unknown>): Promise<string>
@@ -78,6 +89,13 @@ export interface MondayApi {
   postUpdate(itemId: string, html: string, threadId?: string | null): Promise<string>
   like(updateId: string): Promise<void>
   archiveItem(itemId: string): Promise<void>
+  /** The board's columns: a move between boards maps every one of them. */
+  boardColumns(boardId: string): Promise<MondayColumn[]>
+  /**
+   * The item moved to another board, with its id, updates and subitems kept.
+   * Monday wants every source column mapped: `target: null` drops one.
+   */
+  moveItemToBoard(boardId: string, groupId: string, itemId: string, mapping: Array<{ source: string; target: string | null }>): Promise<void>
 }
 
 export interface MondayApiOptions {
@@ -97,7 +115,7 @@ const LIMIT_RE = /rate.?limit|daily.?limit|complexity|concurren|maxConcurrency|t
 const ITEM_FIELDS = `
   id name url created_at creator_id
   group { id }
-  column_values(ids: $columns) { id text value }
+  column_values(ids: $columns) { id text value ... on BoardRelationValue { linked_item_ids } }
   updates(limit: 25) { id creator_id text_body created_at replies { id creator_id text_body created_at } }
 `
 
@@ -115,7 +133,7 @@ interface RawItem {
   created_at: string
   creator_id: string | null
   group: { id: string } | null
-  column_values: Array<{ id: string; text: string | null; value: string | null }>
+  column_values: Array<{ id: string; text: string | null; value: string | null; linked_item_ids?: Array<string | number> | null }>
   updates: Array<RawReply & { replies?: RawReply[] | null }> | null
 }
 
@@ -132,7 +150,9 @@ function toItem(raw: RawItem): MondayItem {
     groupId: raw.group?.id ?? "",
     creatorId: raw.creator_id ?? null,
     createdAt: raw.created_at,
-    columns: Object.fromEntries(raw.column_values.map((c) => [c.id, { text: c.text, value: c.value }])),
+    columns: Object.fromEntries(
+      raw.column_values.map((c) => [c.id, { text: c.text, value: c.value, ...(c.linked_item_ids ? { linked: c.linked_item_ids.map(String) } : {}) }]),
+    ),
     updates,
   }
 }
@@ -149,12 +169,39 @@ function logTime(createdAt: string): string {
   return createdAt
 }
 
-/** What a changed column now says, from its log entry: a long text's `text`, or the log's own text value. */
+/** What a changed column now says, from its log entry: a long text's `text`, a status's label, or the log's own text value. */
 function changedText(data: Record<string, unknown>): string | null {
   const value = data.value
   if (value && typeof value === "object" && typeof (value as { text?: unknown }).text === "string") return (value as { text: string }).text
+  if (value && typeof value === "object" && typeof (value as { label?: { text?: unknown } }).label?.text === "string") return (value as { label: { text: string } }).label.text
   return typeof data.textual_value === "string" ? data.textual_value : null
 }
+
+type RawLog = { id: string; event: string; data: string; user_id: string; created_at: string }
+
+/** The column-value changes in an activity log, for the columns asked for, oldest first. */
+function columnLogs(logs: RawLog[] | null | undefined, columnIds: readonly string[]): ColumnChange[] {
+  const wanted = new Set(columnIds)
+  const changes: ColumnChange[] = []
+  for (const log of logs ?? []) {
+    if (log.event !== "update_column_value") continue
+    let parsed: Record<string, unknown>
+    try {
+      parsed = JSON.parse(log.data)
+    } catch {
+      continue
+    }
+    const columnId = String(parsed.column_id ?? "")
+    if (!wanted.has(columnId) || parsed.pulse_id === undefined) continue
+    const text = changedText(parsed)
+    if (text === null) continue
+    changes.push({ id: String(log.id), itemId: String(parsed.pulse_id), userId: String(log.user_id), text, at: logTime(String(log.created_at)), columnId })
+  }
+  return changes.sort((a, b) => a.at.localeCompare(b.at))
+}
+
+/** Column ids, checked, as a GraphQL list literal: the log's arguments are written into the query. */
+const columnList = (ids: readonly string[]) => `[${ids.map((id) => JSON.stringify(checked(id, COLUMN_RE, "Monday column id"))).join(",")}]`
 
 export function createMondayApi(token: string, opts: MondayApiOptions = {}): MondayApi {
   const doFetch = opts.fetch ?? fetch
@@ -197,18 +244,18 @@ export function createMondayApi(token: string, opts: MondayApiOptions = {}): Mon
     },
 
     async readBoard(boardId, columnIds, watch) {
-      type RawLog = { id: string; event: string; data: string; user_id: string; created_at: string }
       // The log's arguments are written into the query, checked first: their types vary between API versions.
+      const log = watch.columnIds.length
+        ? `activity_logs(column_ids: ${columnList(watch.columnIds)}, from: "${watch.since.toISOString()}", limit: 500) { id event data user_id created_at }`
+        : ""
       const first = await request<{
-        boards: Array<{ groups: Array<{ id: string; title: string }>; items_page: { cursor: string | null; items: RawItem[] }; activity_logs: RawLog[] | null }>
+        boards: Array<{ groups: Array<{ id: string; title: string }>; items_page: { cursor: string | null; items: RawItem[] }; activity_logs?: RawLog[] | null }>
       }>(
         `query($board: [ID!], $columns: [String!]) {
            boards(ids: $board) {
              groups { id title }
              items_page(limit: ${PAGE_SIZE}) { cursor items { ${ITEM_FIELDS} } }
-             activity_logs(column_ids: ["${checked(watch.columnId, COLUMN_RE, "Monday column id")}"], from: "${watch.since.toISOString()}", limit: 500) {
-               id event data user_id created_at
-             }
+             ${log}
            }
          }`,
         { board: [checked(boardId, ID_RE, "Monday id")], columns: columnIds },
@@ -226,21 +273,7 @@ export function createMondayApi(token: string, opts: MondayApiOptions = {}): Mon
         items.push(...next.next_items_page.items.map(toItem))
         cursor = next.next_items_page.cursor
       }
-      const changes: ColumnChange[] = []
-      for (const log of board.activity_logs ?? []) {
-        if (log.event !== "update_column_value") continue
-        let parsed: Record<string, unknown>
-        try {
-          parsed = JSON.parse(log.data)
-        } catch {
-          continue
-        }
-        if (parsed.column_id !== watch.columnId || parsed.pulse_id === undefined) continue
-        const text = changedText(parsed)
-        if (text === null) continue
-        changes.push({ id: String(log.id), itemId: String(parsed.pulse_id), userId: String(log.user_id), text, at: logTime(String(log.created_at)) })
-      }
-      return { groups: board.groups, items, changes: changes.sort((a, b) => a.at.localeCompare(b.at)) }
+      return { groups: board.groups, items, changes: columnLogs(board.activity_logs, watch.columnIds) }
     },
 
     async dailyLimit() {
@@ -289,6 +322,30 @@ export function createMondayApi(token: string, opts: MondayApiOptions = {}): Mon
 
     async archiveItem(itemId) {
       await request(`mutation($item: ID!) { archive_item(item_id: $item) { id } }`, { item: itemId })
+    },
+
+    async boardColumns(boardId) {
+      const data = await request<{ boards: Array<{ columns: MondayColumn[] }> }>(
+        `query($board: [ID!]) { boards(ids: $board) { columns { id title type } } }`,
+        { board: [checked(boardId, ID_RE, "Monday id")] },
+      )
+      const board = data.boards[0]
+      if (!board) throw new Error(`Monday: no board ${boardId}, or the token's user cannot see it`)
+      return board.columns.map((c) => ({ id: String(c.id), title: String(c.title), type: String(c.type) }))
+    },
+
+    async moveItemToBoard(boardId, groupId, itemId, mapping) {
+      // Every id is checked before anything is sent: a move with a bad mapping could drop a column's data.
+      for (const m of mapping) {
+        checked(m.source, COLUMN_RE, "Monday column id")
+        if (m.target !== null) checked(m.target, COLUMN_RE, "Monday column id")
+      }
+      await request(
+        `mutation($board: ID!, $group: ID!, $item: ID!, $mapping: [ColumnMappingInput!]) {
+           move_item_to_board(board_id: $board, group_id: $group, item_id: $item, columns_mapping: $mapping) { id }
+         }`,
+        { board: checked(boardId, ID_RE, "Monday id"), group: groupId, item: checked(itemId, ID_RE, "Monday id"), mapping },
+      )
     },
   }
 }

@@ -12,129 +12,16 @@ import { fakeTracker, issue } from "../../__tests__/fakes.ts"
 import { askDecision } from "../../agentd/decisions.ts"
 import { moveJob, recordPr, submitJob } from "../../jobs.ts"
 import { createMondayBridge } from "../bridge.ts"
-import { MondayRefused, type ColumnChange, type MondayApi, type MondayItem } from "../client.ts"
+import { MondayRefused, type MondayItem } from "../client.ts"
 import type { PeopleIssue, PeopleView } from "../people.ts"
 import { enqueueMonday, mondayOutbox, readRecords } from "../store.ts"
+import { AGENT, BOARD, fakeMonday, NEEDS_COLUMNS, T0 } from "./fake-monday.ts"
 
-const BOARD = "5104953028"
 const NATE = "111"
 const KRISTOFFER = "222"
 const STRANGER = "333"
-const AGENT = "900"
-const COL = {
-  person: "multiple_person_mm7hcr31", kind: "color_mm7hx8zq", state: "color_mm7hvyyt", agent: "dropdown_mm7hmyqg",
-  linear: "link_mm7hz1nj", pr: "link_mm7h42x", due: "date_mm7hfrdv", answer: "long_text_mm7hzj39",
-}
-const GROUPS = [
-  { id: "g_needs", title: "Needs you" }, { id: "g_test", title: "Test day" }, { id: "g_req", title: "Requests" },
-  { id: "g_work", title: "Agents working on" }, { id: "g_done", title: "Done" },
-]
+const COL = NEEDS_COLUMNS
 const PR = "https://github.com/STEP-Network/v0-politiske-annoncer/pull/1679"
-const T0 = new Date("2026-09-25T09:00:00.000Z")
-
-/** An in-memory board that records every call, as the Monday API would take it. */
-function fakeMonday(me = { id: AGENT, name: "PolAds agents", isAdmin: false }, dailyLimit: number | null | Error = null) {
-  const items = new Map<string, MondayItem>()
-  const logs: ColumnChange[] = []
-  const calls: Array<{ method: string; args: unknown[] }> = []
-  /** Items Monday cannot be reached for, as in an outage: their updates fail, and are not refused. */
-  const down = new Set<string>()
-  /** Calls Monday cannot be reached for at all, by method. */
-  const broken = new Set<string>()
-  let next = 1000
-  let clock = T0
-  const record = (method: string, args: unknown[]) => calls.push({ method, args })
-  const find = (id: string) => {
-    const hit = items.get(id)
-    // As Monday answers for an item that is gone: a GraphQL error.
-    if (!hit) throw new MondayRefused(`Monday: Item ${id} not found`)
-    return hit
-  }
-  const setValues = (item: MondayItem, values: Record<string, unknown>) => {
-    for (const [id, v] of Object.entries(values)) {
-      const value = (v ?? {}) as { label?: string; labels?: string[]; url?: string; text?: string; date?: string }
-      item.columns[id] = { text: value.label ?? value.labels?.join(", ") ?? value.text ?? value.date ?? null, value: JSON.stringify(v) }
-    }
-  }
-  const api: MondayApi = {
-    async me() {
-      record("me", [])
-      return me
-    },
-    async readBoard(boardId, columnIds, watch) {
-      record("readBoard", [boardId, columnIds, watch.columnId, watch.since.toISOString()])
-      return { groups: GROUPS, items: structuredClone([...items.values()]), changes: logs.filter((l) => l.at >= watch.since.toISOString()) }
-    },
-    async dailyLimit() {
-      record("dailyLimit", [])
-      if (dailyLimit instanceof Error) throw dailyLimit
-      return dailyLimit
-    },
-    async createItem(boardId, groupId, name, values) {
-      record("createItem", [boardId, groupId, name, values])
-      const id = String(next++)
-      const item: MondayItem = { id, name, url: `https://step.monday.com/boards/${BOARD}/pulses/${id}`, groupId, creatorId: me.id, createdAt: clock.toISOString(), columns: {}, updates: [] }
-      setValues(item, values)
-      items.set(id, item)
-      return id
-    },
-    async setColumns(boardId, itemId, values) {
-      record("setColumns", [boardId, itemId, values])
-      if (broken.has("setColumns")) throw new Error("Monday: gave up after 3 attempts (status 503)")
-      setValues(find(itemId), values)
-    },
-    async moveItem(itemId, groupId) {
-      record("moveItem", [itemId, groupId])
-      find(itemId).groupId = groupId
-    },
-    async postUpdate(itemId, html, threadId = null) {
-      record("postUpdate", [itemId, html, threadId])
-      if (down.has(itemId)) throw new Error("Monday: gave up after 3 attempts (status 503)")
-      const id = `u${next++}`
-      find(itemId).updates.push({ id, creatorId: me.id, text: html, createdAt: clock.toISOString(), threadId: threadId ?? id })
-      return id
-    },
-    async like(updateId) {
-      record("like", [updateId])
-    },
-    async archiveItem(itemId) {
-      record("archiveItem", [itemId])
-      items.delete(itemId)
-    },
-  }
-  return {
-    api,
-    items,
-    calls,
-    down,
-    broken,
-    called: (method: string) => calls.filter((c) => c.method === method).map((c) => c.args),
-    writes: () => calls.filter((c) => !["me", "readBoard", "dailyLimit"].includes(c.method)),
-    at: (t: Date) => {
-      clock = t
-    },
-    /** A person's update on an item (a reply when threadId is given). */
-    says(itemId: string, userId: string, text: string, threadId?: string) {
-      const id = `p${next++}`
-      find(itemId).updates.push({ id, creatorId: userId, text, createdAt: clock.toISOString(), threadId: threadId ?? id })
-      return id
-    },
-    /** A person's new item in a group, with an optional first update. */
-    request(userId: string, name: string, detail?: string, groupId = "g_req") {
-      const id = String(next++)
-      items.set(id, { id, name, url: `https://step.monday.com/boards/${BOARD}/pulses/${id}`, groupId, creatorId: userId, createdAt: clock.toISOString(), columns: {}, updates: [] })
-      if (detail) this.says(id, userId, detail)
-      return id
-    },
-    /** A person writing in the Answer column. */
-    answers(itemId: string, userId: string, text: string) {
-      const id = `log${next++}`
-      logs.push({ id, itemId, userId, text, at: clock.toISOString() })
-      return id
-    },
-    item: (name: RegExp) => [...items.values()].find((i) => name.test(i.name)),
-  }
-}
 
 /**
  * The people's view of the fake tracker's issues, with the fields only
@@ -420,6 +307,22 @@ describe("the Monday bridge: answers (STEP-3289)", () => {
     await bridge.sync()
     expect(fake.called("updateIssue")).toHaveLength(1)
     expect(monday.called("postUpdate").filter((c) => /I added your answer/.test(String(c[1])))).toHaveLength(1)
+  })
+
+  it("watches the Answer column alone, and takes no other column's change for words", async () => {
+    const { bridge, monday, fake, later } = setup([issue({ id: "STEP-7", state: "On hold", labels: ["human-todo"], description: "Do the DNS." })])
+    await bridge.sync()
+    expect(monday.called("readBoard")[0][2]).toEqual([COL.answer])
+    const item = monday.item(/job for a person/)!
+    // A log that carries another column too, as it will once a second column is watched (Task 12, the Class column).
+    const read = monday.api.readBoard
+    monday.api.readBoard = (boardId, columnIds, watch) => read(boardId, columnIds, { ...watch, columnIds: [...watch.columnIds, COL.kind] })
+    later(1)
+    monday.answers(item.id, NATE, "Done, the record is in.", COL.kind)
+    later(2)
+    await bridge.sync()
+    expect(fake.called("updateIssue")).toEqual([])
+    expect(monday.called("postUpdate").filter((c) => /I added your answer/.test(String(c[1])))).toEqual([])
   })
 
   it("ignores anyone not on the allowlist: their updates, their Answer column and their requests", async () => {
