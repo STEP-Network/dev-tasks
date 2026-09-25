@@ -160,9 +160,25 @@ describe("usertest config", () => {
   })
 
   it("refuses a preview host that is not a regular expression, and an origin with a path", () => {
-    const bad = { enabled: true, previewEnvironment: "P", previewHost: "(", stagingOrigin: "https://s.example.com" }
+    const bad = { enabled: true, previewEnvironment: "P", previewHost: "^($", stagingOrigin: "https://s.example.com" }
     expect(ConfigSchema.safeParse({ ...base, usertest: bad }).success).toBe(false)
-    expect(ConfigSchema.safeParse({ ...base, usertest: { ...bad, previewHost: "x", stagingOrigin: "https://s.example.com/app" } }).success).toBe(false)
+    expect(ConfigSchema.safeParse({ ...base, usertest: { ...bad, previewHost: "^x$", stagingOrigin: "https://s.example.com/app" } }).success).toBe(false)
+  })
+
+  it("wants the preview host anchored at both ends, since the bypass secret goes to any host it matches", () => {
+    const on = { enabled: true, previewEnvironment: "Preview – example", stagingOrigin: "https://staging.example.com" }
+    expect(ConfigSchema.safeParse({ ...base, usertest: { ...on, previewHost: "^app-[a-z0-9-]+\\.vercel\\.app$" } }).success).toBe(true)
+    for (const previewHost of ["app-[a-z0-9-]+\\.vercel\\.app$", "^app-[a-z0-9-]+\\.vercel\\.app", "vercel\\.app"]) {
+      expect(ConfigSchema.safeParse({ ...base, usertest: { ...on, previewHost } }).success).toBe(false)
+    }
+  })
+
+  it("lets a page load from other sites only by their literal https host", () => {
+    const patterns = (extraAllowedUrlPatterns: string[]) => ConfigSchema.safeParse({ ...base, usertest: { extraAllowedUrlPatterns } }).success
+    expect(patterns(["https://api.stack-auth.com/*", "https://cdn.example.com/assets/*"])).toBe(true)
+    for (const bad of ["*", "https://*/*", "https://*.example.com/*", "http://api.example.com/*", "https://user@api.example.com/*", "https://api.example.com:8443/*", "https://api.example.com"]) {
+      expect(patterns([bad])).toBe(false)
+    }
   })
 
   it("keeps its runs under ~/.agentd/usertest", () => {

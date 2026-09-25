@@ -166,6 +166,10 @@ const compiles = (value: string) => {
     return false
   }
 }
+/** Vercel's bypass secret goes to any host previewHost matches, so it must match whole hostnames. */
+const anchored = (value: string) => value.startsWith("^") && value.endsWith("$") && compiles(value)
+/** Another site a page may load from, named by its literal https host: no wildcard, port or user before the path. */
+const literalHttpsPattern = (value: string) => /^https:\/\/[a-z0-9-]+(\.[a-z0-9-]+)+\/\S*$/.test(value)
 
 /** The agent browser test (WS5): Claude in a real Chrome, on the PR's preview and on staging. */
 const UserTestSchema = z
@@ -179,12 +183,12 @@ const UserTestSchema = z
     previewWaitMinutes: z.number().int().positive().default(20),
     /** The GitHub deployment environment Vercel reports the project's previews in. */
     previewEnvironment: z.string().min(1).optional(),
-    /** The preview's hostname, as a regular expression. */
-    previewHost: z.string().refine(compiles, "must be a regular expression").optional(),
+    /** The preview's hostname, as a regular expression anchored with ^ and $. */
+    previewHost: z.string().refine(anchored, "must be a regular expression anchored with ^ and $").optional(),
     stagingOrigin: z.string().refine(bareOrigin, "must be a bare https origin").optional(),
     rcOrigin: z.string().refine(bareOrigin, "must be a bare https origin").optional(),
     /** URL patterns a page may load from besides its own origin, e.g. the app's sign-in API. */
-    extraAllowedUrlPatterns: z.array(z.string().min(1)).default([]),
+    extraAllowedUrlPatterns: z.array(z.string().refine(literalHttpsPattern, "must be https:// and a literal host, then a path")).default([]),
     chromePath: z.string().default("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"),
     headless: z.boolean().default(true),
     personas: z.array(PersonaSchema).default([]),

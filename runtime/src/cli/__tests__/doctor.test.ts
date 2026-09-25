@@ -372,7 +372,7 @@ describe("userTestChecks (WS5)", () => {
     expect(await userTestChecks(deps(), ConfigSchema.parse(base))).toEqual([])
   })
 
-  it("wants Chrome 149 or newer, the pinned browser tool and Node 22", async () => {
+  it("wants Chrome 149 or newer, the pinned browser tool and Node 22.12", async () => {
     secret(".config/agentd/usertest.env", "TEST_LOGIN_SECRET=x\n")
     expect(await lines(on(), "Google Chrome 153.0.1.2\n")).toEqual([
       "ok browser test Chrome: Chrome 153",
@@ -382,7 +382,10 @@ describe("userTestChecks (WS5)", () => {
     ])
     expect((await lines(on(), "Google Chrome 148.0.1.2\n"))[0]).toMatch(/^fail browser test Chrome: Chrome 148 is older than 149/)
     expect((await lines(on(), ""))[0]).toMatch(/^fail browser test Chrome: no Google Chrome at /)
-    expect(await lines(on(), "Google Chrome 153.0.1.2\n", { nodeVersion: "20.18.1" })).toContain("fail browser test node: Node 20.18.1: the browser test needs Node 22 or newer")
+    expect(await lines(on(), "Google Chrome 153.0.1.2\n", { nodeVersion: "20.18.1" })).toContain("fail browser test node: Node 20.18.1: the browser test needs Node 22.12 or newer")
+    // chrome-devtools-mcp 1.9.0's engines start at 22.12 on Node 22.
+    expect(await lines(on(), "Google Chrome 153.0.1.2\n", { nodeVersion: "22.11.0" })).toContain("fail browser test node: Node 22.11.0: the browser test needs Node 22.12 or newer")
+    expect(await lines(on(), "Google Chrome 153.0.1.2\n", { nodeVersion: "24.1.0" })).toContain("ok browser test node: 24.1.0")
   })
 
   it("warns, and fails nothing, without the secrets file or a persona: the test then runs signed out", async () => {

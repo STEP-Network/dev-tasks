@@ -455,10 +455,12 @@ export async function userTestChecks(d: DoctorDeps, config: AgentConfig): Promis
   } catch (error) {
     checks.push({ level: "fail", name: "browser test tool", detail: message(error) })
   }
+  // Node 22 for its WebSocket, and 22.12 for chrome-devtools-mcp's engines.
+  const [nodeMajor, nodeMinor] = d.nodeVersion.split(".").map(Number)
   checks.push(
-    Number(d.nodeVersion.split(".")[0]) >= 22
+    nodeMajor > 22 || (nodeMajor === 22 && nodeMinor >= 12)
       ? { level: "ok", name: "browser test node", detail: d.nodeVersion }
-      : { level: "fail", name: "browser test node", detail: `Node ${d.nodeVersion}: the browser test needs Node 22 or newer` },
+      : { level: "fail", name: "browser test node", detail: `Node ${d.nodeVersion}: the browser test needs Node 22.12 or newer` },
   )
   checks.push(
     secretCheck("browser test secrets", userTestSecretsPath(d.paths.home), false) ?? {

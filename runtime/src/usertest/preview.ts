@@ -59,12 +59,12 @@ const SHA_RE = /^[0-9a-f]{40}$/
 const GH_MS = 60_000
 
 async function lookup(o: { exec: Exec; slug: string; sha: string; environment: string; hostRe: RegExp }): Promise<PreviewLookup> {
-  const list = await o.exec("gh", ["api", `repos/${o.slug}/deployments?sha=${o.sha}&per_page=20`], { timeoutMs: GH_MS })
+  const list = await o.exec("gh", ["api", `repos/${o.slug}/deployments?sha=${o.sha}&environment=${encodeURIComponent(o.environment)}&per_page=20`], { timeoutMs: GH_MS })
   if (list.code !== 0) return { state: "pending" }
   try {
     const deployments = JSON.parse(list.stdout) as Array<Omit<DeploymentWithStatuses, "statuses">>
     const full: DeploymentWithStatuses[] = []
-    for (const d of deployments.filter((x) => x.environment === o.environment)) {
+    for (const d of deployments.filter((x) => x.environment === o.environment && Number.isInteger(x.id))) {
       const s = await o.exec("gh", ["api", `repos/${o.slug}/deployments/${d.id}/statuses?per_page=20`], { timeoutMs: GH_MS })
       full.push({ ...d, statuses: s.code === 0 ? (JSON.parse(s.stdout) as DeploymentStatus[]) : [] })
     }

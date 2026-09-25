@@ -105,6 +105,9 @@ USERS=(--allowed-users UNATE,UKRIS --other-bots UEVEBOT)
 boot() { bash "$BOOTSTRAP" "$@" > "$T/out.log" 2>&1; }
 steps_run() { grep -o '^== [0-9]*\. [a-z-]*' "$T/out.log" | awk '{print $3}' | tr '\n' ' ' | sed 's/ $//'; }
 calls() { [ -f "$T/ssh.log" ] && wc -l < "$T/ssh.log" | tr -d ' ' || echo 0; }
+parses() { # config.json: agentd's own schema takes it
+  (cd "$RUNTIME" && ./node_modules/.bin/tsx -e 'import("./src/config.ts").then(({ ConfigSchema }) => { const r = ConfigSchema.safeParse(JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8"))); if (!r.success) { console.error(JSON.stringify(r.error.issues)); process.exit(1) } })' "$1")
+}
 refuses() { # what, pattern, args...
   local what=$1 pattern=$2
   shift 2
@@ -123,6 +126,7 @@ refuses "refuses a Slack id that is not one" "not a Slack member id" --allowed-u
 refuses "refuses a bot id that is not one" "not a Slack member id" --allowed-users UNATE --other-bots '"x"' bob bobs-mac-mini
 printf '["not", "an object"]\n' > "$T/usertest-bad.json"
 refuses "refuses a --usertest file that is not a JSON object" "not a JSON object" --usertest "$T/usertest-bad.json" "${USERS[@]}" bob bobs-mac-mini
+refuses "the usage says --force-config without --usertest leaves the browser test out" "without --usertest it leaves the browser test section out" bob
 
 # --dry-run: every step's command, and nothing run.
 rm -f "$T/ssh.log"
@@ -181,6 +185,9 @@ printf '{"enabled":true,"personas":[{"id":"customer","email":"customer@example.t
 printf 'TEST_LOGIN_SECRET=SECRETVALUE\n' > "$R/.config/agentd/usertest.env"
 chmod 600 "$R/.config/agentd/usertest.env"
 if boot --force-config --usertest "$T/usertest.json" "${USERS[@]}" bob bobs-mac-mini && [ "$(jq -c '[.usertest.enabled, .usertest.personas[0].id]' "$C")" = '[true,"customer"]' ]; then ok "--usertest puts the private file's section in config.json"; else bad "--usertest: $(jq -c .usertest "$C") $(tail -3 "$T/out.log")"; fi
+# The private file adds to the template's public section, so agentd takes the result.
+[ "$(jq -cS '.usertest | del(.enabled, .personas)' "$C")" = "$(jq -cS '.usertest | del(.enabled, .personas)' "$RUNTIME/templates/config.example.json")" ] && ok "--usertest keeps the template's preview and staging settings" || bad "--usertest template: $(jq -c .usertest "$C")"
+if out=$(parses "$C" 2>&1); then ok "the config.json --usertest writes is one agentd takes"; else bad "agentd refuses it: $out"; fi
 grep -q "ok $R/.config/agentd/usertest.env (600)" "$T/out.log" && ! grep -q "For the browser test: put" "$T/out.log" && ok "a usertest.env at 600 passes, and is not on the list" || bad "usertest.env 600: $(grep usertest "$T/out.log")"
 if grep -q SECRETVALUE "$T/out.log" "$T/ssh.log"; then bad "a browser-test secret reached the output"; else ok "no browser-test secret in the output"; fi
 

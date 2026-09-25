@@ -15,10 +15,11 @@
 #   bootstrap-mini.sh [--dry-run] [--key <file>] [--force-config] [--usertest <file>]
 #                     --allowed-users U1,U2 [--other-bots U3] <agent> <host>
 #
-# --usertest <file> is config.json's `usertest` section (the browser test,
-# WS5), which the orchestrator keeps in a private file: it names the staging
-# personas, which this public repository may not. Without it the section is
-# left out, and the browser test stays off.
+# --usertest <file> holds what config.json's `usertest` section (the browser
+# test, WS5) adds to the template's: `enabled` and the staging personas, which
+# this public repository may not name. The orchestrator keeps it in a private
+# file. Without it the section is left out, and the browser test stays off,
+# so --force-config without --usertest turns the test off on that mini.
 #
 # One step per SSH call, each read before the next: the first that fails
 # stops the run and names itself. Re-runnable: a checkout that exists is
@@ -44,6 +45,7 @@ usage() {
   echo "  --allowed-users  the Slack member ids that may talk to the agent, the same on every mini" >&2
   echo "  --other-bots     the other agents' bot user ids (slack.otherAgentBots)" >&2
   echo "  --usertest       a JSON file with config.json's usertest section (the browser test, kept private)" >&2
+  echo "  --force-config   writes config.json again: without --usertest it leaves the browser test section out" >&2
   echo "  --key            the SSH key for <agent>@<host> (default ~/.ssh/<agent>_mini_ed25519 when it exists)" >&2
   exit 64
 }
@@ -207,7 +209,7 @@ jq --arg mini "$AGENT" --arg home "$REMOTE_HOME" --argjson users "$USERS_JSON" -
   | .worker.autoMerge = true' "$TEMPLATE" > "$WORK/config.json"
 # The browser test's section comes from the orchestrator's private file, or not at all.
 if [ -n "$USERTEST" ]; then
-  jq --slurpfile u "$USERTEST" '.usertest = $u[0]' "$WORK/config.json" > "$WORK/config.next.json"
+  jq --slurpfile u "$USERTEST" '.usertest = ((.usertest // {}) + $u[0])' "$WORK/config.json" > "$WORK/config.next.json"
 else
   jq 'del(.usertest)' "$WORK/config.json" > "$WORK/config.next.json"
 fi

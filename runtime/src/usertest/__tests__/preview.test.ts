@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 import { fakeExec } from "../../__tests__/fakes.ts"
-import { selectPreview, waitForPreview, type DeploymentWithStatuses } from "../preview.ts"
+import { previewOriginFrom, selectPreview, waitForPreview, type DeploymentWithStatuses } from "../preview.ts"
 
 const SHA = "b".repeat(40)
 const ENV = "Preview – example"
@@ -28,7 +28,32 @@ describe("selectPreview", () => {
   })
 })
 
+describe("previewOriginFrom", () => {
+  it("takes only a bare https origin on the preview host", () => {
+    expect(previewOriginFrom("https://app-x1.vercel.app/", HOST)).toBe("https://app-x1.vercel.app")
+    for (const url of ["https://app-x1.vercel.app:8443/", "https://u:p@app-x1.vercel.app/", "https://app-x1.vercel.app/path", "http://app-x1.vercel.app/", "https://app-x1.vercel.app/?q=1", "not a url", null]) {
+      expect(previewOriginFrom(url, HOST)).toBeNull()
+    }
+  })
+})
+
 describe("waitForPreview", () => {
+  it("asks GitHub for the project's preview environment only, and skips a deployment id that is not a number", async () => {
+    const list = JSON.stringify([
+      { id: "1/../../x", sha: SHA, environment: ENV, created_at: "2026-09-25T10:00:00Z" },
+      { id: 7, sha: SHA, environment: ENV, created_at: "2026-09-25T10:00:00Z" },
+    ])
+    const statuses = JSON.stringify([{ state: "success", environment_url: "https://app-x7.vercel.app", created_at: "2026-09-25T10:01:00Z", creator: { login: "vercel[bot]" } }])
+    const { exec, lines } = fakeExec([
+      [/deployments\?sha=/, { stdout: list }],
+      [/deployments\/7\/statuses/, { stdout: statuses }],
+    ])
+    const found = await waitForPreview({ exec, slug: "example/repo", sha: SHA, environment: ENV, hostRe: HOST, minutes: 1, now: () => new Date(), sleep: async () => {}, pollMs: 120_000 })
+    expect(found).toEqual({ state: "ready", origin: "https://app-x7.vercel.app" })
+    expect(lines()[0]).toContain(`environment=${encodeURIComponent(ENV)}`)
+    expect(lines().join("\n")).not.toContain("../")
+  })
+
   it("gives up after its minutes on a clock that moves with each wait", async () => {
     let t = Date.parse("2026-09-25T10:00:00Z")
     const { exec } = fakeExec([[/deployments\?sha=/, { stdout: "[]" }]])

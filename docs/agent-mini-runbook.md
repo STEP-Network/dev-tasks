@@ -987,17 +987,20 @@ the board as they are.
 ## The browser test (WS5)
 
 Before any person looks at an agent's PR, the agent clicks it through in a
-real Chrome: on the PR's Vercel preview, as a staging persona where the
-change calls for one, at desktop and phone width, with screenshots and a GIF
-on the PR and the issue. A headless Google Chrome runs on the mini, driven
-by chrome-devtools-mcp 1.9.0 (pinned in `runtime/package.json`, never
-fetched with npx), and the browser opens only the preview and staging.
+real Chrome, at desktop and phone width, with screenshots and a GIF on the
+PR and the issue. On the PR's Vercel preview it is always signed out: the
+preview runs code nobody has reviewed yet, so the test-login secret never
+goes there. The journeys that need a staging persona run on staging after
+the merge (and on the release candidate once it exists). A headless Google
+Chrome runs on the mini, driven by chrome-devtools-mcp 1.9.0 (pinned in
+`runtime/package.json`, never fetched with npx), and the browser opens only
+the preview and staging.
 
 ### Setting it up (Nate, then the orchestrator)
 
 1. **Chrome**, from the mini's admin account:
    `brew install --cask google-chrome`. Version 149 or newer: the browser
-   allowlist needs it. Node 22 or newer runs the runtime.
+   allowlist needs it. Node 22.12 or newer runs the runtime.
 2. **The two secrets**, typed on the mini as `<agent>`, the same way as
    section 5, never through an agent's session:
 
@@ -1013,8 +1016,9 @@ fetched with npx), and the browser opens only the preview and staging.
    Deployment Protection "Protection Bypass for Automation" secret. Only the
    runtime's own code reads them, from outside the browser: the persona's
    session and the bypass reach Chrome as cookies, and the model never sees
-   either secret. Without the file the test runs as a visitor who is not
-   signed in, and cannot open a protected preview.
+   either secret. The test-login secret goes only to staging and the release
+   candidate, never to a preview. Without the file the test runs as a
+   visitor who is not signed in, and cannot open a protected preview.
 3. **The config**: `usertest` in `~/.agentd/config.json`, the template's
    section with `"enabled": true` and the personas. The persona addresses
    stay in the mini's config, never in this repository:
@@ -1034,8 +1038,12 @@ fetched with npx), and the browser opens only the preview and staging.
 
    A persona whose pages show real people's data (an admin) has
    `"publishScreenshots": false`: its screenshots stay on the mini.
-   `bootstrap-mini.sh --usertest <file>` writes this section from the
-   orchestrator's private file on a new mini.
+   `previewHost` is anchored with `^` and `$`, because the bypass secret
+   goes to any host it matches, and each `extraAllowedUrlPatterns` entry
+   names one https host literally. `bootstrap-mini.sh --usertest <file>`
+   adds the orchestrator's private file (`enabled` and `personas`) to the
+   template's section on a new mini. `--force-config` without `--usertest`
+   leaves the section out, which turns the test off.
 4. `~/.agentd/bin/agentctl doctor`: the "browser test" lines are Chrome, the
    browser tool, Node and the secrets file, and all must be ok. Then
    `~/.agentd/bin/agentctl probe-browser`, which opens staging and shows that

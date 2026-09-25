@@ -7,6 +7,7 @@
 import { spawn, type ChildProcess } from "node:child_process"
 import { existsSync, mkdirSync, readFileSync, rmSync } from "node:fs"
 import { join } from "node:path"
+import { workerEnv } from "../worker/guard.ts"
 import type { BrowserCookie } from "./login.ts"
 
 export interface ChromeHandle {
@@ -14,7 +15,7 @@ export interface ChromeHandle {
   close(): Promise<void>
 }
 
-export type SpawnChrome = (path: string, args: string[]) => ChildProcess
+export type SpawnChrome = (path: string, args: string[], env: Record<string, string>) => ChildProcess
 
 export function chromeArgs(o: { profileDir: string; headless: boolean }): string[] {
   return [
@@ -27,6 +28,8 @@ export function chromeArgs(o: { profileDir: string; headless: boolean }): string
     "--disable-extensions",
     "--disable-background-networking",
     "--window-size=1440,900",
+    // Over SSH the login keychain is locked: a throwaway profile needs none.
+    "--use-mock-keychain",
     ...(o.headless ? ["--headless=new"] : []),
     "about:blank",
   ]
@@ -56,16 +59,22 @@ export async function launchChrome(o: {
   // A profile from an earlier run could hold an old port file and old cookies.
   rmSync(o.profileDir, { recursive: true, force: true })
   mkdirSync(o.profileDir, { recursive: true })
-  const child = (o.spawnChrome ?? ((path, args) => spawn(path, args, { stdio: "ignore" })))(o.chromePath, chromeArgs(o))
+  // The runner's own secrets stay out of the browser's environment, as out of every other child it starts.
+  const env = workerEnv(process.env, {})
+  const child = (o.spawnChrome ?? ((path, args, env) => spawn(path, args, { stdio: "ignore", env })))(o.chromePath, chromeArgs(o), env)
   let exited = false
   child.on("exit", () => void (exited = true))
   child.on("error", () => void (exited = true))
   const deadline = Date.now() + (o.timeoutMs ?? 30_000)
   let port: number | null = null
   while (port === null) {
-    if (exited) throw new Error("Chrome exited before it opened its debugging port")
+    if (exited) {
+      rmSync(o.profileDir, { recursive: true, force: true })
+      throw new Error("Chrome exited before it opened its debugging port")
+    }
     if (Date.now() > deadline) {
       child.kill("SIGKILL")
+      rmSync(o.profileDir, { recursive: true, force: true })
       throw new Error("Chrome did not open its debugging port in time")
     }
     await o.sleep(250)
@@ -104,7 +113,9 @@ export async function setBrowserCookies(
   o: { fetchImpl: typeof fetch; socket?: SocketFactory; timeoutMs?: number },
 ): Promise<void> {
   if (!cookies.length) return
-  const version = (await (await o.fetchImpl(`http://127.0.0.1:${port}/json/version`)).json()) as { webSocketDebuggerUrl?: string }
+  const version = (await (await o.fetchImpl(`http://127.0.0.1:${port}/json/version`, { signal: AbortSignal.timeout(o.timeoutMs ?? 15_000) })).json()) as {
+    webSocketDebuggerUrl?: string
+  }
   const url = version.webSocketDebuggerUrl
   if (!url?.startsWith(`ws://127.0.0.1:${port}/`)) throw new Error("Chrome gave no local DevTools socket")
   const ws = (o.socket ?? nodeSocket)(url)
@@ -115,7 +126,13 @@ export async function setBrowserCookies(
     }, o.timeoutMs ?? 15_000)
     ws.addEventListener("open", () => ws.send(JSON.stringify({ id: 1, method: "Storage.setCookies", params: { cookies } })))
     ws.addEventListener("message", (event) => {
-      const msg = JSON.parse(String(event.data)) as { id?: number; error?: { message?: string } }
+      // A throw in a listener would be an uncaught exception: a message that is not JSON is passed over.
+      let msg: { id?: number; error?: { message?: string } }
+      try {
+        msg = JSON.parse(String(event.data)) as typeof msg
+      } catch {
+        return
+      }
       if (msg.id !== 1) return
       clearTimeout(timer)
       ws.close()

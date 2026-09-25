@@ -83,12 +83,24 @@ export function loadSentryCronUrl(home: string): string | null {
  * the worker, `claude setup-token` makes a one-year token for the same
  * subscription. It is kept here and handed to the worker's environment only.
  */
+export function loadClaudeOauthToken(home: string): string | null {
+  const path = claudeTokenPath(home)
+  try {
+    statSync(path)
+  } catch {
+    return null
+  }
+  return readSecretsFile(path).CLAUDE_CODE_OAUTH_TOKEN || null
+}
+
 /**
  * The browser test's two secrets (WS5): the staging test-login route's shared
  * secret, and Vercel's protection bypass for the project's previews. Both are
  * optional. Without the first the test runs as a visitor who is not signed
  * in, without the second it cannot open a protected preview. Only the
  * runtime's own code reads them: the browser and the model never see either.
+ * The first goes only to staging and the release candidate, never to a
+ * preview (login.ts).
  */
 export function loadUserTestSecrets(home: string): { testLoginSecret: string | null; bypassSecret: string | null } {
   const path = userTestSecretsPath(home)
@@ -99,16 +111,6 @@ export function loadUserTestSecrets(home: string): { testLoginSecret: string | n
   }
   const values = readSecretsFile(path)
   return { testLoginSecret: values.TEST_LOGIN_SECRET || null, bypassSecret: values.VERCEL_AUTOMATION_BYPASS_SECRET || null }
-}
-
-export function loadClaudeOauthToken(home: string): string | null {
-  const path = claudeTokenPath(home)
-  try {
-    statSync(path)
-  } catch {
-    return null
-  }
-  return readSecretsFile(path).CLAUDE_CODE_OAUTH_TOKEN || null
 }
 
 /**
