@@ -87,6 +87,13 @@ describe("finalize: done", () => {
     expect(outbox()[0].text).toBe(`STEP-7: I opened <${PR}|PR #1700> for "Fix the date". A person needs to merge it once the checks pass.`)
   })
 
+  it("leaves auto-merge to the browser test when it is deferred, and says it goes in once tried in a browser (WS5)", async () => {
+    const { ctx, f, outbox } = setup()
+    expect(await finalize({ ...ctx, merge: "deferred" }, done)).toMatchObject({ status: "done", prUrl: PR })
+    expect(f.lines().some((l) => l.startsWith("gh pr merge"))).toBe(false)
+    expect(outbox()[0].text).toBe(`STEP-7: I opened <${PR}|PR #1700> for "Fix the date". It goes in by itself once I have tried it in a browser and the checks and the review pass. Nothing needed from you.`)
+  })
+
   it("opens the PR but leaves the merge to a person when auto-merge is off on this mini, and says so in the PR and in Slack", async () => {
     const { ctx, f, paths, outbox } = setup()
     expect(await finalize({ ...ctx, merge: "mini-off" }, done)).toMatchObject({ status: "done", prUrl: PR })

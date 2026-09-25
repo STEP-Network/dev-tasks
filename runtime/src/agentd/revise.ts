@@ -36,6 +36,7 @@ import { enqueueSlack } from "../outbox.ts"
 import { feedbackFor, NOTHING_NEEDED, prLink } from "../plain.ts"
 import { approvalLabel, approvalPatch, classOfLabels, classRank, type ApprovalClass, type Tracker } from "../tracker.ts"
 import type { Exec } from "../worker/git.ts"
+import { BROWSER_TEST_REASON, readUserTestState, type UserTestState } from "../usertest/state.ts"
 
 export const MAX_REVISE_ROUNDS = 3
 
@@ -151,7 +152,11 @@ export type RevisePlan =
  * What one open PR needs, from its view, the watcher's record and which
  * failing checks are the infrastructure's (`infra`, by name). Pure.
  */
-export function planRevision(view: OwnPrView, pr: WatchedPr, ctx: { mini: string; required: readonly string[]; infra: Record<string, boolean> }): RevisePlan {
+export function planRevision(
+  view: OwnPrView,
+  pr: WatchedPr,
+  ctx: { mini: string; required: readonly string[]; infra: Record<string, boolean>; usertest?: UserTestState | null },
+): RevisePlan {
   const handled = new Set(pr.revise?.handled ?? [])
   const author = view.author?.login ?? ""
   const others = (who?: PrActor) => Boolean(who?.login) && who!.login !== author
@@ -168,6 +173,12 @@ export function planRevision(view: OwnPrView, pr: WatchedPr, ctx: { mini: string
     ids.push(`comment:${c.id}`)
     reasons.push(`a comment from ${c.author!.login}`)
   }
+  // This mini's own browser test of the PR's head (WS5): its blockers and major findings.
+  const ut = ctx.usertest
+  if (ut && ut.verdict === "findings" && ut.head === view.headRefOid && !handled.has(`usertest:${ut.head}`)) {
+    ids.push(`usertest:${ut.head}`)
+    reasons.push(BROWSER_TEST_REASON)
+  }
   const failing = failingRequired(view, ctx.required)
   const infraOnly: FailingCheck[] = []
   for (const f of failing) {
@@ -182,7 +193,9 @@ export function planRevision(view: OwnPrView, pr: WatchedPr, ctx: { mini: string
   }
   if (ids.length) {
     const rounds = pr.revise?.rounds ?? 0
-    if (rounds >= MAX_REVISE_ROUNDS) return pr.revise?.asked ? { kind: "none" } : { kind: "ask", handled: ids, reasons }
+    // Asked once per head: feedback on a head nobody was asked about asks again.
+    const askedHere = pr.revise?.asked && (pr.revise.askedHead === undefined || pr.revise.askedHead === view.headRefOid)
+    if (rounds >= MAX_REVISE_ROUNDS) return askedHere ? { kind: "none" } : { kind: "ask", handled: ids, reasons }
     return { kind: "revise", handled: ids, reasons }
   }
   if (infraOnly.length) {
@@ -367,7 +380,8 @@ export async function reviseOwnPr(deps: ReviseDeps, pr: WatchedPr, view: OwnPrVi
   const verdicts = await classifyFailures(deps, view, pr, required)
   const infra = Object.fromEntries(Object.entries(verdicts).map(([name, v]) => [`${view.headRefOid}:${name}`, v]))
   let record: WatchedPr = { ...(await raiseClass(deps, pr, view)), infra }
-  const plan = planRevision(view, pr, { mini: deps.config.mini, required, infra: verdicts })
+  const usertest = readUserTestState(deps.paths, pr.url)
+  const plan = planRevision(view, pr, { mini: deps.config.mini, required, infra: verdicts, usertest })
   const now = deps.now()
   switch (plan.kind) {
     case "none":
@@ -422,7 +436,7 @@ export async function reviseOwnPr(deps: ReviseDeps, pr: WatchedPr, view: OwnPrVi
           id: `cap-${pr.issue}-${view.number}`,
           issue: pr.issue,
           url: pr.url,
-          question: `${prLink(pr.url)} still has review feedback after I worked on it ${MAX_REVISE_ROUNDS} times (${plan.reasons.join(", ")}).`,
+          question: `${prLink(pr.url)} still has review feedback after I worked on it ${MAX_REVISE_ROUNDS} times (${plan.reasons.join(", ")}).${plan.reasons.includes(BROWSER_TEST_REASON) ? " It does not go in by itself until then." : ""}`,
           options: [
             { reply: "fix it", does: "have me try once more" },
             { reply: "leave it", does: "leave it to a person" },
@@ -432,7 +446,7 @@ export async function reviseOwnPr(deps: ReviseDeps, pr: WatchedPr, view: OwnPrVi
         },
         now,
       )
-      record = { ...record, revise: { ...(pr.revise ?? { rounds: MAX_REVISE_ROUNDS, handled: [] }), handled: [...(pr.revise?.handled ?? []), ...plan.handled], asked: true } }
+      record = { ...record, revise: { ...(pr.revise ?? { rounds: MAX_REVISE_ROUNDS, handled: [] }), handled: [...(pr.revise?.handled ?? []), ...plan.handled], asked: true, askedHead: view.headRefOid } }
       appendLedger(deps.paths, { type: "pr.reviseCapped", issue: pr.issue, url: pr.url }, now)
       break
     }
@@ -442,13 +456,26 @@ export async function reviseOwnPr(deps: ReviseDeps, pr: WatchedPr, view: OwnPrVi
       const round = (pr.revise?.rounds ?? 0) + 1
       submitJob(deps.paths, pr.issue, null, now, {
         kind: "revise",
-        revise: { url: view.url, number: view.number, branch: view.headRefName, round, since: pr.revise?.lastRoundAt ?? pr.openedAt, reasons: plan.reasons },
+        revise: {
+          url: view.url,
+          number: view.number,
+          branch: view.headRefName,
+          round,
+          since: pr.revise?.lastRoundAt ?? pr.openedAt,
+          reasons: plan.reasons,
+          ...(plan.handled.some((id) => id.startsWith("usertest:")) && usertest ? { usertestFindings: usertest.findings } : {}),
+        },
       })
       record = { ...record, revise: { rounds: round, handled: [...(pr.revise?.handled ?? []), ...plan.handled], lastRoundAt: now.toISOString() } }
       appendLedger(deps.paths, { type: "pr.revise", issue: pr.issue, url: pr.url, round, reasons: plan.reasons }, now)
       enqueueSlack(
         deps.paths,
-        { kind: "post", channel: "agents", text: `${pr.issue}: I am fixing ${feedbackFor(plan.reasons)} on ${prLink(pr.url)} (${plan.reasons.join(", ")}), try ${round} of ${MAX_REVISE_ROUNDS}. ${NOTHING_NEEDED}` },
+        {
+          kind: "post",
+          channel: "agents",
+          // The browser test's reason says nothing feedbackFor has not said already.
+          text: `${pr.issue}: I am fixing ${feedbackFor(plan.reasons)} on ${prLink(pr.url)}${((rest) => (rest.length ? ` (${rest.join(", ")})` : ""))(plan.reasons.filter((r) => r !== BROWSER_TEST_REASON))}, try ${round} of ${MAX_REVISE_ROUNDS}. ${NOTHING_NEEDED}`,
+        },
         now,
       )
       break

@@ -52,5 +52,8 @@ describe("plain words for people (plain.ts)", () => {
     expect(feedbackFor(["Claude review failed"])).toBe("the review comments")
     expect(feedbackFor(["Test failed"])).toBe("the failing checks")
     expect(feedbackFor(["changes requested by nate", "Lint failed"])).toBe("the review comments and the failing checks")
+    expect(feedbackFor(["the browser test found problems"])).toBe("the problems the browser test found")
+    expect(feedbackFor(["changes requested by someone", "Test failed", "the browser test found problems"])).toBe("the review comments, the failing checks and the problems the browser test found")
+    expect(feedbackFor(["Test failed", "the browser test found problems"])).toBe("the failing checks and the problems the browser test found")
   })
 })

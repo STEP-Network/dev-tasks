@@ -444,6 +444,20 @@ describe("runJob", () => {
       return s
     }
 
+    it("says in the issue's thread when a round runs out of usage, and how to have it try again", async () => {
+      const { deps, job, outbox } = revising({ messages: [INIT], thrown: "Claude usage limit reached" })
+      expect(await runJob(deps, job.id)).toMatchObject({ status: "limited" })
+      expect(outbox()).toContain(`I ran out of usage while fixing the review comments and the failing checks on <${PR_URL}|PR #1674>. Once the limit resets, reply "fix it" here and I will try again.`)
+    })
+
+    it("tests a revise round's push in a browser however the round ended (WS5)", async () => {
+      const stopped: SdkMessage = { ...DONE, structured_output: { status: "blocked", summary: "Half done: the rest needs a person." } }
+      const usertest = { enabled: true, previewEnvironment: "Preview – example", previewHost: "^app-[a-z0-9-]+\\.vercel\\.app$", stagingOrigin: "https://staging.example.com" }
+      const { deps, job, f } = revising({ messages: [INIT, stopped], usertest })
+      expect(await runJob(deps, job.id)).toMatchObject({ status: "blocked" })
+      expect(f.lines().some((l) => l.startsWith(`gh pr view ${PR_URL} --json number,headRefOid`))).toBe(true)
+    })
+
     it("continues the PR's branch from origin, with the feedback in its brief, pushes to that branch and replies on the PR, claiming nothing", async () => {
       const { deps, job, fake, f, q, paths, outbox } = revising()
       expect(await runJob(deps, job.id)).toMatchObject({ status: "done", reason: "revised (round 1 of 3)", prUrl: PR_URL, branch: "STEP-7-fix-the-date" })
@@ -734,6 +748,49 @@ describe("modelFor, checkPlugins and checkBilling", () => {
     expect(checkBilling("none")).toBeNull()
     expect(checkBilling(undefined)).toBeNull()
     for (const source of ["ANTHROPIC_API_KEY", "apiKeyHelper", "/login managed key"]) expect(checkBilling(source), source).toMatch(/would bill an API key/)
+  })
+})
+
+describe("a develop job and the browser test (WS5)", () => {
+  const usertest = { enabled: true, previewEnvironment: "Preview – example", previewHost: "^app-[a-z0-9-]+\\.vercel\\.app$", stagingOrigin: "https://staging.example.com" }
+  const changed = (files: string) => [[/diff --name-only origin\/staging\.\.\.HEAD/, { stdout: files }]] as Array<[RegExp, Partial<ExecResult>]>
+  const arms = (lines: string[]) => lines.filter((l) => l.startsWith("gh pr merge"))
+
+  // The PR as gh answers the browser test: it lists no files a user sees, so the test ends before any browser.
+  const prView: Array<[RegExp, Partial<ExecResult>]> = [
+    [/^gh pr view \S+ --json number,headRefOid/, { stdout: JSON.stringify({ number: 1701, headRefOid: "e".repeat(40), labels: [], autoMergeRequest: null, state: "OPEN" }) }],
+    [/^gh pr diff /, { stdout: "" }],
+  ]
+
+  it("leaves auto-merge to the browser test when a user can see the change, which arms it after its test", async () => {
+    const { deps, job, f, outbox } = setup({ usertest, exec: [...prView, ...changed("components/account/Profile.tsx\n")] })
+    expect(await runJob(deps, job.id)).toMatchObject({ status: "done", prUrl: PR })
+    expect(outbox()[1]).toBe(`STEP-7: I opened <${PR}|PR #1701> for "Fix the date". It goes in by itself once I have tried it in a browser and the checks and the review pass. Nothing needed from you.`)
+    const lines = f.lines()
+    expect(arms(lines)).toEqual([`gh pr merge ${PR} --auto --squash --delete-branch`])
+    expect(lines.indexOf(arms(lines)[0])).toBeGreaterThan(lines.findIndex((l) => l.startsWith(`gh pr diff ${PR} --name-only`)))
+  })
+
+  it("counts a change it could not list as one a user can see", async () => {
+    const { deps, job, outbox } = setup({ usertest, exec: [...prView, [/diff --name-only origin\/staging\.\.\.HEAD/, { code: 1, stderr: "fatal" }]] })
+    await runJob(deps, job.id)
+    expect(outbox()[1]).toContain("once I have tried it in a browser")
+  })
+
+  it("still runs the browser test, which arms auto-merge, when finishing fails after the PR opened", async () => {
+    const { deps, job, f } = setup({ usertest, exec: [...prView, ...changed("components/account/Profile.tsx\n")], failOn: ["attachLink"] })
+    expect(await runJob(deps, job.id)).toMatchObject({ status: "blocked", prUrl: PR })
+    expect(arms(f.lines())).toEqual([`gh pr merge ${PR} --auto --squash --delete-branch`])
+  })
+
+  it("arms at once when no user can see the change, or the browser test is off", async () => {
+    for (const o of [{ usertest, exec: changed("docs/a.md\n") }, { usertest: { ...usertest, enabled: false }, exec: changed("components/account/Profile.tsx\n") }]) {
+      const { deps, job, f, outbox } = setup(o)
+      await runJob(deps, job.id)
+      expect(outbox()[1]).toContain("It goes in by itself once the checks and the review pass.")
+      expect(arms(f.lines())).toEqual([`gh pr merge ${PR} --auto --squash --delete-branch`])
+      expect(f.lines().some((l) => l.startsWith(`gh pr view ${PR} --json number,headRefOid`))).toBe(false)
+    }
   })
 })
 

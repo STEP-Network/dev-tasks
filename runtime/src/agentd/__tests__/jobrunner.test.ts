@@ -109,6 +109,15 @@ describe("superviseJobs", () => {
     expect(listJobs(paths, "done")[0].lostEarly).not.toBe(true)
   })
 
+  it("names the open PR, and says it will not go in by itself, when a job stops during its browser test", () => {
+    const { paths, deps } = setup({ liveness: () => "gone" })
+    running(paths, "STEP-1", { sessionStartedAt: "2026-09-24T11:00:00.000Z", userTestStartedAt: "2026-09-24T11:40:00.000Z", userTestPr: "https://github.com/example/repo/pull/7", killRequestedAt: "2026-09-24T11:58:00.000Z" })
+    superviseJobs(deps)
+    const [notice] = outbox(paths)
+    expect(notice).toContain("Its PR <https://github.com/example/repo/pull/7|PR #7> is open, and does not go in by itself now: a person merges it once the checks pass.")
+    expect(notice).not.toContain("Anything I committed")
+  })
+
   it("says a browser test job that died changed nothing, not that it left commits (WS5)", () => {
     const { paths, deps } = setup({ liveness: () => "gone" })
     running(paths, "STEP-1", { kind: "usertest", usertest: { target: "staging", pr: 12 } })

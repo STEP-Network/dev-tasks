@@ -252,7 +252,8 @@ function pruneOlderThan(dir: string, days: number, now: number, match: (name: st
     if (!match(name)) continue
     const path = join(dir, name)
     if (now - statSync(path).mtimeMs > days * 86_400_000) {
-      rmSync(path, { force: true })
+      // A browser test's run is a folder (WS5).
+      rmSync(path, { recursive: true, force: true })
       removed++
     }
   }
@@ -264,6 +265,9 @@ export async function cleanup(deps: { paths: AgentPaths; config: AgentConfig; ex
   let removed = 0
   for (const dir of [join(deps.paths.inbox, "done"), join(deps.paths.outbox, "done")]) removed += pruneOlderThan(dir, 14, now)
   removed += pruneOlderThan(join(deps.paths.jobs, "done"), 30, now)
+  // The browser test's runs (screenshots kept on the mini among them) and its verdicts (WS5).
+  removed += pruneOlderThan(deps.paths.usertest, 14, now)
+  removed += pruneOlderThan(join(deps.paths.state, "usertest"), 14, now)
   // One log per job, never written again once it ends.
   removed += pruneOlderThan(deps.paths.logs, 30, now, (name) => name.startsWith("worker-") && name.endsWith(".log"))
   if (existsSync(deps.paths.logs)) {

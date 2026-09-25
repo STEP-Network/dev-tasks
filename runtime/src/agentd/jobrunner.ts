@@ -24,7 +24,7 @@ import { heldBackIssues, jobPath, listJobs, moveJob, updateJob, type JobRecord }
 import { appendLedger, type Logger } from "../log.ts"
 import { enqueueSlack } from "../outbox.ts"
 import { commandOf } from "../pidlock.ts"
-import { plainReason } from "../plain.ts"
+import { plainReason, prLink } from "../plain.ts"
 import { recordLessons } from "../retro/lessons.ts"
 
 /** A job's worker: still running ("ours"), not ("gone"), or ps could not say ("unknown"). */
@@ -181,7 +181,10 @@ export function superviseJobs(deps: JobRunnerDeps): void {
         startedAt,
         job.kind === "usertest"
           ? "A browser test changes nothing, so nothing is left behind."
-          : `Anything I committed stays on this mini, and my next try at ${job.issue} starts from it. ` +
+          : job.userTestStartedAt && job.userTestPr
+            ? // Its PR is open, and waited for this test to switch on automatic merging.
+              `Its PR ${prLink(job.userTestPr)} is open, and does not go in by itself now: a person merges it once the checks pass.`
+            : `Anything I committed stays on this mini, and my next try at ${job.issue} starts from it. ` +
               `If I had taken the issue, I let it go after ${deps.config.claims.ttlHours} hours unless someone takes it first.`,
         lostEarly,
       )
