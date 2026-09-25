@@ -36,6 +36,8 @@ export interface ReviseRequest {
   since: string
   /** What brought it back, in a few words each, for Slack and the brief. */
   reasons: string[]
+  /** A person's own words, when a Slack reply asked for the round (STEP-3285). */
+  instruction?: string
 }
 
 export interface JobRecord {

@@ -491,7 +491,10 @@ describe("runJob", () => {
       expect(readFileSync(join(paths.state, "pr-reply-STEP-7.md"), "utf8")).toBe("eve could not finish this revision (round 1 of 3): The migration needs a person.\n\n1 commit pushed to STEP-7-fix-the-date.\n")
       expect(f.lines().some((l) => l.endsWith(" push -u origin HEAD:refs/heads/STEP-7-fix-the-date"))).toBe(true)
       const thread = listNew<{ kind: string; text: string; question: boolean }>(paths.outbox).map((e) => e.payload).find((p) => p.kind === "issue")
-      expect(thread).toMatchObject({ question: true, text: `blocked revising ${PR_URL}: The migration needs a person. A person needs to look.` })
+      expect(thread).toMatchObject({
+        question: true,
+        text: `Revising ${PR_URL} stopped: The migration needs a person. Reply "fix it" to try the round again once that is sorted, or "leave it" to leave the PR to a person.`,
+      })
       expect(fake.called("updateIssue")).toEqual([])
     })
 

@@ -252,7 +252,36 @@ describe("answers", () => {
     expect(updates[0][1]).toMatchObject({ state: "Ready", removeLabels: ["awaiting-answer"] })
     expect(fake.issues.get("STEP-7")!.description).toContain("**Nate** ([Slack](https://step.slack.com/archives/CQ/p17005)): Use the publication date")
     expect(listNew(paths.inbox)).toEqual([])
-    expect(listNew<{ kind: string; name?: string }>(paths.outbox)[0].payload).toMatchObject({ kind: "react", name: "white_check_mark" })
+    // Words, and a ✅ beside them: never a bare ✅ (STEP-3285).
+    expect(listNew<{ kind: string; name?: string; text?: string }>(paths.outbox).map((e) => e.payload)).toEqual([
+      expect.objectContaining({ kind: "reply", channelId: "CQ", threadTs: "1700.1", text: "Added your answer to STEP-7, and it goes back to Ready." }),
+      expect.objectContaining({ kind: "react", name: "white_check_mark" }),
+    ])
+  })
+
+  it("turn into an instruction for agentd when they answer the mini's own post about a PR or job (STEP-3285)", async () => {
+    // Nate, 2026-09-25, under Eve's "a person needs to look": a ✅ and nothing else, until now.
+    const { deps, fake, paths } = setup([issue({ id: "STEP-7", state: "In Review", labels: ["polads", "agent-ready"] })])
+    await handleEnvelope(deps, reply("1700.5", "fix it and merge"))
+    expect(fake.called("updateIssue")).toEqual([])
+    expect(listNew(paths.inbox).map((e) => e.payload)).toEqual([
+      expect.objectContaining({
+        type: "instruction", key: "instr:CQ:1700.5", issue: "STEP-7", channel: "CQ", ts: "1700.5", threadTs: "1700.1",
+        user: "UNATE", userName: "Nate", text: "fix it and merge", actions: ["revise", "merge"],
+      }),
+    ])
+    // agentd acts, and replies in words: the bridge sends nothing, least of all a bare ✅.
+    expect(listNew(paths.outbox)).toEqual([])
+  })
+
+  it("stay answers when the issue waits on one, or on a person's to-do, whatever words they use", async () => {
+    for (const label of ["awaiting-answer", "human-todo"]) {
+      const { deps, fake, paths } = setup([issue({ id: "STEP-7", state: "On hold", labels: ["agent-ready", label], description: "## Goal\n\nFix it." })])
+      await handleEnvelope(deps, reply("1700.5", "Done: the key is in, and please fix the label too"))
+      expect(fake.called("updateIssue"), label).toHaveLength(1)
+      expect(listNew(paths.inbox), label).toEqual([])
+      expect(fake.issues.get("STEP-7")!.description, label).toContain("fix the label too")
+    }
   })
 
   it("keep both of two replies that arrive together, applying one at a time", async () => {
@@ -350,6 +379,19 @@ describe("mentions", () => {
     }
     expect(await handleEnvelope(deps, body)).toBe("mention")
     expect(listNew(paths.inbox)[0].payload).toMatchObject({ type: "mention", channel: "CAG" })
+  })
+})
+
+describe("mentions that name a PR (STEP-3285)", () => {
+  it("become an instruction for agentd, and one that names nothing stays the front door's", async () => {
+    const { deps, paths } = setup()
+    const at = (ts: string, text: string): SlackEnvelope => ({ team_id: "T1", event: { type: "app_mention", user: "UNATE", channel: "CAG", ts, text } })
+    await handleEnvelope(deps, at("1950.1", "<@UBOT> fix <https://github.com/STEP-Network/v0-politiske-annoncer/pull/1679|#1679> and merge"))
+    await handleEnvelope(deps, at("1950.2", "<@UBOT> fix the login page"))
+    expect(listNew<{ type: string; target?: unknown; threadTs?: string }>(paths.inbox).map((e) => e.payload)).toEqual([
+      expect.objectContaining({ type: "instruction", issue: null, threadTs: "1950.1", actions: ["revise", "merge"], target: { url: "https://github.com/STEP-Network/v0-politiske-annoncer/pull/1679", pr: 1679 } }),
+      expect.objectContaining({ type: "mention", ts: "1950.2" }),
+    ])
   })
 })
 

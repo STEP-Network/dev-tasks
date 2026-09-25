@@ -22,6 +22,7 @@ import { onQueue } from "../select.ts"
 import { issueForThread, saveThread } from "../threads.ts"
 import { createLinearTracker, type Tracker } from "../tracker.ts"
 import { classify, type Classified, type ClassifyContext, type SlackEnvelope } from "./classify.ts"
+import { parseInstruction, type InstructionEntry } from "./instruction.ts"
 import { isSlackTrouble, slackErrorCode, startOutbox, type SendContext, type SlackWeb } from "./send.ts"
 import { answerTransition, appendAnswer, fromSlack, intakeIssue, mentionedUsers } from "./text.ts"
 
@@ -74,9 +75,28 @@ export async function handleEnvelope(deps: BridgeDeps, envelope: SlackEnvelope):
     const entry = readJson<Record<string, unknown>>(path)
     if (entry) writeJsonAtomic(path, { ...entry, userName })
   }
+  if (c.type === "mention" && !c.filedBy) {
+    // "@eve fix #1679 and merge": an instruction for agentd, when it names what it means.
+    const said = parseInstruction(c.text)
+    if (said.actions.length && (said.target.issue || said.target.pr)) {
+      fileInstruction(deps, { issue: null, channel: c.channel, ts: c.ts, threadTs: c.threadTs, user: c.user, userName, text: c.text, ...said })
+      ack(deps.paths.inbox, c.key)
+      return c.type
+    }
+  }
   if (c.type === "answer") await applyAnswer(deps, c.key)
   if (c.type === "intake") await fileIntake(deps, c.key)
   return c.type
+}
+
+/**
+ * An instruction for agentd (agentd/instructions.ts), which acts on it within
+ * seconds and replies in words. Filed once per message.
+ */
+function fileInstruction(deps: BridgeDeps, entry: Omit<InstructionEntry, "type" | "key" | "receivedAt">): void {
+  const key = `instr:${entry.channel}:${entry.ts}`
+  const filed: InstructionEntry = { type: "instruction", key, ...entry, receivedAt: deps.now().toISOString() }
+  if (putOnce(deps.paths.inbox, key, filed)) appendLedger(deps.paths, { type: "instruction.received", issue: entry.issue ?? entry.target.issue ?? undefined, actions: entry.actions }, deps.now())
 }
 
 /** How long an intake or an answer Linear keeps refusing waits in the inbox before the bridge gives up and says so. */
@@ -190,12 +210,29 @@ export async function applyAnswer(deps: BridgeDeps, key: string): Promise<void> 
     await once(deps, `issue:${entry.issue}`, async () => {
       try {
         const current = await deps.tracker.readIssue(entry.issue)
+        // A reply to one of the mini's own posts about the issue's PR or job
+        // ("fix it and merge") is an instruction, not an answer. A reply to a
+        // question the issue waits on, or to a person's to-do, stays an
+        // answer, whatever words it uses.
+        const said = parseInstruction(entry.text)
+        const waits = current.labels.includes("awaiting-answer") || current.labels.includes("human-todo")
+        if (said.actions.length && !waits) {
+          fileInstruction(deps, {
+            issue: entry.issue, channel: entry.channel, ts: entry.ts, threadTs: entry.threadTs,
+            user: entry.user, userName: entry.userName, text: entry.text, actions: said.actions, target: said.target,
+          })
+          ack(deps.paths.inbox, key)
+          return
+        }
         const permalink = await deps.web.permalink(entry.channel, entry.ts).catch(() => null)
         const text = fromSlack(entry.text, await namesFor(deps, entry.text))
         const description = appendAnswer(current.description, { ts: entry.ts, userName: entry.userName, text, permalink })
         const move = answerTransition(current)
         await deps.tracker.updateIssue(entry.issue, { ...(description !== current.description ? { description } : {}), ...move })
         ack(deps.paths.inbox, key)
+        // Words first, and a ✅ beside them: never a bare ✅ (STEP-3285).
+        const moved = move.state ? `, and it goes back to ${move.state}` : ""
+        enqueueSlack(deps.paths, { kind: "reply", channelId: entry.channel, threadTs: entry.threadTs, text: `Added your answer to ${entry.issue}${moved}.` }, deps.now())
         enqueueSlack(deps.paths, { kind: "react", channelId: entry.channel, ts: entry.ts, name: "white_check_mark" }, deps.now())
         appendLedger(deps.paths, { type: "answer.applied", issue: entry.issue, movedTo: move.state ?? null }, deps.now())
       } catch (error) {

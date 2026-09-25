@@ -177,14 +177,14 @@ describe("finalize: the other outcomes", () => {
     expect(fake.issues.get("STEP-7")!.state).toBe("On hold")
     expect(fake.called("comment")[0][1]).toMatch(/^Worker stopped: the turn limit of 250\./)
     expect(fake.called("comment")[0][1]).toContain("Work so far is on branch `STEP-7-fix-the-date`.")
-    expect(outbox()[0]).toEqual(expect.objectContaining({ kind: "issue", text: "blocked: the turn limit of 250. Reply here when it can continue." }))
+    expect(outbox()[0]).toEqual(expect.objectContaining({ kind: "issue", text: "blocked: the turn limit of 250. Reply \"retry\" when it can continue, and I pick it up on its branch." }))
   })
 
   it("blocked by the worker's own report says its reason once, with one full stop", async () => {
     const { ctx, fake, outbox } = setup("1\n")
     const summary = "pnpm install fails offline.\nThe lockfile names a package the store lacks."
     await finalize(ctx, { ...done, status: "blocked", reason: "pnpm install fails offline", report: { status: "blocked", summary } })
-    expect(outbox()[0].text).toBe("blocked: pnpm install fails offline. The lockfile names a package the store lacks. Reply here when it can continue.")
+    expect(outbox()[0].text).toBe("blocked: pnpm install fails offline. The lockfile names a package the store lacks. Reply \"retry\" when it can continue, and I pick it up on its branch.")
     expect(outbox()[1].text).toBe("STEP-7 blocked: pnpm install fails offline")
     expect(fake.called("comment")[0][1]).toMatch(/^Worker stopped: pnpm install fails offline\.\nThe lockfile names a package the store lacks\.\n/)
   })
@@ -192,7 +192,7 @@ describe("finalize: the other outcomes", () => {
   it("blocked still says why in Slack when Linear then fails", async () => {
     const { ctx, outbox } = setup("1\n", [], ["updateIssue"])
     expect(await failure(finalize(ctx, { ...done, status: "blocked", reason: "the turn limit of 250", report: null }))).toMatchObject({ pushed: true })
-    expect(outbox().map((m) => m.text)).toEqual(["blocked: the turn limit of 250. Reply here when it can continue.", "STEP-7 blocked: the turn limit of 250"])
+    expect(outbox().map((m) => m.text)).toEqual(["blocked: the turn limit of 250. Reply \"retry\" when it can continue, and I pick it up on its branch.", "STEP-7 blocked: the turn limit of 250"])
   })
 })
 
