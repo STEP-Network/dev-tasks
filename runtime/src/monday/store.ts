@@ -42,7 +42,7 @@ export interface ItemRecord {
    * log is read a few minutes back only, so a longer outage would lose them.
    * An update needs no copy: it is on the item, read again every poll.
    */
-  retry?: Record<string, { userId: string; text: string }>
+  retry?: Record<string, { userId: string; text: string; at?: string }>
   /** A request whose Linear link, State and group are written to the board. */
   linked?: boolean
 }

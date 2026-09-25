@@ -31,14 +31,14 @@ describe("classify", () => {
     expect(b).toEqual(a)
   })
 
-  it("reads a reply in an issue's thread as an answer, mention or not", () => {
+  it("reads a person's message in an issue's thread as a reply for the front door, mention or not (STEP-3293)", () => {
     expect(classify(envelope({ type: "message", channel: "CQ", ts: "1700.5", thread_ts: "1700.1", text: "Use the publication date" }), CTX)).toMatchObject({
-      type: "answer",
+      type: "reply",
       issue: "STEP-7",
       key: "msg:CQ:1700.5",
     })
     expect(classify(envelope({ type: "app_mention", channel: "CQ", ts: "1700.6", thread_ts: "1700.1", text: "<@UBOT> also" }), CTX)).toMatchObject({
-      type: "answer",
+      type: "reply",
       issue: "STEP-7",
     })
   })
@@ -69,7 +69,7 @@ describe("classify", () => {
   it("reads a private channel's messages (channel_type group) as it reads a public channel's", () => {
     expect(classify(envelope({ type: "message", channel_type: "group", channel: "CIN", ts: "1800.1", text: "<@UBOT> fix the date" }), CTX)).toMatchObject({ type: "intake" })
     expect(classify(envelope({ type: "message", channel_type: "group", channel: "CQ", ts: "1700.5", thread_ts: "1700.1", text: "Use the publication date" }), CTX)).toMatchObject({
-      type: "answer",
+      type: "reply",
       issue: "STEP-7",
     })
     expect(classify(envelope({ type: "message", channel_type: "group", channel: "CAG", ts: "1900.1", text: "<@UBOT> status?" }), CTX)).toMatchObject({ type: "mention" })

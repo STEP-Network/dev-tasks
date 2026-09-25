@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { describe, expect, it } from "vitest"
@@ -144,6 +144,24 @@ describe("actOnInstructions (STEP-3285)", () => {
     await actOnInstructions(deps)
     expect(listJobs(paths, "pending")).toHaveLength(1)
     expect(outbox().filter((m) => m.kind === "reply").at(-1)?.text).toBe(`I am already about to work on it, as it is next in line.\nNothing needed from you.`)
+  })
+
+  it("pauses on a plain '@eve pause', which names no PR: a pause is the whole mini's (STEP-3293 re-review)", async () => {
+    const { deps, paths, say, outbox } = setup()
+    say("<@UBOT> pause", { issue: null, target: {} })
+    await actOnInstructions(deps)
+    expect(existsSync(paths.pauseFile)).toBe(true)
+    expect(outbox().filter((m) => m.kind === "reply").map((m) => m.text)).toEqual([
+      "Paused, as you asked. I start nothing new and finish what I am doing now. To carry on, a person lifts the pause on the mini.\nNothing needed from you.",
+    ])
+    // With more than a pause and no PR, it pauses and asks which PR for the rest.
+    rmSync(paths.pauseFile)
+    say("<@UBOT> pause and fix it", { issue: null, target: {} })
+    await actOnInstructions(deps)
+    expect(existsSync(paths.pauseFile)).toBe(true)
+    expect(outbox().filter((m) => m.kind === "reply").at(-1)?.text).toBe(
+      "Paused, as you asked. I start nothing new and finish what I am doing now. To carry on, a person lifts the pause on the mini.\nI could not tell which PR you mean, so I did nothing more. Please name it: STEP-<n>, #<number> or its link. I only act on PRs I opened.",
+    )
   })
 
   it("finds a mentioned PR of this mini's by number, and asks which PR when it cannot tell", async () => {

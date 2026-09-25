@@ -172,6 +172,13 @@ export const ConfigSchema = z.object({
       claudePath: z.string().default("claude"),
       /** install.sh writes the absolute path, as for claudePath. */
       tmuxPath: z.string().default("tmux"),
+      /**
+       * The Slack channel into the front door's session (STEP-3293): agentd
+       * starts it with --channels for the dev-tasks plugin when the mini's
+       * managed settings approve exactly that (channel/managed.ts). false, or
+       * not approved: Slack messages wait for its next wakeup.
+       */
+      channel: z.boolean().default(true),
     })
     .prefault({}),
   worker: z

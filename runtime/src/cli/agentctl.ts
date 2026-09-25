@@ -12,12 +12,17 @@
 import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs"
 import { join, sep } from "node:path"
 import { fileURLToPath } from "node:url"
-import { agentPaths, loadConfig, readProfile, readProfileMini } from "../config.ts"
+import { agentPaths, loadConfig, readProfile, readProfileMini, type AgentConfig } from "../config.ts"
 import { ack, readJson } from "../fsq.ts"
 import { heldBackIssues, jobPath, listJobs, submitJob, type JobRecord } from "../jobs.ts"
 import { enqueueSlack, type ChannelKey } from "../outbox.ts"
+import { channelApproval, MANAGED_SETTINGS } from "../channel/managed.ts"
+import { actionsAsked, decisionText, fileInstructionFor, personEntry, recordDecision, type Decision } from "../decide.ts"
+import { handoff, RECOMMENDATION_LEAD, withRecommendation } from "../plain.ts"
+import type { Action, InstructionEntry } from "../slack/instruction.ts"
 import { loadClaudeOauthToken } from "../secrets.ts"
-import { buildDigest, pauseReason } from "../tick.ts"
+import { buildDigest, inboxEvents, pauseReason } from "../tick.ts"
+import { readChannelState } from "../channel/state.ts"
 import { assertNoSecretText, createLinearTracker, readTextFile, type Tracker } from "../tracker.ts"
 import { readUsage } from "../usage.ts"
 import { frontDoorAlive, lastTickAt, readFrontDoorState } from "../agentd/frontdoor.ts"
@@ -57,6 +62,8 @@ export interface AgentctlDeps {
   query: () => Promise<QueryFn>
   /** The Claude Code workers run: the Agent SDK's own (hooks-probe.ts). */
   workerClaude: () => string | null
+  /** Claude Code's managed settings on this machine, which approve the Slack channel. */
+  managedSettings: string
 }
 
 const DEFAULTS: AgentctlDeps = {
@@ -67,6 +74,14 @@ const DEFAULTS: AgentctlDeps = {
   now: () => new Date(),
   query: async () => (await import("@anthropic-ai/claude-agent-sdk")).query as unknown as QueryFn,
   workerClaude: workerClaudePath,
+  managedSettings: MANAGED_SETTINGS,
+}
+
+/** Why agentd starts the front door without the Slack channel, or null when it opens it (agentd/frontdoor.ts). */
+function channelOff(config: AgentConfig, managedSettings: string): string | null {
+  if (!config.frontDoor.channel) return "frontDoor.channel in config.json"
+  const approval = channelApproval(managedSettings)
+  return approval.ok ? null : approval.why
 }
 
 const message = (error: unknown) => (error instanceof Error ? error.message : String(error))
@@ -115,6 +130,25 @@ export async function run(argv: string[], out: (line: string) => void, overrides
         // Gone already, or no ~/.front-door: nothing to spend.
       }
     }
+  }
+  const recommendationFlag = (): string => {
+    const inline = typeof flags.recommendation === "string" ? flags.recommendation : undefined
+    const file = typeof flags["recommendation-file"] === "string" ? flags["recommendation-file"] : undefined
+    if (inline === undefined && file === undefined) {
+      throw new UsageError("--recommendation or --recommendation-file is required: every question says what you recommend, and a reply of yes agrees to it")
+    }
+    if (inline !== undefined && file !== undefined) throw new UsageError("--recommendation and --recommendation-file are two ways to give one text: give one")
+    let text: string
+    try {
+      text = file !== undefined ? readTextFile(file, "--recommendation-file") : (inline as string)
+      assertNoSecretText(text, file !== undefined ? "--recommendation-file" : "--recommendation")
+    } catch (error) {
+      if (error instanceof UsageError) throw error
+      throw new UsageError(message(error).replace(/^usage: /, ""))
+    }
+    if (!text.trim()) throw new UsageError("the recommendation is empty")
+    if (file !== undefined) textFiles.push(file)
+    return text.trim()
   }
   const issueFlag = () => {
     const issue = need("issue")
@@ -178,8 +212,61 @@ export async function run(argv: string[], out: (line: string) => void, overrides
       return 0
     }
     case "ask": {
-      print({ queued: enqueueSlack(paths, { kind: "issue", issue: issueFlag(), text: textFlag(), question: true }, now()) })
+      // Every question a person must answer carries this mini's recommendation (STEP-3293), which a "yes" agrees to.
+      // A hand-off asks for their hands, not a choice: it ends "Reply done when it is done", with nothing a yes could agree to.
+      const issue = issueFlag()
+      const question = textFlag()
+      if (flags.handoff === true) {
+        if (flags.recommendation !== undefined || flags["recommendation-file"] !== undefined) {
+          throw new UsageError("--handoff asks a person to do something, so it carries no recommendation for a yes to agree to: drop --recommendation")
+        }
+        print({ queued: enqueueSlack(paths, { kind: "issue", issue, text: handoff(question), question: true }, now()) })
+      } else {
+        print({ queued: enqueueSlack(paths, { kind: "issue", issue, text: withRecommendation(question, recommendationFlag()), question: true }, now()) })
+      }
       spend()
+      return 0
+    }
+    case "decide": {
+      // A person's reply the front door read as a decision (STEP-3293): recorded on the issue as words that stand on their own.
+      const entry = personEntry(paths, need("key"))
+      const agree = flags.agree === true
+      if (agree && (flags.text !== undefined || flags["text-file"] !== undefined)) throw new UsageError("--agree records the recommendation: give it without --text or --text-file")
+      let decision: Decision
+      try {
+        decision = decisionText(paths, entry, agree ? { agree: true } : { text: textFlag() })
+      } catch (error) {
+        if (error instanceof UsageError) throw error
+        throw new UsageError(message(error))
+      }
+      try {
+        print({ decided: await recordDecision({ paths, tracker: deps.tracker(), now }, entry, decision), decision: decision.recorded })
+      } catch (error) {
+        if (!(error instanceof Error) || !/human-todo|not in an issue's thread/.test(error.message)) throw error
+        throw new UsageError(error.message)
+      }
+      spend()
+      return 0
+    }
+    case "instruct": {
+      // A person's reply the front door read as one of the fixed actions: agentd acts on it and replies (agentd/instructions.ts).
+      const entry = personEntry(paths, need("key"))
+      const named = need("actions").split(",").map((a) => a.trim()).filter(Boolean)
+      const aimed: InstructionEntry["target"] = {}
+      const given = typeof flags.target === "string" ? flags.target : undefined
+      if (given !== undefined) {
+        if (ISSUE_RE.test(given)) aimed.issue = given
+        else if (/^#?\d{2,6}$/.test(given)) aimed.pr = Number(given.replace("#", ""))
+        else throw new UsageError(`--target must be STEP-<n> or #<number>, got ${given}`)
+      }
+      try {
+        // Only what their words ask for, on what they name, or "default": a plain yes to agentd's decision takes the reply it recommended.
+        const { actions, target }: { actions: Action[]; target: InstructionEntry["target"] } = actionsAsked(paths, entry, named, aimed)
+        const filed = fileInstructionFor(paths, entry, actions, target, now())
+        print(filed ? { filed: filed.key, actions: filed.actions } : { filed: null, doneByBridge: entry.acted ?? [] })
+      } catch (error) {
+        throw new UsageError(message(error))
+      }
       return 0
     }
     case "slack": {
@@ -196,7 +283,11 @@ export async function run(argv: string[], out: (line: string) => void, overrides
         const text = textFlag()
         if (!CHANNEL_ID_RE.test(channelId)) throw new UsageError(`--channel must be a Slack channel id (C...), as the event carries it, got ${channelId}`)
         if (!THREAD_TS_RE.test(threadTs)) throw new UsageError(`--thread must be a Slack message ts (1790000000.000100), got ${threadTs}`)
-        print({ queued: enqueueSlack(paths, { kind: "reply", channelId, threadTs, text }, now()) })
+        // The thread keeps a question's recommendation for a later yes only when agentctl ask posts it (STEP-3293 review).
+        if (text.includes(RECOMMENDATION_LEAD)) {
+          throw new UsageError("a reply that recommends something is a question: post it with agentctl ask --issue <id> --text-file <question> --recommendation-file <recommendation>, so a yes agrees to it")
+        }
+        print({ queued: enqueueSlack(paths, { kind: "reply", channelId, threadTs, text, frontDoor: true }, now()) })
         spend()
         return 0
       }
@@ -259,6 +350,7 @@ export async function run(argv: string[], out: (line: string) => void, overrides
           pending: listJobs(paths, "pending").map((j) => j.issue),
           heldBack,
           bridge: readJson<NonNullable<StatusInput["bridge"]>>(join(paths.state, "bridge.json")),
+          channel: { at: readChannelState(paths)?.at ?? null, waiting: inboxEvents(paths, config).length, off: channelOff(config, deps.managedSettings) },
           usage: readUsage(paths),
           linear,
           now: now(),
@@ -376,7 +468,7 @@ export async function run(argv: string[], out: (line: string) => void, overrides
     }
     default:
       throw new UsageError(
-        "usage: agentctl <tick|ack|job|ask|slack|pause|resume|retry|status|report|retro|doctor|probe-hooks|probe-sandbox> (see runtime/src/cli/agentctl.ts)",
+        "usage: agentctl <tick|ack|job|ask|decide|instruct|slack|pause|resume|retry|status|report|retro|doctor|probe-hooks|probe-sandbox> (see runtime/src/cli/agentctl.ts)",
       )
   }
 }

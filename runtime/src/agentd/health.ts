@@ -24,6 +24,7 @@ import type { AgentConfig, AgentPaths } from "../config.ts"
 import { listNew } from "../fsq.ts"
 import { forgetWatchedPr, listJobs, readWatchedPrs } from "../jobs.ts"
 import { appendLedger, type Logger } from "../log.ts"
+import { plural } from "../plain.ts"
 import { pruneJsonl } from "../retro/jsonl.ts"
 import { lessonsFile } from "../retro/lessons.ts"
 import { retrosFile } from "../retro/retro.ts"
@@ -120,7 +121,6 @@ export interface BridgeHeartbeat {
   outboxFailed?: number
 }
 
-const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`
 
 /** A front door started this recently has not had its first wakeup yet, and is not late for it. */
 export const STARTUP_GRACE_MINUTES = 10
@@ -136,8 +136,10 @@ export function healthStatus(input: {
   staleTickMinutes: number
   /** bridge.json's outboxFailed at the previous check. null: no earlier reading, so nothing is new. */
   outboxFailedBefore?: number | null
-  /** Answers and intakes the bridge has retried against Linear for over an hour (inboxStuck). */
+  /** Intakes the bridge has retried against Linear for over an hour (inboxStuck). */
   stuckInbox?: number
+  /** People's messages the front door has not closed for over half an hour (inboxUnhandled). */
+  unhandledInbox?: number
   /** The last checkout refresh's result. */
   checkout?: string | null
 }): { ok: boolean; problems: string[] } {
@@ -165,22 +167,35 @@ export function healthStatus(input: {
     problems.push(`Slack refused ${plural(failed - before, "more message", "more messages")} for good, kept in ~/.agentd/outbox/failed`)
   }
   if (input.stuckInbox) {
-    problems.push(`${plural(input.stuckInbox, "Slack message has", "Slack messages have")} waited over an hour for Linear`)
+    problems.push(`${plural(input.stuckInbox, "Slack request has", "Slack requests have")} waited over an hour for Linear`)
+  }
+  if (input.unhandledInbox) {
+    problems.push(`${plural(input.unhandledInbox, "person's Slack message has", "people's Slack messages have")} waited over 30 minutes for the front door`)
   }
   return { ok: problems.length === 0, problems }
 }
 
+type Waiting = { type?: string; issue?: string | null; receivedAt?: string }
+const olderThan = (p: Waiting, now: Date, ms: number) => typeof p.receivedAt === "string" && now.getTime() - Date.parse(p.receivedAt) > ms
+
 /**
- * Answers and intakes the bridge is still retrying against Linear, received
- * over an hour ago. It gives up on each after a day of refusals: until then
- * only this says they wait. Mentions and filed intakes wait for the front
- * door instead, whose own health is checked above.
+ * Intakes the bridge is still retrying against Linear, received over an hour
+ * ago. It gives up on each after a day of refusals: until then only this says
+ * they wait.
  */
 export function inboxStuck(paths: AgentPaths, now: Date): number {
-  return listNew<{ type?: string; issue?: string | null; receivedAt?: string }>(paths.inbox).filter(({ payload: p }) => {
-    const retried = p.type === "answer" || (p.type === "intake" && !p.issue)
-    return retried && typeof p.receivedAt === "string" && now.getTime() - Date.parse(p.receivedAt) > 60 * 60_000
-  }).length
+  return listNew<Waiting>(paths.inbox).filter(({ payload: p }) => p.type === "intake" && !p.issue && olderThan(p, now, 60 * 60_000)).length
+}
+
+/**
+ * People's replies and mentions the front door has not closed within half an
+ * hour (STEP-3293 review). The Slack channel and the digest both offer every
+ * one, so a message this old means neither reached a front door that acts:
+ * Claude Code dropped the channel's pushes, or the front door cannot work.
+ * "answer" is a reply filed before STEP-3293.
+ */
+export function inboxUnhandled(paths: AgentPaths, now: Date): number {
+  return listNew<Waiting>(paths.inbox).filter(({ payload: p }) => ["reply", "mention", "answer"].includes(p.type ?? "") && olderThan(p, now, 30 * 60_000)).length
 }
 
 export function sentryCheckInUrl(base: string, ok: boolean): string {

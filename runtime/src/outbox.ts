@@ -17,8 +17,12 @@ export type ChannelKey = "agents" | "questions" | "intake" | "releases"
 export type OutboxMessage =
   /** A notice in a channel: claimed, PR opened, parked, alerts. */
   | { kind: "post"; channel: ChannelKey; text: string }
-  /** A reply in a thread the caller knows, e.g. the front door answering a mention. */
-  | { kind: "reply"; channelId: string; threadTs: string; text: string }
+  /**
+   * A reply in a thread the caller knows, e.g. the front door answering a
+   * mention. frontDoor: the front door's own words (agentctl slack reply),
+   * which the thread records the time of (STEP-3293 review).
+   */
+  | { kind: "reply"; channelId: string; threadTs: string; text: string; frontDoor?: boolean }
   /** A message in the issue's own thread. The bridge opens one in #polads-questions when there is none. */
   | { kind: "issue"; issue: string; text: string; question: boolean }
   /** A reaction, e.g. a tick on an answer that was applied. */

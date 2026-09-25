@@ -208,6 +208,14 @@ describe("runDuties", () => {
     expect(problems.flat()).toContain("Slack refused 1 more message for good, kept in ~/.agentd/outbox/failed")
   })
 
+  it("reports a person's Slack message the front door left open for half an hour (STEP-3293 review)", async () => {
+    // Pushed into a session that never registered the channel, or offered to a front door that cannot act: either way, nobody read it.
+    const { d, paths, problems } = duties()
+    putOnce(paths.inbox, "msg:CQ:1700.5", { type: "reply", key: "msg:CQ:1700.5", issue: "STEP-7", channel: "CQ", ts: "1700.5", user: "UNATE", text: "yes", receivedAt: new Date(NOW.getTime() - 40 * 60_000).toISOString() })
+    await runDuties(d, freshMemo())
+    expect(problems.flat()).toContain("1 person's Slack message has waited over 30 minutes for the front door")
+  })
+
   it("reports a checkout the refresh had to leave alone", async () => {
     const { d, problems } = duties({ exec: fakeExec([[/status --porcelain/, { stdout: " M lib/x.ts\n" }]]).exec })
     await runDuties(d, freshMemo())

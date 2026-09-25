@@ -340,6 +340,8 @@ describe("the Monday bridge: answers (STEP-3289)", () => {
     const item = monday.item(/Eve needs a decision: Fix the date/)!
     expect(monday.called("createItem")[0][3]).toMatchObject({ [COL.kind]: { label: "Decision" }, [COL.agent]: { labels: ["Eve"] }, [COL.pr]: { url: PR, text: "PR #1679" }, [COL.due]: { date: "2026-09-25" } })
     expect(texts(item.id)[0]).toContain("Reply &quot;re-run&quot; to re-run CI in full once more")
+    // The fixed verbs read Monday's words: a bare yes counts only in Slack (STEP-3293).
+    expect(texts(item.id)[0]).not.toContain("Reply yes")
     later(1)
     const said = monday.says(item.id, NATE, "leave it")
     later(2)
@@ -354,6 +356,26 @@ describe("the Monday bridge: answers (STEP-3289)", () => {
     later(2)
     await bridge.sync()
     expect(inbox()).toHaveLength(1)
+  })
+
+  it("asks for an answer to the newer question when the words were written before it, and keeps the item waiting (STEP-3293 final pass)", async () => {
+    const { bridge, monday, fake, later, paths } = setup([issue({ id: "STEP-7", state: "On hold", labels: ["agent-ready", "awaiting-answer"], description: "## Goal\n\nFix it." })])
+    enqueueSlack(paths, { kind: "issue", issue: "STEP-7", text: "Which date?\n\nMy recommendation: the publication date. Reply yes to go with it, or tell me what you want instead.", question: true }, T0)
+    await bridge.sync()
+    const item = monday.item(/has a question/)!
+    const thread = monday.items.get(item.id)!.updates[0].id
+    later(1)
+    monday.says(item.id, KRISTOFFER, "yes", thread)
+    // A newer question goes out before the next poll reads the yes.
+    enqueueSlack(paths, { kind: "issue", issue: "STEP-7", text: "Given the legal rule, which date?\n\nMy recommendation: the submission date. Reply yes to go with it, or tell me what you want instead.", question: true }, new Date(T0.getTime() + 2 * 60_000))
+    later(2)
+    const writesBefore = monday.called("setColumns").length
+    await bridge.sync()
+    expect(fake.issues.get("STEP-7")).toMatchObject({ state: "On hold", description: "## Goal\n\nFix it." })
+    expect(String(monday.called("postUpdate").at(-1)?.[1])).toMatch(/^Eve: Thanks, Kristoffer\. I asked a newer question after you wrote this, so I have not taken it as your answer\. Please answer the newer one here: Given the legal rule, which date\?/)
+    // The item still needs them: never Waiting on agent, not even for a moment.
+    expect(monday.called("setColumns").slice(writesBefore).map((c) => JSON.stringify(c[2]))).not.toContainEqual(expect.stringContaining("Waiting on agent"))
+    expect(stateOf(monday.items.get(item.id))).not.toBe("Waiting on agent")
   })
 
   it("puts a person's answer to a question onto the issue, which goes back to Ready, and says so on the item", async () => {

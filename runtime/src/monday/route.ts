@@ -7,10 +7,13 @@
  * only where this mini has work of its own on the issue: a PR it opened and
  * still watches, an open question it asked, or its most recent job there
  * ended blocked. A request is never one. Either way the words are added to
- * the issue under "## Answers from Monday", so the issue keeps them. Only an
- * answer moves a parked issue on: an instruction is agentd's to act on. So
- * "fix the date" on a request, or "hold off" on another mini's issue,
- * reaches the issue as words and moves nothing on this mini.
+ * the issue under "## Answers from Monday", so the issue keeps them, through
+ * the one answer recorder Slack uses too (answer.ts): a plain yes to a
+ * question that recommended something is recorded as that recommendation,
+ * never a bare "yes" (STEP-3293 review). Only an answer moves a parked issue
+ * on: an instruction is agentd's to act on. So "fix the date" on a request,
+ * or "hold off" on another mini's issue, reaches the issue as words and moves
+ * nothing on this mini.
  */
 
 import type { AgentPaths } from "../config.ts"
@@ -18,8 +21,9 @@ import { putOnce } from "../fsq.ts"
 import { listJobs, readWatchedPrs } from "../jobs.ts"
 import { appendLedger } from "../log.ts"
 import { openDecisions } from "../agentd/decisions.ts"
+import { agreedTo, askedSince, BARE, noteCorrection, recordAnswer } from "../answer.ts"
+import { lastQuestion } from "../outbox.ts"
 import { instructionFor, type Action, type MondayInstructionEntry } from "../slack/instruction.ts"
-import { answerTransition, appendAnswer } from "../slack/text.ts"
 import type { Tracker } from "../tracker.ts"
 
 /** A person's words on an item: an update, a reply under one, or the Answer column (no update to reply under or like). */
@@ -30,9 +34,15 @@ export interface Words {
   updateId: string | null
   threadId: string | null
   permalink: string | null
+  /** When they wrote it: the update's time, or the Answer column change's. null when Monday did not say. */
+  at: string | null
 }
 
-export type Routed = { to: "agentd"; actions: Action[] } | { to: "issue"; movedTo: string | null }
+export type Routed =
+  | { to: "agentd"; actions: Action[] }
+  | { to: "issue"; movedTo: string | null }
+  /** Written before this mini's newest question: not an answer to it, so the person is asked to answer that one. */
+  | { to: "newer-question"; question: string }
 
 /** Whether the issue's most recent job on this mini, running, queued or done, is one that ended blocked. */
 function blockedNow(paths: AgentPaths, issue: string): boolean {
@@ -47,18 +57,33 @@ export function ownsWork(paths: AgentPaths, issue: string): boolean {
 }
 
 export async function routeWords(
-  deps: { paths: AgentPaths; tracker: Tracker },
+  deps: { paths: AgentPaths; tracker: Tracker; mini: string },
   input: { issue: string; request: boolean; itemId: string; who: { id: string; name: string }; words: Words; now: Date },
 ): Promise<Routed> {
   const { paths, tracker } = deps
   const { issue, words, who, now } = input
   const current = await tracker.readIssue(issue)
+  // "No, do X" on the board is a lesson for the weekly retro, as in Slack (STEP-3290), answer or instruction alike.
+  noteCorrection({ paths, mini: deps.mini, now: () => now }, { issue, source: "monday", key: `correction:monday:${words.id}`, who: who.name, text: words.text })
   const said = !input.request && ownsWork(paths, issue) ? instructionFor(words.text, current) : null
-  const description = appendAnswer(current.description, { ts: words.id, userName: who.name, text: words.text, permalink: words.permalink }, "monday")
-  // An instruction leaves the issue where it is: agentd acts on it.
-  const move = said ? {} : answerTransition(current)
-  const patch = { ...(description !== current.description ? { description } : {}), ...move }
-  if (Object.keys(patch).length) await tracker.updateIssue(issue, patch)
+  const asked = lastQuestion(paths, issue)
+  // Written before this mini's newest question, the words never saw it: the same rule as Slack (answer.ts).
+  // No agreement, no move. Their words stay on the issue unless they are only a yes, which says nothing now.
+  if (!said && asked && askedSince(asked.at, words.at)) {
+    if (!BARE.test(words.text)) {
+      await recordAnswer({ paths, tracker }, { issue, who: who.name, words: words.text, ts: words.id, permalink: words.permalink, source: "monday" }, { current, move: false })
+    }
+    appendLedger(paths, { type: "answer.before_question", issue, via: "monday" }, now)
+    return { to: "newer-question", question: asked.text }
+  }
+  // A plain yes to a question that recommended something is that recommendation, as in Slack (STEP-3293 review).
+  const decided = said ? null : agreedTo(words.text, asked?.text, current)
+  // One recorder for Slack and Monday (answer.ts). An instruction leaves the issue where it is: agentd acts on it.
+  const { movedTo } = await recordAnswer(
+    { paths, tracker },
+    { issue, who: who.name, words: words.text, ts: words.id, permalink: words.permalink, source: "monday", ...(decided ? { decided } : {}) },
+    { current, move: !said },
+  )
   if (said) {
     const key = `instr:monday:${words.id}`
     const entry: MondayInstructionEntry = {
@@ -69,6 +94,6 @@ export async function routeWords(
     if (putOnce(paths.inbox, key, entry)) appendLedger(paths, { type: "instruction.received", issue, actions: said.actions, via: "monday" }, now)
     return { to: "agentd", actions: said.actions }
   }
-  appendLedger(paths, { type: "answer.applied", issue, movedTo: move.state ?? null, via: "monday" }, now)
-  return { to: "issue", movedTo: move.state ?? null }
+  appendLedger(paths, { type: "answer.applied", issue, movedTo, via: "monday", ...(decided ? { decided: true } : {}) }, now)
+  return { to: "issue", movedTo }
 }

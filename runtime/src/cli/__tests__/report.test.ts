@@ -140,3 +140,17 @@ describe("summariseLedger", () => {
     ])
   })
 })
+
+describe("the Slack channel's status line (STEP-3293)", () => {
+  const NOW2 = new Date("2026-09-25T10:00:00.000Z")
+  const status = (channel: StatusInput["channel"]) => statusReport({ ...healthy, now: NOW2, bridge: null, channel }).split("\n").find((l) => l.startsWith("slack channel:"))
+  it("says whether the channel server runs, never that the front door gets its pushes, and how many messages wait (STEP-3293 review)", () => {
+    // Claude Code never says whether it registered the channel: the messages still open say whether they reach the front door.
+    expect(status({ at: "2026-09-25T09:59:30.000Z", waiting: 1, off: null })).toBe("slack channel: server running, 1 message waiting for the front door")
+    expect(status({ at: "2026-09-25T09:50:00.000Z", waiting: 2, off: null })).toBe("slack channel: server NOT RUNNING for 10 min, 2 messages waiting for the front door")
+    expect(status({ at: null, waiting: 0, off: null })).toBe("slack channel: server never ran: messages wait for the front door's next wakeup, 0 messages waiting for the front door")
+    expect(status({ at: null, waiting: 0, off: "frontDoor.channel in config.json" })).toBe("slack channel: off (frontDoor.channel in config.json), 0 messages waiting for the front door")
+    for (const line of [status({ at: "2026-09-25T09:59:30.000Z", waiting: 1, off: null }), status({ at: null, waiting: 0, off: null })]) expect(line).not.toMatch(/connected|\(s\)/)
+    expect(status(undefined)).toBeUndefined()
+  })
+})

@@ -249,7 +249,7 @@ export function createMondayBridge(deps: MondayBridgeDeps): MondayBridge {
         if (!who) continue
         // A reply's link opens its thread's update. Each link is its own: appendAnswer knows an answer by it too.
         const permalink = u.threadId === u.id ? `${item.url}/posts/${u.id}` : `${item.url}/posts/${u.threadId}?reply=reply-${u.id}`
-        await hear(rec, item, who, { id: u.id, text: u.text, updateId: u.id, threadId: u.threadId, permalink }, pass)
+        await hear(rec, item, who, { id: u.id, text: u.text, updateId: u.id, threadId: u.threadId, permalink, at: u.createdAt }, pass)
       }
     }
     for (const change of pass.board.changes) {
@@ -259,7 +259,7 @@ export function createMondayBridge(deps: MondayBridgeDeps): MondayBridge {
       const id = `log:${change.id}`
       if (!rec || !item || !who || rec.handled.includes(id)) continue
       tried.add(id)
-      await hear(rec, item, who, { id, text: change.text, updateId: null, threadId: null, permalink: null }, pass)
+      await hear(rec, item, who, { id, text: change.text, updateId: null, threadId: null, permalink: null, at: change.at }, pass)
     }
     // Answer column changes Linear refused, from their copy: the log has moved on from them.
     for (const rec of byItem.values()) {
@@ -267,7 +267,7 @@ export function createMondayBridge(deps: MondayBridgeDeps): MondayBridge {
         const item = pass.byId.get(rec.itemId)
         const who = person.get(kept.userId)
         if (tried.has(id) || rec.handled.includes(id) || !item || !who) continue
-        await hear(rec, item, who, { id, text: kept.text, updateId: null, threadId: null, permalink: null }, pass)
+        await hear(rec, item, who, { id, text: kept.text, updateId: null, threadId: null, permalink: null, at: kept.at ?? null }, pass)
       }
     }
     writeCursor(paths, pass.now)
@@ -305,7 +305,7 @@ export function createMondayBridge(deps: MondayBridgeDeps): MondayBridge {
         return mark(rec, words.id)
       }
       if (!first) rec.failing = { ...rec.failing, [words.id]: pass.now.toISOString() }
-      if (words.updateId === null) rec.retry = { ...rec.retry, [words.id]: { userId: who.id, text: words.text } }
+      if (words.updateId === null) rec.retry = { ...rec.retry, [words.id]: { userId: who.id, text: words.text, ...(words.at ? { at: words.at } : {}) } }
       save(rec)
       log.warn("monday words not acted on yet", { issue: rec.issue, item: item.id, error: message(error) })
     }
@@ -322,10 +322,15 @@ export function createMondayBridge(deps: MondayBridgeDeps): MondayBridge {
 
   /** Words on a Needs you or a request item, through the one router (route.ts). */
   async function answer(rec: ItemRecord, item: MondayItem, who: Person, words: Words, pass: Pass): Promise<void> {
-    const routed = await routeWords({ paths, tracker }, { issue: rec.issue, request: rec.kind === "request", itemId: item.id, who, words, now: pass.now })
+    const routed = await routeWords({ paths, tracker, mini: deps.config.mini }, { issue: rec.issue, request: rec.kind === "request", itemId: item.id, who, words, now: pass.now })
     mark(rec, words.id)
     // agentd answers an instruction itself, once it has acted (agentd/instructions.ts).
     if (routed.to === "issue") reply(item.id, words, say.answered(who.name, routed.movedTo), pass.now)
+    // Words from before the newest question: the item still needs them, for that one.
+    if (routed.to === "newer-question") {
+      reply(item.id, words, say.newerQuestion(who.name, routed.question), pass.now)
+      return
+    }
     // A request's State follows its issue in Linear (requests below).
     if (rec.kind !== "request") await after("state", rec, () => setState(rec, "Waiting on agent"))
   }
@@ -473,7 +478,7 @@ export function createMondayBridge(deps: MondayBridgeDeps): MondayBridge {
     return {
       key: `needs-${issue.id}`, kind: "needs", group: "needsYou", issue,
       name: needName("decision", issue.title, agentLabel),
-      body: needBody("decision", { title: issue.title, agent: agentLabel, question: questionText(d, timeZone) }),
+      body: needBody("decision", { title: issue.title, agent: agentLabel, question: questionText(d, timeZone, "monday") }),
       mondayKind: needKind("decision"), agent: agentLabel, pr: d.url || issue.prUrl, due: dateIn(new Date(d.deadlineAt), timeZone),
     }
   }

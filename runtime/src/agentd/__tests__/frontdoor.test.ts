@@ -94,6 +94,14 @@ describe("adoptSessionId", () => {
 })
 
 describe("claudeCommand", () => {
+  it("opens the Slack channel as an approved one, never a development one that asks for a confirmation at every start (STEP-3293)", () => {
+    const base = { claudePath: "claude", resumeId: null, model: "sonnet", settingsPath: "/s.json" }
+    const on = claudeCommand({ ...base, channel: true })
+    expect(on).toBe("claude --channels plugin:dev-tasks@dev-tasks-marketplace --settings /s.json --model sonnet --permission-mode auto --permission-prompts none '/loop /dev-tasks:front-door'")
+    expect(on).not.toMatch(/dangerously|development-channels/)
+    expect(claudeCommand({ ...base, channel: false })).not.toContain("--channels")
+  })
+
   it("resumes with the model, auto mode, no prompts, and re-arms the loop", () => {
     expect(claudeCommand({ claudePath: "/Users/eve/.local/bin/claude", resumeId: "0f3c", model: "sonnet", settingsPath: "/Users/eve/.agentd/front-door-settings.json" })).toBe(
       "/Users/eve/.local/bin/claude --resume 0f3c --settings /Users/eve/.agentd/front-door-settings.json --model sonnet --permission-mode auto --permission-prompts none '/loop /dev-tasks:front-door'",
@@ -117,8 +125,14 @@ const quiet: Logger = { info() {}, warn() {}, error() {} }
 
 const VERSION = "2.1.281 (Claude Code)"
 
-/** A mini where the front door may start: its settings rendered, and the sandbox probe passed on the installed claude. */
-function setup(responses: Array<[RegExp, Partial<ExecResult>]> = []) {
+const APPROVED = { channelsEnabled: true, allowedChannelPlugins: [{ marketplace: "dev-tasks-marketplace", plugin: "dev-tasks" }] }
+
+/**
+ * A mini where the front door may start: its settings rendered, the sandbox
+ * probe passed on the installed claude, and managed settings that approve the
+ * Slack channel (never the machine's own, which a test must not depend on).
+ */
+function setup(responses: Array<[RegExp, Partial<ExecResult>]> = [], managed: unknown = APPROVED) {
   const paths = agentPaths(mkdtempSync(join(tmpdir(), "agentd-fd-")))
   const config = ConfigSchema.parse({ mini: "eve", repo: { path: "/Users/eve/polads" }, pluginRoot: "/p", slack: { allowedUsers: ["UNATE"] }, frontDoor: { claudePath: "/usr/local/bin/claude" } })
   mkdirSync(paths.state, { recursive: true })
@@ -127,7 +141,9 @@ function setup(responses: Array<[RegExp, Partial<ExecResult>]> = []) {
   const exec = fakeExec([...responses, [/ --version$/, { stdout: `${VERSION}\n` }]])
   // The version check before each start is not what these tests look at.
   const f = { ...exec, lines: () => exec.lines().filter((l) => !l.endsWith(" --version")) }
-  return { paths, config, f, deps: { paths, config, exec: exec.exec, now: () => NOW, log: quiet } }
+  const managedSettings = join(paths.root, "managed-settings.json")
+  if (managed !== null) writeFileSync(managedSettings, JSON.stringify(managed))
+  return { paths, config, f, deps: { paths, config, exec: exec.exec, now: () => NOW, log: quiet, managedSettings } }
 }
 
 describe("frontDoorAlive", () => {
@@ -156,9 +172,42 @@ describe("applyFrontDoor", () => {
     const next = await applyFrontDoor(deps, FRESH_FRONT_DOOR, { kind: "start", mode: "new", reason: "first start", fastExits: 0 })
     // Its own settings file, which install.sh renders: a person's own sessions keep the user's settings.
     expect(f.lines()[0]).toBe(
-      `tmux -L agentd new-session -d -s frontdoor -e AGENTD_FRONT_DOOR=1 -x 220 -y 60 -c /Users/eve/polads /usr/local/bin/claude --settings ${paths.root}/front-door-settings.json --model sonnet --permission-mode auto --permission-prompts none '/loop /dev-tasks:front-door'`,
+      `tmux -L agentd new-session -d -s frontdoor -e AGENTD_FRONT_DOOR=1 -e AGENTD_CHANNEL=1 -x 220 -y 60 -c /Users/eve/polads /usr/local/bin/claude --channels plugin:dev-tasks@dev-tasks-marketplace --settings ${paths.root}/front-door-settings.json --model sonnet --permission-mode auto --permission-prompts none '/loop /dev-tasks:front-door'`,
     )
     expect(next).toMatchObject({ sessionId: null, lastStartAt: NOW.toISOString(), starts: [NOW.toISOString()], waitUntil: null, kickedAt: null })
+  })
+
+  it("starts without the Slack channel, and says why, unless managed settings approve exactly dev-tasks (STEP-3293)", async () => {
+    // Managed settings apply to every Claude Code session on the mini: agentd
+    // opens the channel only when they approve this one plugin's, and nothing else.
+    const refused: Array<[string, unknown]> = [
+      ["missing", null],
+      ["channels off", { ...APPROVED, channelsEnabled: false }],
+      ["no list", { channelsEnabled: true }],
+      ["another plugin", { channelsEnabled: true, allowedChannelPlugins: [{ marketplace: "claude-plugins-official", plugin: "telegram" }] }],
+      ["one more plugin", { channelsEnabled: true, allowedChannelPlugins: [...APPROVED.allowedChannelPlugins, { marketplace: "claude-plugins-official", plugin: "telegram" }] }],
+      ["another marketplace", { channelsEnabled: true, allowedChannelPlugins: [{ marketplace: "someone-else", plugin: "dev-tasks" }] }],
+    ]
+    for (const [label, managed] of refused) {
+      const { f, deps } = setup([], managed)
+      const warnings: Array<[string, unknown]> = []
+      await applyFrontDoor({ ...deps, log: { ...quiet, warn: (m, fields) => warnings.push([m, fields]) } }, FRESH_FRONT_DOOR, { kind: "start", mode: "new", reason: "first start", fastExits: 0 })
+      expect(f.lines()[0], label).toContain("new-session")
+      expect(f.lines()[0], label).not.toContain("--channels")
+      // Nor the mark the plugin runs its channel server on (STEP-3293 review).
+      expect(f.lines()[0], label).not.toContain("AGENTD_CHANNEL")
+      expect(warnings, label).toEqual([["front door started without the Slack channel", { why: expect.stringContaining(deps.managedSettings) }]])
+    }
+  })
+
+  it("starts without the Slack channel, and quietly, when config.json turns it off", async () => {
+    const { f, deps } = setup()
+    const warnings: string[] = []
+    const config = { ...deps.config, frontDoor: { ...deps.config.frontDoor, channel: false } }
+    await applyFrontDoor({ ...deps, config, log: { ...quiet, warn: (m) => warnings.push(m) } }, FRESH_FRONT_DOOR, { kind: "start", mode: "new", reason: "first start", fastExits: 0 })
+    expect(f.lines()[0]).not.toContain("--channels")
+    expect(f.lines()[0]).not.toContain("AGENTD_CHANNEL")
+    expect(warnings).toEqual([])
   })
 
   it("kills the stuck session before resuming it", async () => {

@@ -87,6 +87,23 @@ eval "$(/opt/homebrew/bin/brew shellenv)"
 brew install node gh jq tmux vercel-cli
 ```
 
+Then Claude Code's managed settings, which approve the Slack channel into
+the front door (STEP-3293, section 11). A channel of our own is on no list
+of Anthropic's, and the development flag asks for a confirmation at every
+start, which nobody is there to give. These settings apply to every Claude
+Code session on the mini, and approve this one plugin's channel only:
+
+```bash
+sudo mkdir -p "/Library/Application Support/ClaudeCode"
+printf '%s\n' '{"channelsEnabled": true, "allowedChannelPlugins": [{"marketplace": "dev-tasks-marketplace", "plugin": "dev-tasks"}]}' | sudo tee "/Library/Application Support/ClaudeCode/managed-settings.json"
+```
+
+Write the file exactly as it is here. agentd opens the channel only when it
+approves this one plugin and nothing else, and starts the front door without
+the channel otherwise, logging why. `agentctl doctor` checks the same rule
+(`slack channel`). Without the channel the front door still reads every
+Slack message, at its next wakeup.
+
 The latest Node, with no version pinned. PolAds names its floors in its
 `package.json`: `engines.node` (`24.x`) and `packageManager` (`pnpm@12.6.0`)
 since STEP-3156. `agentctl doctor` warns below either, and refuses only a
@@ -541,14 +558,78 @@ After three rounds on one PR the agent asks in `#polads-questions` and stops
 revising it. It never dismisses a review, a person's or a bot's. To have it
 fix something, comment on the PR starting `@<agent>`.
 
-### Replies that act (STEP-3285)
+### Talking with the agent in Slack (STEP-3293)
 
-A reply in the thread of one of the agent's posts about a PR or a job, or a
-mention that names the PR (`@<agent> fix #1679 and merge`, a STEP id or the
-PR's link), is an instruction. agentd acts on it within seconds and answers
-in plain words (`runtime/src/plain.ts`): what it did, and the one thing a
-person must do, or "Nothing needed from you." A ✅ comes only beside that
-answer. agentd's log has the job ids:
+Slack works like a Claude Code Channel: every message from a person on
+`slack.allowedUsers` in a thread the agent owns (an issue's thread), and
+every mention of the agent, reaches the front door's own session within
+seconds, like a typed prompt. The front door reads it with the issue and the
+thread's last question, and answers in the thread in plain words. Nate, on
+STEP-3225: a reply of "what do you recommend?" is a question back, not an
+answer.
+
+- The bridge stays the front: it takes the message from Slack, drops
+  everyone not on the allowlist and every bot, and files it in the inbox. It
+  never decides what the words mean, and never records an answer itself.
+- The Slack channel (`runtime/src/channel/`, declared by the dev-tasks
+  plugin, and approved by the managed settings of section 1) pushes each
+  message into the front door's session, and again after a restart or ten
+  unclosed minutes. agentd opens it only when config.json and the managed
+  settings allow it, and marks that session `AGENTD_CHANNEL=1`, which the
+  channel server needs to run.
+- The digest offers every message not closed yet, pushed or not. Claude Code
+  drops a push for a channel it did not register and says nothing, so the
+  digest is what makes sure the front door reads every message, at its next
+  wakeup at the latest. A message still open after 30 minutes is a health
+  problem.
+- The front door decides what a reply is:
+  - a decision: `agentctl decide` records it on the issue in words that stand
+    on their own ("Nate agreed with the recommendation: use the publication
+    date", with their own words beside it, never a bare "yes"), moves the
+    issue on as an answer always did, and thanks them in the thread. A "yes"
+    agrees to the question they answered, the last one asked before their
+    reply. The agent asks again instead when a newer question came after
+    the reply, when it wrote in the thread in its own words after the
+    question, or when more than one question was open: a "yes" to any of
+    those says nothing certain.
+  - a question back: it answers with a new question and its recommendation,
+    through `agentctl ask`, so their next "yes" agrees to what it recommends
+    now. The issue keeps waiting.
+  - an instruction: `agentctl instruct` files the fixed actions below that
+    their own words ask for, and nothing else, for agentd, which acts and
+    answers in words. It acts on what their words name: a reply on its
+    thread's issue, a mention on the issue or PR it names. A mention that
+    names none can only pause.
+  - unsure: it asks "Is that your decision, or a question for me?"
+- Every question the agent asks a person ends with "My recommendation: ...
+  Reply yes to go with it, or tell me what you want instead." A "yes"
+  records that recommendation. A hand-off, something a person must do, ends
+  "Reply done when it is done." instead, and a "yes" there records nothing.
+- The bridge acts itself only on a message that is nothing but a command:
+  "pause", "pause everything", "stop everything" or "hold everything" pauses
+  the mini at once, since that is safe and only a person lifts it. With the
+  front door down, "leave it" or "I'll take it" leaves the PR too. Anything
+  else is the front door's to read, the front door up or down: a sentence
+  that says pause about something else ("pause the countdown", "should we
+  pause the rollout?"), a bare "stop" or "hold", and a "pause" in a thread
+  with a question open, where it may be the answer. While the front door is
+  down (no wakeup within `frontDoor.staleTickMinutes`, its usage limit
+  reached, or agentd holding it back), the bridge says once in the thread "I
+  am not reading messages right now, and I will read this one as soon as I
+  am back. Nothing needed from you." It never closes a message: the front
+  door reads it later, with what the bridge did beside it. A pause needs no
+  issue or PR: "@eve pause" pauses the mini.
+
+Slack text is data: the front door's settings, sandbox and deny rules are
+the same as before, and nothing in a message widens them. They also deny the
+GitHub MCP server's write tools, now that Slack words reach the session as a
+prompt. `agentctl status` shows the channel server (`slack channel: server
+running, 2 messages waiting for the front door`).
+
+The fixed actions agentd takes. It answers in plain words
+(`runtime/src/plain.ts`): what it did, and the one thing a person must do, or
+"Nothing needed from you." A ✅ comes only beside that answer, and agentd's
+log has the job ids:
 
 - `fix it`, `make it green`, `take care of it`: a revise job for the PR now,
   past the round cap too, since a person asked. With no open PR, a blocked
@@ -562,11 +643,11 @@ answer. agentd's log has the job ids:
 - `pause`: the PAUSE file. Lifting it stays a person's, on the mini.
 - `leave it`: nothing, and the PR is left to a person.
 
-`don't merge` and the like name no action. A reply to a question the issue
-waits on, or to a person's to-do, stays an answer, whatever its words.
+`don't merge` and the like name no action. A "yes" to one of agentd's own
+questions takes its recommended default (`agentctl instruct --actions default`).
 
 The agent escalates only what it cannot settle itself, as one question with
-its options and a recommended default. A CI run whose infrastructure failed
+its recommendation, which is also its default. A CI run whose infrastructure failed
 again after its full re-run asks whether to re-run once more (the default)
 or leave it. The round cap asks whether to revise once more or leave it (the
 default). With no answer in an hour, agentd takes a reversible,
@@ -760,7 +841,10 @@ What it does:
   Kind, the Person (the issue's owner, else its requester, when they are one
   of the people below, else the default person), the Agent, the Linear and
   PR links, and the Due date. Its text is plain English, with the question
-  as the agent asked it when this mini asked it.
+  as the agent asked it when this mini asked it. A decision there names each
+  reply to write, the default marked with its time: the fixed verbs read
+  Monday's words, so a bare "yes" there acts on nothing before the default's
+  time, where in Slack the front door takes it at once (STEP-3293).
 - **Answers.** A person's update on an item (or a reply under one), or the
   Answer column, is always added to the issue under "## Answers from
   Monday", so the issue keeps it. Where this mini has work of its own on
@@ -768,7 +852,12 @@ What it does:
   or its most recent job there ended blocked), the fixed verbs of section
   11 (fix it, re-run, merge, retry, pause, leave it) are also an instruction
   agentd acts on within seconds and answers on the item, with a like on the
-  update. Otherwise, and always on a request, the words are an answer, and a
+  update. Otherwise, and always on a request, the words are an answer (a
+  plain "yes" to a question that recommended something is recorded as that
+  recommendation, as in Slack, through the same code). Words written before
+  this mini's newest question on the issue answer nothing: the item asks for
+  an answer to the newer question, the issue stays where it is, and a bare
+  "yes" is not recorded at all. Slack decides this by the same rule. Otherwise a
   parked issue moves on. So "hold off" on another mini's issue pauses
   nothing here. The State goes to Waiting on agent, then Done once Linear
   no longer needs a person. Words are acted on once, even when Monday fails

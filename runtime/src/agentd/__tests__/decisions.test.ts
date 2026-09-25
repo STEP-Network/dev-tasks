@@ -35,7 +35,7 @@ function setup() {
 }
 
 describe("decisions (STEP-3285)", () => {
-  it("asks one question with each option and the default's time, in the mini's own time zone, and only once", () => {
+  it("asks one question, recommending its default, with the other options and the default's time in the mini's own time zone, and only once (STEP-3293)", () => {
     const { paths, outbox } = setup()
     expect(askDecision(paths, config, INFRA, NOW)).toMatchObject({ deadlineAt: "2026-09-25T10:00:00.000Z" })
     expect(askDecision(paths, config, INFRA, NOW)).toBeNull()
@@ -45,11 +45,15 @@ describe("decisions (STEP-3285)", () => {
         issue: "STEP-7",
         question: true,
         // 10:00 UTC is 12:00 in Copenhagen.
-        text: `${INFRA.question} Reply "re-run" to re-run CI in full once more (the default: I do it at 12:00 if nobody answers), or "leave it" to leave the PR to a person.`,
+        text: `${INFRA.question}\n\nMy recommendation: re-run CI in full once more. Reply yes to go with it, or tell me what you want instead. You can also reply "leave it" to leave the PR to a person. I go with my recommendation at 12:00.`,
       }),
     ])
     expect(questionText({ ...INFRA, defaultReply: "leave it", askedAt: "", deadlineAt: "2026-09-25T10:00:00.000Z" }, "UTC")).toBe(
-      `${INFRA.question} Reply "re-run" to re-run CI in full once more, or "leave it" to leave the PR to a person (the default: I do it at 10:00 if nobody answers).`,
+      `${INFRA.question}\n\nMy recommendation: leave the PR to a person. Reply yes to go with it, or tell me what you want instead. You can also reply "re-run" to re-run CI in full once more. I go with my recommendation at 10:00.`,
+    )
+    // On the Monday board the fixed verbs read the reply, so a bare yes would act on nothing there.
+    expect(questionText({ ...INFRA, askedAt: "", deadlineAt: "2026-09-25T10:00:00.000Z" }, "UTC", "monday")).toBe(
+      `${INFRA.question} Reply "re-run" to re-run CI in full once more (the default: I do it at 10:00 if nobody answers), or "leave it" to leave the PR to a person.`,
     )
   })
 

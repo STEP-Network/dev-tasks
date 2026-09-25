@@ -1,5 +1,6 @@
 /** The two human-readable outputs of agentctl: status now, and the ledger over a period. */
 
+import { plural } from "../plain.ts"
 import type { Lesson } from "../retro/lessons.ts"
 import { baselineLine, firstPassTrend, METRICS, weekMetrics } from "../retro/metrics.ts"
 import type { UsageSnapshot } from "../usage.ts"
@@ -16,6 +17,9 @@ export interface StatusInput {
   /** Issues whose last two workers were lost early (heldBackIssues). */
   heldBack: string[]
   bridge: { at: string; connected: boolean; outboxWaiting: number; outboxFailed: number; error?: string; stopped?: boolean } | null
+  /** The Slack channel into the front door's session (STEP-3293): its heartbeat, and the messages waiting for the front door. */
+  /** off: why agentd starts the front door without the channel (config.json, or the managed settings), null when it opens it. */
+  channel?: { at: string | null; waiting: number; off: string | null }
   usage: UsageSnapshot | null
   linear: { ok: true; email: string } | { ok: false; error: string }
   now: Date
@@ -54,6 +58,20 @@ function bridgeLine(s: StatusInput): string {
   return `${b.connected ? "connected" : "DISCONNECTED"}${paused}, heartbeat ${minutesAgo(s.now, at)}, outbox ${b.outboxWaiting} waiting, ${b.outboxFailed} failed`
 }
 
+/**
+ * The channel server's own heartbeat, and never "connected": Claude Code does
+ * not say whether it registered the channel, so the messages still open say
+ * whether they reach the front door (health alerts at half an hour).
+ */
+function channelLine(s: StatusInput): string {
+  const c = s.channel!
+  const waiting = `${plural(c.waiting, "message", "messages")} waiting for the front door`
+  if (c.off) return `off (${c.off}), ${waiting}`
+  if (!c.at) return `server never ran: messages wait for the front door's next wakeup, ${waiting}`
+  const at = new Date(c.at)
+  return s.now.getTime() - at.getTime() > 2 * 60_000 ? `server NOT RUNNING for ${minutes(s.now, at)} min, ${waiting}` : `server running, ${waiting}`
+}
+
 export function statusReport(s: StatusInput): string {
   const fd = s.frontDoor
   return [
@@ -65,6 +83,7 @@ export function statusReport(s: StatusInput): string {
       ? [`held back: ${s.heldBack.join(", ")}. Its last two workers were lost early. agentctl job submit --issue <id> runs one by hand`]
       : []),
     `bridge: ${bridgeLine(s)}`,
+    ...(s.channel ? [`slack channel: ${channelLine(s)}`] : []),
     `usage: ${s.usage ? `5h ${pct(s.usage.fiveHourPct)}, 7d ${pct(s.usage.sevenDayPct)}` : "no snapshot yet"}`,
     `linear: ${s.linear.ok ? `ok (${s.linear.email})` : `ERROR ${s.linear.error}`}`,
   ].join("\n")

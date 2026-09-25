@@ -101,17 +101,34 @@ async function viewPr(deps: InstructionDeps, url: string): Promise<OwnPrView & {
 const busyJob = (paths: AgentPaths, issue: string): JobRecord | null =>
   [...listJobs(paths, "running"), ...listJobs(paths, "pending")].find((j) => j.issue === issue) ?? null
 
+/** One closing line: the one thing a person must do, or that nothing is needed (../plain.ts). */
+const closed = (lines: string[]) => (lines.some((l) => /\bA person (needs|should)\b|\bPlease\b/.test(l)) ? lines : [...lines, NOTHING_NEEDED])
+
 async function act(deps: InstructionDeps, entry: AnyInstructionEntry): Promise<string[]> {
   const { paths, config } = deps
   const now = deps.now()
   const who = entry.userName || entry.user
   const where = entry.monday ? "on the Monday board" : "in Slack"
   const { issue, pr } = findPr(paths, entry)
-  if (!issue) {
-    return [`I could not tell which PR you mean, so I did nothing. Please name it: STEP-<n>, #<number> or its link. I only act on PRs I opened.`]
-  }
   const lines: string[] = []
   const actions = ORDER.filter((a) => entry.actions.includes(a))
+  // A pause is the whole mini's: it needs no PR, so "@eve pause" pauses (STEP-3293 review).
+  if (actions.includes("pause")) {
+    if (existsSync(paths.pauseFile)) {
+      lines.push("I am paused already, so nothing changed. To carry on, a person lifts the pause on the mini.")
+    } else {
+      const reason = `asked by ${who} ${where}`
+      mkdirSync(paths.root, { recursive: true })
+      writeFileSync(paths.pauseFile, JSON.stringify({ at: now.toISOString(), reason }))
+      appendLedger(paths, { type: "paused", reason }, now)
+      lines.push("Paused, as you asked. I start nothing new and finish what I am doing now. To carry on, a person lifts the pause on the mini.")
+    }
+  }
+  if (!actions.some((a) => a !== "pause")) return closed(lines)
+  if (!issue) {
+    const did = lines.length ? "so I did nothing more" : "so I did nothing"
+    return closed([...lines, `I could not tell which PR you mean, ${did}. Please name it: STEP-<n>, #<number> or its link. I only act on PRs I opened.`])
+  }
   let view: (OwnPrView & { baseRefName?: string }) | null = null
   const open = async () => {
     if (!pr) return null
@@ -121,17 +138,6 @@ async function act(deps: InstructionDeps, entry: AnyInstructionEntry): Promise<s
   let revising = false
 
   for (const action of actions) {
-    if (action === "pause") {
-      if (existsSync(paths.pauseFile)) {
-        lines.push("I am paused already, so nothing changed. To carry on, a person lifts the pause on the mini.")
-      } else {
-        const reason = `asked by ${who} ${where}`
-        mkdirSync(paths.root, { recursive: true })
-        writeFileSync(paths.pauseFile, JSON.stringify({ at: now.toISOString(), reason }))
-        appendLedger(paths, { type: "paused", reason }, now)
-        lines.push("Paused, as you asked. I start nothing new and finish what I am doing now. To carry on, a person lifts the pause on the mini.")
-      }
-    }
     if (action === "leave") {
       lines.push(`OK, I will leave ${pr ? prLink(pr.url) : issue} to a person and not touch it until someone asks.`)
     }
@@ -209,8 +215,7 @@ async function act(deps: InstructionDeps, entry: AnyInstructionEntry): Promise<s
   // Whatever it asked, it answers the issue's open question.
   for (const d of openDecisions(paths, issue)) closeDecision(paths, d.id, `answered by ${who}: ${actions.join(", ")}`, now)
   if (!lines.length) lines.push(`I read that as a request about ${issue}, but found nothing to do.`)
-  // One closing line: the one thing a person must do, or that nothing is needed (../plain.ts).
-  return lines.some((l) => /\bA person (needs|should)\b|\bPlease\b/.test(l)) ? lines : [...lines, NOTHING_NEEDED]
+  return closed(lines)
 }
 
 function lastBlocked(paths: AgentPaths, issue: string): JobRecord | null {

@@ -2,7 +2,15 @@
   "mcpServers": {
     "dev-tasks": {
       "command": "node",
-      "args": ["${CLAUDE_PLUGIN_ROOT}/dist/server.js"]
+      "args": [
+        "${CLAUDE_PLUGIN_ROOT}/dist/server.js"
+      ]
+    },
+    "slack": {
+      "command": "node",
+      "args": [
+        "${CLAUDE_PLUGIN_ROOT}/scripts/slack-channel.mjs"
+      ]
     }
   }
 }
