@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest"
 import { agentPaths, ConfigSchema } from "../../config.ts"
 import { listNew, putOnce } from "../../fsq.ts"
 import { listJobs, moveJob, readWatchedPrs, recordPr, submitJob, updateWatchedPr } from "../../jobs.ts"
+import { saveUserTestState } from "../../usertest/state.ts"
 import type { Logger } from "../../log.ts"
 import { mondayOutbox } from "../../monday/store.ts"
 import { parseInstruction, type InstructionEntry, type MondayInstructionEntry } from "../../slack/instruction.ts"
@@ -46,6 +47,21 @@ function setup(opts: { worker?: Record<string, unknown>; policy?: string; state?
   const outbox = () => listNew<{ kind: string; text?: string; name?: string; ts?: string; threadTs?: string }>(paths.outbox).map((e) => e.payload)
   return { paths, config, f, deps, say, outbox }
 }
+
+describe("a fix-it round and the browser test (WS5)", () => {
+  it("hands the round the browser test's findings at this head, and none from another head", async () => {
+    const { deps, paths, say } = setup()
+    saveUserTestState(paths, { issue: "STEP-7", url: PR, head: "abc1234def", verdict: "findings", findings: ["major: X (/en)"], at: NOW.toISOString() })
+    say("fix it")
+    await actOnInstructions(deps)
+    expect(listJobs(paths, "pending")[0].revise).toMatchObject({ usertestFindings: ["major: X (/en)"] })
+    const other = setup()
+    saveUserTestState(other.paths, { issue: "STEP-7", url: PR, head: "0000000", verdict: "findings", findings: ["major: X (/en)"], at: NOW.toISOString() })
+    other.say("fix it")
+    await actOnInstructions(other.deps)
+    expect(listJobs(other.paths, "pending")[0].revise?.usertestFindings).toBeUndefined()
+  })
+})
 
 describe("actOnInstructions (STEP-3285)", () => {
   it("turns 'fix it and merge' into a revise job now, arms auto-merge, and says so in words", async () => {

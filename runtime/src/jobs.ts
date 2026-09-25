@@ -73,6 +73,8 @@ export interface JobRecord {
   usertest?: { target: "staging" | "rc"; pr: number }
   /** Set by the runner when its browser test begins: agentd's backstop counts that test's own minutes from here. */
   userTestStartedAt?: string
+  /** The PR a develop or revise job's browser test is testing: agentd names it if it has to stop the job. */
+  userTestPr?: string
 }
 
 export const jobPath = (paths: AgentPaths, state: JobState, id: string) => join(paths.jobs, state, `${id}.json`)
@@ -163,7 +165,8 @@ export interface WatchedPr {
   /** `<head sha>:<failing checks>` last reported, so one failure is reported once. */
   notified?: string
   /** Review feedback acted on (review:<id>, comment:<id>, check:<head>:<name>), and the revise rounds so far. */
-  revise?: { rounds: number; handled: string[]; lastRoundAt?: string; asked?: boolean }
+  /** askedHead: the head the round cap's question was asked at. A new head's feedback asks again (WS5). */
+  revise?: { rounds: number; handled: string[]; lastRoundAt?: string; asked?: boolean; askedHead?: string }
   /** Runs re-run in full for an infra failure, as <head>:<runId>, and failing checks' verdicts at the head, as <head>:<name>. */
   reruns?: string[]
   infra?: Record<string, boolean>

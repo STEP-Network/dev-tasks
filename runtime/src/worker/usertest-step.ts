@@ -13,7 +13,7 @@ import { prLink } from "../plain.ts"
 import { classOfLabels, type TrackerIssue } from "../tracker.ts"
 import { reportMarkdown } from "../usertest/result.ts"
 import { runUserTest, userTestDeps } from "../usertest/run.ts"
-import { readUserTestState } from "../usertest/state.ts"
+import { BROWSER_TEST_REASON, readUserTestState } from "../usertest/state.ts"
 import type { MergeMode } from "./finalize.ts"
 import type { RunDeps } from "./run.ts"
 
@@ -67,7 +67,8 @@ export async function runUserTestJob(deps: RunDeps, job: JobRecord, finish: (r: 
 }
 
 const GH = 120_000
-const BROWSER_REASON = "the browser test found problems"
+const NOT_VISIBLE = "nothing in this change shows in a browser"
+const sentence = (text: string) => `${text[0].toUpperCase()}${text.slice(1)}`
 
 /**
  * After the PR is open (develop) or pushed (revise): the browser test on the
@@ -84,38 +85,71 @@ export async function userTestStep(
   if (!config.usertest.enabled) return
   // A develop job that finalize armed: run.ts found nothing a user can see, so there is nothing to test.
   if (!ctx.revise && ctx.merge === "auto") return
-  const mayArm = ctx.merge === "auto" || ctx.merge === "deferred"
+  let mayArm = ctx.merge === "auto" || ctx.merge === "deferred"
+  const opts = { cwd: config.repo.path, timeoutMs: GH }
+  // A note that cannot be posted never stops the step: the arming after it matters more.
   const note = async (text: string) => {
-    mkdirSync(paths.state, { recursive: true })
-    const file = join(paths.state, `pr-note-${ctx.issue.id}.md`)
-    writeFileSync(file, `${text}\n`)
-    await exec("gh", ["pr", "comment", ctx.prUrl, "--repo", config.repo.slug, "--body-file", file], { cwd: config.repo.path, timeoutMs: GH })
+    try {
+      mkdirSync(paths.state, { recursive: true })
+      const file = join(paths.state, `pr-note-${ctx.issue.id}.md`)
+      writeFileSync(file, `${text}\n`)
+      await exec("gh", ["pr", "comment", ctx.prUrl, "--repo", config.repo.slug, "--body-file", file], opts)
+    } catch (error) {
+      log.warn("browser test note not posted on the PR", { url: ctx.prUrl, error: error instanceof Error ? error.message : String(error) })
+    }
+  }
+  const prState = async (url: string): Promise<string | null> => {
+    try {
+      const r = await exec("gh", ["pr", "view", url, "--json", "state"], opts)
+      return r.code === 0 ? ((JSON.parse(r.stdout) as { state?: string }).state ?? null) : null
+    } catch {
+      return null
+    }
   }
   const arm = async () => {
     if (!mayArm) return
-    const r = await exec("gh", ["pr", "merge", ctx.prUrl, "--auto", "--squash", "--delete-branch"], { cwd: config.repo.path, timeoutMs: GH })
-    if (r.code !== 0) {
-      log.warn("could not arm auto-merge after the browser test", { url: ctx.prUrl, stderr: r.stderr.trim() })
-      enqueueSlack(paths, { kind: "post", channel: "agents", text: `${ctx.issue.id}: I could not switch on automatic merging for ${prLink(ctx.prUrl)}. A person needs to merge it once the checks pass.` }, deps.now())
-    }
+    const r = await exec("gh", ["pr", "merge", ctx.prUrl, "--auto", "--squash", "--delete-branch"], opts)
+    if (r.code === 0) return
+    log.warn("could not arm auto-merge after the browser test", { url: ctx.prUrl, stderr: r.stderr.trim() })
+    // A PR a person merged or closed meanwhile needs no one.
+    const state = await prState(ctx.prUrl)
+    if (state === "MERGED" || state === "CLOSED") return
+    enqueueSlack(paths, { kind: "post", channel: "agents", text: `${ctx.issue.id}: I could not switch on automatic merging for ${prLink(ctx.prUrl)}. A person needs to merge it once the checks pass.` }, deps.now())
   }
   try {
-    const view = await exec("gh", ["pr", "view", ctx.prUrl, "--json", "number,headRefOid,labels,autoMergeRequest"], { cwd: config.repo.path, timeoutMs: GH })
+    // First: agentd gives the test its own minutes from here, and names the PR if it has to stop the job.
+    updateJob(paths, "running", ctx.job.id, { userTestStartedAt: deps.now().toISOString(), userTestPr: ctx.prUrl })
+    const view = await exec("gh", ["pr", "view", ctx.prUrl, "--json", "number,headRefOid,labels,autoMergeRequest,state"], opts)
     if (view.code !== 0) throw new Error("gh could not read the PR")
-    const pr = JSON.parse(view.stdout) as { number: number; headRefOid: string; labels?: Array<{ name: string }>; autoMergeRequest?: unknown }
+    const pr = JSON.parse(view.stdout) as { number: number; headRefOid: string; labels?: Array<{ name: string }>; autoMergeRequest?: unknown; state?: string }
+    // A person merged or closed it meanwhile: nothing to test, and nothing to switch on.
+    if (pr.state && pr.state !== "OPEN") return
+    const last = readUserTestState(paths, ctx.prUrl)
+    // A revise round switches on only what was on, or what the browser test held off: never what a person switched off.
+    if (ctx.revise) mayArm = mayArm && (Boolean(pr.autoMergeRequest) || last?.verdict === "findings")
     if (ctx.revise && !ctx.pushed) {
       // Nothing new to test. Findings at this head that this round answered without a change go out with the answer.
-      const last = readUserTestState(paths, ctx.prUrl)
-      if (last?.head === pr.headRefOid && last.verdict === "findings" && ctx.revise.reasons.includes(BROWSER_REASON)) {
+      const answered = ctx.revise.reasons.includes(BROWSER_TEST_REASON) || Boolean(ctx.revise.usertestFindings?.length)
+      if (last?.head === pr.headRefOid && last.verdict === "findings" && answered) {
         await note("The browser test's findings were answered without a code change, in the reply above. The checks and the review decide from here.")
         await arm()
       }
       return
     }
-    const diff = await exec("gh", ["pr", "diff", ctx.prUrl, "--name-only"], { cwd: config.repo.path, timeoutMs: GH })
-    const changedPaths = diff.code === 0 ? diff.stdout.split("\n").map((l) => l.trim()).filter(Boolean) : []
-    if (mayArm && pr.autoMergeRequest) await exec("gh", ["pr", "merge", ctx.prUrl, "--disable-auto"], { cwd: config.repo.path, timeoutMs: GH })
-    updateJob(paths, "running", ctx.job.id, { userTestStartedAt: deps.now().toISOString() })
+    const diff = await exec("gh", ["pr", "diff", ctx.prUrl, "--name-only"], opts)
+    if (diff.code !== 0) {
+      await note("The browser test did not run: gh could not list the PR's files. The checks and the review still decide.")
+      await arm()
+      return
+    }
+    const changedPaths = diff.stdout.split("\n").map((l) => l.trim()).filter(Boolean)
+    if (mayArm && pr.autoMergeRequest) {
+      const off = await exec("gh", ["pr", "merge", ctx.prUrl, "--disable-auto"], opts)
+      if (off.code !== 0) {
+        log.warn("could not switch auto-merge off for the browser test", { url: ctx.prUrl, stderr: off.stderr.trim() })
+        await note("Automatic merging could not be switched off while the browser test ran, so this head may go in before its test ends.")
+      }
+    }
     const outcome = await runUserTest(
       userTestDeps({ paths, config, exec, tracker: deps.tracker, now: deps.now, log, fetchImpl: fetch, sleep: (ms) => new Promise((r) => setTimeout(r, ms)), secrets: loadUserTestSecrets(paths.home) }, deps.query, deps.claudeToken),
       {
@@ -127,12 +161,13 @@ export async function userTestStep(
     )
     appendLedger(paths, { type: "usertest.end", issue: ctx.issue.id, url: ctx.prUrl, verdict: outcome.verdict, costUsd: outcome.costUsd }, deps.now())
     if (outcome.verdict === "findings") return
-    if (outcome.verdict !== "pass" && outcome.reason !== "nothing in this change shows in a browser") {
-      await note(`The browser test did not run: ${outcome.reason}. The checks and the review still decide.`)
-    }
+    // Said on the PR only when its own report is not: "Could not finish" already says why.
+    if (outcome.verdict === "skipped" && outcome.reason !== NOT_VISIBLE) await note(`The browser test did not run: ${outcome.reason}. The checks and the review still decide.`)
+    if (outcome.verdict === "error" && !outcome.commentUrl) await note(`${sentence(outcome.reason)}. The checks and the review still decide.`)
     await arm()
   } catch (error) {
     log.warn("browser test step failed", { url: ctx.prUrl, error: error instanceof Error ? error.message : String(error) })
+    await note("The browser test could not run. The checks and the review still decide.")
     await arm()
   }
 }

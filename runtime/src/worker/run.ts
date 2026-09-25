@@ -434,14 +434,16 @@ export async function runJob(deps: RunDeps, jobId: string): Promise<JobResult> {
       const fin = revise
         ? await finalizeRevise({ exec, paths, config, issue, revise, worktree, now: deps.now }, outcome)
         : await finalize({ exec, tracker, paths, config, issue, branch, worktree, merge: mode, model, minutes: minutes(), now: deps.now }, outcome)
-      // It never throws, so a broken test never turns a done job into a blocked one.
-      if (fin.status === "done" && fin.prUrl) await userTestStep(deps, { job, issue, prUrl: fin.prUrl, merge: mode, pushed: fin.pushed, revise })
+      // It never throws, so a broken test never turns a done job into a blocked one. A revise round's push is tested however the round ended.
+      if (fin.prUrl && (fin.status === "done" || (revise && fin.pushed))) await userTestStep(deps, { job, issue, prUrl: fin.prUrl, merge: mode, pushed: fin.pushed, revise })
       result = { status: fin.status, reason: fin.reason, prUrl: fin.prUrl, branch, costUsd: outcome.costUsd, turns: outcome.turns, minutes: minutes() }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
       enqueueSlack(paths, { kind: "post", channel: "agents", text: `${issue.id}: finishing the job failed (${message}). A person needs to look.` }, deps.now())
       // A PR that opened before the failure is still this job's.
       const prUrl = error instanceof FinalizeFailed ? error.prUrl : (revise?.url ?? null)
+      // A PR that opened without auto-merge, for the browser test to switch on, still gets its test.
+      if (error instanceof FinalizeFailed && error.prUrl && mode === "deferred") await userTestStep(deps, { job, issue, prUrl: error.prUrl, merge: mode, pushed: true })
       result = { status: "blocked", reason: `finishing the job failed: ${message}`, prUrl, branch, costUsd: outcome.costUsd, turns: outcome.turns, minutes: minutes() }
     }
     // Outside the try: the job reaches done once, whatever finalize did (Review Focus 5).
@@ -484,8 +486,13 @@ export async function runJob(deps: RunDeps, jobId: string): Promise<JobResult> {
   const first = await runSession(deps.query, prompt, options(), config.worker.wallClockMinutes)
   // A revise job's own commits are those past the PR's head on origin.
   const since = revise ? revise.branch : config.repo.base
-  const changed = await changedFiles(exec, worktree.path, since).catch(() => [] as string[])
-  visibleChange = isBrowserVisible(changed, config.usertest.skipPaths)
+  let unlisted = false
+  const changed = await changedFiles(exec, worktree.path, since).catch(() => {
+    unlisted = true
+    return [] as string[]
+  })
+  // A change that could not be listed counts as one a user can see: the browser test decides.
+  visibleChange = unlisted || isBrowserVisible(changed, config.usertest.skipPaths)
   const small = changed.filter((f) => !TEST_FILE_RE.test(f)).length <= SMALL_CHANGE_FILES
   const judge = (end: typeof first) =>
     requireMutations(toOutcome(end.result, { abortedByClock: end.abortedByClock, thrown: end.thrown, limits, requireTitle, small }), changed)

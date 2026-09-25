@@ -33,6 +33,7 @@ import { mergeMode, readAutoMergePolicy } from "../worker/run.ts"
 import { closeDecision, openDecisions } from "./decisions.ts"
 import { requiredChecks } from "./health.ts"
 import { failingRequired, MAX_REVISE_ROUNDS, type OwnPrView } from "./revise.ts"
+import { readUserTestState } from "../usertest/state.ts"
 
 export type { AnyInstructionEntry, InstructionEntry }
 
@@ -149,11 +150,15 @@ async function act(deps: InstructionDeps, entry: AnyInstructionEntry): Promise<s
         revising = busy.kind === "revise"
       } else if (v && pr) {
         const round = (pr.revise?.rounds ?? 0) + 1
+        // The browser test's findings at this head go with the round, as agentd's own rounds carry them (WS5).
+        const ut = readUserTestState(paths, v.url)
+        const usertestFindings = ut?.verdict === "findings" && ut.head === v.headRefOid ? ut.findings : undefined
         const job = submitJob(paths, issue, null, now, {
           kind: "revise",
           revise: {
             url: v.url, number: v.number, branch: v.headRefName, round, since: pr.revise?.lastRoundAt ?? pr.openedAt,
             reasons: [`asked by ${who} ${where}`], instruction: entry.text,
+            ...(usertestFindings ? { usertestFindings } : {}),
           },
         })
         updateWatchedPr(paths, { ...pr, revise: { rounds: round, handled: pr.revise?.handled ?? [], lastRoundAt: now.toISOString(), asked: pr.revise?.asked } })

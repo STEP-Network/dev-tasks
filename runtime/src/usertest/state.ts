@@ -11,6 +11,9 @@ import { readJson, writeJsonAtomic } from "../fsq.ts"
 
 export type UserTestVerdict = "pass" | "findings" | "skipped" | "error"
 
+/** The revise reason agentd gives a round the browser test's findings brought back. */
+export const BROWSER_TEST_REASON = "the browser test found problems"
+
 export interface UserTestState {
   issue: string
   url: string

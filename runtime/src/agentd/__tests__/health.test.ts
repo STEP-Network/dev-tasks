@@ -559,7 +559,7 @@ describe("cleanup", () => {
 
   it("removes a browser test's folder and its recorded verdict after 14 days, and keeps newer ones (WS5)", async () => {
     const paths = agentPaths(mkdtempSync(join(tmpdir(), "agentd-clean-ut-")))
-    const config = ConfigSchema.parse({ mini: "eve", repo: { path: "/r" }, pluginRoot: "/p", slack: { allowedUsers: ["UNATE"] } })
+    const config = ConfigSchema.parse({ mini: "eve", repo: { path: "/r" }, pluginRoot: "/p", slack: { allowedUsers: ["U0EXAMPLE"] } })
     const old = new Date(NOW.getTime() - 15 * 86_400_000)
     const oldRun = join(paths.usertest, "STEP-1-20260901000000")
     mkdirSync(join(oldRun, "shots"), { recursive: true })
