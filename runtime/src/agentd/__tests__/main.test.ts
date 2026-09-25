@@ -5,8 +5,9 @@ import { join } from "node:path"
 import { fileURLToPath } from "node:url"
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
 import { agentPaths, ConfigSchema } from "../../config.ts"
-import { writeJsonAtomic } from "../../fsq.ts"
-import { submitJob } from "../../jobs.ts"
+import { listNew, putOnce, writeJsonAtomic } from "../../fsq.ts"
+import { listJobs, recordPr, submitJob } from "../../jobs.ts"
+import { parseInstruction } from "../../slack/instruction.ts"
 import type { Logger } from "../../log.ts"
 import { fakeExec, fakeTracker } from "../../__tests__/fakes.ts"
 import { recordSandboxProbe } from "../../cli/sandbox-probe.ts"
@@ -90,6 +91,27 @@ describe("runDuties", () => {
       writeJsonAtomic(join(paths.state, "bridge.json"), { at: new Date(t).toISOString(), connected: true, outboxWaiting: 0, outboxFailed })
     return { d, f, paths, problems, checkIns, bridge, advance: (minutes: number) => void (t += minutes * 60_000) }
   }
+
+  it("acts on a person's Slack reply in the same pass, and starts the revise job it queues (STEP-3285)", async () => {
+    const pr = "https://github.com/STEP-Network/v0-politiske-annoncer/pull/1679"
+    const view = { url: pr, number: 1679, state: "OPEN", headRefName: "STEP-7-fix-the-date", headRefOid: "abc", baseRefName: "staging", statusCheckRollup: [] }
+    const spawned: string[] = []
+    const f = fakeExec([
+      [/^gh pr view /, { stdout: JSON.stringify(view) }],
+      [/ls-remote/, { stdout: `${SHA}\trefs/heads/staging\n` }],
+      [/ --version$/, { stdout: "2.1.281 (Claude Code)\n" }],
+    ])
+    const { d, paths } = duties({ exec: f.exec, spawnWorker: (id) => (spawned.push(id), 5001) })
+    recordPr(paths, { issue: "STEP-7", url: pr, openedAt: NOW.toISOString() })
+    putOnce(paths.inbox, "instr:CQ:1700.5", {
+      type: "instruction", key: "instr:CQ:1700.5", issue: "STEP-7", channel: "CQ", ts: "1700.5", threadTs: "1700.1",
+      user: "UNATE", userName: "Nate", text: "take care of it", ...parseInstruction("take care of it"), receivedAt: NOW.toISOString(),
+    })
+    await runDuties(d, freshMemo())
+    expect(listJobs(paths, "running")).toEqual([expect.objectContaining({ issue: "STEP-7", kind: "revise" })])
+    expect(spawned).toEqual([listJobs(paths, "running")[0].id])
+    expect(listNew<{ kind: string; text?: string }>(paths.outbox).map((e) => e.payload.kind)).toEqual(["reply", "react"])
+  })
 
   it("refreshes the checkout and cleans up only while no job is pending or running", async () => {
     const busy = duties()

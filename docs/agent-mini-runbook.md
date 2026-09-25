@@ -505,6 +505,36 @@ After three rounds on one PR the agent asks in `#polads-questions` and stops
 revising it. It never dismisses a review, a person's or a bot's. To have it
 fix something, comment on the PR starting `@<agent>`.
 
+### Replies that act (STEP-3285)
+
+A reply in the thread of one of the agent's posts about a PR or a job, or a
+mention that names the PR (`@<agent> fix #1679 and merge`, a STEP id or the
+PR's link), is an instruction. agentd acts on it within seconds and answers
+in words, with the job id and the PR link, and a ✅ only beside that answer:
+
+- `fix it`, `make it green`, `take care of it`: a revise job for the PR now,
+  past the round cap too, since a person asked. With no open PR, a blocked
+  job is retried.
+- `re-run`: a full re-run of each failing required check's workflow run,
+  never `--failed`.
+- `merge`: auto-merge armed (`gh pr merge --auto --squash`) where the mini's
+  `worker.autoMerge` and the project's policy for the PR's base allow it.
+  Otherwise the answer says which one does not.
+- `retry`, `try again`: the issue's last blocked job again, on its branch.
+- `pause`: the PAUSE file. Lifting it stays a person's, on the mini.
+- `leave it`: nothing, and the PR is left to a person.
+
+`don't merge` and the like name no action. A reply to a question the issue
+waits on, or to a person's to-do, stays an answer, whatever its words.
+
+The agent escalates only what it cannot settle itself, as one question with
+its options and a recommended default. A CI run whose infrastructure failed
+again after its full re-run asks whether to re-run once more (the default)
+or leave it. The round cap asks whether to revise once more or leave it (the
+default). With no answer in an hour, agentd takes a reversible,
+staging-only default and says so in the thread. It also writes it under
+"Decisions taken by default" in the PR body and on the issue.
+
 The front door explains a pause or a hold when someone asks in Slack, and
 never lifts one because Slack said so. It cannot lift a pause at all: only a
 person on the mini (SSH or Screen Sharing) runs `agentctl resume`.

@@ -20,11 +20,17 @@
  * At most MAX_REVISE_ROUNDS rounds per PR. After that it asks in
  * #polads-questions, once, and stops. Nothing here, and nothing the worker
  * may run, dismisses a person's or a bot's review.
+ *
+ * Neither the re-run that failed again nor the round cap is a "person needs
+ * to look" (STEP-3285): each is one question with options and a default
+ * (agentd/decisions.ts). A re-run's default is another re-run, which agentd
+ * takes after an hour without an answer. The cap's is leaving the PR to a person.
  */
 
 import type { AgentConfig, AgentPaths } from "../config.ts"
 import { listJobs, submitJob, updateWatchedPr, type WatchedPr } from "../jobs.ts"
 import { appendLedger, type Logger } from "../log.ts"
+import { askDecision } from "./decisions.ts"
 import { enqueueSlack } from "../outbox.ts"
 import type { Exec } from "../worker/git.ts"
 
@@ -105,7 +111,7 @@ export function failingRequired(view: OwnPrView, required: readonly string[]): F
 export type RevisePlan =
   | { kind: "none" }
   | { kind: "rerun"; runs: string[] }
-  | { kind: "notify"; failing: string[] }
+  | { kind: "notify"; failing: string[]; runs: string[] }
   | { kind: "revise"; handled: string[]; reasons: string[] }
   | { kind: "ask"; handled: string[]; reasons: string[] }
 
@@ -153,7 +159,7 @@ export function planRevision(view: OwnPrView, pr: WatchedPr, ctx: { mini: string
     const fresh = runs.filter((r) => !done.has(`${view.headRefOid}:${r}`))
     if (fresh.length) return { kind: "rerun", runs: fresh }
     // Re-run once at this head and still failing, or not an Actions run at all: a person looks.
-    return { kind: "notify", failing: infraOnly.map((f) => f.name) }
+    return { kind: "notify", failing: infraOnly.map((f) => f.name), runs }
   }
   return { kind: "none" }
 }
@@ -220,14 +226,20 @@ export async function reviseOwnPr(deps: ReviseDeps, pr: WatchedPr, view: OwnPrVi
     case "notify": {
       const signature = `${view.headRefOid}:${plan.failing.join(",")}`
       if (pr.notified === signature) break
-      const merge = view.autoMergeRequest ? "Auto-merge waits until it is green." : "It cannot merge until it is green."
-      enqueueSlack(
+      askDecision(
         deps.paths,
+        deps.config,
         {
-          kind: "issue",
+          id: `infra-${pr.issue}-${view.headRefOid.slice(0, 12)}`,
           issue: pr.issue,
-          text: `PR ${pr.url}: ${plan.failing.join(", ")} failed on ${view.headRefOid.slice(0, 7)}, on the infrastructure again after a full re-run. ${merge} A person needs to look.`,
-          question: false,
+          url: pr.url,
+          question: `CI on ${pr.url} failed on its infrastructure again after a full re-run (${plan.failing.join(", ")} on ${view.headRefOid.slice(0, 7)}), not on the code.`,
+          options: [
+            { reply: "re-run", does: "re-run CI in full once more" },
+            { reply: "leave it", does: "leave the PR to a person" },
+          ],
+          defaultReply: "re-run",
+          defaultAction: { kind: "rerun", runs: plan.runs },
         },
         now,
       )
@@ -235,13 +247,20 @@ export async function reviseOwnPr(deps: ReviseDeps, pr: WatchedPr, view: OwnPrVi
       break
     }
     case "ask": {
-      enqueueSlack(
+      askDecision(
         deps.paths,
+        deps.config,
         {
-          kind: "issue",
+          id: `cap-${pr.issue}-${view.number}`,
           issue: pr.issue,
-          text: `PR ${pr.url} still has review feedback after ${MAX_REVISE_ROUNDS} revise rounds (${plan.reasons.join(", ")}). I have stopped revising it: a person decides what happens next.`,
-          question: true,
+          url: pr.url,
+          question: `PR ${pr.url} still has review feedback after ${MAX_REVISE_ROUNDS} revise rounds (${plan.reasons.join(", ")}).`,
+          options: [
+            { reply: "fix it", does: "revise it once more" },
+            { reply: "leave it", does: "leave it to a person" },
+          ],
+          defaultReply: "leave it",
+          defaultAction: { kind: "leave" },
         },
         now,
       )

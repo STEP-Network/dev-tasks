@@ -105,6 +105,7 @@ export function buildReviseBrief(input: BriefInput, revise: ReviseRequest, feedb
     "## Why it is back",
     "",
     ...revise.reasons.map((r) => `- ${r}`),
+    ...(revise.instruction ? ["", "In Slack, the person wrote:", "", revise.instruction.split("\n").map((l) => `> ${l}`).join("\n")] : []),
     "",
     `## Review feedback since ${revise.since}`,
     "",
@@ -180,7 +181,11 @@ export async function finalizeRevise(ctx: ReviseFinalizeContext, outcome: Outcom
   }
 
   await reply([`${config.mini} could not finish this revision (${round}): ${clause(outcome.reason)}.`, "", commits].join("\n"))
-  enqueueSlack(ctx.paths, { kind: "issue", issue: issue.id, text: `blocked revising ${revise.url}: ${clause(outcome.reason)}. A person needs to look.`, question: true }, ctx.now())
+  enqueueSlack(
+    ctx.paths,
+    { kind: "issue", issue: issue.id, text: `Revising ${revise.url} stopped: ${clause(outcome.reason)}. Reply "fix it" to try the round again once that is sorted, or "leave it" to leave the PR to a person.`, question: true },
+    ctx.now(),
+  )
   post(`${issue.id} blocked revising ${revise.url}: ${clause(outcome.reason)}`)
   return { status: "blocked", reason: outcome.reason, prUrl: revise.url, pushed }
 }

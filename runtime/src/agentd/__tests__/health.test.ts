@@ -120,7 +120,29 @@ describe("watchPrs, and the revise loop (STEP-3274)", () => {
     // Still failing on the infrastructure at that head after the re-run: a person looks, once.
     await w.run()
     expect(outbox(paths).filter((p) => p.kind === "issue").map((p) => p.text)).toEqual([
-      `PR ${PR1}: Test failed on abc1234, on the infrastructure again after a full re-run. Auto-merge waits until it is green. A person needs to look.`,
+      // One question with its options and a default, never "a person needs to look" (STEP-3285). 13:00 UTC is 15:00 in Copenhagen.
+      `CI on ${PR1} failed on its infrastructure again after a full re-run (Test on abc1234), not on the code. Reply "re-run" to re-run CI in full once more (the default: I do it at 15:00 if nobody answers), or "leave it" to leave the PR to a person.`,
+    ])
+  })
+
+  it("never posts 'a person needs to look' for a failing check: the code's is revised, the infrastructure's re-run, and what stays is one question (STEP-3285)", async () => {
+    const { paths, config } = setup()
+    recordPr(paths, { issue: "STEP-7", url: PR1, openedAt: "t" })
+    recordPr(paths, { issue: "STEP-8", url: PR2, openedAt: "t" })
+    const w = watch(paths, config, [
+      [/pull\/1 /, { stdout: view(PR1, { statusCheckRollup: redTest }) }],
+      [/pull\/2 /, { stdout: view(PR2, { headRefName: "STEP-8-x", statusCheckRollup: [{ name: "Test", conclusion: "FAILURE", detailsUrl: "https://github.com/x/actions/runs/333/job/444" }] }) }],
+      [/run view --job 222/, { stdout: "FAIL lib/notice.test.ts\n  expected 2026-09-01\n" }],
+      [/run view --job 444/, { stdout: "Error: read ECONNRESET\n" }],
+    ])
+    await w.run()
+    await w.run()
+    const sent = outbox(paths)
+    expect(sent.map((p) => p.text).filter((t) => /person needs to look/i.test(t))).toEqual([])
+    expect(listJobs(paths, "pending").map((j) => [j.issue, j.kind])).toEqual([["STEP-7", "revise"]])
+    // STEP-8's infrastructure failed again at the same head: one question, with a default.
+    expect(sent.filter((p) => p.kind === "issue")).toEqual([
+      expect.objectContaining({ issue: "STEP-8", question: true, text: expect.stringMatching(/^CI on .*\/pull\/2 failed on its infrastructure again .* Reply "re-run" .*\(the default: I do it at \d\d:\d\d if nobody answers\), or "leave it"/) }),
     ])
   })
 
@@ -178,7 +200,7 @@ describe("watchPrs, and the revise loop (STEP-3274)", () => {
         kind: "issue",
         issue: "STEP-7",
         question: true,
-        text: `PR ${PR1} still has review feedback after 3 revise rounds (changes requested by nate). I have stopped revising it: a person decides what happens next.`,
+        text: `PR ${PR1} still has review feedback after 3 revise rounds (changes requested by nate). Reply "fix it" to revise it once more, or "leave it" to leave it to a person (the default: I do it at 15:00 if nobody answers).`,
       }),
     ])
   })

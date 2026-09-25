@@ -22,7 +22,9 @@ import { readUsage } from "../usage.ts"
 import { realExec, type Exec } from "../worker/git.ts"
 import { heartbeatAndSweep } from "./claims.ts"
 import { frontDoorAlive, FrontDoorRefused, lastTickAt, readFrontDoorState, superviseFrontDoor } from "./frontdoor.ts"
+import { takeDefaults } from "./decisions.ts"
 import { cleanup, Every, healthStatus, inboxStuck, linearDownNotice, refreshCheckout, sentryCheckInUrl, watchPrs, type BridgeHeartbeat } from "./health.ts"
+import { actOnInstructions } from "./instructions.ts"
 import { spawnWorkerProcess, superviseJobs, workerLiveness, type Liveness } from "./jobrunner.ts"
 
 const TICK_MS = 15_000
@@ -110,7 +112,12 @@ export async function runDuties(d: DutyDeps, memo: DutyMemo): Promise<void> {
       }
     }
   })
+  // A person's Slack reply is acted on at once, before the job it may queue is started (STEP-3285).
+  await step("instructions", () => actOnInstructions({ exec: d.exec, paths, config, now, log }))
   await step("jobs", () => superviseJobs({ paths, config, now, log, bootAt: d.bootAt, liveness: d.liveness, kill: d.kill, spawnWorker: d.spawnWorker }))
+  if (d.every.due("decisions", 60_000)) {
+    await step("decisions", () => takeDefaults({ exec: d.exec, paths, config, now, log, comment: (issue, body) => d.tracker.comment(issue, body) }))
+  }
   // The main checkout and its worktrees change only between jobs: a job
   // fetches into the same repository, and its session loads the project's
   // settings and hooks from this checkout (projectConfigRoot).

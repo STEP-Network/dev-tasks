@@ -230,7 +230,7 @@ async function settle(ctx: FinalizeContext, outcome: Outcome, progress: { pushed
   }
 
   const more = beyondReason(reason, outcome.report?.summary)
-  inThread(`blocked: ${clause(reason)}. ${more ? `${more} ` : ""}Reply here when it can continue.`)
+  inThread(`blocked: ${clause(reason)}. ${more ? `${more} ` : ""}Reply "retry" when it can continue, and I pick it up on its branch.`)
   post(`${issue.id} blocked: ${clause(reason)}`)
   await ctx.tracker.updateIssue(issue.id, { state: "On hold" })
   await ctx.tracker.comment(issue.id, blockedReport(reason, outcome.report, { branch: ctx.branch, pushed }))
