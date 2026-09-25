@@ -26,6 +26,9 @@ export const AGENT_CONFIG = /^(\.claude\/hooks(\/|$)|\.claude\/settings[^/]*\.js
 /** PolAds's tracked template holds no secret, and git stats every tracked file, so it is the one .env file allowed. */
 export const ENV_TEMPLATE = ".env.example"
 
+const WHOLESALE =
+  "Resolve a merge conflict hunk by hunk, keeping both sides' intent: never take one side for the whole merge or the whole tree. Taking one side of a single file (a lockfile) is allowed."
+
 const BANS: Array<{ re: RegExp; reason: string }> = [
   // The sandbox's network allowlist (npm's registry only) is what stops a push
   // written some other way (`git -C x push`, a path to the binary): these
@@ -34,6 +37,16 @@ const BANS: Array<{ re: RegExp; reason: string }> = [
   { re: /(^|[\s;&|(])gh\s+pr\s+(create|merge)\b/, reason: "Workers never open or merge PRs. The launcher opens the PR and arms auto-merge." },
   { re: /(^|[\s;&|(])gh\s+pr\s+review\b|\/dismissals\b/, reason: "Workers never review a PR or dismiss a review: a person's or a bot's review decision stands." },
   { re: /--admin\b/, reason: "--admin is banned outright (spec section 11)." },
+  // A PR that clashes with its base is merged, never rebased (STEP-3340): a
+  // rebase rewrites commits origin has, which a push that is never forced
+  // cannot send. And a clash is resolved hunk by hunk, never by taking one
+  // side of the whole merge or the whole tree.
+  { re: /(^|[\s;&|(])git\s+rebase\b/, reason: "Workers never rebase: a PR's branch takes its base by a merge, and the launcher never force-pushes." },
+  {
+    re: /(^|[\s;&|(])git\s+merge\b[^;&|]*\s(-s\s*ours|--strategy[= ]ours|-X\s*(ours|theirs)|--strategy-option[= ](ours|theirs))\b/,
+    reason: WHOLESALE,
+  },
+  { re: /(^|[\s;&|(])git\s+(checkout|restore)\b(?=[^;&|]*\s--(ours|theirs)\b)[^;&|]*\s(--\s+)?(\.|:\/|\*)(?=$|[\s;&|)])/, reason: WHOLESALE },
   // A path segment `.config` (so not jest.config.ts) and a `.env` file name
   // (so not process.env) other than the template. The sandbox refuses the
   // read itself: this says why.

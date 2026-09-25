@@ -164,8 +164,38 @@ export async function prepareWorktree(exec: Exec, o: WorktreeOptions): Promise<{
   return { path, resumed }
 }
 
-export async function commitsAhead(exec: Exec, path: string, base: string): Promise<number> {
-  return Number.parseInt((await mustGit(exec, ["-C", path, "rev-list", "--count", `origin/${base}..HEAD`])).trim(), 10) || 0
+export async function commitsAhead(exec: Exec, path: string, base: string, o: { firstParent?: boolean } = {}): Promise<number> {
+  const args = ["-C", path, "rev-list", "--count", `origin/${base}..HEAD`, ...(o.firstParent ? ["--first-parent"] : [])]
+  return Number.parseInt((await mustGit(exec, args)).trim(), 10) || 0
+}
+
+/**
+ * Starts merging origin's copy of `base` into the worktree's branch, for a
+ * revise round whose PR clashes with it (STEP-3340). Here, outside the
+ * sandbox: the merge writes every file the base changed, the agent
+ * configuration included, which the sandbox keeps read-only. None of those
+ * conflicts: prepareWorktree refuses a branch that changes one. A clean merge
+ * is committed. Otherwise the conflicted files are left marked, and named,
+ * for the worker to resolve and commit. A merge, never a rebase: the branch
+ * is on origin, and its push is never forced.
+ */
+export async function startMerge(exec: Exec, path: string, base: string): Promise<{ conflicts: string[] }> {
+  const merge = ["-C", path, "merge", "--no-ff", "--no-edit", `origin/${base}`]
+  const r = await git(exec, merge)
+  const unmerged = await mustGit(exec, ["-C", path, "diff", "--name-only", "--diff-filter=U"])
+  const conflicts = unmerged.split("\n").map((f) => f.trim()).filter(Boolean)
+  if (r.code !== 0 && !conflicts.length) throw failed(`git ${merge.join(" ")}`, r)
+  return { conflicts }
+}
+
+/**
+ * Of `files`, those that still differ from origin's copy of `base`: what a
+ * round changed itself, not what merging the base in brought (STEP-3340).
+ */
+export async function ownChanges(exec: Exec, path: string, base: string, files: readonly string[]): Promise<string[]> {
+  const out = await mustGit(exec, ["-C", path, "diff", "--name-only", `origin/${base}`, "HEAD"])
+  const differs = new Set(out.split("\n").map((f) => f.trim()).filter(Boolean))
+  return files.filter((f) => differs.has(f))
 }
 
 /** The files the branch changes against origin's copy of `base`. */

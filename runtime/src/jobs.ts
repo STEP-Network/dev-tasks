@@ -30,7 +30,7 @@ export interface ReviseRequest {
   number: number
   /** The PR's head branch, which the worker continues from origin. */
   branch: string
-  /** 1 to MAX_REVISE_ROUNDS. */
+  /** 1 to MAX_REVISE_ROUNDS, or to MAX_CONFLICT_ROUNDS for a round that only merges the base in. */
   round: number
   /** Feedback newer than this is the round's to answer: the PR's opening, or the last round. */
   since: string
@@ -41,6 +41,13 @@ export interface ReviseRequest {
   /** The browser test's blockers and major findings, when they brought the PR back (WS5). */
   usertestFindings?: string[]
 }
+
+/** Why a PR is back when git cannot merge it into its base (STEP-3340). */
+export const CONFLICT_PREFIX = "merge conflict with "
+export const conflictReason = (base: string) => `${CONFLICT_PREFIX}${base}`
+export const isConflictReason = (reason: string) => reason.startsWith(CONFLICT_PREFIX)
+/** A round that only merges the base in: it counts against its own cap, not the review rounds. */
+export const isConflictOnly = (reasons: readonly string[]) => reasons.length > 0 && reasons.every(isConflictReason)
 
 export interface JobRecord {
   id: string
@@ -164,9 +171,10 @@ export interface WatchedPr {
   openedAt: string
   /** `<head sha>:<failing checks>` last reported, so one failure is reported once. */
   notified?: string
-  /** Review feedback acted on (review:<id>, comment:<id>, check:<head>:<name>), and the revise rounds so far. */
+  /** Review feedback acted on (review:<id>, comment:<id>, check:<head>:<name>, conflict:<head>), and the revise rounds so far. */
   /** askedHead: the head the round cap's question was asked at. A new head's feedback asks again (WS5). */
-  revise?: { rounds: number; handled: string[]; lastRoundAt?: string; asked?: boolean; askedHead?: string }
+  /** conflictRounds: the rounds that only merged the base in, under their own cap (STEP-3340). */
+  revise?: { rounds: number; handled: string[]; lastRoundAt?: string; asked?: boolean; askedHead?: string; conflictRounds?: number }
   /** Runs re-run in full for an infra failure, as <head>:<runId>, and failing checks' verdicts at the head, as <head>:<name>. */
   reruns?: string[]
   infra?: Record<string, boolean>

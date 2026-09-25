@@ -55,5 +55,9 @@ describe("plain words for people (plain.ts)", () => {
     expect(feedbackFor(["the browser test found problems"])).toBe("the problems the browser test found")
     expect(feedbackFor(["changes requested by someone", "Test failed", "the browser test found problems"])).toBe("the review comments, the failing checks and the problems the browser test found")
     expect(feedbackFor(["Test failed", "the browser test found problems"])).toBe("the failing checks and the problems the browser test found")
+    // STEP-3340: a PR that clashes with its base, by the base's name.
+    expect(feedbackFor(["merge conflict with staging"])).toBe("the clash with newer changes in staging")
+    expect(feedbackFor(["changes requested by nate", "merge conflict with staging"])).toBe("the review comments and the clash with newer changes in staging")
+    expect(JARGON.test(feedbackFor(["asked by Nate in Slack", "Test failed", "merge conflict with staging"]))).toBe(false)
   })
 })

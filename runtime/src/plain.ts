@@ -11,6 +11,8 @@
  * (plugin/skills/front-door/SKILL.md, Replies).
  */
 
+import { CONFLICT_PREFIX, isConflictReason } from "./jobs.ts"
+
 export const NOTHING_NEEDED = "Nothing needed from you."
 
 /** "1 message", "3 messages". */
@@ -63,7 +65,13 @@ export function feedbackFor(reasons: readonly string[]): string {
   const review = reasons.some((r) => /changes requested|comment|asked|review/i.test(r))
   const checks = reasons.some((r) => /failed/i.test(r) && !/review/i.test(r))
   const browser = reasons.some((r) => /browser test/i.test(r))
-  const parts = [review && "the review comments", checks && "the failing checks", browser && "the problems the browser test found"].filter((p): p is string => Boolean(p))
+  const base = reasons.find(isConflictReason)?.slice(CONFLICT_PREFIX.length)
+  const parts = [
+    review && "the review comments",
+    checks && "the failing checks",
+    browser && "the problems the browser test found",
+    base && `the clash with newer changes in ${base}`,
+  ].filter((p): p is string => Boolean(p))
   if (!parts.length) return "the review comments"
   return parts.length === 1 ? parts[0] : `${parts.slice(0, -1).join(", ")} and ${parts.at(-1)}`
 }

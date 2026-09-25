@@ -67,7 +67,16 @@ fi
 # Pre-filter to ADDITION LINES ONLY: `^\+` matches added lines, but we must
 # exclude the diff's own `+++ b/path` header lines (they also start with +).
 # A simple `grep -v '^+++'` does this without polluting the per-pattern regex.
-DIFF=$(git diff --cached --no-color 2>/dev/null | grep -E '^\+' | grep -vE '^\+\+\+')
+#
+# A merge commit's own lines are what differs from the branch merged in
+# (STEP-3340): that branch's lines were committed, and scanned, where they
+# were written. Against HEAD, a merge of a moving base would carry every line
+# the base gained since, and any fixture among them would block it.
+if git rev-parse -q --verify MERGE_HEAD >/dev/null 2>&1; then
+  DIFF=$(git diff --cached --no-color MERGE_HEAD 2>/dev/null | grep -E '^\+' | grep -vE '^\+\+\+')
+else
+  DIFF=$(git diff --cached --no-color 2>/dev/null | grep -E '^\+' | grep -vE '^\+\+\+')
+fi
 
 if [ -z "$DIFF" ]; then
   exit 0

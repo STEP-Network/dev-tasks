@@ -23,7 +23,7 @@ import { requiredChecks } from "../agentd/health.ts"
 import { FINISH_GRACE_MINUTES } from "../agentd/jobrunner.ts"
 import { agentPaths, assertProfileMini, loadConfig, readProfileMini, type AgentConfig, type AgentPaths } from "../config.ts"
 import { readJson } from "../fsq.ts"
-import { jobPath, moveJob, updateJob, type JobRecord, type JobResult } from "../jobs.ts"
+import { isConflictOnly, isConflictReason, jobPath, moveJob, updateJob, type JobRecord, type JobResult } from "../jobs.ts"
 import { appendLedger, createLogger, type Logger } from "../log.ts"
 import { enqueueSlack } from "../outbox.ts"
 import { NOTHING_NEEDED } from "../plain.ts"
@@ -32,7 +32,7 @@ import { loadClaudeOauthToken } from "../secrets.ts"
 import { branchNameFor, createLinearTracker, type Tracker, type TrackerIssue } from "../tracker.ts"
 import { buildBrief, WORKER_RESULT_SCHEMA, workerRules, type BriefInput } from "./brief.ts"
 import { finalize, FinalizeFailed, type MergeMode } from "./finalize.ts"
-import { changedFiles, commitMessages, commitsAhead, historyRewrite, prepareWorktree, realExec, WorktreeRefused, type Exec } from "./git.ts"
+import { changedFiles, commitMessages, commitsAhead, historyRewrite, ownChanges, prepareWorktree, startMerge, realExec, WorktreeRefused, type Exec } from "./git.ts"
 import { denyBannedBash, denyWorkerPaths, ENV_TEMPLATE, workerEnv, workerToolDenial } from "./guard.ts"
 import { SMALL_CHANGE_FILES, clause, toOutcome, type Outcome, type ResultMessageLike } from "./outcome.ts"
 import { buildReviseBrief, finalizeRevise, gatherFeedback } from "./revise.ts"
@@ -459,6 +459,15 @@ export async function runJob(deps: RunDeps, jobId: string): Promise<JobResult> {
     const message = error instanceof Error ? error.message : String(error)
     return finishWith(null, blockedBefore(error instanceof WorktreeRefused ? message : `the worktree could not be prepared: ${message}`))
   }
+  // A PR that clashes with the base: the merge starts here, outside the sandbox (git.ts, startMerge), and the worker resolves it.
+  let baseMerge: { conflicts: string[] } | undefined
+  if (revise?.reasons.some(isConflictReason)) {
+    try {
+      baseMerge = await startMerge(exec, worktree.path, config.repo.base)
+    } catch (error) {
+      return finishWith(worktree.path, blockedBefore(`the merge of ${config.repo.base} could not start: ${error instanceof Error ? error.message : String(error)}`))
+    }
+  }
 
   // 3. the session
   const earlier = job.retryOf ? readJson<JobRecord>(jobPath(paths, "done", job.retryOf))?.result?.reason : undefined
@@ -478,9 +487,10 @@ export async function runJob(deps: RunDeps, jobId: string): Promise<JobResult> {
   const sessionStart = deps.now()
   updateJob(paths, "running", jobId, { sessionStartedAt: sessionStart.toISOString() })
   log.info("worker session starting", { issue: issue.id, model, worktree: worktree.path, resumed: worktree.resumed, retryOf: job.retryOf ?? null, revise: revise?.url ?? null })
-  const feedback = revise ? await gatherFeedback(exec, config.repo.slug, revise, requiredChecks(config.repo.path)) : null
+  // A round that only merges the base in answers no feedback (STEP-3340): the review rounds do, and the retro learns from them.
+  const feedback = revise ? (isConflictOnly(revise.reasons) ? { points: [], logs: [] } : await gatherFeedback(exec, config.repo.slug, revise, requiredChecks(config.repo.path))) : null
   if (revise && feedback) learn(lessonsFromFeedback(feedback, { mini: config.mini, issue: issue.id, pr: revise.url, round: revise.round }))
-  const prompt = revise && feedback ? buildReviseBrief(brief, revise, feedback) : buildBrief(brief)
+  const prompt = revise && feedback ? buildReviseBrief(brief, revise, feedback, baseMerge) : buildBrief(brief)
   // A revise job's PR has its title: its report needs none.
   const requireTitle = !revise
   const first = await runSession(deps.query, prompt, options(), config.worker.wallClockMinutes)
@@ -493,9 +503,13 @@ export async function runJob(deps: RunDeps, jobId: string): Promise<JobResult> {
   })
   // A change that could not be listed counts as one a user can see: the browser test decides.
   visibleChange = unlisted || isBrowserVisible(changed, config.usertest.skipPaths)
-  const small = changed.filter((f) => !TEST_FILE_RE.test(f)).length <= SMALL_CHANGE_FILES
+  // A merge of the base brings the base's own files and tests (STEP-3340): the round's own work is what still differs from the base.
+  const own = baseMerge ? await ownChanges(exec, worktree.path, config.repo.base, changed).catch(() => changed) : changed
+  const small = own.filter((f) => !TEST_FILE_RE.test(f)).length <= SMALL_CHANGE_FILES
+  // A merge round writes no tests of its own, so it has no mutation to check.
+  const tested = revise && isConflictOnly(revise.reasons) ? [] : own
   const judge = (end: typeof first) =>
-    requireMutations(toOutcome(end.result, { abortedByClock: end.abortedByClock, thrown: end.thrown, limits, requireTitle, small }), changed)
+    requireMutations(toOutcome(end.result, { abortedByClock: end.abortedByClock, thrown: end.thrown, limits, requireTitle, small }), tested)
   let outcome = first.initProblem ? blockedBefore(first.initProblem) : judge(first)
   log.info("worker session ended", { issue: issue.id, status: outcome.status, reason: outcome.reason, costUsd: outcome.costUsd, turns: outcome.turns })
 

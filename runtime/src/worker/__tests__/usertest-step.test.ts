@@ -163,6 +163,27 @@ describe("userTestStep", () => {
     expect(f.lines().filter((l) => l.startsWith("gh pr merge"))).toEqual([`gh pr merge ${PR} --disable-auto`, ARM])
   })
 
+  it("treats a round that only merged the base in as any revise push: auto-merge off, the test, on again after a pass (STEP-3340)", async () => {
+    const { f, step } = setup({ autoMergeRequest: { enabledAt: "2026-09-25T10:10:00Z" } })
+    mocked.mockResolvedValue(outcome("pass"))
+    await step("auto", { pushed: true, revise: revise(["merge conflict with staging"]) })
+    expect(f.lines().filter((l) => l.startsWith("gh pr merge"))).toEqual([`gh pr merge ${PR} --disable-auto`, ARM])
+    // It tests the PR's own change against its base, as gh lists it after the merge: not the files the merge brought in.
+    expect(f.lines()).toContain(`gh pr diff ${PR} --name-only`)
+    expect(mocked.mock.calls[0][1]).toMatchObject({ changedPaths: ["components/account/Profile.tsx"] })
+  })
+
+  it("arms again, with a note, after a merge round whose change no user sees, and never arms what a person switched off (STEP-3340)", async () => {
+    const skipped = setup({ autoMergeRequest: { enabledAt: "2026-09-25T10:10:00Z" } })
+    mocked.mockResolvedValue(outcome("skipped", "nothing in this change shows in a browser"))
+    await skipped.step("auto", { pushed: true, revise: revise(["merge conflict with staging"]) })
+    expect(skipped.f.lines().filter((l) => l.startsWith("gh pr merge"))).toEqual([`gh pr merge ${PR} --disable-auto`, ARM])
+    expect(skipped.note()).toBe("Auto-merge is on without a browser test: nothing in this change shows in a browser. The checks and the review still decide.")
+    const off = setup()
+    await off.step("auto", { pushed: true, revise: revise(["merge conflict with staging"]) })
+    expect(off.f.lines().some((l) => l.startsWith("gh pr merge"))).toBe(false)
+  })
+
   it("does nothing while the browser test is off", async () => {
     const { f, step } = setup({ enabled: false })
     await step("auto")
@@ -264,6 +285,50 @@ describe("userTestStep", () => {
     await step("deferred")
     const posts = listNew<{ text: string }>(paths.outbox).map((e) => e.payload.text)
     expect(posts).toEqual([`STEP-7: I could not switch on automatic merging for <${PR}|PR #7>. A person needs to merge it once the checks pass.`])
+  })
+})
+
+describe("buildReviseBrief for a PR that clashes with its base (STEP-3340)", () => {
+  const input = { mini: "eve", issue: issue({ id: "STEP-7" }), worktree: "/w", branch: "STEP-7-x", base: "staging", resumed: true } as Parameters<typeof buildReviseBrief>[0]
+  const CONFLICT = "merge conflict with staging"
+  const feedback = { points: [{ who: "nate", where: "PR comment", at: "2026-09-25T10:05:00Z", body: "Rename it." }], logs: [] }
+
+  it("names the conflicted files and how to finish the merge: hunk by hunk, a merge never a rebase, never aborted, a question for a product decision", () => {
+    const brief = buildReviseBrief(input, revise([CONFLICT]), feedback, { conflicts: ["lib/a.ts", "pnpm-lock.yaml"] })
+    expect(brief).toMatch(/^# STEP-7: .* \(revise, merge round 1 of 3\)/)
+    expect(brief).toContain("## Finish the merge of the base")
+    expect(brief).toContain("The runner has started `git merge --no-ff origin/staging` in your worktree, and these files conflict:\n\n- lib/a.ts\n- pnpm-lock.yaml\n")
+    expect(brief).toContain("Resolve each conflict hunk by hunk, keeping both sides' intent")
+    expect(brief).toContain("Never take one side wholesale (`--ours`, `--theirs`, `-X ours`, `-s ours`)")
+    expect(brief).toContain("`git add` those files and `git commit --no-edit`")
+    expect(brief).toContain("A merge, never a rebase, and never abort or reset it")
+    expect(brief).toContain("report needs_input with one question in plain English")
+    expect(brief).toContain("Only the merge brought this PR back: change nothing else.")
+    // A merge round answers no feedback: the review rounds do.
+    expect(brief).not.toContain("## Review feedback since")
+    expect(brief).not.toContain("Rename it.")
+    expect(brief).toContain("one line per file a conflict touched")
+  })
+
+  it("says so when the runner's merge went through clean", () => {
+    const brief = buildReviseBrief(input, revise([CONFLICT]), feedback, { conflicts: [] })
+    expect(brief).toContain("The runner merged origin/staging into the branch without a conflict here, and committed it.")
+    expect(brief).not.toContain("these files conflict")
+  })
+
+  it("keeps the feedback, and the round's own count, when the merge rides along with it", () => {
+    const brief = buildReviseBrief(input, revise(["changes requested by nate", CONFLICT]), feedback, { conflicts: ["lib/a.ts"] })
+    expect(brief).toMatch(/\(revise, round 1 of 3\)/)
+    expect(brief).toContain("## Finish the merge of the base")
+    expect(brief).toContain("## Review feedback since")
+    expect(brief).toContain("Rename it.")
+    expect(brief).toContain("Finish the merge first, as above.")
+    expect(brief).not.toContain("Only the merge brought this PR back")
+  })
+
+  it("carries no merge section for a PR that does not clash", () => {
+    const brief = buildReviseBrief(input, revise(["Test failed"]), feedback)
+    expect(brief).not.toMatch(/merge of the base|git merge/)
   })
 })
 
