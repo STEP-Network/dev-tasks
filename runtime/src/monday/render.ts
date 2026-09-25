@@ -162,7 +162,10 @@ export const say = {
   sameAnswer: (name: string, first: string) => `Thanks, ${name}. ${first} gave the same answer already, so it stands as it is. ${NOTHING_NEEDED}`,
   newerQuestion: (name: string, question: string) =>
     `Thanks, ${name}. I asked a newer question after you wrote this, so I have not taken it as your answer. Please answer the newer one here: ${plainText(question)}`,
-  onlyVerdicts: () => "I read only PASS or FAIL here. Start your reply with PASS if it works, or with FAIL and what you saw.",
+  onlyVerdicts: (look = false) =>
+    look
+      ? "I read only a verdict here. Start your reply with Looks good if it looks right, or with Change: and what should change."
+      : "I read only PASS or FAIL here. Start your reply with PASS if it works, or with FAIL and what you saw.",
   notWaiting: () => `This change is no longer waiting for a test, so I did not record your verdict. ${NOTHING_NEEDED}`,
   gone: (id: string) => `I could not add this to ${id}, because ${id} is no longer in Linear. ${NOTHING_NEEDED}`,
   refused: (id: string) => `Linear refused this for a whole day, so I have stopped trying to add it to ${id}. Please write it again.`,

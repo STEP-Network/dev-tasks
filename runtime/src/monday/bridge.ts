@@ -47,6 +47,7 @@ import { MondayRefused, type MondayApi, type MondayBoard, type MondayItem } from
 import type { PeopleIssue, PeopleView } from "./people.ts"
 import { aboutText, needBody, needKind, needName, plainText, quote, requestIssue, say, stableUuid, toHtml, uatBody, uatName, type MondayKind, type NeedSource } from "./render.ts"
 import { routeWords, type Words } from "./route.ts"
+import { parseVerdict, recordVerdict, verdictReply } from "../verdict.ts"
 import { dropRecord, enqueueMonday, mondayOutbox, readCursor, readRecords, saveRecord, writeCursor, type ItemRecord, type MondayReply, type MondayState } from "./store.ts"
 
 export interface MondayBridgeDeps {
@@ -361,66 +362,24 @@ export function createMondayBridge(deps: MondayBridgeDeps): MondayBridge {
   }
 
   /**
-   * A person's PASS or FAIL on a Test day item, written as the PolAds
-   * review-uat skill writes a person's verdict (its Step 10, and
-   * references/linear-io.md). PASS: a comment naming them, Approved, and for
-   * a UAT fix its parent back to Agent UAT once none of its fixes is open.
-   * FAIL: a UAT fix sub-issue with what they saw (Ready, bug, the product,
-   * agent, the parent's priority), a comment naming it, Needs Correction.
+   * A person's verdict on a Test day or a Looks good? item: PASS or FAIL, and
+   * on a Look also "looks good" or "change" (spec 3). Written through the one
+   * verdict recorder Slack uses too (verdict.ts), as review-uat writes it.
    */
   async function verdict(rec: ItemRecord, item: MondayItem, who: Person, words: Words, pass: Pass): Promise<void> {
-    const m = /^\s*(pass|fail)\b[\s:.,!-]*/i.exec(words.text)
-    if (!m) {
-      reply(item.id, words, say.onlyVerdicts(), pass.now, false)
-      return mark(rec, words.id)
-    }
     const current = await tracker.readIssue(rec.issue)
-    if (current.state !== "Waiting for UAT") {
-      reply(item.id, words, say.notWaiting(), pass.now, false)
+    const look = current.labels.includes("approval/look")
+    const v = parseVerdict(words.text, look)
+    if (!v) {
+      reply(item.id, words, say.onlyVerdicts(look), pass.now, false)
       return mark(rec, words.id)
     }
-    const seen = words.text.slice(m[0].length).trim()
-    const where = words.permalink ?? item.url
-    if (m[1].toLowerCase() === "pass") {
-      await tracker.comment(rec.issue, `UAT PASS from ${who.name} on the Monday board (${where})${seen ? `: ${seen}` : "."}`)
-      await tracker.updateIssue(rec.issue, { state: "Approved" })
-      mark(rec, words.id)
-      if (current.title.startsWith("UAT fix:")) await after("closing the loop", rec, () => closeTheLoop(current.id, who))
-      reply(item.id, words, say.passed(who.name), pass.now)
-    } else {
-      // Named by the person's update, so a retry after a crash finds this issue rather than filing a second.
-      const sub = await tracker.createIssue({
-        title: truncateChars(`UAT fix: ${plainText(current.title)}`, 80),
-        description: [
-          `${who.name} tried ${current.id} on test day, and it did not work. What they saw, as they wrote it on the Monday board:`,
-          "",
-          quote(seen || "(no details given)"),
-          "",
-          `Part of ${current.id}. Monday: ${where}`,
-          "",
-          "## Acceptance criteria",
-          "",
-          `- [ ] What ${who.name} saw no longer happens, and ${current.id}'s own acceptance criteria hold.`,
-        ].join("\n"),
-        labels: ["bug", deps.config.repo.product, "agent"],
-        state: "Ready",
-        clientId: stableUuid(`monday-uat-fail:${words.id}`),
-      })
-      await people.adoptFix(sub.uuid, current.uuid, current.priority)
-      await tracker.comment(rec.issue, `UAT FAIL from ${who.name} on the Monday board (${where}). The fix is tracked in ${sub.id}.`)
-      await tracker.updateIssue(rec.issue, { state: "Needs Correction" })
-      mark(rec, words.id)
-      reply(item.id, words, say.failed(who.name, sub.id), pass.now)
-    }
-    appendLedger(paths, { type: "uat.verdict", issue: rec.issue, verdict: m[1].toLowerCase(), by: who.name, via: "monday" }, pass.now)
-  }
-
-  /** review-uat's "Closing the loop": the parent of an approved UAT fix goes back to Agent UAT once none of its fixes is open. */
-  async function closeTheLoop(fix: string, who: Person): Promise<void> {
-    const parent = await people.parentOf(fix)
-    if (!parent || parent.state !== "Needs Correction" || parent.openFixes.length) return
-    await tracker.comment(parent.id, `${fix} is fixed and approved (${who.name}, on the Monday board), so ${parent.id} goes back for its review against its full acceptance criteria.`)
-    await tracker.updateIssue(parent.id, { state: "Agent UAT" })
+    const out = await recordVerdict(
+      { paths, tracker, people, product: deps.config.repo.product, now: () => pass.now, log },
+      { issue: rec.issue, who: who.name, verdict: v, where: words.permalink ?? item.url, source: "monday", key: words.id },
+    )
+    mark(rec, words.id)
+    reply(item.id, words, verdictReply(who.name, out), pass.now, out.outcome !== "not-waiting")
   }
 
   // 2. Requests -------------------------------------------------------------

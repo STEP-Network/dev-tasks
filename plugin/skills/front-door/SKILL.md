@@ -119,6 +119,12 @@ An intake event also has `issue`, the Triage issue the bridge already filed.
   The bridge records nothing on its own: you decide what it is. Read the
   issue (`~/.agentd/bin/trackerctl read <issue>`) and the last question you
   asked in the thread (`question`), then:
+  - **On an issue waiting for a person to try it or look at it** (it is in
+    Waiting for UAT: a Test day or a Looks good? item): words that start with
+    PASS or FAIL, or on a Look "looks good" or "change", are a verdict. Run
+    `~/.agentd/bin/agentctl verdict --key <key>`. It records the verdict as
+    review-uat does, answers in the thread and acks. Never write a verdict
+    they did not give: anything else, answer in the thread, and ack.
   - **A decision** on what the issue waits on: record it, in words that stand
     on their own. A "yes" (or "go with it", "agreed") to your recommendation:
     `~/.agentd/bin/agentctl decide --key <key> --agree`, which records the

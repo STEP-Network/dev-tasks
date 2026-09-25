@@ -576,6 +576,23 @@ describe("the Monday bridge: test day (STEP-3289)", () => {
     expect(fake.issues.get("STEP-7")!.state).toBe("Needs Correction")
   })
 
+  it("takes a Look's own words on the board: looks good approves, and anything else is asked for in a Look's words (Wave 2)", async () => {
+    const { bridge, monday, fake, later } = setup([issue({ id: "STEP-7", title: "Fix the date", state: "Waiting for UAT", labels: ["polads", "approval/look"] })], { extra: { "STEP-7": { uatSteps: steps, prUrl: PR } } })
+    await bridge.sync()
+    const item = monday.item(/Try it on the test site/)!
+    later(1)
+    monday.says(item.id, NATE, "hmm, not sure")
+    later(1)
+    await bridge.sync()
+    expect(monday.called("postUpdate").at(-1)?.[1]).toBe("Eve: I read only a verdict here. Start your reply with Looks good if it looks right, or with Change: and what should change.")
+    later(1)
+    const said = monday.says(item.id, NATE, "Looks good")
+    later(1)
+    await bridge.sync()
+    expect(fake.issues.get("STEP-7")!.state).toBe("Approved")
+    expect(fake.called("comment")).toEqual([["STEP-7", `UAT PASS from Nate on the Monday board (${item.url}/posts/${said}).`]])
+  })
+
   it("reads only PASS or FAIL on a test-day item, and never a verdict for an issue no longer waiting", async () => {
     const { bridge, monday, fake, later } = uat()
     await bridge.sync()
@@ -592,6 +609,9 @@ describe("the Monday bridge: test day (STEP-3289)", () => {
     await bridge.sync()
     expect(fake.called("comment")).toEqual([])
     expect(fake.issues.get("STEP-7")!.state).toBe("On hold")
+    // Words back, and no like: nothing was recorded.
+    expect(monday.called("postUpdate").some((c) => c[1] === "Eve: This change is no longer waiting for a test, so I did not record your verdict. Nothing needed from you.")).toBe(true)
+    expect(monday.called("like")).toEqual([])
   })
 })
 

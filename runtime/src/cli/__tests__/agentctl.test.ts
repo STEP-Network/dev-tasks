@@ -330,3 +330,68 @@ describe("agentctl retro (STEP-3290)", () => {
     expect(existsSync(join(root, "state", "retro.json"))).toBe(false)
   })
 })
+
+describe("agentctl verdict (Wave 2)", () => {
+  /** A person's reply in STEP-7's thread, as the bridge files it. */
+  function replyEntry(text: string, over: Record<string, unknown> = {}): string {
+    const key = `msg:CQ:1790330410.000100`
+    putOnce(agentPaths().inbox, key, {
+      type: "reply", key, issue: "STEP-7", channel: "CQ", ts: "1790330410.000100", threadTs: "1790330400.000100", user: "UADA", userName: "Ada",
+      text, readableText: text, permalink: "https://x.slack.com/archives/CQ/p1790330410000100", receivedAt: NOW.toISOString(), ...over,
+    })
+    return key
+  }
+  function waiting(labels = ["polads"]) {
+    const fake = fakeTracker([issue({ id: "STEP-7", title: "Wider buttons", state: "Waiting for UAT", labels })])
+    const adopted: string[] = []
+    const people = () => ({ adoptFix: async (c: string) => void adopted.push(c), parentOf: async () => null })
+    return { fake, adopted, deps: deps({ tracker: () => fake.tracker, people }) }
+  }
+  const outbox = () => listNew<{ kind: string; text?: string; name?: string }>(agentPaths().outbox).map((e) => e.payload)
+
+  it("verdict records a person's PASS from their own words, answers in the thread and acks it", async () => {
+    writeConfig()
+    const { fake, deps: d } = waiting()
+    const key = replyEntry("PASS works on my phone")
+    expect(await run(["verdict", "--key", key], out, d)).toBe(0)
+    expect(fake.issues.get("STEP-7")!.state).toBe("Approved")
+    expect(fake.called("comment")).toEqual([["STEP-7", "UAT PASS from Ada in Slack (https://x.slack.com/archives/CQ/p1790330410000100): works on my phone"]])
+    expect(outbox()).toEqual([
+      expect.objectContaining({ kind: "reply", text: "Thanks, Ada. I marked it as approved, so it goes out with the next release. Nothing needed from you." }),
+      expect.objectContaining({ kind: "react", name: "white_check_mark" }),
+    ])
+    expect(listNew(agentPaths().inbox)).toEqual([])
+    expect(JSON.parse(printed.at(-1)!)).toEqual({ issue: "STEP-7", outcome: "passed" })
+  })
+
+  it("takes a Look's change as a fix, from the words", async () => {
+    writeConfig()
+    const { fake, adopted, deps: d } = waiting(["polads", "approval/look"])
+    expect(await run(["verdict", "--key", replyEntry("change: the button should be blue")], out, d)).toBe(0)
+    expect(fake.issues.get("STEP-7")!.state).toBe("Needs Correction")
+    expect(adopted).toHaveLength(1)
+    expect(JSON.parse(printed.at(-1)!)).toMatchObject({ issue: "STEP-7", outcome: "failed" })
+  })
+
+  it("verdict refuses words that are not a verdict, and a mention", async () => {
+    writeConfig()
+    const { fake, deps: d } = waiting()
+    const key = replyEntry("looks good")
+    await expect(run(["verdict", "--key", key], out, d)).rejects.toThrow(UsageError)
+    await expect(run(["verdict", "--key", key], out, d)).rejects.toThrow(/do not start with PASS or FAIL, so they are not a verdict/)
+    const mention = "msg:CAG:1790330500.000100"
+    putOnce(agentPaths().inbox, mention, { type: "mention", key: mention, channel: "CAG", ts: "1790330500.000100", user: "UADA", userName: "Ada", text: "PASS", receivedAt: NOW.toISOString() })
+    await expect(run(["verdict", "--key", mention], out, d)).rejects.toThrow(/not a reply in an issue's thread/)
+    expect(fake.called("updateIssue")).toEqual([])
+    expect(listNew(agentPaths().inbox)).toHaveLength(2)
+  })
+
+  it("answers but does not tick a verdict on an issue no longer waiting to be tried", async () => {
+    writeConfig()
+    const { fake, deps: d } = waiting()
+    fake.issues.set("STEP-7", { ...fake.issues.get("STEP-7")!, state: "Approved" })
+    expect(await run(["verdict", "--key", replyEntry("FAIL it broke")], out, d)).toBe(0)
+    expect(outbox()).toEqual([expect.objectContaining({ kind: "reply", text: "This change is no longer waiting for a test, so I did not record your verdict. Nothing needed from you." })])
+    expect(listNew(agentPaths().inbox)).toEqual([])
+  })
+})
