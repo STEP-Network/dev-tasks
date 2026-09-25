@@ -227,6 +227,11 @@ describe("/front-door", () => {
     expect(source).not.toMatch(/--text "</)
     expect(source).not.toMatch(/--description "</)
   })
+
+  it("records a verdict only through agentctl verdict, from the person's own words", () => {
+    expect(source).toMatch(/~\/\.agentd\/bin\/agentctl verdict --key <key>/)
+    expect(source).toMatch(/Never write a verdict\s+they did not give/)
+  })
 })
 
 describe("/refine", () => {
