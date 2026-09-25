@@ -101,6 +101,14 @@ describe("createMondayTracker", () => {
     expect(commentVars.body).toContain("claimed by nate")
   })
 
+  it("refuses projects and sub-issues, which are Linear's", async () => {
+    const tracker = createMondayTracker()
+    await expect(tracker.createProject({ name: "x", milestones: [] })).rejects.toThrow(/Linear/)
+    await expect(tracker.createIssue({ title: "x", parent: "STEP-7" })).rejects.toThrow(/Linear/)
+    await expect(tracker.createIssue({ title: "x", projectId: "p" })).rejects.toThrow(/Linear/)
+    expect(executeMondayQuery).not.toHaveBeenCalled()
+  })
+
   it("createIssue creates the item then posts the description as an update", async () => {
     executeMondayQuery.mockImplementation(async (query: string) => {
       if (query.includes("create_item")) return { create_item: { id: "999" } }
