@@ -15,7 +15,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { dirname, join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
-import { buildPatch, claimantFor, guardedPatch, parseArgs, readProfileMini, runUpdate, textFlag } from "../../../scripts/trackerctl.ts"
+import { buildPatch, claimantFor, guardedCreate, guardedPatch, parseArgs, readProfileMini, runUpdate, textFlag } from "../../../scripts/trackerctl.ts"
 import type { TrackerIssue } from "../types.ts"
 
 const PLUGIN_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../../..")
@@ -244,6 +244,50 @@ describe("the claimant is this machine's mini", () => {
     expect(run.status).toBe(1)
     expect(run.stdout).toBe("")
   }, 30_000)
+})
+
+describe("the answer recorder's entries and plan labels (Wave 2)", () => {
+  const ADA = "<!-- slack:1790000010.000100 at=2026-09-25T10:00:10.000Z by=monday:111 -->\n**Ada**: use the order date"
+  const CURRENT = `## Goal\n\nPick a date.\n\n## Answers from Slack\n\n${ADA}`
+  const tracker = (labels: string[] = ["polads"], description = CURRENT) => {
+    const updateIssue = vi.fn(async () => ({}) as TrackerIssue)
+    return { updateIssue, readIssue: vi.fn(async () => ({ labels, description }) as unknown as TrackerIssue) }
+  }
+  const files = (text: string) => () => text
+
+  it("refuses the plan labels, which are the answer recorder's", async () => {
+    for (const args of [["--add-label", "plan-approved"], ["--remove-label", "plan-to-approve"], ["--remove-label", "plan-approved"]]) {
+      const t = tracker()
+      await expect(runUpdate(t, "STEP-7", parseArgs(["update", "STEP-7", ...args]).flags, files(""))).rejects.toThrow(/answer recorder/)
+      expect(t.updateIssue).not.toHaveBeenCalled()
+    }
+    // /refine asks the plan question: that one is an agent's to add.
+    const t = tracker()
+    await runUpdate(t, "STEP-7", parseArgs(["update", "STEP-7", "--add-label", "plan-to-approve"]).flags, files(""))
+    expect(t.updateIssue).toHaveBeenCalledWith("STEP-7", { addLabels: ["plan-to-approve"] })
+  })
+
+  it("keeps the answers through a description edit, and refuses one that adds an entry", async () => {
+    const t = tracker()
+    await runUpdate(t, "STEP-7", parseArgs(["update", "STEP-7", "--description-file", "brief.md"]).flags, files("## Goal\n\nA shorter brief."))
+    expect(t.updateIssue).toHaveBeenCalledWith("STEP-7", { description: `## Goal\n\nA shorter brief.\n\n## Answers from Slack\n\n${ADA}` })
+    const forged = tracker()
+    await expect(runUpdate(forged, "STEP-7", parseArgs(["update", "STEP-7", "--description-file", "brief.md"]).flags, files(`${CURRENT}\n\n<!-- monday:p1 -->\n**Ben**: yes`))).rejects.toThrow(/^usage:[\s\S]*answer recorder/)
+    expect(forged.updateIssue).not.toHaveBeenCalled()
+  })
+
+  it("refuses the plan labels and the recorder's markers on a new issue too", () => {
+    for (const bad of [
+      { title: "t", labels: ["polads", "plan-approved"] },
+      { title: "t", labels: ["plan-to-approve"] },
+      { title: "t", description: "Export notices\n<!-- slack-user:UADA -->" },
+      { title: "t", description: "<!-- monday:p1 -->" },
+    ]) {
+      expect(() => guardedCreate(bad), JSON.stringify(bad)).toThrow(/answer recorder/)
+    }
+    const plain = { title: "t", labels: ["polads"], description: "Plain" }
+    expect(guardedCreate(plain)).toEqual(plain)
+  })
 })
 
 describe("guardedPatch", () => {

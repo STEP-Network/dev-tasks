@@ -278,7 +278,8 @@ describe("the Monday bridge: answers (STEP-3289)", () => {
     expect(inbox()).toEqual([])
     const now = fake.issues.get("STEP-7")!
     expect(now).toMatchObject({ state: "Ready", labels: ["agent-ready"] })
-    expect(now.description).toBe(`## Goal\n\nFix it.\n\n## Answers from Monday\n\n<!-- monday:${said} -->\n**Kristoffer** ([Monday](${item.url}/posts/${thread}?reply=reply-${said})): Use the publication date, then merge`)
+    // The marker keeps when they wrote it and who they are (Wave 2: the first answer counts).
+    expect(now.description).toBe(`## Goal\n\nFix it.\n\n## Answers from Monday\n\n<!-- monday:${said} at=2026-09-25T09:01:00.000Z by=monday:${KRISTOFFER} -->\n**Kristoffer** ([Monday](${item.url}/posts/${thread}?reply=reply-${said})): Use the publication date, then merge`)
     // The reply went out in the same poll, under the person's thread, with a like beside it.
     expect(listNew(mondayOutbox(paths))).toEqual([])
     expect(monday.called("postUpdate").at(-1)).toEqual([item.id, "Eve: Thanks, Kristoffer. I added your answer to the issue, and an agent picks it up again. Nothing needed from you.", thread])
@@ -300,7 +301,7 @@ describe("the Monday bridge: answers (STEP-3289)", () => {
     const change = monday.answers(item.id, NATE, "Done, the record is in.")
     later(2)
     await bridge.sync()
-    expect(fake.issues.get("STEP-7")!.description).toBe(`Do the DNS.\n\n## Answers from Monday\n\n<!-- monday:log:${change} -->\n**Nate**: Done, the record is in.`)
+    expect(fake.issues.get("STEP-7")!.description).toBe(`Do the DNS.\n\n## Answers from Monday\n\n<!-- monday:log:${change} at=2026-09-25T09:01:00.000Z by=monday:${NATE} -->\n**Nate**: Done, the record is in.`)
     expect(monday.called("postUpdate").at(-1)).toEqual([item.id, "Eve: Thanks, Nate. I added your answer to the issue, and an agent looks at it again. Nothing needed from you.", null])
     expect(monday.called("like")).toEqual([])
     later(2)
@@ -323,6 +324,48 @@ describe("the Monday bridge: answers (STEP-3289)", () => {
     await bridge.sync()
     expect(fake.called("updateIssue")).toEqual([])
     expect(monday.called("postUpdate").filter((c) => /I added your answer/.test(String(c[1])))).toEqual([])
+  })
+
+  it("tells a second person whose answer counts, in their words, keeps theirs unapplied, and asks them again (Wave 2)", async () => {
+    const { bridge, monday, fake, later, paths } = setup([issue({ id: "STEP-7", state: "On hold", labels: ["human-todo"], description: "Do the DNS." })])
+    await bridge.sync()
+    const item = monday.item(/job for a person/)!
+    // The item asked when it posted its body: the first answer after this counts.
+    expect(readRecords(paths).find((r) => r.itemId === item.id)?.askedAt).toBe(T0.toISOString())
+    later(1)
+    monday.answers(item.id, NATE, "Done, the record is in.")
+    later(1)
+    await bridge.sync()
+    later(1)
+    monday.answers(item.id, KRISTOFFER, "No, it is not in yet.")
+    later(1)
+    await bridge.sync()
+    expect(monday.called("postUpdate").at(-1)).toEqual([item.id, "Eve: Nate answered this first on Monday: Done, the record is in. That answer counts, and I kept yours on the issue beside it. If you meant something else, reply with what should happen instead.", null])
+    expect(fake.issues.get("STEP-7")!.description).toContain("**Kristoffer**: No, it is not in yet. (Not applied: Nate answered first.)")
+    // Asked back: their next words answer the new question.
+    expect(readRecords(paths).find((r) => r.itemId === item.id)?.askedAt).toBe(new Date(T0.getTime() + 4 * 60_000).toISOString())
+    later(1)
+    monday.answers(item.id, KRISTOFFER, "Fine, it is in now")
+    later(1)
+    await bridge.sync()
+    expect(fake.issues.get("STEP-7")!.description).toMatch(/\*\*Kristoffer\*\*: Fine, it is in now$/)
+  })
+
+  it("thanks a second person who gives the same answer, and records nothing new (Wave 2)", async () => {
+    const { bridge, monday, fake, later } = setup([issue({ id: "STEP-7", state: "On hold", labels: ["human-todo"], description: "Do the DNS." })])
+    await bridge.sync()
+    const item = monday.item(/job for a person/)!
+    later(1)
+    monday.answers(item.id, NATE, "Done, the record is in.")
+    later(1)
+    await bridge.sync()
+    const before = fake.issues.get("STEP-7")!.description
+    later(1)
+    monday.answers(item.id, KRISTOFFER, "done, the record is in!")
+    later(1)
+    await bridge.sync()
+    expect(monday.called("postUpdate").at(-1)).toEqual([item.id, "Eve: Thanks, Kristoffer. Nate gave the same answer already, so it stands as it is. Nothing needed from you.", null])
+    expect(fake.issues.get("STEP-7")!.description).toBe(before)
   })
 
   it("ignores anyone not on the allowlist: their updates, their Answer column and their requests", async () => {
@@ -793,7 +836,7 @@ describe("the Monday bridge: words sent to agentd stay on the issue too (STEP-32
     later(2)
     await bridge.sync()
     expect(inbox()).toEqual([expect.objectContaining({ issue: "STEP-7", actions: ["retry"] })])
-    expect(fake.issues.get("STEP-7")).toMatchObject({ state: "On hold", description: expect.stringContaining(`<!-- monday:${said} -->\n**Nate** `) })
+    expect(fake.issues.get("STEP-7")).toMatchObject({ state: "On hold", description: expect.stringContaining(`<!-- monday:${said} at=2026-09-25T09:01:00.000Z by=monday:${NATE} -->\n**Nate** `) })
   })
 
   it("counts a blocked job only while it is the issue's most recent one", async () => {

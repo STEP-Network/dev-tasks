@@ -3,7 +3,7 @@
  * rules: British English, no semicolons, no em or en dashes.
  */
 
-import type { CreateIssueInput, TrackerIssue } from "../tracker.ts"
+import { answerEntries, insertUnder, type CreateIssueInput, type TrackerIssue } from "../tracker.ts"
 
 /** Every message carries the agent's name first (spec 8). */
 export function prefixed(mini: string, text: string): string {
@@ -85,6 +85,9 @@ export interface SlackAnswer {
   userName: string
   text: string
   permalink: string | null
+  /** When the person wrote it (ISO), and their person key (answer.ts personKey): the first answer counts (spec 6). */
+  at?: string
+  by?: string
 }
 
 export const ANSWERS_HEADING = "## Answers from Slack"
@@ -98,31 +101,35 @@ const ANSWER_SOURCES: Record<AnswerSource, { heading: string; link: string }> = 
 }
 
 /**
- * Appends once per message: the marker (the Slack ts, or the Monday update's
- * id) makes a redelivery a no-op. Linear rebuilds a description from its own
- * document model and may drop an HTML comment, so the answer's link, when it
- * has one, counts too.
+ * Appends once per message: an entry for the same message (the Slack ts, or
+ * the Monday update's id) makes a redelivery a no-op. Linear rebuilds a
+ * description from its own document model and may drop an HTML comment, so
+ * the answer's link, when it has one, counts too. A bare marker with no
+ * words is no answer: the real one takes its place. The entry goes at the
+ * end of its own heading's section, never under whichever heading is last.
  */
 export function appendAnswer(description: string, answer: SlackAnswer, source: AnswerSource = "slack"): string {
   const { heading, link: label } = ANSWER_SOURCES[source]
-  const marker = `<!-- ${source}:${answer.ts} -->`
-  if (description.includes(marker) || (answer.permalink && description.includes(`(${answer.permalink})`))) return description
+  const same = answerEntries(description).find((e) => e.source === source && e.id === answer.ts)
+  if (same?.who || (answer.permalink && description.includes(`(${answer.permalink})`))) return description
+  const meta = `${answer.at ? ` at=${answer.at}` : ""}${answer.by ? ` by=${answer.by}` : ""}`
   const link = answer.permalink ? ` ([${label}](${answer.permalink}))` : ""
-  const entry = `${marker}\n**${answer.userName}**${link}: ${answer.text}`
-  const base = description.trimEnd()
-  return base.includes(heading) ? `${base}\n\n${entry}` : `${base}\n\n${heading}\n\n${entry}`
+  const entry = `<!-- ${source}:${answer.ts}${meta} -->\n**${answer.userName}**${link}: ${answer.text}`
+  if (same) return description.replace(same.raw, () => entry)
+  return insertUnder(description, heading, entry)
 }
 
 /**
- * What a person's reply in an issue's thread does to the issue. Only a parked
- * issue (On hold) moves: back to Ready when an agent had already refined it
- * (a worker asked), back to Refining when not (/refine asked). An issue a
- * worker is running keeps its state; the answer is still appended.
+ * What a person's answer does to the issue. It settles what asked for a
+ * person: the question (awaiting-answer) and needs-human, wherever the issue
+ * is (spec 6: an answered item is Done in both places). Only a parked issue
+ * (On hold) moves: back to Ready when an agent had already refined it (a
+ * worker asked), back to Refining when not (/refine asked). An issue a worker
+ * is running keeps its state; the answer is still appended.
  */
 export function answerTransition(issue: Pick<TrackerIssue, "state" | "labels">): { state?: string; removeLabels?: string[] } {
-  if (issue.state !== "On hold") return {}
-  return {
-    state: issue.labels.includes("agent-ready") ? "Ready" : "Refining",
-    ...(issue.labels.includes("awaiting-answer") ? { removeLabels: ["awaiting-answer"] } : {}),
-  }
+  const answered = ["awaiting-answer", "needs-human"].filter((l) => issue.labels.includes(l))
+  const labels = answered.length ? { removeLabels: answered } : {}
+  if (issue.state !== "On hold") return labels
+  return { state: issue.labels.includes("agent-ready") ? "Ready" : "Refining", ...labels }
 }

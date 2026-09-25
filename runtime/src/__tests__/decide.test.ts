@@ -116,6 +116,45 @@ describe("agentctl decide", () => {
   })
 })
 
+describe("the first answer counts, in Slack (Wave 2)", () => {
+  // Slack timestamps just after the question, which went out at NOW.
+  const NATE_TS = "1790330410.000100"
+  const BEN_TS = "1790330440.000100"
+  const BEN = { user: "UBEN", userName: "Ben" }
+
+  it("a yes after the question was answered, agreeing to the same recommendation, records nothing new and says so", async () => {
+    const { fake, go, outbox } = ctl()
+    expect(await go(["decide", "--key", reply(NATE_TS, "yes"), "--agree"])).toBe(0)
+    const before = fake.issues.get("STEP-7")!.description
+    const key = reply(BEN_TS, "yes", BEN)
+    expect(await go(["decide", "--key", key, "--agree"])).toBe(0)
+    expect(fake.called("updateIssue")).toHaveLength(1)
+    expect(fake.issues.get("STEP-7")!.description).toBe(before)
+    expect(outbox().slice(-2)).toEqual([
+      expect.objectContaining({ kind: "reply", text: "Thanks, Ben. Nate gave the same answer already, so it stands as it is. Nothing needed from you." }),
+      expect.objectContaining({ kind: "react", name: "white_check_mark" }),
+    ])
+    expect(listNew(paths.inbox)).toEqual([])
+    expect(readFileSync(join(paths.logs, "ledger.jsonl"), "utf8")).toContain('"type":"answer.same","issue":"STEP-7"')
+  })
+
+  it("a second person's different decision is kept but not applied, and they are asked what they meant as a new question", async () => {
+    const { fake, go, outbox } = ctl()
+    expect(await go(["decide", "--key", reply(NATE_TS, "yes"), "--agree"])).toBe(0)
+    const moved = fake.issues.get("STEP-7")!
+    const key = reply(BEN_TS, "no, the signing date", BEN)
+    const file = join(paths.root, "ben.md")
+    writeFileSync(file, "use the signing date\n")
+    expect(await go(["decide", "--key", key, "--text-file", file])).toBe(0)
+    const after = fake.issues.get("STEP-7")!
+    expect({ state: after.state, labels: after.labels }).toEqual({ state: moved.state, labels: moved.labels })
+    expect(after.description).toContain('Ben decided: use the signing date. (Their words: "no, the signing date") (Not applied: Nate answered first.)')
+    expect(outbox().at(-1)).toEqual(expect.objectContaining({ kind: "issue", issue: "STEP-7", question: true, text: expect.stringMatching(/^Nate answered this first in Slack: use the publication date\. That answer counts/) }))
+    expect(listNew(paths.inbox)).toEqual([])
+    expect(readFileSync(join(paths.logs, "ledger.jsonl"), "utf8")).toContain('"type":"answer.second","issue":"STEP-7"')
+  })
+})
+
 /** The bridge's outbox sender, posting whatever is queued at `at`, as the Slack bridge does. */
 async function deliver(at: Date): Promise<void> {
   const web = { postMessage: async () => ({ ts: "1700.99" }), permalink: async () => null, react: async () => {} }

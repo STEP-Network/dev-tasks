@@ -37,6 +37,7 @@ import { createHash } from "node:crypto"
 import type { AgentConfig, AgentPaths } from "../config.ts"
 import { ack, fail, listNew } from "../fsq.ts"
 import { appendLedger, redact, type Logger } from "../log.ts"
+import { personKey, secondAnswerText } from "../answer.ts"
 import { lastQuestion } from "../outbox.ts"
 import { prRef } from "../plain.ts"
 import { openDecisions, questionText, type Decision } from "../agentd/decisions.ts"
@@ -324,8 +325,30 @@ export function createMondayBridge(deps: MondayBridgeDeps): MondayBridge {
 
   /** Words on a Needs you or a request item, through the one router (route.ts). */
   async function answer(rec: ItemRecord, item: MondayItem, who: Person, words: Words, pass: Pass): Promise<void> {
-    const routed = await routeWords({ paths, tracker, mini: deps.config.mini }, { issue: rec.issue, request: rec.kind === "request", itemId: item.id, who, words, now: pass.now })
+    const request = rec.kind === "request"
+    const routed = await routeWords(
+      { paths, tracker, mini: deps.config.mini },
+      {
+        issue: rec.issue, request, itemId: item.id, who, words, now: pass.now,
+        // The first answer after the item asked counts (spec 6). A request asks nothing.
+        since: request ? null : (rec.askedAt ?? lastQuestion(paths, rec.issue)?.at ?? rec.createdAt),
+        by: personKey(deps.config, { monday: who.id }),
+        // The Recommendation column comes with the Needs-you board's new columns (Wave 2 Task 5).
+        recommendation: null,
+      },
+    )
     mark(rec, words.id)
+    if (routed.to === "same") {
+      reply(item.id, words, say.sameAnswer(who.name, routed.first.who), pass.now)
+      return
+    }
+    if (routed.to === "second") {
+      // Asked back: their next words answer this, and a third person's count only after it.
+      reply(item.id, words, secondAnswerText(routed.first), pass.now)
+      rec.askedAt = pass.now.toISOString()
+      save(rec)
+      return
+    }
     // agentd answers an instruction itself, once it has acted (agentd/instructions.ts).
     if (routed.to === "issue") reply(item.id, words, say.answered(who.name, routed.movedTo), pass.now)
     // Words from before the newest question: the item still needs them, for that one.
@@ -535,6 +558,8 @@ export function createMondayBridge(deps: MondayBridgeDeps): MondayBridge {
     }
     if (rec.bodyHash === hash && rec.state !== "Done") return
     await api.postUpdate(rec.itemId, toHtml(need.body))
+    // The item asks: the first answer after this counts.
+    rec.askedAt = pass.now.toISOString()
     rec.bodyHash = hash
     rec.state = "Needs you"
     rec.doneAt = null

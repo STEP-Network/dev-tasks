@@ -6,15 +6,23 @@
  * never recorded bare: it is recorded as the recommendation it agreed to.
  * Words that say the mini got something wrong become a lesson for the weekly
  * retro, from either place (noteCorrection).
+ *
+ * Wave 2 (spec 6): each answer's marker keeps when it was written and by
+ * whom, so the first answer after the question counts. A second person's
+ * different answer stays on the issue, marked not applied, and moves
+ * nothing. The recorder alone writes the answer entries and the plan labels:
+ * a person's agreement to "Build it as planned" approves a Try plan, and
+ * every approval is announced in #polads-agents.
  */
 
-import type { AgentPaths } from "./config.ts"
+import type { AgentConfig, AgentPaths } from "./config.ts"
 import type { Logger } from "./log.ts"
+import { enqueueSlack } from "./outbox.ts"
 import { recommendationOf } from "./plain.ts"
 import { isCorrection, recordLessons } from "./retro/lessons.ts"
-import { answerTransition, appendAnswer } from "./slack/text.ts"
+import { answerTransition, appendAnswer, truncateChars } from "./slack/text.ts"
 import { threadFor, saveThread } from "./threads.ts"
-import type { Tracker, TrackerIssue } from "./tracker.ts"
+import { answerEntries, PLAN_RECOMMENDATION, type Tracker, type TrackerIssue } from "./tracker.ts"
 
 const AGREE = "(yes|yep|yeah|y|ok|okay|sure|fine|agreed|agree|go|go ahead|go for it|go with it|go with that|do it|sounds good|lgtm|👍|:\\+1:|:thumbsup:)"
 const POLITE = "(please|thanks|thank you)"
@@ -44,7 +52,84 @@ export interface PersonAnswer {
   source: "slack" | "monday"
   /** Absent: their words stand on their own. */
   decided?: Decided
+  /** When they wrote it (ISO), and their person key (personKey): so the first answer can count. */
+  at?: string
+  by?: string
 }
+
+/** An answer as the issue keeps it. `applied` is false for one kept beside the first, which counted. */
+export interface RecordedAnswer {
+  source: "slack" | "monday"
+  id: string
+  at: string | null
+  by: string | null
+  who: string
+  text: string
+  applied: boolean
+}
+
+/** Words that follow an answer the recorder kept but did not apply (spec 6: the first counts). */
+export const NOT_APPLIED = "(Not applied:"
+
+/** The answers on an issue, oldest entry first: the recorder's entries with words (not the asker's marker, not a bare one). */
+export function recordedAnswers(description: string): RecordedAnswer[] {
+  return answerEntries(description).flatMap((e) =>
+    e.source !== "slack-user" && e.who !== null
+      ? [{ source: e.source, id: e.id, at: e.at, by: e.by, who: e.who, text: e.text, applied: !e.text.includes(NOT_APPLIED) }]
+      : [],
+  )
+}
+
+/** One key for one person in both doors: their Monday id, found from their Slack id when config knows it. */
+export function personKey(config: AgentConfig, who: { monday?: string; slack?: string }): string {
+  const people = config.bridges.monday?.people ?? []
+  const hit = who.monday ? people.find((p) => p.id === who.monday) : who.slack ? people.find((p) => p.slackId === who.slack) : undefined
+  if (hit) return `monday:${hit.id}`
+  return who.monday ? `monday:${who.monday}` : `slack:${who.slack ?? "unknown"}`
+}
+
+/** What an answer as the issue keeps it decided, in plain words: the recommendation agreed to, the decision, or the words themselves. */
+export function answerSaid(text: string): string {
+  const said = /agreed with the recommendation: (.+?)\. \(Their words:/.exec(text)?.[1] ?? /decided: (.+?)\. \(Their words:/.exec(text)?.[1] ?? text
+  return said.replace(/ \(Not applied:[\s\S]*$/, "").trim()
+}
+
+const norm = (text: string) => text.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim()
+/** answerSaid without case or punctuation: two answers that decided the same thing. */
+export const answerCore = (text: string): string => norm(answerSaid(text))
+
+/** The first applied answer after the question from someone else: the one that counts. */
+function firstAnswer(description: string, since: string, by: string): RecordedAnswer | null {
+  return (
+    recordedAnswers(description)
+      .filter((r) => r.applied && r.at && r.by && r.by !== by && Date.parse(r.at) >= Date.parse(since))
+      .sort((a, b) => a.at!.localeCompare(b.at!))[0] ?? null
+  )
+}
+
+/** What the second person is told, in either door: whose answer counts, and that theirs is kept. */
+export function secondAnswerText(first: RecordedAnswer): string {
+  const door = first.source === "slack" ? "in Slack" : "on Monday"
+  // Their words may end with a stop of their own: one is enough.
+  const said = truncateChars(answerSaid(first.text), 300).replace(/[.!?]+$/, "")
+  return `${first.who} answered this first ${door}: ${said}. That answer counts, and I kept yours on the issue beside it. If you meant something else, reply with what should happen instead.`
+}
+
+/**
+ * A Try plan's answer (spec 4). A person's agreement to "Build it as planned"
+ * approves it. Any other answer sends it back to be planned again with their
+ * words, and approves nothing: only this, never text on the issue, makes
+ * /refine build a Try plan.
+ */
+export function planTransition(issue: Pick<TrackerIssue, "labels">, a: Pick<PersonAnswer, "decided">): { addLabels?: string[]; removeLabels?: string[] } {
+  if (!issue.labels.includes("plan-to-approve")) return {}
+  const approved = a.decided?.agreed === true && a.decided.recommendation.trim().toLowerCase() === PLAN_RECOMMENDATION.toLowerCase()
+  return approved ? { removeLabels: ["plan-to-approve"], addLabels: ["plan-approved"] } : { removeLabels: ["plan-to-approve"] }
+}
+
+/** The notice of a plan approval in #polads-agents: the detection layer for a session the people-doors guard did not stop. */
+export const planApprovedText = (issue: string, who: string, door: string, where: string): string =>
+  `${issue}'s plan was approved by ${who} ${door} (${where}). If ${who} did not do this, take plan-approved off in Linear.`
 
 /** The answer as the issue keeps it: whose, what, and their own words beside it. */
 export function answerText(a: Pick<PersonAnswer, "who" | "words" | "decided">): string {
@@ -65,29 +150,64 @@ export function agreedTo(words: string, question: string | null | undefined, iss
   return recommendation ? { agreed: true, recommendation } : null
 }
 
+export interface Recorded {
+  movedTo: string | null
+  recorded: string
+  /** recorded: applied as the answer. same: the first answer said the same, nothing written. second: kept, not applied. */
+  outcome: "recorded" | "same" | "second"
+  /** The answer that counts, for same and second. */
+  first?: RecordedAnswer
+}
+
 /**
  * Records the answer on the issue, under "## Answers from Slack" or "from
  * Monday", and moves a parked issue on as an answer always did (unless
  * `move` is false: an instruction leaves the issue for agentd). The issue's
  * Slack thread then has no question left open. Returns where the issue went.
+ *
+ * With `since` (when the question went out), the first answer after it from
+ * someone else counts: the same answer is not written again, and a different
+ * one is kept on the issue, marked not applied, and moves nothing.
  */
 export async function recordAnswer(
   deps: { paths: AgentPaths; tracker: Tracker },
   a: PersonAnswer,
-  opts: { current?: TrackerIssue; move?: boolean } = {},
-): Promise<{ movedTo: string | null; recorded: string }> {
+  opts: { current?: TrackerIssue; move?: boolean; since?: string | null } = {},
+): Promise<Recorded> {
   const current = opts.current ?? (await deps.tracker.readIssue(a.issue))
   if (a.decided?.agreed && current.labels.includes("human-todo")) {
     throw new Error(`${a.issue} waits on a person to do something (human-todo), so a yes is not a decision: once they say it is done, record that with --text-file, and otherwise ack it`)
   }
+  const first = opts.since && a.by ? firstAnswer(current.description, opts.since, a.by) : null
+  if (first) {
+    const mine = answerCore(a.decided ? (a.decided.agreed ? a.decided.recommendation : a.decided.text) : a.words)
+    if (answerCore(first.text) === mine) return { movedTo: null, recorded: answerText(a), outcome: "same", first }
+    // The first answer counts (spec 6). Theirs stays on the issue, marked, and moves nothing.
+    const kept = `${answerText(a)} ${NOT_APPLIED} ${first.who} answered first.)`
+    const description = appendAnswer(current.description, { ts: a.ts, userName: a.who, text: kept, permalink: a.permalink, at: a.at, by: a.by }, a.source)
+    if (description !== current.description) await deps.tracker.updateIssue(a.issue, { description })
+    return { movedTo: null, recorded: kept, outcome: "second", first }
+  }
   const recorded = answerText(a)
-  const description = appendAnswer(current.description, { ts: a.ts, userName: a.who, text: recorded, permalink: a.permalink }, a.source)
+  const description = appendAnswer(current.description, { ts: a.ts, userName: a.who, text: recorded, permalink: a.permalink, at: a.at, by: a.by }, a.source)
+  // An instruction moves no label: agentd acts on it.
   const move = opts.move === false ? {} : answerTransition(current)
-  const patch = { ...(description !== current.description ? { description } : {}), ...move }
+  const plan = opts.move === false ? {} : planTransition(current, a)
+  const removeLabels = [...(move.removeLabels ?? []), ...(plan.removeLabels ?? [])]
+  const patch = {
+    ...(description !== current.description ? { description } : {}),
+    ...(move.state ? { state: move.state } : {}),
+    ...(removeLabels.length ? { removeLabels } : {}),
+    ...(plan.addLabels ? { addLabels: plan.addLabels } : {}),
+  }
   if (Object.keys(patch).length) await deps.tracker.updateIssue(a.issue, patch)
+  if (plan.addLabels?.includes("plan-approved")) {
+    const door = a.source === "monday" ? "on Monday" : "in Slack"
+    enqueueSlack(deps.paths, { kind: "post", channel: "agents", text: planApprovedText(a.issue, a.who, door, a.permalink ?? current.url) })
+  }
   const thread = threadFor(deps.paths, a.issue)
   if (thread?.openQuestions) saveThread(deps.paths, { ...thread, openQuestions: 0 })
-  return { movedTo: move.state ?? null, recorded }
+  return { movedTo: move.state ?? null, recorded, outcome: "recorded" }
 }
 
 /**
