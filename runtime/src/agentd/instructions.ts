@@ -26,6 +26,7 @@ import { listJobs, readWatchedPrs, submitJob, updateWatchedPr, type JobRecord, t
 import { appendLedger, type Logger } from "../log.ts"
 import { enqueueMonday } from "../monday/store.ts"
 import { enqueueSlack } from "../outbox.ts"
+import { NOTHING_NEEDED, plainLinks, plainReason, prLink } from "../plain.ts"
 import type { Action, AnyInstructionEntry, InstructionEntry } from "../slack/instruction.ts"
 import type { Exec } from "../worker/git.ts"
 import { mergeMode, readAutoMergePolicy } from "../worker/run.ts"
@@ -55,14 +56,14 @@ export async function actOnInstructions(deps: InstructionDeps): Promise<void> {
     try {
       lines = await act(deps, payload)
     } catch (error) {
-      lines = [`I could not do that: ${error instanceof Error ? error.message : String(error)}.`]
+      lines = [`I could not do that: ${error instanceof Error ? error.message : String(error)}. A person should look.`]
       deps.log.warn("instruction failed", { key, error: String(error) })
     }
     const now = deps.now()
     if (payload.monday) {
-      // Words from the Monday board are answered there (STEP-3289), with a like beside them.
+      // Words from the Monday board are answered there (STEP-3289), with a like beside them, and links as Monday shows them.
       const { itemId, updateId, threadId } = payload.monday
-      enqueueMonday(deps.paths, { itemId, threadId, text: lines.join("\n"), like: updateId }, now)
+      enqueueMonday(deps.paths, { itemId, threadId, text: plainLinks(lines.join("\n")), like: updateId }, now)
     } else {
       enqueueSlack(deps.paths, { kind: "reply", channelId: payload.channel, threadTs: payload.threadTs, text: lines.join("\n") }, now)
       // A ✅ beside the words, never instead of them.
@@ -100,6 +101,9 @@ async function viewPr(deps: InstructionDeps, url: string): Promise<OwnPrView & {
 const busyJob = (paths: AgentPaths, issue: string): JobRecord | null =>
   [...listJobs(paths, "running"), ...listJobs(paths, "pending")].find((j) => j.issue === issue) ?? null
 
+/** One closing line: the one thing a person must do, or that nothing is needed (../plain.ts). */
+const closed = (lines: string[]) => (lines.some((l) => /\bA person (needs|should)\b|\bPlease\b/.test(l)) ? lines : [...lines, NOTHING_NEEDED])
+
 async function act(deps: InstructionDeps, entry: AnyInstructionEntry): Promise<string[]> {
   const { paths, config } = deps
   const now = deps.now()
@@ -111,18 +115,19 @@ async function act(deps: InstructionDeps, entry: AnyInstructionEntry): Promise<s
   // A pause is the whole mini's: it needs no PR, so "@eve pause" pauses (STEP-3293 review).
   if (actions.includes("pause")) {
     if (existsSync(paths.pauseFile)) {
-      lines.push("This mini is paused already. A person lifts it on the mini with agentctl resume.")
+      lines.push("I am paused already, so nothing changed. To carry on, a person lifts the pause on the mini.")
     } else {
       const reason = `asked by ${who} ${where}`
       mkdirSync(paths.root, { recursive: true })
       writeFileSync(paths.pauseFile, JSON.stringify({ at: now.toISOString(), reason }))
       appendLedger(paths, { type: "paused", reason }, now)
-      lines.push("Paused: no new job starts, and a running one finishes. A person lifts it on the mini with agentctl resume.")
+      lines.push("Paused, as you asked. I start nothing new and finish what I am doing now. To carry on, a person lifts the pause on the mini.")
     }
   }
-  if (!actions.some((a) => a !== "pause")) return lines
+  if (!actions.some((a) => a !== "pause")) return closed(lines)
   if (!issue) {
-    return [...lines, `I could not tell which PR you mean. Name it (STEP-<n>, #<number> or its link): I act only on PRs this mini opened.`]
+    const did = lines.length ? "so I did nothing more" : "so I did nothing"
+    return closed([...lines, `I could not tell which PR you mean, ${did}. Please name it: STEP-<n>, #<number> or its link. I only act on PRs I opened.`])
   }
   let view: (OwnPrView & { baseRefName?: string }) | null = null
   const open = async () => {
@@ -134,13 +139,13 @@ async function act(deps: InstructionDeps, entry: AnyInstructionEntry): Promise<s
 
   for (const action of actions) {
     if (action === "leave") {
-      lines.push(pr ? `Leaving ${pr.url} to a person. I will not touch it until someone asks.` : `Leaving ${issue} to a person.`)
+      lines.push(`OK, I will leave ${pr ? prLink(pr.url) : issue} to a person and not touch it until someone asks.`)
     }
     if (action === "revise") {
       const busy = busyJob(paths, issue)
       const v = await open()
       if (busy) {
-        lines.push(`Already on it: job ${busy.id} is ${listJobs(paths, "running").some((j) => j.id === busy.id) ? "running" : "queued"}.`)
+        lines.push(`I am already ${listJobs(paths, "running").some((j) => j.id === busy.id) ? "working on it" : "about to work on it, as it is next in line"}.`)
         revising = busy.kind === "revise"
       } else if (v && pr) {
         const round = (pr.revise?.rounds ?? 0) + 1
@@ -153,25 +158,26 @@ async function act(deps: InstructionDeps, entry: AnyInstructionEntry): Promise<s
         })
         updateWatchedPr(paths, { ...pr, revise: { rounds: round, handled: pr.revise?.handled ?? [], lastRoundAt: now.toISOString(), asked: pr.revise?.asked } })
         appendLedger(paths, { type: "pr.revise", issue, url: v.url, round, reasons: [`asked by ${who}`] }, now)
-        const past = round > MAX_REVISE_ROUNDS ? `, past the ${MAX_REVISE_ROUNDS}-round cap since you asked` : ""
-        lines.push(`Revising ${v.url} now: job ${job.id} (round ${round}${past}).`)
+        const past = round > MAX_REVISE_ROUNDS ? ` This is try ${round}, past my usual ${MAX_REVISE_ROUNDS}, because you asked.` : ""
+        lines.push(`I am fixing ${prLink(v.url)} now, as you asked.${past}`)
+        deps.log.info("revise job queued, as a person asked", { issue, jobId: job.id, by: who })
         revising = true
       } else if (lastBlocked(paths, issue)) {
         // No open PR to revise: the work is a blocked job's, so it is retried, once however the reply put it.
         if (!entry.actions.includes("retry")) lines.push(...retry(paths, issue, now))
       } else {
-        lines.push(`There is no open PR of mine for ${issue} to fix.`)
+        lines.push(`I have no open PR for ${issue}, so there is nothing to fix.`)
       }
     }
     if (action === "rerun") {
       const v = await open()
       if (!v) {
-        lines.push(`There is no open PR of mine for ${issue} to re-run.`)
+        lines.push(`I have no open PR for ${issue}, so there are no checks to start again.`)
         continue
       }
       const runs = [...new Set(failingRequired(v, requiredChecks(config.repo.path)).map((f) => f.job?.runId).filter((r): r is string => Boolean(r)))]
       if (!runs.length) {
-        lines.push(`Nothing required is failing on ${v.url}, so there is nothing to re-run.`)
+        lines.push(`Nothing that must pass is failing on ${prLink(v.url)}, so there is nothing to start again.`)
         continue
       }
       const done: string[] = []
@@ -181,34 +187,35 @@ async function act(deps: InstructionDeps, entry: AnyInstructionEntry): Promise<s
         if (r.code === 0) done.push(run)
       }
       if (pr && done.length) updateWatchedPr(paths, { ...pr, reruns: [...(pr.reruns ?? []), ...done.map((run) => `${v.headRefOid}:${run}`)] })
-      lines.push(done.length ? `Re-running CI on ${v.url} in full: run ${done.join(", ")}.` : `GitHub refused to re-run CI on ${v.url}.`)
+      lines.push(done.length ? `I started the automatic checks on ${prLink(v.url)} again.` : `GitHub would not let me start the checks on ${prLink(v.url)} again. A person needs to start them from the PR.`)
     }
     if (action === "retry") lines.push(...retry(paths, issue, now))
     if (action === "merge") {
       const v = await open()
       if (!v) {
-        lines.push(`There is no open PR of mine for ${issue} to merge.`)
+        lines.push(`I have no open PR for ${issue} to merge.`)
         continue
       }
       const base = v.baseRefName ?? config.repo.base
       const mode = mergeMode(readAutoMergePolicy(config.repo.path, base), config)
       if (mode === "mini-off") {
-        lines.push(`I cannot merge ${v.url}: auto-merge is off on this mini (worker.autoMerge in its config.json), so a person merges it.`)
+        lines.push(`I cannot merge ${prLink(v.url)} myself, because merging by myself is turned off on this mini. A person needs to merge it once the checks pass.`)
       } else if (mode === "person") {
-        lines.push(`I cannot merge ${v.url}: the project's policy for ${base} leaves merging to a person.`)
+        lines.push(`I cannot merge ${prLink(v.url)} myself, because a person merges into ${base}. A person needs to merge it once the checks pass.`)
       } else {
         const r = await deps.exec("gh", ["pr", "merge", v.url, "--auto", "--squash", "--delete-branch"], { cwd: config.repo.path, timeoutMs: GH_TIMEOUT_MS })
         lines.push(
           r.code === 0
-            ? `Auto-merge armed on ${v.url}: it merges into ${base}${revising ? " after the revision," : ""} once the required checks and the review are green.`
-            : `GitHub refused to arm auto-merge on ${v.url} (${r.stderr.trim().split("\n")[0] || `exit ${r.code}`}).`,
+            ? `${prLink(v.url)} will go into ${base} by itself${revising ? " after my fixes" : ""}, once the checks and the review pass.`
+            : `GitHub would not let me set ${prLink(v.url)} to go in by itself (${r.stderr.trim().split("\n")[0] || `exit ${r.code}`}). A person needs to merge it.`,
         )
       }
     }
   }
   // Whatever it asked, it answers the issue's open question.
   for (const d of openDecisions(paths, issue)) closeDecision(paths, d.id, `answered by ${who}: ${actions.join(", ")}`, now)
-  return lines.length ? lines : [`I read that as an instruction for ${issue}, but found nothing to do.`]
+  if (!lines.length) lines.push(`I read that as a request about ${issue}, but found nothing to do.`)
+  return closed(lines)
 }
 
 function lastBlocked(paths: AgentPaths, issue: string): JobRecord | null {
@@ -219,9 +226,9 @@ function lastBlocked(paths: AgentPaths, issue: string): JobRecord | null {
 
 function retry(paths: AgentPaths, issue: string, now: Date): string[] {
   const busy = busyJob(paths, issue)
-  if (busy) return [`Already on it: job ${busy.id}.`]
+  if (busy) return [`I am already working on ${issue}.`]
   const blocked = lastBlocked(paths, issue)
-  if (!blocked) return [`${issue}'s last job did not end blocked, so there is nothing to retry.`]
-  const job = submitJob(paths, issue, blocked.model, now, { retryOf: blocked.id })
-  return [`Retrying ${issue} on its branch: job ${job.id}, after ${blocked.id} ended blocked (${blocked.result?.reason ?? "no reason recorded"}).`]
+  if (!blocked) return [`My last try at ${issue} did not stop on a problem, so there is nothing to try again.`]
+  submitJob(paths, issue, blocked.model, now, { retryOf: blocked.id })
+  return [`I am trying ${issue} again from where I stopped (last time: ${plainReason(blocked.result?.reason ?? "no reason recorded")}).`]
 }

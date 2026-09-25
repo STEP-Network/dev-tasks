@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest"
 import { issue } from "../../__tests__/fakes.ts"
 import { ANSWERS_HEADING, appendAnswer } from "../../slack/text.ts"
-import { buildBrief, PLAIN_WORDS_RULE, WORKER_RESULT_SCHEMA, workerRules, type BriefInput } from "../brief.ts"
+import { buildBrief, PLAIN_WORDS_RULE, WORKER_LESSONS_FILE, WORKER_RESULT_SCHEMA, workerLessons, workerRules, type BriefInput } from "../brief.ts"
 
 const input: BriefInput = {
   mini: "eve",
@@ -89,6 +89,15 @@ describe("WORKER_RESULT_SCHEMA", () => {
     expect(rules).toContain(PLAIN_WORDS_RULE)
     expect(PLAIN_WORDS_RULE).toMatch(/plain words someone who does not write code follows.*the one thing you need.*self-check, checklist, siblings, report/)
     expect((WORKER_RESULT_SCHEMA.properties.question as { description: string }).description).toMatch(/plain words someone who does not write code follows/)
+  })
+
+  it("gives every worker the lessons file the weekly retro keeps, and nothing when it is empty (STEP-3290)", () => {
+    expect(workerRules(input, "# Lessons from review\n\n- Test every new branch.")).toContain("\n# Lessons from review\n\n- Test every new branch.\n")
+    expect(workerRules(input, "")).not.toContain("Lessons from review")
+    // The checkout's own file, as the mini's install has it.
+    expect(workerLessons()).toMatch(/^# Lessons from review/)
+    expect(workerLessons(WORKER_LESSONS_FILE)).toBe(workerLessons())
+    expect(workerLessons("/nonexistent/worker-lessons.md")).toBe("")
   })
 
   it("requires a status and a summary and allows only the three statuses", () => {

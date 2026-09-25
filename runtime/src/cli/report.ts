@@ -1,6 +1,8 @@
 /** The two human-readable outputs of agentctl: status now, and the ledger over a period. */
 
 import { plural } from "../plain.ts"
+import type { Lesson } from "../retro/lessons.ts"
+import { baselineLine, firstPassTrend, METRICS, weekMetrics } from "../retro/metrics.ts"
 import type { UsageSnapshot } from "../usage.ts"
 
 export interface StatusInput {
@@ -96,7 +98,7 @@ function median(values: number[]): string | null {
   return String(Math.round(sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2))
 }
 
-export function summariseLedger(events: LedgerLine[], since: Date): string {
+export function summariseLedger(events: LedgerLine[], since: Date, lessons: Lesson[] = [], now: Date = new Date()): string {
   const recent = events.filter((e) => typeof e.at === "string" && Date.parse(e.at) >= since.getTime())
   const of = (type: string) => recent.filter((e) => e.type === type)
   const ends = of("worker.end")
@@ -124,5 +126,17 @@ export function summariseLedger(events: LedgerLine[], since: Date): string {
     `questions: ${asked.length} asked, ${answered.length} answered, median answer ${answerMedian === null ? "n/a" : `${answerMedian} min`}`,
     `front door starts: ${of("frontdoor.start").length}, claims released: ${of("released").length}, pauses: ${of("paused").length}`,
     `latest usage: ${usage ? `5h ${usage.fiveHourPct ?? "?"} percent, 7d ${usage.sevenDayPct ?? "?"} percent` : "none recorded"}`,
+    // The weekly retro's numbers (STEP-3290), over the same period, and the first-pass trend by week.
+    ...retroLines(events, lessons, since, now),
   ].join("\n")
+}
+
+function retroLines(events: LedgerLine[], lessons: Lesson[], since: Date, now: Date): string[] {
+  const m = weekMetrics(events, lessons, since, new Date(now.getTime() + 1))
+  const show = (key: keyof typeof METRICS) => METRICS[key].show(m)
+  return [
+    `first-pass merges: ${show("firstPassRate")}. Baseline: ${baselineLine()}`,
+    `PRs with a must-fix finding: ${show("fixRate")}, revise rounds per PR: ${show("roundsPerPr")}, blocked jobs: ${show("blockedJobs")}, human interventions: ${show("interventions")}, per issue: ${m.issues ? `${show("costPerIssue")}, ${show("minutesPerIssue")} min` : "n/a"}`,
+    `first-pass trend: ${firstPassTrend(events, lessons, new Date(now.getTime() + 1))}`,
+  ]
 }

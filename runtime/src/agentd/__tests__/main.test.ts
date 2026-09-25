@@ -113,6 +113,28 @@ describe("runDuties", () => {
     expect(listNew<{ kind: string; text?: string }>(paths.outbox).map((e) => e.payload.kind)).toEqual(["reply", "react"])
   })
 
+  it("starts the weekly retro once per slot, on a mini that has it on, when no job runs and nothing is paused (STEP-3290)", async () => {
+    const FRIDAY = new Date("2026-09-25T12:30:00.000Z") // 14:30 in Copenhagen
+    const started: string[] = []
+    const on = ConfigSchema.parse({ ...CONFIG, retro: { enabled: true } })
+    const spawnRetro = (slot: string) => (started.push(slot), 6001)
+    const run = async (over: Partial<DutyDeps>, prepare: (p: ReturnType<typeof agentPaths>) => void = () => {}) => {
+      started.length = 0
+      const { d, paths } = duties({ config: on, spawnRetro, now: () => FRIDAY, ...over })
+      prepare(paths)
+      await runDuties(d, freshMemo())
+      await runDuties({ ...d, every: new Every(() => FRIDAY.getTime() + 3_600_000) }, freshMemo())
+      return { paths, started: [...started] }
+    }
+    const due = await run({})
+    expect(due.started).toEqual(["2026-09-25"])
+    expect(JSON.parse(readFileSync(join(due.paths.state, "retro.json"), "utf8"))).toMatchObject({ slot: "2026-09-25", pid: 6001 })
+    expect((await run({ config: ConfigSchema.parse(CONFIG) })).started).toEqual([])
+    expect((await run({ now: () => new Date("2026-09-24T12:30:00.000Z") })).started).toEqual([])
+    expect((await run({}, (p) => void submitJob(p, "STEP-1", null, FRIDAY))).started).toEqual([])
+    expect((await run({}, (p) => writeFileSync(p.pauseFile, "{}"))).started).toEqual([])
+  })
+
   it("refreshes the checkout and cleans up only while no job is pending or running", async () => {
     const busy = duties()
     submitJob(busy.paths, "STEP-1", null, NOW)

@@ -28,7 +28,8 @@ import { frontDoorAlive, FrontDoorRefused, lastTickAt, readFrontDoorState, super
 import { takeDefaults } from "./decisions.ts"
 import { cleanup, Every, healthStatus, inboxStuck, inboxUnhandled, linearDownNotice, refreshCheckout, sentryCheckInUrl, watchPrs, type BridgeHeartbeat } from "./health.ts"
 import { actOnInstructions } from "./instructions.ts"
-import { spawnWorkerProcess, superviseJobs, workerLiveness, type Liveness } from "./jobrunner.ts"
+import { spawnRetroProcess, spawnWorkerProcess, superviseJobs, workerLiveness, type Liveness } from "./jobrunner.ts"
+import { dueSlot, readRetroState, writeRetroState } from "../retro/retro.ts"
 
 const TICK_MS = 15_000
 
@@ -68,6 +69,8 @@ export interface DutyDeps {
   liveness: (pid: number, jobId: string) => Liveness
   kill: (pid: number, signal: NodeJS.Signals) => void
   spawnWorker: (jobId: string) => number
+  /** Starts the weekly retro for a slot (retro/run.ts). Absent, agentd starts none. */
+  spawnRetro?: (slot: string) => number
   sentryUrl: string | null
   /** One GET of the Sentry check-in URL. */
   checkIn: (url: string) => Promise<{ ok: boolean; status: number }>
@@ -152,6 +155,19 @@ export async function runDuties(d: DutyDeps, memo: DutyMemo): Promise<void> {
     })
   }
   if (d.every.due("prs", 15 * 60_000)) await step("prs", () => watchPrs({ exec: d.exec, paths, config, now, log }))
+  // The weekly retro (STEP-3290), on the coordinator mini alone: once per slot, when no job runs and nothing is paused.
+  // Checked when it starts, not after: a job may start while the retro runs. They share no repository, and
+  // lessons.jsonl, which both write, is locked around each write (retro/jsonl.ts).
+  if (config.retro.enabled && d.spawnRetro && d.every.due("retro", 60_000)) {
+    await step("retro", () => {
+      const slot = dueSlot(now(), config)
+      if (!slot || jobActive || existsSync(paths.pauseFile) || readRetroState(paths)?.slot === slot) return
+      const pid = d.spawnRetro!(slot)
+      writeRetroState(paths, { slot, startedAt: now().toISOString(), pid })
+      appendLedger(paths, { type: "retro.started", slot }, now())
+      log.info("retro started", { slot, pid })
+    })
+  }
   if (!jobActive && d.every.due("checkout", 10 * 60_000)) {
     await step("checkout", async () => {
       memo.lastRefresh = await refreshCheckout(d.exec, config.repo.path, config.repo.base)
@@ -238,6 +254,7 @@ async function main(): Promise<void> {
     liveness: workerLiveness,
     kill: killGroup,
     spawnWorker: spawnWorkerProcess(paths, runtimeDir),
+    spawnRetro: spawnRetroProcess(paths, runtimeDir),
     sentryUrl,
     checkIn: (url) => fetch(url, { signal: AbortSignal.timeout(10_000) }),
     // Its own log, monday.log: the board's traffic is not agentd's.

@@ -5,6 +5,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { fileURLToPath } from "node:url"
 import { describe, expect, it, vi } from "vitest"
+import { readLessons } from "../../retro/lessons.ts"
 import { agentPaths, ConfigSchema } from "../../config.ts"
 import { countIn, listNew, putOnce } from "../../fsq.ts"
 import type { Logger } from "../../log.ts"
@@ -286,6 +287,24 @@ describe("replies in a thread the mini owns (STEP-3293)", () => {
     // A later question changes the thread, never the reply already filed.
     saveThread(paths, { ...threadFor(paths, "STEP-7")!, lastQuestionAt: "2026-09-24T08:05:00.000Z", lastQuestion: "And the footer?" })
     expect(replies(paths)[0]).toMatchObject({ lastQuestionAt: "2026-09-24T07:30:00.000Z", lastQuestion: expect.stringContaining("the publication date") })
+  })
+
+  it("that say the mini got it wrong are kept as lessons for the weekly retro, whether answer or instruction (STEP-3290)", async () => {
+    const parked = setup([issue({ id: "STEP-7", state: "On hold", labels: ["polads", "agent-ready", "awaiting-answer"], description: "## Goal\n\nFix it." })])
+    await handleEnvelope(parked.deps, reply("1700.5", "no, use the publication date, not the creation date"))
+    await handleEnvelope(parked.deps, reply("1700.6", "Use the publication date"))
+    const inReview = setup([issue({ id: "STEP-7", state: "In Review", labels: ["polads", "agent-ready"] })])
+    await handleEnvelope(inReview.deps, reply("1700.7", "don't merge it, fix the test first"))
+    await handleEnvelope(inReview.deps, reply("1700.8", "fix it and merge"))
+    expect(readLessons(parked.paths)).toEqual([
+      expect.objectContaining({ category: "correction", source: "slack", issue: "STEP-7", who: "Nate", text: "no, use the publication date, not the creation date", key: "correction:CQ:1700.5" }),
+    ])
+    expect(readLessons(inReview.paths)).toEqual([
+      expect.objectContaining({ category: "correction", source: "slack", issue: "STEP-7", who: "Nate", text: "don't merge it, fix the test first", key: "correction:CQ:1700.7" }),
+    ])
+    // Once, however often Slack delivers it.
+    await handleEnvelope(inReview.deps, reply("1700.7", "don't merge it, fix the test first"))
+    expect(readLessons(inReview.paths)).toHaveLength(1)
   })
 
   it("that name one of the fixed actions go to the front door too, which reads them, while it is up", async () => {

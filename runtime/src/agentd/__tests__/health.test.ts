@@ -264,8 +264,22 @@ describe("watchPrs, and the revise loop (STEP-3274)", () => {
     const w = watch(paths, config, [[/pull\/1 /, { stdout: view(PR1, { reviews }) }], [/pull\/2 /, { stdout: view(PR2, { state: "MERGED" }) }]])
     await w.run()
     expect(readWatchedPrs(paths).map((p) => p.issue)).toEqual(["STEP-7"])
-    expect(w.f.lines().filter((l) => l.startsWith("gh pr view"))).toEqual([`gh pr view ${PR1} --json ${PR_FIELDS}`, `gh pr view ${PR2} --json ${PR_FIELDS}`])
+    // A closed PR is read once more, for its commits' authors (STEP-3290's first-pass measure).
+    expect(w.f.lines().filter((l) => l.startsWith("gh pr view"))).toEqual([
+      `gh pr view ${PR1} --json ${PR_FIELDS}`,
+      `gh pr view ${PR2} --json ${PR_FIELDS}`,
+      `gh pr view ${PR2} --json author,commits`,
+    ])
     expect(w.f.lines().some((l) => /dismiss|pr review|--token|GH_TOKEN/.test(l))).toBe(false)
+  })
+
+  it("records how many rounds a closed PR took, and how many commits someone else pushed to it (STEP-3290)", async () => {
+    const { paths, config } = setup()
+    recordPr(paths, { issue: "STEP-8", url: PR2, openedAt: "2026-09-24T10:05:00.000Z", revise: { rounds: 2, handled: [] } })
+    const commits = { author: { login: "eve-polads" }, commits: [{ authors: [{ login: "eve-polads" }] }, { authors: [{ login: "nate" }] }, { authors: [{ login: "eve-polads" }, { login: "nate" }] }] }
+    await watch(paths, config, [[/pull\/2 --json author,commits$/, { stdout: JSON.stringify(commits) }], [/pull\/2 /, { stdout: view(PR2, { state: "MERGED" }) }]]).run()
+    const ledger = readFileSync(join(paths.logs, "ledger.jsonl"), "utf8").trim().split("\n").map((l) => JSON.parse(l))
+    expect(ledger.find((e) => e.type === "pr.closed")).toMatchObject({ issue: "STEP-8", url: PR2, state: "MERGED", rounds: 2, otherCommits: 1 })
   })
 
   it("keeps watching a PR gh could not read, and one bad answer does not stop the others", async () => {
@@ -541,6 +555,26 @@ describe("cleanup", () => {
     // A process's own log is rotated by size, never deleted.
     expect(existsSync(join(paths.logs, "agentd.log"))).toBe(true)
     expect(f.lines()).toEqual([`${GIT} -C /r worktree remove --force ${join(paths.worktrees, "STEP-1-x")}`, `${GIT} -C /r worktree prune`])
+  })
+
+  it("keeps the retro's lessons and history to 90 days, and removes an old retro worktree from dev-tasks, not the project (STEP-3290)", async () => {
+    const paths = agentPaths(mkdtempSync(join(tmpdir(), "agentd-clean-retro-")))
+    const config = ConfigSchema.parse({ mini: "eve", repo: { path: "/r" }, pluginRoot: "/d/plugin", slack: { allowedUsers: ["UNATE"] } })
+    const at = (days: number) => new Date(NOW.getTime() - days * 86_400_000).toISOString()
+    mkdirSync(paths.state, { recursive: true })
+    const lessons = join(paths.state, "lessons.jsonl")
+    writeFileSync(lessons, [{ at: at(100), key: "old" }, { at: at(89), key: "kept" }, { at: at(1), key: "new" }].map((l) => JSON.stringify(l)).join("\n") + "\nnot json\n")
+    const retros = join(paths.state, "retros.jsonl")
+    writeFileSync(retros, [{ at: at(91), slot: "a" }, { at: at(7), slot: "b" }].map((l) => JSON.stringify(l)).join("\n") + "\n")
+    mkdirSync(join(paths.worktrees, "retro-2026-09-18"), { recursive: true })
+    const old = new Date(NOW.getTime() - 5 * 86_400_000)
+    utimesSync(join(paths.worktrees, "retro-2026-09-18"), old, old)
+    const f = fakeExec()
+    const { removed } = await cleanup({ paths, config, exec: f.exec, now: () => NOW })
+    expect(readFileSync(lessons, "utf8").trim().split("\n").map((l) => JSON.parse(l).key)).toEqual(["kept", "new"])
+    expect(readFileSync(retros, "utf8").trim().split("\n").map((l) => JSON.parse(l).slot)).toEqual(["b"])
+    expect(removed).toBe(4)
+    expect(f.lines()).toEqual([`${GIT} -C /d worktree remove --force ${join(paths.worktrees, "retro-2026-09-18")}`, `${GIT} -C /r worktree prune`])
   })
 })
 

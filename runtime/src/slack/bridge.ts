@@ -25,6 +25,7 @@ import { ack, countIn, entryPath, fail, listNew, putOnce, readJson, safeKey, wri
 import { appendLedger, createLogger, redact, type Logger } from "../log.ts"
 import { enqueueSlack, type ChannelKey } from "../outbox.ts"
 import { releasePidLock, takePidLock } from "../pidlock.ts"
+import { isCorrection, recordLessons } from "../retro/lessons.ts"
 import { assertLinearKeyFile, loadSlackSecrets } from "../secrets.ts"
 import { onQueue } from "../select.ts"
 import { issueForThread, saveThread, threadFor } from "../threads.ts"
@@ -105,6 +106,8 @@ export async function handleEnvelope(deps: BridgeDeps, envelope: SlackEnvelope):
     if (entry) writeJsonAtomic(path, { ...entry, userName, ...(person ? { readableText, permalink } : {}) })
   }
   if (c.type === "intake") await fileIntake(deps, c.key)
+  // "No, do X": a lesson for the weekly retro (STEP-3290), whoever handles the words.
+  if (person) learnCorrection(deps, { issue: c.type === "reply" ? c.issue : null, channel: c.channel, ts: c.ts, who: userName, text: c.text })
   if (person) actForFrontDoor(deps, c.key)
   return c.type
 }
@@ -180,7 +183,28 @@ function tellAway(deps: BridgeDeps, entry: PersonEntry, now: Date): void {
  */
 function fileInstruction(deps: BridgeDeps, key: string, entry: Omit<InstructionEntry, "type" | "key" | "receivedAt">): void {
   const filed: InstructionEntry = { type: "instruction", key, ...entry, receivedAt: deps.now().toISOString() }
-  if (putOnce(deps.paths.inbox, key, filed)) appendLedger(deps.paths, { type: "instruction.received", issue: entry.issue ?? entry.target.issue ?? undefined, actions: entry.actions }, deps.now())
+  if (putOnce(deps.paths.inbox, key, filed)) {
+    appendLedger(deps.paths, { type: "instruction.received", issue: entry.issue ?? entry.target.issue ?? undefined, actions: entry.actions }, deps.now())
+    learnCorrection(deps, { issue: entry.issue ?? entry.target.issue ?? null, channel: entry.channel, ts: entry.ts, who: entry.userName || entry.user, text: entry.text })
+  }
+}
+
+/**
+ * A person's reply that says the mini got something wrong ("no, do X"): a
+ * lesson for the weekly retro (STEP-3290). Its words are data. A lesson that
+ * cannot be written never stops the reply's own handling.
+ */
+function learnCorrection(deps: BridgeDeps, said: { issue: string | null; channel: string; ts: string; who: string; text: string }): void {
+  if (!isCorrection(said.text)) return
+  try {
+    recordLessons(
+      deps.paths,
+      [{ mini: deps.config.mini, issue: said.issue, pr: null, category: "correction", source: "slack", who: said.who, text: said.text, key: `correction:${said.channel}:${said.ts}` }],
+      deps.now(),
+    )
+  } catch (error) {
+    deps.log.warn("lesson not recorded", { issue: said.issue, error: String(error) })
+  }
 }
 
 /** How long an intake or an answer Linear keeps refusing waits in the inbox before the bridge gives up and says so. */

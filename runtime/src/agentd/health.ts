@@ -19,12 +19,15 @@
  */
 
 import { existsSync, readdirSync, readFileSync, renameSync, rmSync, statSync } from "node:fs"
-import { join } from "node:path"
+import { dirname, join } from "node:path"
 import type { AgentConfig, AgentPaths } from "../config.ts"
 import { listNew } from "../fsq.ts"
 import { forgetWatchedPr, listJobs, readWatchedPrs } from "../jobs.ts"
 import { appendLedger, type Logger } from "../log.ts"
 import { plural } from "../plain.ts"
+import { pruneJsonl } from "../retro/jsonl.ts"
+import { lessonsFile } from "../retro/lessons.ts"
+import { retrosFile } from "../retro/retro.ts"
 import { git, isDirty, removeWorktree, type Exec } from "../worker/git.ts"
 import { PR_FIELDS, reviseOwnPr, type OwnPrView } from "./revise.ts"
 
@@ -52,7 +55,12 @@ export async function watchPrs(deps: { exec: Exec; paths: AgentPaths; config: Ag
       }
       const view = JSON.parse(r.stdout) as OwnPrView
       if (view.state !== "OPEN") {
-        appendLedger(deps.paths, { type: "pr.closed", issue: pr.issue, url: pr.url, state: view.state }, deps.now())
+        // For the weekly retro's first-pass measure (STEP-3290): how many rounds it took, and whether anyone else committed to it.
+        appendLedger(
+          deps.paths,
+          { type: "pr.closed", issue: pr.issue, url: pr.url, state: view.state, rounds: pr.revise?.rounds ?? 0, otherCommits: await othersCommits(deps.exec, pr.url) },
+          deps.now(),
+        )
         forgetWatchedPr(deps.paths, pr.url)
         continue
       }
@@ -61,6 +69,28 @@ export async function watchPrs(deps: { exec: Exec; paths: AgentPaths; config: Ag
       // One PR's bad answer must not stop the watch of the others.
       deps.log.warn("PR not checked", { url: pr.url, error: error instanceof Error ? error.message : String(error) })
     }
+  }
+}
+
+/**
+ * The PR's commits by anyone but its author (the mini), or null when gh
+ * cannot say. GitHub names a commit's authors by the login its email is
+ * linked to: the mini's commits count as its own only while its git email
+ * is on its GitHub account, and a commit whose email is on no account counts
+ * as someone else's. A co-authored commit counts as the mini's when it is
+ * one of the authors. The retro's first-pass measure takes null as none
+ * (retro/metrics.ts), so a gh that could not answer never costs a first pass.
+ */
+export async function othersCommits(exec: Exec, url: string): Promise<number | null> {
+  const r = await exec("gh", ["pr", "view", url, "--json", "author,commits"], { timeoutMs: GH_TIMEOUT_MS })
+  if (r.code !== 0) return null
+  try {
+    const v = JSON.parse(r.stdout) as { author?: { login?: string }; commits?: Array<{ authors?: Array<{ login?: string }> }> }
+    const author = v.author?.login
+    if (!author) return null
+    return (v.commits ?? []).filter((c) => !(c.authors ?? []).some((a) => a.login === author)).length
+  } catch {
+    return null
   }
 }
 
@@ -233,14 +263,20 @@ export async function cleanup(deps: { paths: AgentPaths; config: AgentConfig; ex
       if (!name.endsWith(".1") && statSync(path).size > 20 * 1024 * 1024) renameSync(path, `${path}.1`)
     }
   }
+  // What the weekly retro reads (STEP-3290): it looks back two weeks, and
+  // compares with the last retro. A quarter is plenty, and the cap bounds a flood.
+  removed += pruneJsonl(lessonsFile(deps.paths), { days: 90, max: 5000 }, deps.now())
+  removed += pruneJsonl(retrosFile(deps.paths), { days: 90, max: 52 }, deps.now())
   const busy = listJobs(deps.paths, "running").map((j) => j.issue)
+  // A retro's worktree (retro-<date>) is dev-tasks', beside the plugin, not the project's.
+  const devTasks = dirname(deps.config.pluginRoot)
   if (existsSync(deps.paths.worktrees)) {
     for (const name of readdirSync(deps.paths.worktrees)) {
       const path = join(deps.paths.worktrees, name)
       if (busy.some((issue) => name === issue || name.startsWith(`${issue}-`))) continue
       if (now - statSync(path).mtimeMs <= 3 * 86_400_000) continue
       // Forced, as the runner removes its own: git's clean check would enter submodules.
-      await removeWorktree(deps.exec, deps.config.repo.path, path)
+      await removeWorktree(deps.exec, name.startsWith("retro-") ? devTasks : deps.config.repo.path, path)
       removed++
     }
   }
