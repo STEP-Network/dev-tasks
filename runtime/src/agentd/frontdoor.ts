@@ -23,6 +23,7 @@
 
 import { readFileSync } from "node:fs"
 import { join } from "node:path"
+import { channelApproval, MANAGED_SETTINGS } from "../channel/managed.ts"
 import { readSandboxProbe } from "../cli/sandbox-probe.ts"
 import type { AgentConfig, AgentPaths } from "../config.ts"
 import { readJson, writeJsonAtomic } from "../fsq.ts"
@@ -234,6 +235,20 @@ export interface FrontDoorDeps {
   exec: Exec
   now: () => Date
   log: Logger
+  /** Claude Code's managed settings on this machine. Default: MANAGED_SETTINGS. */
+  managedSettings?: string
+}
+
+/**
+ * Whether this start opens the Slack channel (STEP-3293): config.json wants
+ * it, and the machine's managed settings approve exactly the dev-tasks
+ * plugin's channel. Otherwise the front door starts without it, and says why.
+ */
+function slackChannel(deps: FrontDoorDeps): boolean {
+  if (!deps.config.frontDoor.channel) return false
+  const approval = channelApproval(deps.managedSettings ?? MANAGED_SETTINGS)
+  if (!approval.ok) deps.log.warn("front door started without the Slack channel", { why: approval.why })
+  return approval.ok
 }
 
 export async function applyFrontDoor(deps: FrontDoorDeps, state: FrontDoorState, action: FrontDoorAction): Promise<FrontDoorState> {
@@ -277,7 +292,7 @@ export async function applyFrontDoor(deps: FrontDoorDeps, state: FrontDoorState,
     resumeId,
     model: deps.config.frontDoor.model,
     settingsPath: frontDoorSettingsPath(deps.paths),
-    channel: deps.config.frontDoor.channel,
+    channel: slackChannel(deps),
   })
   const r = await tmux(["new-session", "-d", "-s", session, "-e", "AGENTD_FRONT_DOOR=1", "-x", "220", "-y", "60", "-c", deps.config.repo.path, command])
   if (r.code !== 0) throw new Error(`tmux new-session failed (${r.code}): ${r.stderr.trim()}`)

@@ -97,8 +97,11 @@ sudo mkdir -p "/Library/Application Support/ClaudeCode"
 printf '%s\n' '{"channelsEnabled": true, "allowedChannelPlugins": [{"marketplace": "dev-tasks-marketplace", "plugin": "dev-tasks"}]}' | sudo tee "/Library/Application Support/ClaudeCode/managed-settings.json"
 ```
 
-`agentctl doctor` checks them (`slack channel`). Without them the front door
-still reads every Slack message, at its next wakeup.
+Write the file exactly as it is here. agentd opens the channel only when it
+approves this one plugin and nothing else, and starts the front door without
+the channel otherwise, logging why. `agentctl doctor` checks the same rule
+(`slack channel`). Without the channel the front door still reads every
+Slack message, at its next wakeup.
 
 The latest Node, with no version pinned. PolAds names its floors in its
 `package.json`: `engines.node` (`24.x`) and `packageManager` (`pnpm@12.6.0`)

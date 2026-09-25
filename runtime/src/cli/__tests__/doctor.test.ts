@@ -320,12 +320,14 @@ describe("slackChannelCheck (STEP-3293)", () => {
     expect(slackChannelCheck(config(), managed(approved))).toMatchObject({ level: "ok", name: "slack channel" })
   })
 
-  it("warns, naming the settings to write, when they are missing, off, or approve another plugin", () => {
+  it("warns, naming the settings to write, when they are missing, off, or approve anything but exactly dev-tasks", () => {
     for (const file of [
       "/nonexistent/managed-settings.json",
       managed({ ...approved, channelsEnabled: false }),
       managed({ channelsEnabled: true }),
       managed({ channelsEnabled: true, allowedChannelPlugins: [{ marketplace: "claude-plugins-official", plugin: "telegram" }] }),
+      // The file applies to every session on the mini: dev-tasks and nothing else.
+      managed({ channelsEnabled: true, allowedChannelPlugins: [...approved.allowedChannelPlugins, { marketplace: "claude-plugins-official", plugin: "telegram" }] }),
     ]) {
       const check = slackChannelCheck(config(), file)
       expect(check.level, file).toBe("warn")

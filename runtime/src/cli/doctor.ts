@@ -11,6 +11,7 @@ import { existsSync, readFileSync, statSync } from "node:fs"
 import { dirname, join } from "node:path"
 import { assertProfileMini, loadConfig, type AgentConfig, type AgentPaths } from "../config.ts"
 import { frontDoorSettingsPath, frontDoorSettingsProblem } from "../agentd/frontdoor.ts"
+import { channelApproval, MANAGED_CHANNEL_JSON, MANAGED_SETTINGS } from "../channel/managed.ts"
 import { readHooksProbes, workerClaudePath, type HooksProbe } from "./hooks-probe.ts"
 import { readSandboxProbe } from "./sandbox-probe.ts"
 import { agentdSecretsPath, assertLinearKeyFile, claudeTokenPath, linearKeyPath, slackSecretsPath } from "../secrets.ts"
@@ -45,35 +46,24 @@ export interface DoctorDeps {
   managedSettings?: string
 }
 
-/** Where Claude Code reads managed settings on macOS: root-owned, written from the admin account (runbook, section 8). */
-export const MANAGED_SETTINGS = "/Library/Application Support/ClaudeCode/managed-settings.json"
+export { MANAGED_SETTINGS }
 
 /**
- * The Slack channel into the front door (STEP-3293) registers only when the
- * machine's managed settings turn channels on and approve the dev-tasks
- * plugin's: a custom channel is on no list of Anthropic's, and the
- * development flag asks for a confirmation at every start. Without them the
- * front door still reads every message, at its next wakeup: a warning.
+ * The Slack channel into the front door (STEP-3293) opens only when the
+ * machine's managed settings turn channels on and approve exactly the
+ * dev-tasks plugin's (channel/managed.ts), the same rule agentd starts the
+ * front door by. Without it the front door still reads every message, at its
+ * next wakeup: a warning.
  */
 export function slackChannelCheck(config: AgentConfig, file: string): Check {
   const name = "slack channel"
   if (!config.frontDoor.channel) return { level: "ok", name, detail: "off in config.json (frontDoor.channel): Slack messages wait for the front door's next wakeup" }
-  let managed: { channelsEnabled?: unknown; allowedChannelPlugins?: unknown } | null = null
-  try {
-    managed = JSON.parse(readFileSync(file, "utf8"))
-  } catch {
-    managed = null
-  }
-  const approved =
-    Array.isArray(managed?.allowedChannelPlugins) &&
-    managed.allowedChannelPlugins.some((p: { plugin?: unknown; marketplace?: unknown }) => p?.plugin === "dev-tasks" && p?.marketplace === "dev-tasks-marketplace")
-  if (managed?.channelsEnabled === true && approved) return { level: "ok", name, detail: `approved in ${file}` }
+  const approval = channelApproval(file)
+  if (approval.ok) return { level: "ok", name, detail: `approved in ${file}` }
   return {
     level: "warn",
     name,
-    detail:
-      `${file} does not turn channels on and approve dev-tasks@dev-tasks-marketplace, so Slack messages reach the front door only at its next wakeup. ` +
-      'From the admin account: {"channelsEnabled": true, "allowedChannelPlugins": [{"marketplace": "dev-tasks-marketplace", "plugin": "dev-tasks"}]} (runbook, section 8)',
+    detail: `${approval.why}, so the front door starts without the Slack channel and reads Slack messages only at its next wakeup. From the admin account, write ${MANAGED_CHANNEL_JSON} there (runbook, section 1)`,
   }
 }
 
