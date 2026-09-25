@@ -187,14 +187,17 @@ and the answer you recommend, in a few plain words, to
 ~/.agentd/bin/trackerctl update STEP-<n> --description-file ~/.front-door/refine-STEP-<n>.md --state "On hold" --add-label awaiting-answer
 ```
 
-Try work waits for a person's OK on the plan before it is built. Unless the
-answers under `## Answers from Slack` or `## Answers from Monday` already
-approve this plan, make that the question: "Here is the plan for STEP-<n>:
-<what changes for users, in two or three plain sentences>. Shall I build it?",
-with the recommendation "Build it as planned", and park the issue as above,
-with `--add-label approval/try` in the same update. A person's yes comes back
-as an answer in the description, and the next /refine makes it Ready. Auto
-and Look work goes Ready at once.
+Try work waits for a person's OK on the plan before it is built. Try work is
+an issue whose class, set or kept in Phase 4, is `approval/try`: one a person
+keeps at `approval/look` or `approval/auto` is not, whatever the rules say.
+Unless the answers under `## Answers from Slack` or `## Answers from Monday`
+already approve this plan, make that the question: "Here is the plan for
+STEP-<n>: <what changes for users, in two or three plain sentences>. Shall I
+build it?", with the recommendation "Build it as planned", and park the issue
+as above, with `--add-label approval/try` in the same update when the class
+you set or kept is `approval/try`. A person's yes comes back as an answer in
+the description, and the next /refine makes it Ready. Auto and Look work goes
+Ready at once.
 
 Otherwise it is ready:
 
