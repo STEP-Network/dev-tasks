@@ -28,7 +28,7 @@ fail() { echo "install: $*" >&2; exit 1; }
 [ "$(id -u)" -ne 0 ] || fail "run this as the agent user, not as root"
 # What agentctl doctor itself needs. It checks everything else.
 command -v jq >/dev/null || fail "jq is missing: brew install jq, from the admin account"
-NODE="$(command -v node)" || fail "node is missing: brew install node@20, and put /opt/homebrew/opt/node@20/bin on PATH in ~/.zprofile"
+NODE="$(command -v node)" || fail "node is missing: brew install node, from the admin account (runbook, section 1)"
 # node --import with tsx's loader, not tsx's own command: that one opens an
 # IPC socket, which the front door's sandbox refuses.
 TSX_LOADER="$RUNTIME/node_modules/tsx/dist/loader.mjs"
@@ -46,8 +46,8 @@ GIT="$(resolve git)"
 JQ="$(resolve jq)"
 
 # The LaunchAgents' PATH: the directories of the tools doctor checked, the
-# most specific first (Homebrew's keg-only node@20 and pnpm@10 live apart from
-# /opt/homebrew/bin, where another pnpm may be), then the usual ones.
+# most specific first (a pnpm from pnpm's own installer lives in ~/Library/pnpm,
+# apart from /opt/homebrew/bin, where another pnpm may be), then the usual ones.
 JOB_PATH=""
 add_path() {
   case ":$JOB_PATH:" in

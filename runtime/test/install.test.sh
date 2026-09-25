@@ -77,7 +77,15 @@ printf '[credential]\n\thelper = osxkeychain\n' > "$HOME/.config/git/config"
 refuses "refuses any ~/.config/git/config" "config/git/config exists"
 rm -rf "$HOME/.config/git"
 
-PATH="$T/pnpm12:$PATH" refuses "refuses a pnpm other than 10" "pnpm@10"
+# The latest pnpm and Node are fine. Below what the checkout's package.json names, doctor warns and installs.
+printf '{ "engines": { "node": "99.x" }, "packageManager": "pnpm@99.0.0" }\n' > "$T/polads/package.json"
+if run; then
+  grep -q "WARN  pnpm: 10.33.0 is older than 99.0.0" "$T/out.log" && grep -q "WARN  node: .* is older than the checkout's engines.node, 99.x" "$T/out.log" && ok "warns, and installs, below the checkout's pnpm and Node" || bad "no toolchain warning: $(grep -E 'pnpm:|node:' "$T/out.log")"
+else
+  bad "refused a pnpm below packageManager: $(grep FAIL "$T/out.log")"
+fi
+rm "$T/polads/package.json"
+PATH="$T/pnpm12:$PATH" run && grep -q "^ok    pnpm: 12.1.0" "$T/out.log" && ok "takes a pnpm other than 10" || bad "pnpm 12: $(grep pnpm "$T/out.log")"
 
 # The LaunchAgents' PATH puts the checked tools' directories first. One that
 # holds another node would hand agentd and the worker a node doctor never saw.
@@ -147,7 +155,12 @@ cp "$T/bin/claude" "$T/claude.ok"; cp "$T/bin/gh" "$T/gh.ok"
 stub claude 'case "$*" in "--version") echo "2.1.281 (Claude Code)" ;; "auth status") echo "{\"loggedIn\":false}"; exit 1 ;; *) exit 0 ;; esac'
 stub gh 'case "$*" in "auth status") echo "User interaction is not allowed." >&2; exit 1 ;; api*) exit 1 ;; esac'
 if SSH_CONNECTION="100.64.0.2 51234 100.64.0.9 22" run; then
-  grep -q "WARN  claude login: not reachable over SSH" "$T/out.log" && grep -q "WARN  gh: not reachable over SSH" "$T/out.log" && ok "over SSH, doctor defers the keychain logins" || bad "doctor over SSH: $(grep -E 'claude login|gh:' "$T/out.log")"
+  grep -q "WARN  claude login: can't check over SSH" "$T/out.log" && grep -q "WARN  gh: can't check over SSH" "$T/out.log" && ok "over SSH, doctor defers the keychain logins" || bad "doctor over SSH: $(grep -E 'claude login|gh:' "$T/out.log")"
+  # What a person over SSH runs: the shim, which starts node with a clean environment.
+  SSH_CONNECTION="100.64.0.2 51234 100.64.0.9 22" "$HOME/.agentd/bin/agentctl" doctor > "$T/shim-doctor.out" 2>&1
+  grep -q "WARN  gh: can't check over SSH" "$T/shim-doctor.out" && ! grep -q "FAIL  gh" "$T/shim-doctor.out" && ok "over SSH, the shim's doctor defers the keychain logins too" || bad "shim doctor over SSH: $(grep -E 'claude login|gh:' "$T/shim-doctor.out")"
+  "$HOME/.agentd/bin/agentctl" doctor > "$T/shim-doctor.out" 2>&1
+  grep -q "FAIL  gh" "$T/shim-doctor.out" && ok "outside SSH, the shim's doctor refuses them" || bad "shim doctor outside SSH: $(grep -E 'gh:' "$T/shim-doctor.out")"
   grep -q "Run .*agentctl doctor from the mini's own Terminal" "$T/out.log" && ok "over SSH, install says where to check the logins" || bad "no SSH note: $(tail -3 "$T/out.log")"
 else
   bad "install over SSH failed on the keychain logins: $(tail -5 "$T/out.log")"
