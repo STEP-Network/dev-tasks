@@ -12,14 +12,24 @@ import { PNG } from "pngjs"
 // build, and vitest would load its ESM build instead. Both read this one.
 const { applyPalette, GIFEncoder, quantize } = createRequire(import.meta.url)("gifenc") as typeof import("gifenc")
 
+/** Never throws: a frame that is not a whole PNG (a screenshot cut off by the time limit) is left out, and fewer than two frames make no GIF. */
 export function gifFromPngs(files: readonly string[], outFile: string, o: { width?: number; delayMs?: number; maxFrames?: number } = {}): string | null {
-  const frames = files.slice(0, o.maxFrames ?? 12)
+  const read = (file: string) => {
+    try {
+      return PNG.sync.read(readFileSync(file))
+    } catch {
+      return null
+    }
+  }
+  const frames = files
+    .map(read)
+    .filter((png): png is NonNullable<typeof png> => png !== null)
+    .slice(0, o.maxFrames ?? 12)
   if (frames.length < 2) return null
   const width = o.width ?? 960
   const gif = GIFEncoder()
   let height: number | null = null
-  for (const file of frames) {
-    const png = PNG.sync.read(readFileSync(file))
+  for (const png of frames) {
     const scale = width / png.width
     const h: number = height ?? Math.max(1, Math.round(png.height * scale))
     height = h
@@ -40,6 +50,10 @@ export function gifFromPngs(files: readonly string[], outFile: string, o: { widt
     gif.writeFrame(applyPalette(rgba, palette), width, h, { palette, delay: o.delayMs ?? 1500 })
   }
   gif.finish()
-  writeFileSync(outFile, gif.bytes())
-  return outFile
+  try {
+    writeFileSync(outFile, gif.bytes())
+    return outFile
+  } catch {
+    return null
+  }
 }

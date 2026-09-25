@@ -202,8 +202,9 @@ export async function run(argv: string[], out: (line: string) => void, overrides
     case "usertest": {
       // The browser test on staging, for agent UAT (review-uat). Its PR says what changed.
       const issue = issueFlag()
-      const pr = Number(need("pr"))
-      if (!Number.isInteger(pr) || pr <= 0) throw new UsageError("--pr must be the merged PR's number")
+      const prFlag = need("pr")
+      if (!/^\d+$/.test(prFlag) || Number(prFlag) <= 0) throw new UsageError("--pr must be the merged PR's number")
+      const pr = Number(prFlag)
       const target = flags.target === undefined ? "staging" : flags.target
       if (target !== "staging" && target !== "rc") throw new UsageError("--target is staging or rc")
       print(submitJob(paths, issue, null, now(), { kind: "usertest", usertest: { target, pr } }))
@@ -225,6 +226,7 @@ export async function run(argv: string[], out: (line: string) => void, overrides
       const old = readJson<JobRecord>(jobPath(paths, "done", id))
       if (!old) throw new Error(`no finished job ${id}: agentctl job list shows the last ten`)
       if (old.result?.status !== "blocked") throw new Error(`${id} ended ${old.result?.status ?? "without a result"}: only a blocked job is retried`)
+      if (old.kind === "usertest") throw new Error(`${id} is a browser test, not work on the issue: agentctl usertest --issue ${old.issue} --pr ${old.usertest?.pr ?? "<number>"} queues it again`)
       print(submitJob(paths, old.issue, old.model, now(), { retryOf: old.id }))
       return 0
     }

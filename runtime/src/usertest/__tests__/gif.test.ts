@@ -31,6 +31,15 @@ describe("gifFromPngs", () => {
     expect(run.stdout.trim()).toBe("function")
   }, 30_000)
 
+  it("leaves out a frame that is not a whole PNG, and never throws", () => {
+    const dir = mkdtempSync(join(tmpdir(), "gif-"))
+    const cut = join(dir, "cut.png")
+    writeFileSync(cut, readFileSync(png(dir, "whole.png", 9)).subarray(0, 30))
+    expect(gifFromPngs([png(dir, "a.png", 0), cut, png(dir, "b.png", 255)], join(dir, "main.gif"), { width: 10 })).toBe(join(dir, "main.gif"))
+    expect(gifFromPngs([png(dir, "c.png", 0), cut], join(dir, "one.gif"))).toBeNull()
+    expect(gifFromPngs([png(dir, "d.png", 0), png(dir, "e.png", 9)], join(dir, "no-such-folder", "main.gif"))).toBeNull()
+  })
+
   it("makes none from a single frame", () => {
     const dir = mkdtempSync(join(tmpdir(), "gif-"))
     expect(gifFromPngs([png(dir, "a.png", 0)], join(dir, "main.gif"))).toBeNull()

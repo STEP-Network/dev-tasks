@@ -58,7 +58,7 @@ describe("personaCookies", () => {
 
   it("says in plain words why a site refuses, never with the secret", async () => {
     for (const [status, words] of [
-      [500, "its sign-in service is the production one"],
+      [500, "failed on the site's side (HTTP 500)"],
       [401, "refused this mini's secret"],
       [404, "no test sign-in"],
       [422, "persona does not exist"],

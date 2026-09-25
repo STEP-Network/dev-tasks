@@ -14,6 +14,7 @@ import { join } from "node:path"
 import type { AgentConfig, AgentPaths } from "../config.ts"
 import { writeJsonAtomic } from "../fsq.ts"
 import type { Logger } from "../log.ts"
+import { plural } from "../plain.ts"
 import { linearRequest, type ApprovalClass, type Tracker, type TrackerIssue } from "../tracker.ts"
 import { workerEnv } from "../worker/guard.ts"
 import type { Exec } from "../worker/git.ts"
@@ -47,6 +48,8 @@ export interface UserTestOutcome {
   findings: string[]
   commentUrl: string | null
   costUsd: number | null
+  /** Whether the report reached the Linear issue: when not, the caller says the test did not run. */
+  reported: boolean
 }
 
 export interface UserTestDeps {
@@ -62,7 +65,7 @@ export interface UserTestDeps {
   launch: (profileDir: string) => Promise<ChromeHandle>
   setCookies: (port: number, cookies: BrowserCookie[]) => Promise<void>
   browse: (port: number, s: { brief: string; cwd: string; origins: string[]; patterns: string[]; shotsDir: string }) => Promise<{ result: UserTestResult | null; costUsd: number | null; problem: string | null }>
-  publishImages: (o: { prNumber: number; sha: string; files: string[]; workDir: string }) => Promise<Map<string, string>>
+  publishImages: (o: { prNumber: number; sha: string; files: string[]; workDir: string; suffix?: string }) => Promise<Map<string, string>>
   uploadImage: (file: string) => Promise<string | null>
 }
 
@@ -85,11 +88,15 @@ export function userTestDeps(base: Omit<UserTestDeps, "launch" | "setCookies" | 
 
 const message = (error: unknown) => (error instanceof Error ? error.message : String(error))
 const MAX_IMAGES = 16
+/** The screenshots the brief asks for, in the order a person reads them: nothing else in the shots folder is published. */
+const SHOT_ORDER = ["main", "phone", "finding", "before-desktop", "before-phone"]
+const SHOT_RE = /^(main|phone|finding|before-desktop|before-phone)-\d+\.png$/
+const shotRank = (file: string) => SHOT_ORDER.indexOf(SHOT_RE.exec(file.split("/").pop() ?? "")?.[1] ?? "")
 
 export async function runUserTest(deps: UserTestDeps, input: UserTestInput): Promise<UserTestOutcome> {
   const { config, log } = deps
   const u = config.usertest
-  const done = (verdict: UserTestVerdict, reason: string, extra: Partial<UserTestOutcome> = {}): UserTestOutcome => ({ verdict, reason, findings: [], commentUrl: null, costUsd: null, ...extra })
+  const done = (verdict: UserTestVerdict, reason: string, extra: Partial<UserTestOutcome> = {}): UserTestOutcome => ({ verdict, reason, findings: [], commentUrl: null, costUsd: null, reported: false, ...extra })
   if (!u.enabled) return done("skipped", "the browser test is off on this mini")
   if (!isBrowserVisible(input.changedPaths, u.skipPaths)) return done("skipped", "nothing in this change shows in a browser")
   try {
@@ -160,8 +167,21 @@ export async function runUserTest(deps: UserTestDeps, input: UserTestInput): Pro
     }
     const verdict: UserTestVerdict = session.result ? verdictOf(session.result) : "error"
     const findings = findingLines(session.result)
-    const reason = session.problem ?? (verdict === "pass" ? "nothing a user would trip on" : `${findings.length} problems a user would meet`)
-    const shots = existsSync(shotsDir) ? readdirSync(shotsDir).filter((f) => /\.png$/.test(f)).sort().map((f) => join(shotsDir, f)) : []
+    const reason =
+      session.problem ??
+      (verdict === "pass"
+        ? "nothing a user would trip on"
+        : verdict === "findings"
+          ? `${plural(findings.length, "problem", "problems")} a user would meet`
+          : session.result?.status === "blocked"
+            ? "the browser test could not test the change"
+            : "the browser test saved no screenshot, so its report is no evidence")
+    const shots = existsSync(shotsDir)
+      ? readdirSync(shotsDir)
+          .filter((f) => SHOT_RE.test(f))
+          .sort((a, b) => shotRank(a) - shotRank(b) || a.localeCompare(b))
+          .map((f) => join(shotsDir, f))
+      : []
     const main = shots.filter((f) => /\/main-\d+\.png$/.test(f))
     const gifWanted = input.approvalClass !== "auto"
     const gif = gifWanted ? gifFromPngs(main, join(dir, "main.gif")) : null
@@ -169,16 +189,36 @@ export async function runUserTest(deps: UserTestDeps, input: UserTestInput): Pro
     const publish = !signedIn || Boolean(persona?.publishScreenshots)
     const toPublish = publish ? [...(gif ? [gif] : []), ...shots.slice(0, MAX_IMAGES)] : []
     const keptLocal = publish ? Math.max(0, shots.length - MAX_IMAGES) : shots.length + (gif ? 1 : 0)
+    const keptLocalReason = publish ? `because a report shows at most ${MAX_IMAGES}` : undefined
     const captions = new Map((session.result?.screenshots ?? []).map((s) => [join(shotsDir, s.file.split("/").pop() ?? s.file), s.caption]))
     const images = (urls: Map<string, string>) =>
       toPublish.filter((f) => f !== gif && urls.has(f)).map((f) => ({ file: f.split("/").pop()!, caption: captions.get(f) ?? f.split("/").pop()!, url: urls.get(f)! }))
     const report = (urls: Map<string, string>) =>
-      reportMarkdown({ mini: config.mini, result: session.result, verdict, reason: session.problem, site, personaNote, images: images(urls), gifUrl: gif ? urls.get(gif) ?? null : null, keptLocal })
+      reportMarkdown({
+        mini: config.mini,
+        result: session.result,
+        verdict,
+        reason: session.problem ?? (verdict === "error" ? reason : null),
+        site,
+        personaNote,
+        images: images(urls),
+        gifUrl: gif ? urls.get(gif) ?? null : null,
+        keptLocal,
+        keptLocalReason,
+      })
+    let reported = false
     let commentUrl: string | null = null
     const target = input.target
     if (target.prUrl && target.prNumber && target.headSha) {
       try {
-        const urls = toPublish.length ? await deps.publishImages({ prNumber: target.prNumber, sha: target.headSha, files: toPublish, workDir: dir }) : new Map<string, string>()
+        // Images that cannot be published never cost the report: it goes out without them.
+        const suffix = target.kind === "preview" ? undefined : target.kind
+        const urls = toPublish.length
+          ? await deps.publishImages({ prNumber: target.prNumber, sha: target.headSha, files: toPublish, workDir: dir, suffix }).catch((error: unknown) => {
+              log.warn("browser test images not published", { issue: input.issue.id, error: message(error) })
+              return new Map<string, string>()
+            })
+          : new Map<string, string>()
         const bodyFile = join(dir, "pr-comment.md")
         writeFileSync(bodyFile, `${report(urls)}\n`)
         const out = await deps.exec("gh", ["pr", "comment", target.prUrl, "--repo", config.repo.slug, "--body-file", bodyFile], { cwd: config.repo.path, timeoutMs: 120_000 })
@@ -194,12 +234,14 @@ export async function runUserTest(deps: UserTestDeps, input: UserTestInput): Pro
         if (url) linearUrls.set(file, url)
       }
       await deps.tracker.comment(input.issue.id, report(linearUrls))
+      reported = true
     } catch (error) {
       log.warn("browser test report not posted on the issue", { issue: input.issue.id, error: message(error) })
     }
     writeJsonAtomic(join(dir, "result.json"), { site, personaNote, verdict, reason, result: session.result, costUsd: session.costUsd })
-    if (target.prUrl && target.headSha) saveUserTestState(deps.paths, { issue: input.issue.id, url: target.prUrl, head: target.headSha, verdict, findings, at: deps.now().toISOString() })
-    return done(verdict, reason, { findings, commentUrl, costUsd: session.costUsd })
+    // Only a preview's verdict is the PR's to act on: agentd's PR watcher reads it by the PR's head.
+    if (target.kind === "preview") saveUserTestState(deps.paths, { issue: input.issue.id, url: target.prUrl, head: target.headSha, verdict, findings, at: deps.now().toISOString() })
+    return done(verdict, reason, { findings, commentUrl, costUsd: session.costUsd, reported })
   } catch (error) {
     return done("error", `the browser test could not run: ${message(error)}`)
   }

@@ -68,10 +68,17 @@ describe("run", () => {
     expect(listJobs(agentPaths(), "pending")[0]).toMatchObject({ issue: "STEP-7", kind: "usertest", usertest: { target: "staging", pr: 12 } })
     await run(["usertest", "--issue", "STEP-8", "--pr", "13", "--target", "rc"], out, deps())
     expect(listJobs(agentPaths(), "pending").find((j) => j.issue === "STEP-8")).toMatchObject({ kind: "usertest", usertest: { target: "rc", pr: 13 } })
-    for (const args of [["--pr", "14", "--target", "prod"], [], ["--pr", "x"], ["--pr", "0"], ["--pr", "1.5"]]) {
+    for (const args of [["--pr", "14", "--target", "prod"], [], ["--pr", "x"], ["--pr", "0"], ["--pr", "1.5"], ["--pr", "0x10"], ["--pr", "1e2"]]) {
       await expect(run(["usertest", "--issue", "STEP-9", ...args], out, deps()), args.join(" ")).rejects.toBeInstanceOf(UsageError)
     }
     expect(listJobs(agentPaths(), "pending").map((j) => j.issue)).toEqual(["STEP-7", "STEP-8"])
+  })
+
+  it("never retries a browser test job as a develop job", async () => {
+    const job = submitJob(agentPaths(), "STEP-7", null, NOW, { kind: "usertest", usertest: { target: "staging", pr: 12 } })
+    moveJob(agentPaths(), job.id, "pending", "done", { endedAt: NOW.toISOString(), result: { status: "blocked", reason: "x", prUrl: null, branch: null, costUsd: null, turns: null, minutes: 1 } })
+    await expect(run(["retry", job.id], out, deps())).rejects.toThrow(/agentctl usertest/)
+    expect(listJobs(agentPaths(), "pending")).toEqual([])
   })
 
   it("queues a question in the issue's thread, always with this mini's recommendation (STEP-3293)", async () => {

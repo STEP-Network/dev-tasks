@@ -78,6 +78,15 @@ describe("superviseJobs", () => {
     expect(asked).toEqual([[4242, job.id]])
   })
 
+  it("says a browser test job that died changed nothing, not that it left commits (WS5)", () => {
+    const { paths, deps } = setup({ liveness: () => "gone" })
+    running(paths, "STEP-1", { kind: "usertest", usertest: { target: "staging", pr: 12 } })
+    superviseJobs(deps)
+    const [notice] = outbox(paths)
+    expect(notice).toContain("A browser test changes nothing, so nothing is left behind.")
+    expect(notice).not.toContain("Anything I committed")
+  })
+
   it("records a dead worker as blocked, says so, and frees the slot", () => {
     const { paths, deps, spawned } = setup({ liveness: () => "gone" })
     running(paths, "STEP-1", {})

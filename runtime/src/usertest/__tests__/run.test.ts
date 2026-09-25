@@ -1,4 +1,5 @@
-import { mkdtempSync, writeFileSync } from "node:fs"
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs"
+import { PNG } from "pngjs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { describe, expect, it, vi } from "vitest"
@@ -8,6 +9,9 @@ import { readUserTestState } from "../state.ts"
 import { runUserTest, type UserTestDeps } from "../run.ts"
 
 const HEAD = "e".repeat(40)
+// A real PNG, as take_screenshot saves one.
+const PNG_FILE = join(mkdtempSync(join(tmpdir(), "ut-png-")), "p.png")
+writeFileSync(PNG_FILE, PNG.sync.write(new PNG({ width: 4, height: 4 })))
 const PR = "https://github.com/example/repo/pull/7"
 
 function deps(over: Partial<UserTestDeps> = {}, usertest: Record<string, unknown> = {}): UserTestDeps {
@@ -46,7 +50,7 @@ function deps(over: Partial<UserTestDeps> = {}, usertest: Record<string, unknown
     launch: vi.fn().mockResolvedValue({ port: 9333, close: async () => {} }),
     setCookies: vi.fn().mockResolvedValue(undefined),
     browse: vi.fn().mockResolvedValue({
-      result: { status: "findings", summary: "It broke.", journeys: [], findings: [{ severity: "major", title: "Save does nothing", where: "/en/account", steps: "s", expected: "e", actual: "a" }], screenshots: [], notWalked: [] },
+      result: { status: "findings", summary: "It broke.", journeys: [], findings: [{ severity: "major", title: "Save does nothing", where: "/en/account", steps: "s", expected: "e", actual: "a" }], screenshots: [{ file: "main-01.png", caption: "The page" }], notWalked: [] },
       costUsd: 0.5,
       problem: null,
     }),
@@ -91,7 +95,7 @@ describe("runUserTest", () => {
     await runUserTest(d, input(undefined, staging))
     expect(loginCalls(d)).toHaveLength(1)
     expect(String(loginCalls(d)[0][0])).toBe("https://staging.example.com/api/dev/test-login")
-    expect(briefOf(d)).toContain("not signed in: this site cannot sign test users in")
+    expect(briefOf(d)).toContain("not signed in: the test sign-in failed on the site's side (HTTP 500)")
   })
 
   it("asks for Vercel's bypass cookie on a preview only", async () => {
@@ -137,6 +141,76 @@ describe("runUserTest", () => {
     expect(d.publishImages).toHaveBeenCalledTimes(1)
     expect(d.uploadImage).toHaveBeenCalled()
     expect(briefOf(d)).toContain("signed in as the customer persona")
+  })
+
+  it("says in plain words why a report is no verdict, and counts problems in plain words", async () => {
+    const blocked = deps({ browse: vi.fn().mockResolvedValue({ result: { status: "blocked", summary: "No page loaded.", journeys: [], findings: [], screenshots: [], notWalked: [] }, costUsd: 0.1, problem: null }) })
+    expect(await runUserTest(blocked, input())).toMatchObject({ verdict: "error", reason: "the browser test could not test the change" })
+    const bare = deps({ browse: vi.fn().mockResolvedValue({ result: { status: "pass", summary: "Fine.", journeys: [], findings: [], screenshots: [], notWalked: [] }, costUsd: 0.1, problem: null }) })
+    expect(await runUserTest(bare, input())).toMatchObject({ verdict: "error", reason: "the browser test saved no screenshot, so its report is no evidence" })
+    expect((await runUserTest(deps(), input())).reason).toBe("1 problem a user would meet")
+  })
+
+  it("keeps the report, and publishes only the screenshots it named, when a file in the shots folder is not what it says", async () => {
+    const comment = vi.fn().mockResolvedValue(undefined)
+    const browse = vi.fn().mockImplementation(async (_port: number, s: { shotsDir: string }) => {
+      writeFileSync(join(s.shotsDir, "main-01.png"), readFileSync(PNG_FILE))
+      writeFileSync(join(s.shotsDir, "main-02.png"), "a snapshot saved as .png")
+      writeFileSync(join(s.shotsDir, "odd name (1).png"), readFileSync(PNG_FILE))
+      return { result: { status: "findings", summary: "It broke.", journeys: [], findings: [{ severity: "major", title: "X", where: "/en", steps: "s", expected: "e", actual: "a" }], screenshots: [{ file: "main-01.png", caption: "c" }], notWalked: [] }, costUsd: 0.2, problem: null }
+    })
+    const d = deps({ browse, tracker: { comment } })
+    expect(await runUserTest(d, input())).toMatchObject({ verdict: "findings", reported: true })
+    expect(comment).toHaveBeenCalledTimes(1)
+    const files = (d.publishImages as ReturnType<typeof vi.fn>).mock.calls[0][0].files.map((f: string) => f.split("/").pop())
+    expect(files).toEqual(["main-01.png", "main-02.png"])
+  })
+
+  it("posts the report on the PR without images when they cannot be published", async () => {
+    const d = deps({ browse: vi.fn().mockImplementation(async (_port: number, s: { shotsDir: string }) => {
+        for (const f of ["main-01.png"]) writeFileSync(join(s.shotsDir, f), readFileSync(PNG_FILE))
+        return { result: { status: "pass", summary: "Fine.", journeys: [], findings: [], screenshots: [{ file: "main-01.png", caption: "The page" }], notWalked: [], ...{} }, costUsd: 0.1, problem: null }
+      }), publishImages: vi.fn().mockRejectedValue(new Error("422")) })
+    const outcome = await runUserTest(d, input())
+    expect(outcome.commentUrl).toBe("https://github.com/example/repo/pull/7#issuecomment-1")
+  })
+
+  it("puts the main journey, the phone and the problems first, and says why the rest stay on the mini", async () => {
+    const files = [...Array.from({ length: 6 }, (_, n) => `before-desktop-0${n + 1}.png`), ...Array.from({ length: 8 }, (_, n) => `main-0${n + 1}.png`), ...Array.from({ length: 6 }, (_, n) => `phone-0${n + 1}.png`), "finding-01.png"]
+    const comment = vi.fn().mockResolvedValue(undefined)
+    const d = deps({ browse: vi.fn().mockImplementation(async (_port: number, s: { shotsDir: string }) => {
+        for (const f of files) writeFileSync(join(s.shotsDir, f), readFileSync(PNG_FILE))
+        return { result: { status: "pass", summary: "Fine.", journeys: [], findings: [], screenshots: [{ file: "main-01.png", caption: "The page" }], notWalked: [], ...{} }, costUsd: 0.1, problem: null }
+      }), tracker: { comment } }, { personas: [] })
+    await runUserTest(d, { ...input(), approvalClass: "auto" })
+    const published = (d.publishImages as ReturnType<typeof vi.fn>).mock.calls[0][0].files.map((f: string) => f.split("/").pop())
+    expect(published).toHaveLength(16)
+    expect(published.slice(0, 8).every((f: string) => f.startsWith("main-"))).toBe(true)
+    expect(published).toContain("finding-01.png")
+    expect(published.filter((f: string) => f.startsWith("before-"))).toHaveLength(1)
+    expect(comment.mock.calls[0][1]).toContain("5 screenshots stay on the mini, because a report shows at most 16.")
+  })
+
+  it("keeps a staging test's images apart from the preview's, and records only a preview's verdict for agentd", async () => {
+    const d = deps({ fetchImpl: signedIn(), browse: vi.fn().mockImplementation(async (_port: number, s: { shotsDir: string }) => {
+        for (const f of ["main-01.png"]) writeFileSync(join(s.shotsDir, f), readFileSync(PNG_FILE))
+        return { result: { status: "pass", summary: "Fine.", journeys: [], findings: [], screenshots: [{ file: "main-01.png", caption: "The page" }], notWalked: [], ...{} }, costUsd: 0.1, problem: null }
+      }) })
+    await runUserTest(d, input(undefined, staging))
+    expect((d.publishImages as ReturnType<typeof vi.fn>).mock.calls[0][0].suffix).toBe("staging")
+    expect(readUserTestState(d.paths, PR)).toBeNull()
+    const p = deps({ browse: vi.fn().mockImplementation(async (_port: number, s: { shotsDir: string }) => {
+        for (const f of ["main-01.png"]) writeFileSync(join(s.shotsDir, f), readFileSync(PNG_FILE))
+        return { result: { status: "pass", summary: "Fine.", journeys: [], findings: [], screenshots: [{ file: "main-01.png", caption: "The page" }], notWalked: [], ...{} }, costUsd: 0.1, problem: null }
+      }) })
+    await runUserTest(p, input())
+    expect((p.publishImages as ReturnType<typeof vi.fn>).mock.calls[0][0].suffix).toBeUndefined()
+    expect(readUserTestState(p.paths, PR)).toMatchObject({ verdict: "pass" })
+  })
+
+  it("says whether the report reached the issue", async () => {
+    expect((await runUserTest(deps({}, { enabled: false }), input())).reported).toBe(false)
+    expect((await runUserTest(deps({ tracker: { comment: vi.fn().mockRejectedValue(new Error("Linear down")) } }), input())).reported).toBe(false)
   })
 
   it("never throws: a Chrome that will not start is an error outcome", async () => {
