@@ -59,7 +59,7 @@ export function findingLines(result: UserTestResult | null): string[] {
 /**
  * Page and model text as inert markdown: one line (no heading, list item,
  * rule or table row of its own), no link, image, autolink (www. and bare
- * hosts included) or code span, no math, no HTML, no @-mention, no issue or
+ * hosts included) or code span, no math (a fullwidth dollar), no HTML, no @-mention, no issue or
  * PR reference, and no Linear profile URL, which would mention its person.
  * Also the report's style: no semicolons and no dashes between clauses.
  */
@@ -70,11 +70,15 @@ export function neutralise(text: string, max = 1000): string {
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
-    .replace(/[\\`*_[\]()!|#~$]/g, "\\$&")
+    .replace(/[\\`*_[\]()!|#~]/g, "\\$&")
+    // No escape stops GitHub's math: a fullwidth dollar is no dollar to it.
+    .replace(/\$/g, "＄")
     .replace(/^(\d+)([.)])/, "$1\\$2")
     .replace(/^[-+=]/, "\\$&")
     .replace(/:\/\//g, ":\u200b//")
     .replace(/\.(?=\w)/g, ".\u200b")
+    // GitHub takes a zero-width space as part of a host, so only a broken "www." is no autolink.
+    .replace(/\b(w)(ww\.)/gi, "$1\u200b$2")
     .replace(/#(?=\d)/g, "#\u200b")
     .replace(/\bGH-(?=\d)/gi, "$&\u200b")
     .replace(/@(?=[\w-])/g, "@\u200b")
