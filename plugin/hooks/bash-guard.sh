@@ -23,6 +23,8 @@ exec >&2
 #       project-config.i18n.enabled = true.
 #   (e) i18n completeness — block commit when project-config.i18n.parityHookMode = "block"
 #       and the branch has modified some but not all configured locale files.
+#   At a merge commit, (d) and (e) read only what is new over both parents
+#   (STEP-3348): what the branch merged in brought was checked where it was made.
 #   (f) Protected-branch push block — hard-refuse `git push` to any branch in
 #       project-config.git.protectedBranches[] (default: main staging master
 #       production prod). No marker bypass. Set list to [] to disable.
@@ -102,20 +104,27 @@ default_path = os.path.join(messages_dir, default_locale + '.json')
 if not os.path.exists(default_path):
     sys.exit(0)
 
-# Get the staged diff for the default-locale file — extract added lines with key patterns
-diff = subprocess.run(
-    ['git', 'diff', '--cached', '-U0', '--', default_path],
-    capture_output=True, text=True
-).stdout
-
-# Find keys on added lines (lines starting with +, excluding +++ header)
+# Keys on the added lines of the staged diff of the default-locale file
+# (lines starting with +, excluding the +++ header), against HEAD or `against`.
 # Match JSON keys like: \"keyName\": ...
-added_keys = set()
-for line in diff.split('\n'):
-    if line.startswith('+') and not line.startswith('+++'):
-        match = re.search(r'\"([^\"]+)\"\s*:', line)
-        if match:
-            added_keys.add(match.group(1))
+def added(*against):
+    diff = subprocess.run(
+        ['git', 'diff', '--cached', '-U0', *against, '--', default_path],
+        capture_output=True, text=True
+    ).stdout
+    keys = set()
+    for line in diff.split('\n'):
+        if line.startswith('+') and not line.startswith('+++'):
+            match = re.search(r'\"([^\"]+)\"\s*:', line)
+            if match:
+                keys.add(match.group(1))
+    return keys
+
+added_keys = added()
+# A merge commit's own keys are new over both parents (STEP-3348): a key the
+# branch merged in already has came with it, checked where it was added.
+if subprocess.run(['git', 'rev-parse', '-q', '--verify', 'MERGE_HEAD'], capture_output=True).returncode == 0:
+    added_keys &= added('MERGE_HEAD')
 
 if not added_keys:
     print('OK')
@@ -189,11 +198,18 @@ branch_diff = subprocess.run(
     capture_output=True, text=True
 ).stdout.strip().split('\n')
 
-# Staged changes (about to be committed)
-staged = subprocess.run(
-    ['git', 'diff', '--cached', '--name-only', '--', messages_dir + '/'],
-    capture_output=True, text=True
-).stdout.strip().split('\n')
+# Staged changes (about to be committed). A merge commit's own are the files
+# that differ from both parents (STEP-3348).
+def staged_names(*against):
+    return subprocess.run(
+        ['git', 'diff', '--cached', '--name-only', *against, '--', messages_dir + '/'],
+        capture_output=True, text=True
+    ).stdout.strip().split('\n')
+
+staged = staged_names()
+if subprocess.run(['git', 'rev-parse', '-q', '--verify', 'MERGE_HEAD'], capture_output=True).returncode == 0:
+    merged = set(staged_names('MERGE_HEAD'))
+    staged = [f for f in staged if f in merged]
 
 # Combine: branch diff + staged
 all_modified = set()
