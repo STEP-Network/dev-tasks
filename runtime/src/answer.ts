@@ -12,10 +12,16 @@
  * different answer stays on the issue, marked not applied, and moves
  * nothing. The recorder alone writes the answer entries and the plan labels:
  * a person's agreement to "Build it as planned" approves a Try plan, and
- * every approval is announced in #polads-agents.
+ * every approval is announced in #polads-agents. One answer to an issue is
+ * recorded at a time on a mini, so the Slack door and the Monday bridge never
+ * both apply one.
  */
 
+import { closeSync, mkdirSync, openSync, rmSync, statSync, writeSync } from "node:fs"
+import { join } from "node:path"
+
 import type { AgentConfig, AgentPaths } from "./config.ts"
+import { safeKey } from "./fsq.ts"
 import type { Logger } from "./log.ts"
 import { enqueueSlack } from "./outbox.ts"
 import { recommendationOf } from "./plain.ts"
@@ -98,11 +104,19 @@ const norm = (text: string) => text.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " 
 /** answerSaid without case or punctuation: two answers that decided the same thing. */
 export const answerCore = (text: string): string => norm(answerSaid(text))
 
+/** How far Slack's clock, Monday's and the mini's may differ: an answer this much before the question still answers it. */
+const CLOCK_SKEW_MS = 60_000
+
+/** Whether an answer written at `at` answers a question asked at `since`, give or take the clocks. */
+export function answeredSince(at: string, since: string): boolean {
+  return Date.parse(at) >= Date.parse(since) - CLOCK_SKEW_MS
+}
+
 /** The first applied answer after the question from someone else: the one that counts. */
 function firstAnswer(description: string, since: string, by: string): RecordedAnswer | null {
   return (
     recordedAnswers(description)
-      .filter((r) => r.applied && r.at && r.by && r.by !== by && Date.parse(r.at) >= Date.parse(since))
+      .filter((r) => r.applied && r.at && r.by && r.by !== by && answeredSince(r.at, since))
       .sort((a, b) => a.at!.localeCompare(b.at!))[0] ?? null
   )
 }
@@ -159,6 +173,46 @@ export interface Recorded {
   first?: RecordedAnswer
 }
 
+const LOCK_WAIT_MS = 30_000
+/** Held longer than this, the lock's holder died mid-answer: what it guards is one Linear read and one write. */
+const LOCK_STALE_MS = 120_000
+
+/**
+ * Runs `fn` holding the issue's answer lock (state/answer-locks), created
+ * with O_EXCL: the Slack door (agentctl decide) and the Monday bridge each
+ * read the issue and then write it, so without it both could apply an answer.
+ * Throws when another holder keeps it past LOCK_WAIT_MS: the bridge tries
+ * again next poll, and the front door says so.
+ */
+async function oneAnswerAtATime<T>(paths: AgentPaths, issue: string, fn: () => Promise<T>): Promise<T> {
+  const dir = join(paths.state, "answer-locks")
+  mkdirSync(dir, { recursive: true })
+  const lock = join(dir, `${safeKey(issue)}.lock`)
+  const deadline = Date.now() + LOCK_WAIT_MS
+  for (;;) {
+    try {
+      const fd = openSync(lock, "wx")
+      writeSync(fd, String(process.pid))
+      closeSync(fd)
+      break
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error
+      try {
+        if (Date.now() - statSync(lock).mtimeMs > LOCK_STALE_MS) rmSync(lock, { force: true })
+      } catch {
+        // Released between the open and the stat.
+      }
+      if (Date.now() > deadline) throw new Error(`another answer to ${issue} is being recorded on this mini: try again in a minute`)
+      await new Promise((resolve) => setTimeout(resolve, 100))
+    }
+  }
+  try {
+    return await fn()
+  } finally {
+    rmSync(lock, { force: true })
+  }
+}
+
 /**
  * Records the answer on the issue, under "## Answers from Slack" or "from
  * Monday", and moves a parked issue on as an answer always did (unless
@@ -167,14 +221,15 @@ export interface Recorded {
  *
  * With `since` (when the question went out), the first answer after it from
  * someone else counts: the same answer is not written again, and a different
- * one is kept on the issue, marked not applied, and moves nothing.
+ * one is kept on the issue, marked not applied, and moves nothing. The issue
+ * is read under the answer lock, so an answer recorded a moment ago is seen.
  */
-export async function recordAnswer(
-  deps: { paths: AgentPaths; tracker: Tracker },
-  a: PersonAnswer,
-  opts: { current?: TrackerIssue; move?: boolean; since?: string | null } = {},
-): Promise<Recorded> {
-  const current = opts.current ?? (await deps.tracker.readIssue(a.issue))
+export function recordAnswer(deps: { paths: AgentPaths; tracker: Tracker }, a: PersonAnswer, opts: { move?: boolean; since?: string | null } = {}): Promise<Recorded> {
+  return oneAnswerAtATime(deps.paths, a.issue, () => recordLocked(deps, a, opts))
+}
+
+async function recordLocked(deps: { paths: AgentPaths; tracker: Tracker }, a: PersonAnswer, opts: { move?: boolean; since?: string | null }): Promise<Recorded> {
+  const current = await deps.tracker.readIssue(a.issue)
   if (a.decided?.agreed && current.labels.includes("human-todo")) {
     throw new Error(`${a.issue} waits on a person to do something (human-todo), so a yes is not a decision: once they say it is done, record that with --text-file, and otherwise ack it`)
   }
