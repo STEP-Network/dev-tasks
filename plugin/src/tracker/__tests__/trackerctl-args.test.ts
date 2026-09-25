@@ -15,7 +15,8 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { dirname, join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
-import { buildPatch, claimantFor, guardedCreate, guardedPatch, parseArgs, readProfileMini, runUpdate, textFlag } from "../../../scripts/trackerctl.ts"
+import { buildPatch, claimantFor, clientIdFor, guardedCreate, guardedPatch, milestoneFlag, parseArgs, readProfileMini, runUpdate, textFlag } from "../../../scripts/trackerctl.ts"
+import { stableUuid } from "../ids.ts"
 import type { TrackerIssue } from "../types.ts"
 
 const PLUGIN_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../../..")
@@ -143,6 +144,26 @@ describe("buildPatch", () => {
     const flags = parseArgs(["update", "STEP-1", ...args]).flags
     expect(() => buildPatch(flags, read)).toThrow(new RegExp(`^usage:[\\s\\S]*--${name} is given more than once`))
   })
+
+  it("takes a due date, a project and a milestone on update, and none clears them", () => {
+    expect(buildPatch(parseArgs(["update", "STEP-1", "--due", "2026-10-09", "--project", "proj-1", "--milestone", "none"]).flags, read)).toEqual({ dueDate: "2026-10-09", projectId: "proj-1", milestoneId: null })
+    expect(buildPatch(parseArgs(["update", "STEP-1", "--due", "none"]).flags, read)).toEqual({ dueDate: null })
+    expect(buildPatch(parseArgs(["update", "STEP-1", "--project", "none"]).flags, read)).toEqual({ projectId: null })
+    expect(() => buildPatch(parseArgs(["update", "STEP-1", "--due", "Friday"]).flags, read)).toThrow(/^usage:/)
+  })
+
+  it("reads a milestone as its name and an optional date", () => {
+    expect(milestoneFlag("Nordic@2026-10-16")).toEqual({ name: "Nordic", targetDate: "2026-10-16" })
+    expect(milestoneFlag("The rest")).toEqual({ name: "The rest" })
+    expect(() => milestoneFlag("Nordic@next week")).toThrow(/^usage:/)
+    expect(() => milestoneFlag("@2026-10-16")).toThrow(/^usage:/)
+  })
+
+  it("names a create by its key, so a second run makes nothing new", () => {
+    expect(clientIdFor(parseArgs(["create", "--title", "t", "--key", "STEP-7:task-1"]).flags)).toBe(stableUuid("trackerctl:STEP-7:task-1"))
+    expect(clientIdFor(parseArgs(["create", "--title", "t"]).flags)).toBeUndefined()
+    expect(() => clientIdFor(parseArgs(["create", "--title", "t", "--key"]).flags)).toThrow(/^usage:/)
+  })
 })
 
 describe("the claimant is this machine's mini", () => {
@@ -227,6 +248,22 @@ describe("the claimant is this machine's mini", () => {
     })
     expect(run.stderr).toMatch(new RegExp(`^usage: ${flag} looks like it carries a key or a token`))
     expect(run.stderr).not.toContain("abcdefghijkl")
+    expect(run.status).toBe(64)
+  }, 30_000)
+
+  it.each([
+    [["create", "--title", "t", "--due", "Friday"], /--due takes a date as YYYY-MM-DD/],
+    [["project", "create", "--name", "Translations"], /missing required --key/],
+    [["project", "create", "--key", "STEP-7", "--name", "Translations", "--milestone", "Nordic@next week"], /--milestone takes a date as YYYY-MM-DD/],
+    [["project", "list"], /project takes one subcommand: create/],
+  ])("%j stops with a usage error before it reaches the tracker", (args, why) => {
+    const run = spawnSync(join(PLUGIN_ROOT, "node_modules", ".bin", "tsx"), [join(PLUGIN_ROOT, "scripts", "trackerctl.ts"), ...args], {
+      cwd: home,
+      // Should the refusal ever go, Linear is still out of reach: a dead loopback port.
+      env: { PATH: process.env.PATH ?? "", HOME: home, DEV_TASKS_TRACKER: "linear", TRACKERCTL_MAX_WRITES: "0", LINEAR_API_KEY: "lin_api_notreal", DEV_TASKS_LINEAR_ENDPOINT: "http://127.0.0.1:9/graphql" },
+      encoding: "utf8",
+    })
+    expect(run.stderr).toMatch(why)
     expect(run.status).toBe(64)
   }, 30_000)
 

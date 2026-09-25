@@ -10,6 +10,7 @@
  */
 
 import { randomUUID } from "node:crypto"
+import { stableUuid } from "./ids.ts"
 import { linearRequest } from "./linear-client.ts"
 import {
   byPriorityThenAge,
@@ -24,8 +25,10 @@ import {
   type CreateIssueInput,
   type IssuePatch,
   type IssuePriority,
+  type ProjectInput,
   type Tracker,
   type TrackerIssue,
+  type TrackerProject,
   type TrackerUser,
 } from "./types.ts"
 
@@ -80,6 +83,17 @@ interface Team {
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 const IDENTIFIER_RE = /^([A-Za-z]+)-(\d+)$/
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/
+
+/** A calendar date as Linear takes it, checked before anything is sent. */
+function day(value: string, what: string): string {
+  if (!DATE_RE.test(value)) throw new Error(`Linear: ${what} must be YYYY-MM-DD, got ${JSON.stringify(value)}`)
+  return value
+}
+
+const PROJECT_FIELDS = `id name url targetDate projectMilestones(first: 50) { nodes { id name targetDate } }`
+type RawProject = { id: string; name: string; url: string; targetDate: string | null; projectMilestones: { nodes: Array<{ id: string; name: string; targetDate: string | null }> } }
+const toProject = (p: RawProject): TrackerProject => ({ id: p.id, name: p.name, url: p.url, targetDate: p.targetDate, milestones: p.projectMilestones.nodes })
 
 /*
  * Page sizes are bounded by complexity, not by count. Linear refuses any
@@ -395,9 +409,12 @@ export function createLinearTracker(): Tracker {
       if (input.clientId !== undefined && !UUID_RE.test(input.clientId)) {
         throw new Error(`Linear: clientId must be a UUID, got ${JSON.stringify(input.clientId)}`)
       }
+      if (input.dueDate !== undefined) day(input.dueDate, "dueDate")
       const t = await team()
       const stateId = await stateIdFor(input.state)
       const labelIds = await labelIdsFor(input.labels)
+      // The parent by its uuid, found before the write: a parent that is not there fails the create, not half of it.
+      const parentId = input.parent ? (await fetchRaw(input.parent)).id : undefined
 
       // Our own id, or the caller's, so a retry after a lost answer names
       // this issue rather than opening a second one.
@@ -406,6 +423,10 @@ export function createLinearTracker(): Tracker {
       if (input.description) payload.description = input.description
       if (stateId) payload.stateId = stateId
       if (labelIds) payload.labelIds = labelIds
+      if (parentId) payload.parentId = parentId
+      if (input.projectId) payload.projectId = input.projectId
+      if (input.milestoneId) payload.projectMilestoneId = input.milestoneId
+      if (input.dueDate) payload.dueDate = input.dueDate
 
       let created: RawIssue
       try {
@@ -428,6 +449,42 @@ export function createLinearTracker(): Tracker {
         )
       }
       return toIssue(created)
+    },
+
+    async createProject(p: ProjectInput) {
+      if (p.clientId !== undefined && !UUID_RE.test(p.clientId)) throw new Error(`Linear: clientId must be a UUID, got ${JSON.stringify(p.clientId)}`)
+      if (p.targetDate) day(p.targetDate, "targetDate")
+      for (const m of p.milestones) if (m.targetDate) day(m.targetDate, "milestone targetDate")
+      const t = await team()
+      const id = p.clientId ?? randomUUID()
+      const input: Record<string, unknown> = { id, name: p.name, teamIds: [t.id] }
+      // Linear keeps a project's description to one short line: the plan itself goes in its content.
+      if (p.summary) input.description = p.summary.slice(0, 255)
+      if (p.content) input.content = p.content
+      if (p.targetDate) input.targetDate = p.targetDate
+      const read = async () => (await linearRequest<{ project: RawProject | null }>(`query($id: String!) { project(id: $id) { ${PROJECT_FIELDS} } }`, { id })).project
+      let project: RawProject
+      try {
+        project = (
+          await linearRequest<{ projectCreate: { project: RawProject } }>(
+            `mutation($input: ProjectCreateInput!) { projectCreate(input: $input) { project { ${PROJECT_FIELDS} } } }`,
+            { input },
+          )
+        ).projectCreate.project
+      } catch (error) {
+        project = await readBackAfterFailure(error, read)
+      }
+      // Each milestone by name, once, under an id named from the project's and its place: a rerun makes only the missing ones.
+      const have = new Set(project.projectMilestones.nodes.map((m) => m.name))
+      for (const [i, m] of p.milestones.entries()) {
+        if (have.has(m.name)) continue
+        await linearRequest(`mutation($input: ProjectMilestoneCreateInput!) { projectMilestoneCreate(input: $input) { success } }`, {
+          input: { id: stableUuid(`${id}:milestone:${i}`), projectId: project.id, name: m.name, ...(m.targetDate ? { targetDate: m.targetDate } : {}) },
+        })
+      }
+      const done = await read()
+      if (!done) throw new Error(`Linear: project ${id} could not be read back`)
+      return toProject(done)
     },
 
     async comment(ref, body) {
@@ -473,6 +530,9 @@ export function createLinearTracker(): Tracker {
       if (patch.removeLabels?.length) input.removedLabelIds = await strictLabelIds(patch.removeLabels)
       if (patch.assignee === "me") input.assigneeId = (await viewer()).id
       if (patch.assignee === null) input.assigneeId = null
+      if (patch.dueDate !== undefined) input.dueDate = patch.dueDate === null ? null : day(patch.dueDate, "dueDate")
+      if (patch.projectId !== undefined) input.projectId = patch.projectId
+      if (patch.milestoneId !== undefined) input.projectMilestoneId = patch.milestoneId
 
       const raw = await fetchRaw(ref)
       if (Object.keys(input).length === 0) return toIssue(raw)

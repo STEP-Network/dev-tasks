@@ -11,6 +11,8 @@
  *   trackerctl branch STEP-123
  *   trackerctl create --title "Fix the thing" --description "$BODY" --label chore
  *   trackerctl create --title "Fix the thing" --description-file request.md --label polads --state Triage
+ *   trackerctl create --title "Task 1" --parent STEP-7 --due 2026-10-09 --key STEP-7:task-1
+ *   trackerctl project create --key STEP-7 --name "Translations" --content-file plan.md --milestone "Nordic@2026-10-16"
  *   trackerctl comment STEP-123 --body "opened PR #42"
  *   trackerctl comment STEP-123 --body-file note.md
  *   trackerctl attach STEP-123 --url https://github.com/... --title "PR #42"
@@ -18,6 +20,7 @@
  *   trackerctl claim STEP-123
  *   trackerctl whoami
  *   trackerctl update STEP-123 --state "On hold" --add-label awaiting-answer --description-file brief.md
+ *   trackerctl update STEP-123 --due 2026-10-16 --project <id> --milestone none
  *   trackerctl heartbeat STEP-123
  *   trackerctl release STEP-123 --reason "claim expired"
  *   trackerctl claims
@@ -41,7 +44,8 @@ import { resolveTracker } from "../src/tracker/index.ts"
 import { assertNoSecretText, readTextFile } from "../src/tracker/secrets-guard.ts"
 import { approvalPatch, touchesApproval } from "../src/tracker/approval.ts"
 import { answerEntries, keepAnswers, RECORDER_LABELS } from "../src/tracker/answers.ts"
-import { branchNameFor, type CreateIssueInput, type IssuePatch, type Tracker, type TrackerIssue } from "../src/tracker/types.ts"
+import { stableUuid } from "../src/tracker/ids.ts"
+import { branchNameFor, type CreateIssueInput, type IssuePatch, type ProjectInput, type Tracker, type TrackerIssue } from "../src/tracker/types.ts"
 
 export interface ParsedArgs {
   command: string
@@ -50,7 +54,10 @@ export interface ParsedArgs {
   flags: Record<string, string | true | Array<string | true>>
 }
 
-const USAGE = `usage: trackerctl <read|branch|create|comment|attach|ready|claim|whoami|update|heartbeat|release|claims|list> [args]`
+const USAGE = `usage: trackerctl <read|branch|create|comment|attach|ready|claim|whoami|update|heartbeat|release|claims|list|project create> [args]
+  create ... [--parent STEP-<n>] [--project <id>] [--milestone <id>] [--due YYYY-MM-DD] [--key <text>]
+  update <ref> ... [--due YYYY-MM-DD|none] [--project <id>|none] [--milestone <id>|none]
+  project create --key <text> --name <name> [--summary <line>] [--content-file <path>] [--target YYYY-MM-DD] [--milestone "<name>@YYYY-MM-DD"]...`
 
 export function parseArgs(argv: string[]): ParsedArgs {
   if (argv.length === 0) throw new Error(USAGE)
@@ -108,7 +115,34 @@ function requireArg(value: string | undefined, name: string): string {
   return value
 }
 
-const UPDATE_FLAGS = ["state", "add-label", "remove-label", "description-file", "assign"]
+const UPDATE_FLAGS = ["state", "add-label", "remove-label", "description-file", "assign", "due", "project", "milestone"]
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/
+
+/** A calendar day given on the command line: YYYY-MM-DD, or a usage error before anything is sent. */
+function dateFlag(value: string, name: string): string {
+  if (!DATE_RE.test(value)) throw new Error(`${USAGE}\n--${name} takes a date as YYYY-MM-DD, got ${JSON.stringify(value)}`)
+  return value
+}
+
+/** `--milestone "Nordic@2026-10-16"` or `--milestone "The rest"`: a name, and a date after the last @. */
+export function milestoneFlag(value: string): { name: string; targetDate?: string } {
+  const at = value.lastIndexOf("@")
+  const name = (at === -1 ? value : value.slice(0, at)).trim()
+  if (!name) throw new Error(`${USAGE}\n--milestone needs a name: "<name>" or "<name>@YYYY-MM-DD"`)
+  return at === -1 ? { name } : { name, targetDate: dateFlag(value.slice(at + 1).trim(), "milestone") }
+}
+
+/**
+ * A create's id, named from `--key`: the same key, the same id, so a front
+ * door that runs a create again after a crash reads the first one back
+ * instead of making a second (the tracker's clientId).
+ */
+export function clientIdFor(flags: ParsedArgs["flags"]): string | undefined {
+  if (flags.key === undefined) return undefined
+  const key = str(flags, "key")
+  if (!key?.trim() || Array.isArray(flags.key)) throw new Error(`${USAGE}\n--key needs one value`)
+  return stableUuid(`trackerctl:${key}`)
+}
 const REPEATABLE_FLAGS = ["add-label", "remove-label"]
 
 /**
@@ -146,8 +180,15 @@ export function buildPatch(flags: ParsedArgs["flags"], readText: (path: string) 
     else if (assign === "none") patch.assignee = null
     else throw new Error(`${USAGE}\n--assign takes me or none`)
   }
+  // "none" clears each of these three.
+  const due = str(flags, "due")
+  if (due !== undefined) patch.dueDate = due === "none" ? null : dateFlag(due, "due")
+  const project = str(flags, "project")
+  if (project !== undefined) patch.projectId = project === "none" ? null : project
+  const milestone = str(flags, "milestone")
+  if (milestone !== undefined) patch.milestoneId = milestone === "none" ? null : milestone
   if (Object.keys(patch).length === 0) {
-    throw new Error(`${USAGE}\nupdate needs one of --state --add-label --remove-label --description-file --assign`)
+    throw new Error(`${USAGE}\nupdate needs one of --state --add-label --remove-label --description-file --assign --due --project --milestone`)
   }
   return patch
 }
@@ -301,15 +342,36 @@ async function main(): Promise<void> {
       return
     }
     case "create": {
+      const due = str(flags, "due")
       const issue = await tracker.createIssue(
         guardedCreate({
           title: sent("title"),
           description: textFlag(flags, "description"),
           labels: list(flags, "label"),
           state: str(flags, "state"),
+          parent: str(flags, "parent"),
+          projectId: str(flags, "project"),
+          milestoneId: str(flags, "milestone"),
+          dueDate: due === undefined ? undefined : dateFlag(due, "due"),
+          clientId: clientIdFor(flags),
         }),
       )
       process.stdout.write(JSON.stringify(issue) + "\n")
+      return
+    }
+    case "project": {
+      if (positional[0] !== "create") throw new Error(`${USAGE}\nproject takes one subcommand: create`)
+      const key = requireArg(str(flags, "key"), "key")
+      const target = str(flags, "target")
+      const input: ProjectInput = {
+        name: sent("name"),
+        summary: textFlag(flags, "summary"),
+        content: textFlag(flags, "content"),
+        targetDate: target === undefined ? undefined : dateFlag(target, "target"),
+        milestones: (list(flags, "milestone") ?? []).map(milestoneFlag),
+        clientId: clientIdFor({ key }),
+      }
+      process.stdout.write(JSON.stringify(await tracker.createProject(input)) + "\n")
       return
     }
     case "comment": {
