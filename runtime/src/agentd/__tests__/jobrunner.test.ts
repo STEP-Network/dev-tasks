@@ -78,6 +78,37 @@ describe("superviseJobs", () => {
     expect(asked).toEqual([[4242, job.id]])
   })
 
+  it("gives a job's browser test its own minutes: the preview wait, the session, then the time to finish (WS5)", () => {
+    const { paths, deps, kills } = setup()
+    // The session began 120 minutes ago, past its 90 and 15 to finish, but the browser test began 10 minutes ago.
+    running(paths, "STEP-1", { startedAt: "2026-09-24T09:55:00.000Z", sessionStartedAt: "2026-09-24T10:00:00.000Z", userTestStartedAt: "2026-09-24T11:50:00.000Z" })
+    superviseJobs(deps)
+    expect(kills).toEqual([])
+    // 20 minutes of preview wait, 25 of session and 15 to finish have passed, and a minute more.
+    superviseJobs({ ...deps, now: () => new Date("2026-09-24T12:51:00.000Z") })
+    expect(kills).toEqual([[-4242, "SIGTERM"]])
+    // Stopped, it is said to be the browser test that ran out of time, not the job's own work.
+    superviseJobs({ ...deps, now: () => new Date("2026-09-24T12:52:00.000Z"), liveness: () => "gone" })
+    expect(listJobs(paths, "done")[0].result).toMatchObject({ status: "blocked", reason: "the browser test ran past its 45 minutes and was stopped" })
+  })
+
+  it("gives a usertest job the browser test's minutes, not a worktree's 45, and says so when it stops one", () => {
+    const { paths, deps, kills } = setup()
+    running(paths, "STEP-1", { kind: "usertest", usertest: { target: "staging", pr: 12 }, startedAt: "2026-09-24T11:00:00.000Z", userTestStartedAt: "2026-09-24T11:01:00.000Z" })
+    // 59 minutes in: past a worktree's 45, inside the test's 20 + 25 + 15.
+    superviseJobs({ ...deps, now: () => new Date("2026-09-24T11:59:00.000Z") })
+    expect(kills).toEqual([])
+    superviseJobs({ ...deps, now: () => new Date("2026-09-24T12:02:00.000Z") })
+    expect(kills).toEqual([[-4242, "SIGTERM"]])
+  })
+
+  it("never counts a browser test job that died early toward pausing the mini", () => {
+    const { paths, deps } = setup({ liveness: () => "gone" })
+    running(paths, "STEP-1", { kind: "usertest", usertest: { target: "staging", pr: 12 }, startedAt: "2026-09-24T11:58:00.000Z" })
+    superviseJobs(deps)
+    expect(listJobs(paths, "done")[0].lostEarly).not.toBe(true)
+  })
+
   it("says a browser test job that died changed nothing, not that it left commits (WS5)", () => {
     const { paths, deps } = setup({ liveness: () => "gone" })
     running(paths, "STEP-1", { kind: "usertest", usertest: { target: "staging", pr: 12 } })

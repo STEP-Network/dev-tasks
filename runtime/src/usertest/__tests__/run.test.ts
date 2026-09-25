@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs"
 import { PNG } from "pngjs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -49,10 +49,14 @@ function deps(over: Partial<UserTestDeps> = {}, usertest: Record<string, unknown
     secrets: { testLoginSecret: "s", bypassSecret: null },
     launch: vi.fn().mockResolvedValue({ port: 9333, close: async () => {} }),
     setCookies: vi.fn().mockResolvedValue(undefined),
-    browse: vi.fn().mockResolvedValue({
-      result: { status: "findings", summary: "It broke.", journeys: [], findings: [{ severity: "major", title: "Save does nothing", where: "/en/account", steps: "s", expected: "e", actual: "a" }], screenshots: [{ file: "main-01.png", caption: "The page" }], notWalked: [] },
-      costUsd: 0.5,
-      problem: null,
+    // The session saves the screenshot it lists: a verdict needs one really saved.
+    browse: vi.fn().mockImplementation(async (_port: number, s: { shotsDir: string }) => {
+      writeFileSync(join(s.shotsDir, "main-01.png"), readFileSync(PNG_FILE))
+      return {
+        result: { status: "findings", summary: "It broke.", journeys: [], findings: [{ severity: "major", title: "Save does nothing", where: "/en/account", steps: "s", expected: "e", actual: "a" }], screenshots: [{ file: "main-01.png", caption: "The page" }], notWalked: [] },
+        costUsd: 0.5,
+        problem: null,
+      }
     }),
     publishImages: vi.fn().mockResolvedValue(new Map()),
     uploadImage: vi.fn().mockResolvedValue(null),
@@ -117,7 +121,7 @@ describe("runUserTest", () => {
 
   const browseWithShot = () =>
     vi.fn().mockImplementation(async (_port: number, s: { shotsDir: string }) => {
-      writeFileSync(join(s.shotsDir, "main-01.png"), "png")
+      writeFileSync(join(s.shotsDir, "main-01.png"), readFileSync(PNG_FILE))
       return { result: { status: "pass", summary: "Fine.", journeys: [], findings: [], screenshots: [{ file: "main-01.png", caption: "The page" }], notWalked: [] }, costUsd: 0.1, problem: null }
     })
   const admin = { personas: [{ id: "admin", email: "admin@example.test", admin: true, publishScreenshots: false, paths: ["components/account/**"] }] }
@@ -163,7 +167,8 @@ describe("runUserTest", () => {
     expect(await runUserTest(d, input())).toMatchObject({ verdict: "findings", reported: true })
     expect(comment).toHaveBeenCalledTimes(1)
     const files = (d.publishImages as ReturnType<typeof vi.fn>).mock.calls[0][0].files.map((f: string) => f.split("/").pop())
-    expect(files).toEqual(["main-01.png", "main-02.png"])
+    // main-02.png is text the browser tool saved under a screenshot's name: it is never published.
+    expect(files).toEqual(["main-01.png"])
   })
 
   it("posts the report on the PR without images when they cannot be published", async () => {
@@ -206,6 +211,21 @@ describe("runUserTest", () => {
     await runUserTest(p, input())
     expect((p.publishImages as ReturnType<typeof vi.fn>).mock.calls[0][0].suffix).toBeUndefined()
     expect(readUserTestState(p.paths, PR)).toMatchObject({ verdict: "pass" })
+  })
+
+  it("trusts no screenshot the session listed but did not save", async () => {
+    const listedOnly = deps({ browse: vi.fn().mockResolvedValue({ result: { status: "pass", summary: "Fine.", journeys: [], findings: [], screenshots: [{ file: "main-01.png", caption: "x" }], notWalked: [] }, costUsd: 0.1, problem: null }) })
+    expect((await runUserTest(listedOnly, input())).verdict).toBe("error")
+  })
+
+  it("removes the browser profiles earlier runs left behind, with a persona's session in them", async () => {
+    const d = deps()
+    const old = join(d.paths.usertest, "STEP-1-20260901000000", "profile")
+    mkdirSync(join(old, "Default"), { recursive: true })
+    writeFileSync(join(old, "Default", "Cookies"), "session")
+    await runUserTest(d, input())
+    expect(existsSync(old)).toBe(false)
+    expect(existsSync(join(d.paths.usertest, "STEP-1-20260901000000"))).toBe(true)
   })
 
   it("says whether the report reached the issue", async () => {

@@ -9,7 +9,7 @@
  * reviewed yet, which could keep the test-login secret (login.ts). The
  * persona's journeys are walked on staging after the merge.
  */
-import { existsSync, mkdirSync, readdirSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import type { AgentConfig, AgentPaths } from "../config.ts"
 import { writeJsonAtomic } from "../fsq.ts"
@@ -21,7 +21,7 @@ import type { Exec } from "../worker/git.ts"
 import type { QueryFn } from "../worker/session.ts"
 import { buildUserTestBrief, readProjectRules } from "./brief.ts"
 import { launchChrome, setBrowserCookies, type ChromeHandle } from "./chrome.ts"
-import { gifFromPngs } from "./gif.ts"
+import { gifFromPngs, readablePng } from "./gif.ts"
 import { bypassCookies, personaCookies, signInOrigins, type BrowserCookie } from "./login.ts"
 import { chromeDevtoolsMcp } from "./mcp.ts"
 import { waitForPreview } from "./preview.ts"
@@ -112,6 +112,10 @@ export async function runUserTest(deps: UserTestDeps, input: UserTestInput): Pro
       if (!u.rcOrigin) return done("skipped", "no release candidate is set up on this mini")
       site = u.rcOrigin
     }
+    // A run a kill cut short leaves its browser profile, with the persona's session cookies in it.
+    if (existsSync(deps.paths.usertest)) {
+      for (const run of readdirSync(deps.paths.usertest)) rmSync(join(deps.paths.usertest, run, "profile"), { recursive: true, force: true })
+    }
     const stamp = deps.now().toISOString().replace(/[-:TZ.]/g, "").slice(0, 14)
     const dir = join(deps.paths.usertest, `${input.issue.id}-${stamp}`)
     const shotsDir = join(dir, "shots")
@@ -165,7 +169,14 @@ export async function runUserTest(deps: UserTestDeps, input: UserTestInput): Pro
     } finally {
       await chrome?.close().catch(() => {})
     }
-    const verdict: UserTestVerdict = session.result ? verdictOf(session.result) : "error"
+    // Only whole PNGs by the brief's names: the browser tool can save a page snapshot or a response body under a screenshot's name.
+    const shots = existsSync(shotsDir)
+      ? readdirSync(shotsDir)
+          .filter((f) => SHOT_RE.test(f) && readablePng(join(shotsDir, f)))
+          .sort((a, b) => shotRank(a) - shotRank(b) || a.localeCompare(b))
+          .map((f) => join(shotsDir, f))
+      : []
+    const verdict: UserTestVerdict = session.result ? verdictOf(session.result, shots.map((f) => f.split("/").pop()!)) : "error"
     const findings = findingLines(session.result)
     const reason =
       session.problem ??
@@ -176,12 +187,6 @@ export async function runUserTest(deps: UserTestDeps, input: UserTestInput): Pro
           : session.result?.status === "blocked"
             ? "the browser test could not test the change"
             : "the browser test saved no screenshot, so its report is no evidence")
-    const shots = existsSync(shotsDir)
-      ? readdirSync(shotsDir)
-          .filter((f) => SHOT_RE.test(f))
-          .sort((a, b) => shotRank(a) - shotRank(b) || a.localeCompare(b))
-          .map((f) => join(shotsDir, f))
-      : []
     const main = shots.filter((f) => /\/main-\d+\.png$/.test(f))
     const gifWanted = input.approvalClass !== "auto"
     const gif = gifWanted ? gifFromPngs(main, join(dir, "main.gif")) : null
