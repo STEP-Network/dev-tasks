@@ -6,10 +6,20 @@
 export { createLinearTracker } from "../../plugin/src/tracker/linear.ts"
 /** The adapter's own transport (its key file, rate limit and retries), for the Monday bridge's reads the Tracker has no fields for (monday/people.ts). */
 export { linearRequest } from "../../plugin/src/tracker/linear-client.ts"
+import { linearRequest as request } from "../../plugin/src/tracker/linear-client.ts"
+
+/** An issue's open sub-issues (not canceled or duplicate), by identifier: an issue with any is a request, worked on through its tasks (Wave 2). */
+export async function openSubIssues(issue: string): Promise<string[]> {
+  const data = await request<{ issue: { children: { nodes: Array<{ identifier: string }> } } | null }>(
+    `query($id: String!) { issue(id: $id) { children(first: 50, filter: { state: { type: { nin: ["canceled", "duplicate"] } } }) { nodes { identifier } } } }`,
+    { id: issue },
+  )
+  return data.issue?.children.nodes.map((n) => n.identifier) ?? []
+}
 export { branchNameFor, byPriorityThenAge, extractAcceptanceCriteria, LINEAR_TEAM_KEY } from "../../plugin/src/tracker/types.ts"
 export { assertNoSecretText, readTextFile } from "../../plugin/src/tracker/secrets-guard.ts"
 /** Approval classes (the human-agent flow spec, section 3), as trackerctl applies them. */
-export { approvalLabel, approvalPatch, classOfLabels, classRank, type ApprovalClass } from "../../plugin/src/tracker/approval.ts"
+export { APPROVAL_CLASSES, approvalLabel, approvalPatch, classOfLabels, classRank, type ApprovalClass } from "../../plugin/src/tracker/approval.ts"
 /** The answer recorder's marks on an issue (Wave 2): written by answer.ts alone, kept by trackerctl. */
 export { answerEntries, insertUnder, keepAnswers, PLAN_RECOMMENDATION, RECORDER_LABELS, type AnswerEntry } from "../../plugin/src/tracker/answers.ts"
 export type {

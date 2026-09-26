@@ -9,10 +9,11 @@
  */
 
 import { stableUuid } from "../../../plugin/src/tracker/ids.ts"
+import { CLASS_TITLE } from "../lower.ts"
 import { redact } from "../log.ts"
 import { NOTHING_NEEDED } from "../plain.ts"
 import { truncateChars } from "../slack/text.ts"
-import type { CreateIssueInput } from "../tracker.ts"
+import type { ApprovalClass, CreateIssueInput } from "../tracker.ts"
 import type { VerdictOutcome } from "../verdict.ts"
 import type { Stage } from "./stage.ts"
 
@@ -227,6 +228,17 @@ export const say = {
         : `${name} answered ${door}. ${NOTHING_NEEDED}`,
   /** A tried change settled in the other door. */
   settled: (id: string, what: string) => `Done: ${id} was ${what}. ${NOTHING_NEEDED}`,
+  /** A person's class change (D1), said where they asked. */
+  classChanged: (id: string, to: ApprovalClass, who: string) => `Done: ${id} is now ${CLASS_TITLE[to]}, as ${who} asked. ${NOTHING_NEEDED}`,
+  classSame: (id: string, to: ApprovalClass) => `${id} is ${CLASS_TITLE[to]} already, so nothing changed. ${NOTHING_NEEDED}`,
+  classNeedsLinear: (id: string, to: ApprovalClass) =>
+    `Only a person can lower the approval level, and I cannot do it for you here yet. You can do it in Linear: open ${id} and set the label approval/${to}.`,
+  /** A Slack thread that holds more than one request (agentctl request): a class verb there could mean any of them. */
+  classShared: (ids: string[]) =>
+    `This thread holds more than one request (${ids.slice(0, -1).join(", ")} and ${ids.at(-1)}), so I changed ${ids.length === 2 ? "neither" : "none of them"}. Change the class on the Monday Requests board, on the one you mean.`,
+  /** Every lowering, in #polads-agents, with who and where (D1): a forged one shows. */
+  lowered: (id: string, from: ApprovalClass | null, to: ApprovalClass, who: string, via: Door, where: string) =>
+    `${id} was lowered from ${from ? CLASS_TITLE[from] : "no class"} to ${CLASS_TITLE[to]} by ${who} ${via} (${where}). If ${who} did not do this, raise it back in Linear.`,
 }
 
 type Door = "in Slack" | "on Monday"

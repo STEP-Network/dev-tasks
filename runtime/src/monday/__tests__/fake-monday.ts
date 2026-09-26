@@ -18,7 +18,7 @@ import type { TrackerIssue } from "../../tracker.ts"
 import { fakeTracker } from "../../__tests__/fakes.ts"
 import { createMondayBridge } from "../bridge.ts"
 import { MondayRefused, type ColumnChange, type MondayApi, type MondayColumn, type MondayItem } from "../client.ts"
-import type { PeopleIssue, PeopleView } from "../people.ts"
+import type { LinearRequest, PeopleIssue, PeopleView } from "../people.ts"
 
 export const BOARD = "5104953028"
 export const AGENT = "900"
@@ -273,6 +273,8 @@ export function doorsSetup(
     digest?: boolean
     /** Wave 3's test-day line for the digest. */
     testDayLine?: () => string | null
+    /** The answer recorder's Linear transport (Task 12), or null for none. */
+    recorder?: LinearRequest | null
   } = {},
 ) {
   const newLayout = opts.newLayout ?? true
@@ -303,7 +305,11 @@ export function doorsSetup(
   const log: Logger = { info: () => {}, warn: (m) => warned.push(m), error: (m) => warned.push(m) }
   let now = opts.start ?? T0
   monday.at(now)
-  const bridge = createMondayBridge({ paths, config, log, now: () => now, api: monday.api, tracker: fake.tracker, people, ...(opts.testDayLine ? { testDayLine: opts.testDayLine } : {}) })
+  const bridge = createMondayBridge({
+    paths, config, log, now: () => now, api: monday.api, tracker: fake.tracker, people,
+    ...(opts.testDayLine ? { testDayLine: opts.testDayLine } : {}),
+    ...(opts.recorder !== undefined ? { recorder: () => opts.recorder ?? null } : {}),
+  })
   const later = (minutes: number) => {
     now = new Date(now.getTime() + minutes * 60_000)
     monday.at(now)

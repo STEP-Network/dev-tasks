@@ -11,7 +11,9 @@ import type { Logger } from "../../log.ts"
 import { mondayOutbox } from "../../monday/store.ts"
 import { parseInstruction, type InstructionEntry, type MondayInstructionEntry } from "../../slack/instruction.ts"
 import type { ExecResult } from "../../worker/git.ts"
-import { fakeExec } from "../../__tests__/fakes.ts"
+import { fakeExec, fakeTracker, issue } from "../../__tests__/fakes.ts"
+import { fakePeople } from "../../monday/__tests__/fake-monday.ts"
+import { saveThread } from "../../threads.ts"
 import { askDecision, openDecisions } from "../decisions.ts"
 import { actOnInstructions } from "../instructions.ts"
 
@@ -282,5 +284,95 @@ describe("actOnInstructions (STEP-3285)", () => {
     expect(replies()[1]).toMatchObject({ itemId: "555", threadId: null, like: null, text: expect.stringMatching(/^Paused, as you asked\. I start nothing new/) })
     expect(JSON.parse(readFileSync(paths.pauseFile, "utf8")).reason).toBe("asked by Nate on the Monday board")
     expect(outbox()).toEqual([])
+  })
+})
+
+describe("a person's \"make it look\" (Wave 2, D1)", () => {
+  const LINK = "https://acme.slack.com/archives/CQ/p1700000500"
+  const LABELS = { issueLabels: { nodes: ["auto", "look", "try"].map((c) => ({ id: `l-${c}`, name: `approval/${c}`, team: { key: "STEP" } })) } }
+
+  function classSetup(labels = ["approval/try"], withKey = true) {
+    const s = setup()
+    const fake = fakeTracker([issue({ id: "STEP-7", uuid: "u7", state: "In Progress", labels })])
+    const { people } = fakePeople(fake.issues)
+    const sent: Array<{ query: string; vars: Record<string, any> }> = []
+    const recorder = async <T,>(query: string, vars: Record<string, unknown> = {}): Promise<T> => {
+      sent.push({ query, vars: vars as Record<string, any> })
+      return (query.includes("issueLabels") ? LABELS : { issueUpdate: { success: true }, commentCreate: { success: true } }) as T
+    }
+    const deps = { ...s.deps, lower: { tracker: fake.tracker, people, recorder: () => (withKey ? recorder : null) } }
+    const ask = (text: string, over: Partial<InstructionEntry> = {}) => s.say(text, { user: "UADA", userName: "Ada", permalink: LINK, ...over })
+    const posts = () => s.outbox().filter((m) => m.kind === "post")
+    const threadReplies = () => s.outbox().filter((m) => m.kind === "reply").map((m) => m.text)
+    return { ...s, deps, fake, sent, ask, posts, threadReplies }
+  }
+
+  it("lowers the thread's issue through the recorder, says so in the thread, and announces it in #polads-agents", async () => {
+    const { deps, sent, ask, posts, threadReplies, outbox } = classSetup()
+    ask("<@UEVE> make it look")
+    await actOnInstructions(deps)
+    expect(sent.filter((s) => s.query.includes("issueUpdate")).map((s) => s.vars.id)).toEqual(["u7"])
+    expect(sent.find((s) => s.query.includes("commentCreate"))?.vars.input.body).toBe(`Class lowered from Try to Look by Ada in Slack, as they asked (${LINK}).`)
+    expect(threadReplies()).toEqual(["Done: STEP-7 is now Look, as Ada asked. Nothing needed from you."])
+    expect(outbox().filter((m) => m.kind === "react")).toHaveLength(1)
+    expect(posts()).toEqual([
+      expect.objectContaining({ channel: "agents", text: `STEP-7 was lowered from Try to Look by Ada in Slack (${LINK}). If Ada did not do this, raise it back in Linear.` }),
+    ])
+  })
+
+  it("acts on neither request in a thread that holds two, and says where to change it", async () => {
+    const { deps, paths, fake, sent, ask, posts, threadReplies } = classSetup()
+    saveThread(paths, { issue: "STEP-7", channelId: "CQ", ts: "1700.1", permalink: null, createdAt: NOW.toISOString(), lastQuestionAt: null, alsoFor: ["STEP-20"] })
+    ask("make it look")
+    await actOnInstructions(deps)
+    expect(sent).toEqual([])
+    expect(fake.calls.filter((c) => c.method === "updateIssue")).toEqual([])
+    expect(posts()).toEqual([])
+    expect(threadReplies()).toEqual([
+      "This thread holds more than one request (STEP-7 and STEP-20), so I changed neither. Change the class on the Monday Requests board, on the one you mean.",
+    ])
+  })
+
+  it("without the recorder's key, tells them to lower it in Linear, and changes nothing", async () => {
+    const { deps, fake, ask, posts, threadReplies } = classSetup(["approval/try"], false)
+    ask("make it auto")
+    await actOnInstructions(deps)
+    expect(fake.calls.filter((c) => c.method === "updateIssue")).toEqual([])
+    expect(posts()).toEqual([])
+    expect(threadReplies()).toEqual([
+      "Only a person can lower the approval level, and I cannot do it for you here yet. You can do it in Linear: open STEP-7 and set the label approval/auto.",
+    ])
+  })
+
+  it("raises through the agent's own tracker, and announces nothing", async () => {
+    const { deps, fake, sent, ask, posts, threadReplies } = classSetup(["approval/auto"])
+    ask("make it look")
+    await actOnInstructions(deps)
+    expect(sent).toEqual([])
+    expect(fake.issues.get("STEP-7")!.labels).toEqual(["approval/look"])
+    expect(posts()).toEqual([])
+    expect(threadReplies()).toEqual(["Done: STEP-7 is now Look, as Ada asked. Nothing needed from you."])
+  })
+
+  it("says so when the class is that already", async () => {
+    const { deps, sent, ask, threadReplies } = classSetup(["approval/look"])
+    ask("make it look")
+    await actOnInstructions(deps)
+    expect(sent).toEqual([])
+    expect(threadReplies()).toEqual(["STEP-7 is Look already, so nothing changed. Nothing needed from you."])
+  })
+
+  it("answers words from a Monday item there, and names Monday in the announcement", async () => {
+    const { deps, paths, posts, outbox } = classSetup()
+    const key = "instr_monday_9101"
+    putOnce(paths.inbox, key, {
+      type: "instruction", key, issue: "STEP-7", user: "111", userName: "Ada", text: "make it look", ...parseInstruction("make it look"),
+      receivedAt: NOW.toISOString(), permalink: "https://step.monday.com/boards/777/pulses/5/posts/9101", monday: { itemId: "5", updateId: "9101", threadId: "9101" },
+    } satisfies MondayInstructionEntry)
+    await actOnInstructions(deps)
+    const replies = listNew<{ itemId: string; text: string; like: string | null }>(mondayOutbox(paths)).map((e) => e.payload)
+    expect(replies).toEqual([expect.objectContaining({ itemId: "5", like: "9101", text: "Done: STEP-7 is now Look, as Ada asked. Nothing needed from you." })])
+    expect(posts()).toEqual([expect.objectContaining({ text: expect.stringContaining("by Ada on Monday (https://step.monday.com/boards/777/pulses/5/posts/9101)") })])
+    expect(outbox().filter((m) => m.kind === "reply")).toEqual([])
   })
 })

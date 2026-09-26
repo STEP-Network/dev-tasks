@@ -145,6 +145,10 @@ An intake event also has `issue`, the Triage issue the bridge already filed.
     moves the issue on, and thanks them in the thread. Never record a bare
     "yes": agentctl refuses it, and a bare "yes" with no recommendation to
     agree to decides nothing, so ask them what they decided.
+  - **A reply to a Try plan:** a yes, in any words, is `agentctl decide
+    --agree`, which the recorder turns into `plan-approved`. A change to its
+    shape, tasks or week is recorded as it is (`agentctl decide --text-file`),
+    and the next /refine plans again.
   - **On an issue waiting on a person's hands** (`human-todo`): a "yes"
     means they will do it, so ack it. Once they say it is done, record that
     with `decide --text-file`.
@@ -221,8 +225,17 @@ on. Nothing to do unless a result looks wrong, and then say so in
 
 ## 4. The next develop job
 
+Whenever you touch an open issue in Ready or In Progress that has no `approval/` label (to revise its PR, to answer about it), give it
+one first, by /refine Phase 4's rules, with
+`~/.agentd/bin/trackerctl update <id> --add-label approval/<class>`. When in
+doubt, the higher. The CI floor may raise it later. Only a person lowers it.
+The issue you are about to launch is the exception: the steps below class it,
+and send Try work back for a person's OK on the plan before anything runs.
+
 If `develop` is set, read the issue once (`~/.agentd/bin/trackerctl read <develop.id>`).
-It carries `agent-ready`, so /refine judged it agent work.
+It carries `agent-ready`, so /refine judged it agent work. An issue with
+sub-issues is a request, and its tasks are the work: it never carries
+`agent-ready`, so it is never offered here.
 
 If the issue has no `approval/` label yet, give it one first, by the rules
 in /refine Phase 4. Try work needs a person's OK on the plan first, so if it

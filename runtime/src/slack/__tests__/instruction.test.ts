@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { instructionFor, parseInstruction } from "../instruction.ts"
+import { classVerb, instructionFor, parseInstruction } from "../instruction.ts"
 
 const actions = (text: string) => parseInstruction(text).actions
 
@@ -61,5 +61,34 @@ describe("instructionFor (STEP-3285, shared with the Monday bridge in STEP-3289)
 
   it("is an answer, whatever its words, when the issue waits on a question or a person's to-do", () => {
     for (const label of ["awaiting-answer", "human-todo"]) expect(instructionFor("merge it", { labels: ["polads", label] })).toBeNull()
+  })
+})
+
+describe("classVerb (Wave 2, D1): the whole message, and nothing else", () => {
+  it.each<[string, "look" | "auto" | null]>([
+    ["make it look", "look"],
+    ["Make it Look.", "look"],
+    ["please make it look", "look"],
+    ["Please, make it look!", "look"],
+    ["lower it to look", "look"],
+    ["make it auto", "auto"],
+    ["<@UEVE> make it auto", "auto"],
+    ["<@UEVE|eve> lower it to auto", "auto"],
+    ["should we make it look nicer?", null],
+    ["make it look nicer", null],
+    ["make it look like the old one", null],
+    ["make it auto-renew", null],
+    ["I'd make it look", null],
+    ["don't make it look", null],
+    ["make it try", null],
+    ["make it look and merge", null],
+  ])("%s", (text, expected) => {
+    expect(classVerb(text)).toBe(expected)
+  })
+
+  it("is the one action a class verb names: it never runs with another", () => {
+    expect(parseInstruction("make it look").actions).toEqual(["class-look"])
+    expect(parseInstruction("<@UEVE> make it auto.").actions).toEqual(["class-auto"])
+    expect(parseInstruction("make it look and merge").actions).toEqual(["merge"])
   })
 })
