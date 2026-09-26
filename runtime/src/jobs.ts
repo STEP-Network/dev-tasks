@@ -184,7 +184,8 @@ export interface WatchedPr {
   /** Review feedback acted on (review:<id>, comment:<id>, check:<head>:<name>, conflict:<head>), and the revise rounds so far. */
   /** askedHead: the head the round cap's question was asked at. A new head's feedback asks again (WS5). */
   /** conflictRounds: the rounds that only merged the base in, under their own cap (STEP-3340). */
-  revise?: { rounds: number; handled: string[]; lastRoundAt?: string; asked?: boolean; askedHead?: string; conflictRounds?: number }
+  /** blockerHistory: what blocked the PR when each round went, oldest first (agentd/revise.ts, blockerFingerprint), to tell past the cap whether the rounds get anywhere. */
+  revise?: { rounds: number; handled: string[]; lastRoundAt?: string; asked?: boolean; askedHead?: string; conflictRounds?: number; blockerHistory?: string[][] }
   /** Runs re-run in full for an infra failure, as <head>:<runId>, and failing checks' verdicts at the head, as <head>:<name>. */
   reruns?: string[]
   infra?: Record<string, boolean>

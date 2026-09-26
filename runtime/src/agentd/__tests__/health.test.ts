@@ -343,6 +343,7 @@ describe("planRevision", () => {
       kind: "revise",
       handled: ["check:h2:Test"],
       reasons: ["Test failed"],
+      blockers: ["check:Test"],
     })
   })
 })

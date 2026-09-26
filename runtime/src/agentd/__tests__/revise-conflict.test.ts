@@ -58,7 +58,7 @@ describe("planRevision for a PR that clashes with its base (STEP-3340)", () => {
 
   it("lets the merge ride along with feedback at the same head, as one review round", () => {
     expect(planRevision({ ...clashing, statusCheckRollup: redTest }, pr, ctx)).toEqual({
-      kind: "revise", handled: ["check:h1:Test", "conflict:h1"], reasons: ["Test failed", CONFLICT],
+      kind: "revise", handled: ["check:h1:Test", "conflict:h1"], reasons: ["Test failed", CONFLICT], blockers: ["check:Test"],
     })
   })
 
@@ -79,8 +79,13 @@ describe("planRevision for a PR that clashes with its base (STEP-3340)", () => {
   })
 
   it("at the review cap, asks about the feedback first, then merges without waiting for the answer", () => {
-    const capped = { ...pr, revise: { rounds: MAX_REVISE_ROUNDS, handled: [] } }
-    expect(planRevision({ ...clashing, statusCheckRollup: redTest }, capped, ctx)).toEqual({ kind: "ask", handled: ["check:h1:Test"], reasons: ["Test failed"] })
+    // The last round was sent for the same failing Test: no progress, so it asks.
+    const capped = { ...pr, revise: { rounds: MAX_REVISE_ROUNDS, handled: [], blockerHistory: [["check:Test"]] } }
+    expect(planRevision({ ...clashing, statusCheckRollup: redTest }, capped, ctx)).toEqual({ kind: "ask", handled: ["check:h1:Test"], reasons: ["Test failed"], why: "no-progress" })
+    // Past the cap with blockers that changed (STEP-3366), the merge rides along as under it.
+    expect(planRevision({ ...clashing, statusCheckRollup: redTest }, { ...capped, revise: { ...capped.revise, blockerHistory: [["check:Lint"]] } }, ctx)).toEqual({
+      kind: "revise", handled: ["check:h1:Test", "conflict:h1"], reasons: ["Test failed", CONFLICT], blockers: ["check:Test"],
+    })
     const asked = { ...pr, revise: { rounds: MAX_REVISE_ROUNDS, handled: [], asked: true, askedHead: "h1" } }
     // New feedback at the head it asked at waits for the answer. The merge does not.
     expect(planRevision({ ...clashing, statusCheckRollup: redTest }, asked, ctx)).toEqual({ kind: "revise", handled: ["conflict:h1"], reasons: [CONFLICT] })
