@@ -33,6 +33,18 @@ describe("the in-memory Monday account", () => {
     expect((await monday.api.readBoard(BOARD, [], watch())).items).toEqual([])
   })
 
+  it("refuses a move whose mapping leaves out one of the board's columns, as Monday does, and moves nothing", async () => {
+    const monday = two()
+    monday.columnsOf(BOARD, [{ id: "name", title: "Name", type: "name" }, { id: NEEDS_COLUMNS.linear, title: "Linear", type: "link" }, { id: NEEDS_COLUMNS.agent, title: "Agent", type: "dropdown" }])
+    const id = monday.request("111", "Export notices")
+    await expect(monday.api.moveItemToBoard(REQUESTS, "g_active", id, [{ source: NEEDS_COLUMNS.linear, target: "col_req_linear" }])).rejects.toThrow(
+      new MondayRefused(`Monday: the column mapping leaves out ${NEEDS_COLUMNS.agent}`),
+    )
+    expect(monday.boardOf(id)).toBe(BOARD)
+    await monday.api.moveItemToBoard(REQUESTS, "g_active", id, [{ source: NEEDS_COLUMNS.linear, target: "col_req_linear" }, { source: NEEDS_COLUMNS.agent, target: null }])
+    expect(monday.boardOf(id)).toBe(REQUESTS)
+  })
+
   it("writes a text column from a plain string and a connected column from item ids, and links items", async () => {
     const monday = two()
     const id = await monday.api.createItem(BOARD, "g_needs", "A question", { text_rec: "Use the order date", col_request: { item_ids: [42] } })

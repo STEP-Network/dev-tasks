@@ -914,7 +914,8 @@ What it does:
 - **Requests.** A new item a person adds to Requests becomes a Linear Triage
   issue labelled `intake/monday`, with their words quoted as written and a
   link each way. The item moves to Agents working on (Blocked while the
-  issue is On hold), then to Done once the issue is released.
+  issue is On hold), then to Done once the issue is released. Once the
+  Requests board is configured (Wave 2, below), requests live there instead.
 - **Done** items are archived after 14 days. An item a person deletes is not
   put back. An item that asks again starts with an empty Answer column.
 
@@ -949,7 +950,114 @@ no more often than `apiShare` (20 percent) of it allows: every 2 minutes
 on Pro and Enterprise (720 calls a day of 10,000), every 8 minutes on
 Basic or Standard (180 of 1,000). When Monday does not say, it assumes the
 smallest plan (1,000, every 8 minutes), and `monday.log` says so once. While
-Monday is out of reach, replies wait, in order, and agentd goes on.
+Monday is out of reach, replies wait, in order, and agentd goes on. With the
+Requests board configured, each poll reads both boards, so the same share
+allows half as many polls.
+
+### Two boards and two doors (Wave 2)
+
+Each part below switches on with its own config (the last list here): until
+then the bridge runs on one board, as above.
+
+**The Needs-you board** (the board above, renamed "PolAds: Needs you") keeps
+what asks a person for something, in these groups:
+
+| Group | What is in it |
+|---|---|
+| Decide | a question or a decision (the old Needs you) |
+| Approve plan | a Try plan that waits for "Build it as planned" |
+| Looks good? | a Look change to see, answered "Looks good" or "Change:" and what should change |
+| Test day | a Try change to try, answered PASS or FAIL |
+| FYI | kept for notes that need no answer |
+| Done | answered, and archived after 14 days |
+
+Three columns join it: Recommendation (what a plain "yes" agrees to), Request
+(the request item it belongs to, linked both ways) and Slack thread.
+
+**The Requests board** holds one item per ask, in Active, Released, and
+Declined and on hold. A new item a person adds to Active becomes a Linear
+Triage issue labelled `intake/monday`, the request's anchor, linked both ways.
+Each poll brings every request up to date from its anchor and the anchor's
+tasks: Requester, Type, Class, Size (Task or Project), Stage, Progress ("3 of
+5 done"), Target week, Linear and Slack thread. A column is written again only
+when Linear changes it, so a person's own edit stands. The Class column is
+the one exception: a person's change there changes the class ("A person
+lowers a class", below). A released or declined request is archived 30 days
+later (`requests.releasedDays`).
+
+| Stage | When |
+|---|---|
+| New | the anchor is in Triage |
+| Clarifying | it is being refined, or waits on a person's answer |
+| Plan to approve | a Try plan waits for a person's OK |
+| Building | a task is being refined, built or reviewed |
+| Checking | the agents are testing it |
+| Ready to test | a Look or Try change waits for a person's test, or is approved and waits for the release |
+| Released | every task that is not canceled or a duplicate is released (a Question: answered) |
+| Declined | the anchor was canceled or is a duplicate |
+| On hold | every open task is On hold |
+
+Each change of Stage is said once, on the item and in the request's Slack
+thread. Once every task is released, canceled or a duplicate, and at least
+one is released, the anchor is marked Released too.
+
+**Two doors.** Every open Needs-you item outside Test day has one Slack
+thread: the issue's own on this mini, else the thread another mini opened
+(found by the link Linear keeps), else a new one in #polads-questions. The
+thread gets the item's link once ("This is also on the Monday board"), and
+the item gets the thread's. A person answers in either. The first answer
+after the question counts. A second person's different answer is kept on the
+issue, marked not applied, and they are asked what they meant. What is
+settled in one door is said in the other, and the item is Done in both.
+
+**Every ask is one request.**
+
+- A message to the agent in #polads-intake is filed as a Triage issue
+  labelled `intake/slack`. It gets its Requests item, with the asker as
+  Requester when their `slackId` is in the config, and its thread gets the
+  item's link.
+- The front door files a new top-level mention of the agent elsewhere that
+  asks for work with `agentctl request`.
+- A second ask in the same thread is its own request, and the thread stays
+  the first one's: a "make it look" there changes neither.
+
+**Verdicts in Slack.** The front door records a reply in an issue's thread
+that is PASS or FAIL (on a Look also "looks good" or "change:") with
+`agentctl verdict`, read from the person's own words, as on the board.
+
+**Pings and the morning digest.** These are the only times the runtime
+@-mentions a person:
+
+- **A ping:** a job that ended blocked, and a money or legal question due
+  today or tomorrow. Once per thing, in the item's thread, calling its
+  Person, or all the people.
+- **Working hours:** 08:00 to 18:00 in `queue.timeZone`, Monday to Friday.
+  Outside them a ping waits. A money or legal question due asks on any day,
+  in working hours.
+- **After a quiet night:** one held ping goes as it would have. Several go to
+  their threads without a mention, and one post in #polads-questions calls
+  the people to them all. A held blocked-job ping whose job has been retried,
+  or replaced, is dropped.
+- **The morning digest:** at 08:00 on working days, except `digest.skipDates`,
+  in #polads-questions. It lists the open Needs-you items by group, with
+  links, and the Requests board's counts. Off until go-live
+  (`digest.enabled`).
+
+**Turning it on (go-live).** The ids stay on the coordinator mini, in
+`~/.agentd/config.json`, never in this repository
+(`runtime/templates/config.example.json` has made-up ones). In
+`bridges.monday`:
+
+- `requests`: the Requests board's `boardId` and its nine `columns` (the
+  board runs as one until this is there).
+- `columns.recommendation`, `columns.request` and `columns.slackThread`. The
+  Slack thread column opens the two doors: without it, no item gets a thread.
+- `groups`: `needsYou` ("Decide"), `approvePlan`, `looks` and `fyi`, as the
+  groups are titled. A need goes to its own group only when this names it.
+- Each person's `slackId`, so their answers in Slack and on Monday count as
+  one person's.
+- `digest`: `{ "enabled": true, "skipDates": [...] }`, with the public
+  holidays that fall on working days.
 
 ### Turning it on (Nate)
 
@@ -1102,12 +1210,15 @@ it found it. Each item goes back to its group, then each column as it was, one a
 time. A connected item (the Request column) is written as item ids, and
 columns Monday computes (a formula, a mirror, a creation log) are left as
 they are. A run that stops half-way is finished by the next: it writes only
-what still differs. The labels come off, and the request items the bridge
+what still differs. The two columns the move carried (the Linear link, and
+the Person, which the Requests board calls Requester) go back to their
+snapshot values too: an edit made to either on the Requests board since the
+move is undone. The labels come off, and the request items the bridge
 made for them are archived. An item a person made that the bridge took over
 stays on the board. While a migration runs, `~/.agentd/state/monday/migrating`
 is there and the bridge does not poll or post. While the bridge polls or
 posts, `~/.agentd/state/monday/syncing` is there, with agentd's process id,
-and a migration does not start. If a migration stops half-way, check that
+and a migration waits up to two minutes for it to go, then refuses. If a migration stops half-way, check that
 none runs, remove `migrating`, and run it again. A `syncing` left by an
 agentd that has since stopped holds nothing up.
 

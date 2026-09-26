@@ -283,8 +283,16 @@ export function createRequests(deps: RequestsDeps) {
     const byItem = new Map<string, Array<Pick<ColumnChange, "id" | "userId" | "text" | "at">>>()
     const add = (itemId: string, change: Pick<ColumnChange, "id" | "userId" | "text" | "at">) => byItem.set(itemId, [...(byItem.get(itemId) ?? []), change])
     for (const rec of recs.values()) if (rec.classRetry) add(rec.itemId, rec.classRetry)
-    // The agent's own writes, and anyone not on the list: never a person's.
-    for (const change of pass.board.changes) if (change.columnId === c.class && person.has(change.userId) && recs.has(change.itemId)) add(change.itemId, change)
+    // The agent's own writes, and anyone not on the list: never a person's. A change whose time cannot be read cannot be
+    // put in order: as a string it would sort after every real one, be acted on, and hold every later change back.
+    for (const change of pass.board.changes) {
+      if (change.columnId !== c.class || !person.has(change.userId) || !recs.has(change.itemId)) continue
+      if (!Number.isFinite(Date.parse(change.at))) {
+        deps.once(`class-time:${change.id}`, () => log.warn("monday class change with a time that cannot be read, left alone", { item: change.itemId, at: change.at }))
+        continue
+      }
+      add(change.itemId, change)
+    }
     for (const [itemId, changes] of byItem) {
       const rec = recs.get(itemId)!
       const newest = changes.sort((a, b) => a.at.localeCompare(b.at)).at(-1)!

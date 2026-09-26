@@ -152,6 +152,20 @@ it("watches several columns and says which one changed", async () => {
     expect(board.changes.map((c) => c.text)).toEqual(["Look"])
   })
 
+  it("gives every change's time as ISO, whichever form Monday wrote it in, so times compare in order (review)", async () => {
+    const at = (id: string, created_at: string) => ({ id, event: "update_column_value", user_id: "111", created_at, data: JSON.stringify({ column_id: "col_class", pulse_id: 42, value: { label: { text: "Look" } } }) })
+    const logs = [at("1", "17592384000000000"), at("2", "2026-09-25T08:01:00Z"), at("3", "2026-09-25 08:02:00 UTC"), at("4", "not a time")]
+    const { f } = fakeFetch([{ json: { data: { boards: [{ groups: [], items_page: { cursor: null, items: [] }, activity_logs: logs }] } } }])
+    const board = await createMondayApi(TOKEN, { fetch: f, sleep: noSleep }).readBoard("5", [], { columnIds: ["col_class"], since: new Date("2026-09-25T08:00:00.000Z") })
+    // One it cannot read at all is kept as Monday wrote it: a person's change is never dropped.
+    expect(board.changes.map((c) => [c.id, c.at])).toEqual([
+      ["1", "2025-09-30T13:20:00.000Z"],
+      ["2", "2026-09-25T08:01:00.000Z"],
+      ["3", "2026-09-25T08:02:00.000Z"],
+      ["4", "not a time"],
+    ])
+  })
+
   it("reads no activity log when no column is watched", async () => {
     const { f, sent } = fakeFetch([{ json: { data: { boards: [{ groups: [], items_page: { cursor: null, items: [] } }] } } }])
     const board = await createMondayApi(TOKEN, { fetch: f, sleep: noSleep }).readBoard("5", ["col_stage"], { columnIds: [], since: new Date("2026-09-25T08:00:00.000Z") })
@@ -181,14 +195,24 @@ it("watches several columns and says which one changed", async () => {
   })
 
   it("moves an item to another board with every column mapped, and checks each id first", async () => {
-    const { f, sent } = fakeFetch([{ json: { data: { move_item_to_board: { id: "42" } } } }])
+    const { f, sent } = fakeFetch([{ json: { data: { items: [{ subitems: [] }] } } }, { json: { data: { move_item_to_board: { id: "42" } } } }])
     const api = createMondayApi(TOKEN, { fetch: f, sleep: noSleep })
     await api.moveItemToBoard("88", "g_active", "42", [{ source: "col_linear", target: "col_req_linear" }, { source: "col_agent", target: null }])
-    expect(sent[0].body.query).toContain("move_item_to_board(board_id: $board, group_id: $group, item_id: $item, columns_mapping: $mapping)")
-    expect(sent[0].body.variables).toEqual({ board: "88", group: "g_active", item: "42", mapping: [{ source: "col_linear", target: "col_req_linear" }, { source: "col_agent", target: null }] })
+    expect(sent[1].body.query).toContain("move_item_to_board(board_id: $board, group_id: $group, item_id: $item, columns_mapping: $mapping)")
+    expect(sent[1].body.variables).toEqual({ board: "88", group: "g_active", item: "42", mapping: [{ source: "col_linear", target: "col_req_linear" }, { source: "col_agent", target: null }] })
     await expect(api.moveItemToBoard("88", "g_active", "42", [{ source: "col linear", target: null }])).rejects.toThrow(/Monday column id/)
     await expect(api.moveItemToBoard("88", "g_active", "42", [{ source: "col_linear", target: "col-x" }])).rejects.toThrow(/Monday column id/)
     await expect(api.moveItemToBoard("88", "g_active", "4x", [])).rejects.toThrow(/Monday id/)
+    expect(sent).toHaveLength(2)
+  })
+
+  it("refuses to move an item that has subitems: the move sends no subitem mapping, so they would be lost (review)", async () => {
+    const { f, sent } = fakeFetch([{ json: { data: { items: [{ subitems: [{ id: "7" }, { id: "8" }] }] } } }])
+    const api = createMondayApi(TOKEN, { fetch: f, sleep: noSleep })
+    await expect(api.moveItemToBoard("88", "g_active", "42", [])).rejects.toThrow(
+      new MondayRefused("Monday: item 42 has 2 subitems, which a move to another board would lose: move them off it first"),
+    )
     expect(sent).toHaveLength(1)
+    expect(sent[0].body.variables).toEqual({ item: ["42"] })
   })
 })

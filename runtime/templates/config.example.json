@@ -4,7 +4,7 @@
   "pluginRoot": "/Users/eve/dev-tasks/plugin",
   "slack": {
     "channels": { "agents": "polads-agents", "questions": "polads-questions", "intake": "polads-intake", "releases": "polads-releases" },
-    "allowedUsers": ["U06LHEHFD3P"],
+    "allowedUsers": ["U0EXAMPLE1"],
     "otherAgentBots": []
   },
   "frontDoor": { "model": "sonnet", "tmuxSession": "frontdoor", "staleTickMinutes": 75 },
@@ -19,5 +19,26 @@
     "stagingOrigin": "https://test.polads.eu",
     "extraAllowedUrlPatterns": ["https://api.stack-auth.com/*"],
     "personas": []
+  },
+  "bridges": {
+    "monday": {
+      "enabled": false,
+      "people": [
+        { "id": "10000001", "name": "Ada", "linearEmail": "ada@example.com", "slackId": "U0EXAMPLE1" },
+        { "id": "10000002", "name": "Ben", "slackId": "U0EXAMPLE2" }
+      ],
+      "defaultPerson": "10000001",
+      "agentLabels": ["Eve", "Bob"],
+      "columns": { "recommendation": "text_example1", "request": "board_relation_example1", "slackThread": "link_example1" },
+      "groups": { "needsYou": "Decide", "approvePlan": "Approve plan", "looks": "Looks good?", "fyi": "FYI" },
+      "requests": {
+        "boardId": "20000001",
+        "columns": {
+          "requester": "person_example", "type": "status_example1", "class": "status_example2", "size": "status_example3", "stage": "status_example4",
+          "progress": "text_example2", "targetWeek": "week_example", "linear": "link_example2", "slackThread": "link_example3"
+        }
+      },
+      "digest": { "enabled": false, "skipDates": ["2026-12-24", "2026-12-25"] }
+    }
   }
 }
