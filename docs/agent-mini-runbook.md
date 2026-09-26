@@ -993,12 +993,13 @@ later (`requests.releasedDays`).
 | Building | a task is being refined, built or reviewed |
 | Checking | the agents are testing it |
 | Ready to test | a Look or Try change waits for a person's test, or is approved and waits for the release |
-| Released | every task is released (a Question: answered) |
+| Released | every task that is not canceled is released (a Question: answered) |
 | Declined | the anchor was canceled or is a duplicate |
 | On hold | every open task is On hold |
 
 Each change of Stage is said once, on the item and in the request's Slack
-thread. Once every task is released, the anchor is marked Released too.
+thread. Once every task is released, canceled or a duplicate, and at least
+one is released, the anchor is marked Released too.
 
 **Two doors.** Every open Needs-you item outside Test day has one Slack
 thread: the issue's own on this mini, else the thread another mini opened
