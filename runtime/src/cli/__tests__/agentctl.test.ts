@@ -366,7 +366,9 @@ describe("run", () => {
       const job = submitJob(paths, "STEP-4", null, new Date(NOW.getTime() - (10 - minute) * 60_000))
       moveJob(paths, job.id, "pending", "done", { lostEarly: true, endedAt: new Date(NOW.getTime() - (10 - minute) * 60_000 + 1).toISOString() })
     }
-    const fake = fakeTracker([issue({ id: "STEP-3" }), issue({ id: "STEP-4", state: "Released" })])
+    // STEP-3 ranks past the first 250 Ready issues, and is still shown (STEP-3368).
+    const queue = Array.from({ length: 260 }, (_, i) => issue({ id: `STEP-${1001 + i}` }))
+    const fake = fakeTracker([...queue, issue({ id: "STEP-3" }), issue({ id: "STEP-4", state: "Released" })])
     const tmux = fakeExec([[/has-session/, { code: 1 }]])
     await run(["status"], out, deps({ exec: tmux.exec, tracker: () => fake.tracker }))
     const lines = printed.at(-1)!.split("\n")

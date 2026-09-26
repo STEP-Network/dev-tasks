@@ -182,7 +182,8 @@ export function createMondayTracker(): Tracker {
       )
     },
 
-    async listReady(limit = 25) {
+    // `only` is kept to after the page: Monday has no id filter for this query, and Monday is read-only legacy.
+    async listReady(limit = 25, only) {
       const data = await executeMondayQuery<{
         boards: Array<{ items_page: { items: RawItem[] } }>
       }>(
@@ -200,7 +201,7 @@ export function createMondayTracker(): Tracker {
       )
       const items = data.boards?.[0]?.items_page?.items ?? []
       const issues = await Promise.all(items.map(toIssue))
-      return issues.sort(byPriorityThenAge)
+      return issues.filter((i) => !only || only.includes(i.id)).sort(byPriorityThenAge)
     },
 
     whoami: linearOnly("whoami"),

@@ -184,7 +184,10 @@ export async function buildDigest(deps: DigestDeps): Promise<Digest> {
   let linearError: string | null = null
   try {
     const me = await deps.tracker.whoami()
-    const listed = await deps.tracker.listReady(250)
+    // On the allowlist, the listed issues themselves, ranked among themselves: each state's top first and the
+    // allowlist after lost every listed issue past it (STEP-3368: 463 in Refining, 432 in Ready).
+    const only = policy.mode === "allowlist" ? policy.allow : undefined
+    const listed = await deps.tracker.listReady(250, only)
     // An issue whose last two workers were lost early would most likely lose a third.
     const held = heldBackIssues(paths)
     heldBack = listed.filter((i) => held.has(i.id)).map((i) => i.id)
@@ -197,8 +200,8 @@ export async function buildDigest(deps: DigestDeps): Promise<Digest> {
     if (firstPass.develop) develop = { id: firstPass.develop.id, title: firstPass.develop.title, url: firstPass.develop.url, mine: firstPass.develop.assigneeId === me.id }
     // Only ask Linear for Triage and Refining when refining is actually due.
     const wantRefine = !paused && firstPass.readyEligible < policy.refineWhenReadyBelow
-    const triage: TrackerIssue[] = wantRefine ? await deps.tracker.listByState("Triage", 20) : []
-    const refining: TrackerIssue[] = wantRefine ? await deps.tracker.listByState("Refining", 20) : []
+    const triage: TrackerIssue[] = wantRefine ? await deps.tracker.listByState("Triage", 20, only) : []
+    const refining: TrackerIssue[] = wantRefine ? await deps.tracker.listByState("Refining", 20, only) : []
     const s = selectNext({ ready, triage, refining, meId: me.id, policy, developBlockedBy, refineBlockedBy })
     if (s.refine) refine = { id: s.refine.id, title: s.refine.title, url: s.refine.url, state: s.refine.state }
   } catch (error) {

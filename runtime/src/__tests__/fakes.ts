@@ -85,9 +85,10 @@ export function fakeTracker(seed: TrackerIssue[] = [], me: TrackerUser = EVE, fa
     async attachLink(ref, url, title) {
       record("attachLink", [ref, url, title])
     },
-    async listReady(limit = 25) {
-      record("listReady", [limit])
-      return [...issues.values()].filter((i) => i.state === "Ready").slice(0, limit)
+    // As Linear does: `only` filters the state, and the cut to `limit` comes after (STEP-3368).
+    async listReady(limit = 25, only) {
+      record("listReady", only ? [limit, only] : [limit])
+      return [...issues.values()].filter((i) => i.state === "Ready" && (!only || only.includes(i.id))).slice(0, limit)
     },
     async whoami() {
       record("whoami", [])
@@ -109,9 +110,9 @@ export function fakeTracker(seed: TrackerIssue[] = [], me: TrackerUser = EVE, fa
       record("listClaims", [])
       return []
     },
-    async listByState(state, limit = 50) {
-      record("listByState", [state, limit])
-      return [...issues.values()].filter((i) => i.state === state).slice(0, limit)
+    async listByState(state, limit = 50, only) {
+      record("listByState", only ? [state, limit, only] : [state, limit])
+      return [...issues.values()].filter((i) => i.state === state && (!only || only.includes(i.id))).slice(0, limit)
     },
   }
   return { tracker, calls, issues, called: (method: string) => calls.filter((c) => c.method === method).map((c) => c.args) }

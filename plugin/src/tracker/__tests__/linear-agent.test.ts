@@ -372,6 +372,34 @@ describe("listByState", () => {
     expect(issues.map((i) => i.id)).toEqual(["STEP-2", "STEP-1"])
   })
 
+  it("lists only the given issues, ranked among themselves, so one far down the state still comes (STEP-3368)", async () => {
+    // Thirty in Triage: 1-10 Urgent, 11-20 High, 21-30 Medium. STEP-25 ranks
+    // past the top 20, so cutting the whole state first would lose it.
+    const triage = Array.from({ length: 30 }, (_, i) => ({ ...ISSUE, id: `uuid-${i + 1}`, identifier: `STEP-${i + 1}`, priority: 1 + Math.floor(i / 10) }))
+    const numberOf = (i: { identifier: string }) => Number(i.identifier.split("-")[1])
+    // Linear applies the number filter server-side, as it does the state.
+    route(/stateName/, (variables) => ({
+      issues: {
+        nodes: triage.filter((i) => (!variables.numbers || variables.numbers.includes(numberOf(i))) && (!variables.ids || variables.ids.includes(i.id))),
+        pageInfo: PAGE_END,
+      },
+    }))
+    const issues = await createLinearTracker().listByState("Triage", 20, ["STEP-25", "STEP-2", "OTHER-7", "not an id"])
+    expect(issues.map((i) => i.id)).toEqual(["STEP-2", "STEP-25"])
+    const [rankQuery, rankVariables] = sent(/stateName/)[0]
+    expect(String(rankQuery)).toMatch(/number: \{ in: \$numbers \}/)
+    // Another team's id, or no id at all, is not this team's issue.
+    expect(rankVariables).toMatchObject({ stateName: "Triage", numbers: [25, 2] })
+  })
+
+  it("asks Linear nothing for an empty list, or one with no issue of this team", async () => {
+    const tracker = createLinearTracker()
+    expect(await tracker.listByState("Triage", 20, [])).toEqual([])
+    expect(await tracker.listByState("Triage", 20, ["OTHER-7"])).toEqual([])
+    expect(await tracker.listReady(250, [])).toEqual([])
+    expect(sent(/stateName/)).toHaveLength(0)
+  })
+
   it("refuses a state the team does not have, rather than read it as an empty queue", async () => {
     // updateIssue refuses the same name. A typo or a wrong case here would
     // otherwise look like a quiet queue for as long as nobody noticed.

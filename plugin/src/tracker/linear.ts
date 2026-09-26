@@ -300,16 +300,26 @@ export function createLinearTracker(): Tracker {
    * pages in its own order, not by priority, so sorting one page misses an
    * Urgent issue on a later one. Ranking needs three fields, and paging full
    * issues instead cost ~5,900 points a page.
+   *
+   * `only` narrows the ranking to those identifiers in Linear's own filter,
+   * BEFORE the cut to `limit`: filtering the cut list instead lost every
+   * allow-listed issue outside a state's top 20 (STEP-3368). Another team's
+   * identifiers are not this team's issues, and none left asks nothing.
    */
-  async function listInState(stateName: string, limit: number): Promise<TrackerIssue[]> {
-    const where = { teamKey: LINEAR_TEAM_KEY, stateName }
+  async function listInState(stateName: string, limit: number, only?: readonly string[]): Promise<TrackerIssue[]> {
+    const numbers = only?.flatMap((id) => {
+      const m = /^([A-Za-z]+)-(\d+)$/.exec(id.trim())
+      return m && m[1].toUpperCase() === LINEAR_TEAM_KEY ? [Number(m[2])] : []
+    })
+    if (numbers && !numbers.length) return []
+    const where = { teamKey: LINEAR_TEAM_KEY, stateName, ...(numbers ? { numbers } : {}) }
     const page = async (after: string | null) => {
       const data = await linearRequest<{ issues: Connection<RankNode> }>(
-        `query($teamKey: String!, $stateName: String!, $first: Int!, $after: String) {
+        `query($teamKey: String!, $stateName: String!, $first: Int!, $after: String${numbers ? ", $numbers: [Float!]!" : ""}) {
            issues(
              first: $first,
              after: $after,
-             filter: { team: { key: { eq: $teamKey } }, state: { name: { eq: $stateName } } }
+             filter: { team: { key: { eq: $teamKey } }, state: { name: { eq: $stateName } }${numbers ? ", number: { in: $numbers }" : ""} }
            ) {
              nodes { id priority updatedAt }
              ${PAGE_INFO}
@@ -340,7 +350,8 @@ export function createLinearTracker(): Tracker {
              nodes { ${ISSUE_FIELDS} }
            }
          }`,
-        { ...where, ids, first: ids.length },
+        // The ids are the ranking's winners already: `numbers` is the ranking's filter, not this query's.
+        { teamKey: LINEAR_TEAM_KEY, stateName, ids, first: ids.length },
       )
       for (const raw of data.issues.nodes) full.set(raw.id, raw)
     }
@@ -507,15 +518,15 @@ export function createLinearTracker(): Tracker {
       )
     },
 
-    async listReady(limit = 25) {
-      return listInState("Ready", limit)
+    async listReady(limit = 25, only) {
+      return listInState("Ready", limit, only)
     },
 
-    async listByState(state, limit = 50) {
+    async listByState(state, limit = 50, only) {
       // An unknown or miscased name matches nothing and would read as an
       // empty queue. updateIssue refuses the same name, so this does too.
       if (!(await stateIdFor(state))) throw new Error(`Linear: no state named ${state} on team ${LINEAR_TEAM_KEY}`)
-      return listInState(state, limit)
+      return listInState(state, limit, only)
     },
 
     async whoami() {

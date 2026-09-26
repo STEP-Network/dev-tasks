@@ -80,6 +80,15 @@ describe("createMondayTracker", () => {
     expect(variables).toMatchObject({ board: String(BOARDS.TASKS), column: TASK_COLUMNS.status })
   })
 
+  it("listReady keeps to `only` when it is given (STEP-3368)", async () => {
+    executeMondayQuery.mockResolvedValue({ boards: [{ items_page: { items: [RAW_ITEM] } }] })
+    const tracker = createMondayTracker()
+    const all = await tracker.listReady()
+    expect(all).toHaveLength(1)
+    expect(await tracker.listReady(25, [all[0].id])).toHaveLength(1)
+    expect(await tracker.listReady(25, ["not-this-one"])).toEqual([])
+  })
+
   it("claimIssue writes the status column by INDEX and posts a claim comment", async () => {
     executeMondayQuery.mockImplementation(async (query: string) => {
       if (query.includes("items(ids:")) return { items: [RAW_ITEM] }
