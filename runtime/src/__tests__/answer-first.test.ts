@@ -191,6 +191,16 @@ describe("a Try plan is approved by the recorder alone (review, 2026-09-25)", ()
     expect(planTransition({ labels: ["plan-to-approve"] }, { words: "Build it as planned, but blue" })).toEqual({ removeLabels: ["plan-to-approve"] })
     expect(planTransition({ labels: ["approval/try"] }, { decided: { agreed: true, recommendation: "Build it as planned" } })).toEqual({})
   })
+
+  it("a plan asked about again: any other answer takes an earlier plan's OK off too, and a yes gives it again (review)", async () => {
+    expect(planTransition({ labels: ["plan-to-approve", "plan-approved"] }, { words: "make it two tasks" })).toEqual({ removeLabels: ["plan-to-approve", "plan-approved"] })
+    expect(planTransition({ labels: ["plan-to-approve", "plan-approved"] }, { words: "Build it as planned" })).toEqual({ removeLabels: ["plan-to-approve"], addLabels: ["plan-approved"] })
+    const { deps, fake } = plan()
+    fake.issues.set("STEP-9", { ...fake.issues.get("STEP-9")!, labels: ["awaiting-answer", "plan-to-approve", "plan-approved", "approval/try"] })
+    await recordAnswer(deps, { ...ada, issue: "STEP-9", words: "make it two tasks" }, { since: Q })
+    expect(fake.issues.get("STEP-9")!.labels).toEqual(["approval/try"])
+    expect(listNew(deps.paths.outbox)).toEqual([])
+  })
 })
 
 describe("an answer clears what asked for a person", () => {
