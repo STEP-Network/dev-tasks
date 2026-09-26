@@ -102,6 +102,28 @@ check 2 "protected branch 'main'" "on main: git push -o ci.skip origin" "$(paylo
 check 2 "protected branch 'main'" "on main: git push origin HEAD" "$(payload 'git push origin HEAD')"
 git checkout --quiet feat/x
 
+echo "--- a commit message is text, and what bash runs is read (#151 review) ---"
+check 0 "" "a heredoc commit whose message says push commits" "$(payload "git commit --allow-empty -F - <<'EOF'
+fix: don't push twice
+EOF")"
+check 0 "" "a -m \"\$(cat <<'EOF'…)\" message with an odd quote commits" "$(payload "git commit --allow-empty -m \"\$(cat <<'EOF'
+fix: a \" and git push origin main
+EOF
+)\"")"
+check 2 "protected branch 'main'" "a push in backticks" "$(payload 'echo `git push origin main`')"
+check 2 "protected branch 'main'" "a push in \$(...)" "$(payload 'echo "$(git push origin main)"')"
+check 2 "every branch" "git push origin : (matching branches)" "$(payload 'git push origin :')"
+check 2 "every branch" "a glob refspec" "$(payload "git push origin 'refs/heads/*:refs/heads/*'")"
+check 2 "every branch" "git -c push.default=matching push origin" "$(payload 'git -c push.default=matching push origin')"
+check 2 "every branch" "git -c remote.origin.push=refs/heads/main push origin" "$(payload 'git -c remote.origin.push=refs/heads/main push origin')"
+# A second checkout on main, while the session's own is on feat/x.
+MAIN_WT="$NOT_GIT/main-wt"
+git worktree add --quiet "$MAIN_WT" main
+check 2 "protected branch 'main'" "git -C <a checkout on main> push origin HEAD: its branch, not the session's" "$(payload "git -C $MAIN_WT push origin HEAD")"
+check 2 "protected branch 'main'" "cd <a checkout on main> && git push" "$(payload "cd $MAIN_WT && git push")"
+check 0 "" "git -C <this checkout> push origin HEAD still goes" "$(payload "git -C $TEST_DIR push origin HEAD")"
+check 2 "cannot tell which branch" "a push from --git-dir" "$(payload "git --git-dir=$MAIN_WT/.git push origin HEAD")"
+
 echo "--- gates (d) and (e): i18n, agent profile ---"
 printf '{ "profile": "agent" }' > "$TEST_HOME/.claude/dev-tasks-profile.json"
 config '{ "version": "1", "git": { "defaultBase": "main" }, "i18n": { "enabled": true, "defaultLocale": "en", "locales": ["en", "da"], "messagesGlob": "messages/*.json", "parityHookMode": "block" }, "hooks": { "enabled": [] } }'
@@ -114,6 +136,13 @@ mkdir -p messages/xx.json
 check 2 "locale parity check did not finish" "(d): a snippet that raises blocks" "$(payload 'git commit -m both')"
 command rm -r -f messages/xx.json
 check 2 "git could not list the staged files" "(d): a git error blocks" "$(payload 'git commit -m both' "$NOT_GIT")"
+# A commit behind -C is checked in its own checkout: a new key there, missing from da, blocks.
+printf '{\n  "hello": "Hello",\n  "only": "Only here"\n}\n' > "$MAIN_WT/messages/en.json"
+printf '{"hello":"Hej"}\n' > "$MAIN_WT/messages/da.json"
+git -C "$MAIN_WT" add messages
+check 2 "locale parity" "(d): git -C <dir> commit is checked in <dir>" "$(payload "git -C $MAIN_WT commit -m x")"
+check 2 "locale parity" "(d): cd <dir> && git commit is checked in <dir>" "$(payload "cd $MAIN_WT && git commit -m x")"
+git -C "$MAIN_WT" reset --quiet
 config '{ "version": "1", "git": { "defaultBase": "no-such-base" }, "i18n": { "enabled": true, "defaultLocale": "en", "locales": ["en", "da"], "messagesGlob": "messages/*.json", "parityHookMode": "block" }, "hooks": { "enabled": [] } }'
 check 2 "completeness check did not finish" "(e): a base it cannot find blocks" "$(payload 'git commit -m both')"
 config '{ "version": "1", "i18n": { "enabled": true, "locales": "en" }, "hooks": { "enabled": [] } }'

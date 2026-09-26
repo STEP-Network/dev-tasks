@@ -81,6 +81,20 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 AGENT_CWD=$(resolve_agent_cwd "$INPUT")
 PROJECT_ROOT="${AGENT_CWD:-${CLAUDE_PROJECT_DIR:-$PWD}}"
 
+# The git commits and pushes the command runs (lib/git_commands.py): each
+# command word, the bodies of $(...) and backticks included, and never what a
+# quote or a heredoc holds as text, so a commit message that says "push" is no
+# push. A command it cannot read blocks. COMMIT and PUSH lines, relative to
+# PROJECT_ROOT.
+GIT_COMMANDS="END"
+if printf '%s' "$ACTUAL_CMD" | grep -qw git; then
+  GIT_COMMANDS=$(printf '%s' "$ACTUAL_CMD" | python3 "$SCRIPT_DIR/lib/git_commands.py" 2>&1)
+  [ "$(printf '%s\n' "$GIT_COMMANDS" | tail -n 1)" = "END" ] \
+    || fail_closed "it cannot read the command's git commands: $(printf '%s\n' "$GIT_COMMANDS" | tail -n 1)"
+fi
+COMMIT_DIRS=$(printf '%s\n' "$GIT_COMMANDS" | sed -n 's/^COMMIT //p')
+PUSHES=$(printf '%s\n' "$GIT_COMMANDS" | sed -n 's/^PUSH //p')
+
 # (a) Block destructive commands
 DESTRUCTIVE_PATTERNS=(
   "rm -rf"
@@ -123,16 +137,24 @@ I18N_LOCALES_CSV=$(guard_config '(.i18n.locales // []) | join(",")') || exit 2
 I18N_PARITY_MODE=$(guard_config '.i18n.parityHookMode') || exit 2
 [ -z "$I18N_PARITY_MODE" ] && I18N_PARITY_MODE="block"
 
+# Each git commit the command runs, `git -C dir commit` and `cd dir && git
+# commit` too, is checked in its own directory (STEP-3354).
+while IFS= read -r COMMIT_DIR; do
+[ -n "$COMMIT_DIR" ] || continue
+[ "$COMMIT_DIR" != "@unknown" ] || fail_closed "it cannot tell which repository or directory this commit is in"
+CHECK_ROOT=$(cd "$PROJECT_ROOT" 2>/dev/null && cd "$COMMIT_DIR" 2>/dev/null && pwd) \
+  || fail_closed "the directory this commit runs in is not there: $COMMIT_DIR"
+
 # (d) i18n locale parity: if committing and the configured default-locale file is staged
 #     with NEW keys, verify those keys exist in ALL other configured locale files.
 #     Only checks newly added keys — pre-existing gaps don't block.
-if echo "$ACTUAL_CMD" | grep -q "git commit" && [ "$I18N_ENABLED" = "true" ]; then
+if [ "$I18N_ENABLED" = "true" ]; then
   DEFAULT_FILE="${I18N_MESSAGES_DIR}/${I18N_DEFAULT_LOCALE}.json"
-  EN_STAGED=$(cd "$PROJECT_ROOT" && git diff --cached --name-only -- "$DEFAULT_FILE" 2>&1) \
+  EN_STAGED=$(cd "$CHECK_ROOT" && git diff --cached --name-only -- "$DEFAULT_FILE" 2>&1) \
     || fail_closed "git could not list the staged files: $(printf '%s' "$EN_STAGED" | head -n 1)"
   if [ -n "$EN_STAGED" ]; then
     # Python's own errors join its output: anything but a verdict on the first line blocks.
-    I18N_RESULT=$(cd "$PROJECT_ROOT" && I18N_MESSAGES_DIR="$I18N_MESSAGES_DIR" I18N_DEFAULT_LOCALE="$I18N_DEFAULT_LOCALE" python3 -c "
+    I18N_RESULT=$(cd "$CHECK_ROOT" && I18N_MESSAGES_DIR="$I18N_MESSAGES_DIR" I18N_DEFAULT_LOCALE="$I18N_DEFAULT_LOCALE" python3 -c "
 import json, glob, os, sys, subprocess, re
 
 messages_dir = os.environ.get('I18N_MESSAGES_DIR', 'messages')
@@ -233,13 +255,13 @@ fi
 #     files have been modified on this branch (staged + already committed).
 #     parityHookMode controls behavior: "block" exits 2, "warn" prints to stderr,
 #     "off" skips entirely. Default "block".
-if echo "$ACTUAL_CMD" | grep -q "git commit" && [ "$I18N_ENABLED" = "true" ] && [ "$I18N_PARITY_MODE" != "off" ]; then
-  I18N_STAGED=$(cd "$PROJECT_ROOT" && git diff --cached --name-only -- "$I18N_MESSAGES_GLOB" 2>&1) \
+if [ "$I18N_ENABLED" = "true" ] && [ "$I18N_PARITY_MODE" != "off" ]; then
+  I18N_STAGED=$(cd "$CHECK_ROOT" && git diff --cached --name-only -- "$I18N_MESSAGES_GLOB" 2>&1) \
     || fail_closed "git could not list the staged locale files: $(printf '%s' "$I18N_STAGED" | head -n 1)"
   if [ -n "$I18N_STAGED" ]; then
     DEFAULT_BASE_BRANCH=$(guard_config '.git.defaultBase') || exit 2
     [ -z "$DEFAULT_BASE_BRANCH" ] && DEFAULT_BASE_BRANCH="main"
-    I18N_COMPLETENESS=$(cd "$PROJECT_ROOT" && I18N_MESSAGES_DIR="$I18N_MESSAGES_DIR" I18N_LOCALES_CSV="$I18N_LOCALES_CSV" I18N_BASE_BRANCH="$DEFAULT_BASE_BRANCH" python3 -c "
+    I18N_COMPLETENESS=$(cd "$CHECK_ROOT" && I18N_MESSAGES_DIR="$I18N_MESSAGES_DIR" I18N_LOCALES_CSV="$I18N_LOCALES_CSV" I18N_BASE_BRANCH="$DEFAULT_BASE_BRANCH" python3 -c "
 import subprocess, os, sys, re
 
 messages_dir = os.environ.get('I18N_MESSAGES_DIR', 'messages')
@@ -339,6 +361,9 @@ print(f'Missing ({len(missing)}): {\", \".join(missing)}')
     fi
   fi
 fi
+done <<COMMITS
+$COMMIT_DIRS
+COMMITS
 fi
 # end of gates (d) and (e)
 
@@ -347,8 +372,15 @@ fi
 # main staging master production prod). No marker bypass — direct push to
 # these branches must go through a PR. Server-side GitHub branch protection
 # is the unforgeable complement; this hook stops bypass at the local layer.
-# Any command with the words git and push: the parse below finds each real push, behind global options (git -C dir push) too.
-if printf '%s' "$ACTUAL_CMD" | grep -qw git && printf '%s' "$ACTUAL_CMD" | grep -qw push; then
+# Each push the command runs (PUSHES, from lib/git_commands.py): every git push
+# in it, behind global options, a cd or a substitution too, every refspec of
+# each (SRC:DST, :DST, +DST, refs/heads/DST), and the remote's word, since an
+# option's value can shift it (STEP-3354). @current <dir> is the branch
+# checked out in <dir> (no refspec, or HEAD); @all a push of every branch or of
+# the ones git's config picks (--all, --mirror, --branches, a ':' or glob
+# refspec, -c push.*, -c remote.<name>.push); @unknown a push from a
+# repository or directory it cannot name.
+if [ -n "$PUSHES" ]; then
   # The list:
   #   no project config at all            → default list
   #   key absent (or .git absent)         → default list
@@ -366,83 +398,35 @@ if printf '%s' "$ACTUAL_CMD" | grep -qw git && printf '%s' "$ACTUAL_CMD" | grep 
     PROTECTED_BRANCHES="$PROTECTED_RAW"  # may be empty string → gate disabled
   fi
 
-  # Every branch the command pushes to, one per line, then END (STEP-3354):
-  # every git push in it, every refspec of each (SRC:DST, :DST, +DST,
-  # refs/heads/DST), and the remote's word too, since an option's value can
-  # shift it. @current is the branch checked out (no refspec, or HEAD), @all a
-  # push of every branch (--all, --mirror, --branches). A command it cannot
-  # read (an unclosed quote, no python3) gives no END, and the push is refused.
-  PUSH_TARGETS=$(printf '%s' "$ACTUAL_CMD" | python3 -c "
-import sys, os, shlex
-lexer = shlex.shlex(sys.stdin.read(), posix=True, punctuation_chars=True)
-lexer.whitespace_split = True
-tokens = list(lexer)
-VALUE_OPTIONS = {'-o', '--push-option', '--repo', '--receive-pack', '--exec'}
-GLOBAL_VALUE_OPTIONS = {'-C', '-c'}
-segments, segment = [], []
-for t in tokens:
-    if set(t) <= set(';&|()'):
-        segments.append(segment)
-        segment = []
-    else:
-        segment.append(t)
-segments.append(segment)
-targets = []
-for seg in segments:
-    for g, word in enumerate(seg):
-        if os.path.basename(word) != 'git':
-            continue
-        i, skip = g + 1, False
-        while i < len(seg) and (skip or seg[i].startswith('-')):
-            skip = not skip and seg[i] in GLOBAL_VALUE_OPTIONS
-            i += 1
-        if i >= len(seg) or seg[i] != 'push':
-            continue
-        args, skip = [], False
-        for t in seg[i + 1:]:
-            if skip:
-                skip = False
-            elif t in VALUE_OPTIONS:
-                skip = True
-            elif t in ('--all', '--mirror', '--branches'):
-                targets.append('@all')
-            elif not t.startswith('-'):
-                args.append(t)
-        if len(args) < 2:
-            targets.append('@current')
-        for spec in args:
-            dst = spec.split(':')[-1].lstrip('+')
-            if dst.startswith('refs/heads/'):
-                dst = dst[len('refs/heads/'):]
-            targets.append('@current' if dst in ('HEAD', '') else dst)
-print('\n'.join(targets + ['END']))
-" 2>&1)
-  [ "$(printf '%s\n' "$PUSH_TARGETS" | tail -n 1)" = "END" ] \
-    || fail_closed "it cannot tell which branches this push goes to: $(printf '%s\n' "$PUSH_TARGETS" | tail -n 1)"
-
   TARGET_REF=""
-  while IFS= read -r target; do
-    case "$target" in
-      END|"") continue ;;
-      @all)
-        if [ -n "$PROTECTED_BRANCHES" ]; then
-          echo "BLOCKED: A push of every branch includes the protected ones ($PROTECTED_BRANCHES)."
+  if [ -n "$PROTECTED_BRANCHES" ]; then
+    while IFS= read -r target; do
+      case "$target" in
+        "") continue ;;
+        @all)
+          echo "BLOCKED: This push can reach every branch, the protected ones included ($PROTECTED_BRANCHES):"
+          echo "--all, --mirror, --branches, a ':' or glob refspec, or git config that picks the branches."
           echo "Push the one feature branch by name, and open a PR for it."
           exit 2
-        fi
-        continue
-        ;;
-      @current)
-        target=$(cd "$PROJECT_ROOT" && git rev-parse --abbrev-ref HEAD 2>&1) \
-          || fail_closed "git could not name the branch this push goes to: $target"
-        ;;
-    esac
-    for protected in $PROTECTED_BRANCHES; do
-      [ "$target" = "$protected" ] && TARGET_REF="$target" && break 2
-    done
-  done <<EOF
-$PUSH_TARGETS
-EOF
+          ;;
+        @unknown)
+          echo "BLOCKED: bash-guard cannot tell which branch this push goes to: it runs in a repository or directory it cannot name (--git-dir, --work-tree, cd -)."
+          echo "Push from the checkout itself, naming the branch: git push origin <branch>."
+          exit 2
+          ;;
+        "@current "*)
+          dir="${target#@current }"
+          target=$(cd "$PROJECT_ROOT" && cd "$dir" && git rev-parse --abbrev-ref HEAD 2>&1) \
+            || fail_closed "git could not name the branch this push goes to, in $dir: $target"
+          ;;
+      esac
+      for protected in $PROTECTED_BRANCHES; do
+        [ "$target" = "$protected" ] && TARGET_REF="$target" && break 2
+      done
+    done <<PUSHED
+$PUSHES
+PUSHED
+  fi
 
   if [ -n "$TARGET_REF" ]; then
     echo "BLOCKED: Direct push to protected branch '$TARGET_REF' is forbidden."
@@ -465,9 +449,9 @@ fi
 # Opt-out: project-config.git.prePushMarker = false, for consumers whose CI is
 # the validation authority (the PR runs the same build/lint/test within a
 # minute of the push). Default true keeps today's behaviour for everyone else.
-# The config read stays INSIDE the git-push branch so a non-push command keeps
-# the original cheap grep short-circuit and never spawns jq.
-if echo "$ACTUAL_CMD" | grep -q "git push"; then
+# The config read stays INSIDE the git-push branch so a non-push command never
+# spawns jq. A push is one lib/git_commands.py found, not the words in a message.
+if [ -n "$PUSHES" ]; then
   # NOTE: deliberately NOT `.git.prePushMarker // true` — jq's `//` treats a
   # literal `false` the same as `null`/absent, so that form always evaluates to
   # `true` and the opt-out could never fire. Use an explicit null check instead.

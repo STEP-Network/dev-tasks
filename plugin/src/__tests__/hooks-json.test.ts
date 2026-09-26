@@ -50,6 +50,10 @@ describe("hooks.json conditions", () => {
     ])
   })
 
+  it("runs the secrets scan on a commit behind a global option too (STEP-3354)", () => {
+    expect(conditionsFor("pre-commit-secrets-scan.sh")).toEqual(["Bash(git commit *)", "Bash(git -C *)", "Bash(git -c *)"])
+  })
+
   it("guards every sensitive file for both Edit and Write", () => {
     const conditions = conditionsFor("protect-sensitive-files.sh")
     for (const path of ["**/.env*", "**/.mcp.json", "**/secrets/**", "**/credentials/**", "**/pnpm-lock.yaml", "**/package-lock.json"]) {

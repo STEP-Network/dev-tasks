@@ -210,6 +210,16 @@
           },
           {
             "type": "command",
+            "if": "Bash(git -C *)",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/pre-commit-secrets-scan.sh"
+          },
+          {
+            "type": "command",
+            "if": "Bash(git -c *)",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/pre-commit-secrets-scan.sh"
+          },
+          {
+            "type": "command",
             "if": "Bash(git commit *)",
             "command": "${CLAUDE_PLUGIN_ROOT}/hooks/commit-id-gate.sh"
           }
