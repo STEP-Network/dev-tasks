@@ -2,7 +2,7 @@
  * agentctl: the agent mini's local control, for the front door (tick, ack,
  * job submit, usertest, ask, decide, verdict, request, slack post and reply), a person on the machine (status,
  * report, retro, pause, resume, retry, doctor, probe-sandbox, probe-hooks --scripted,
- * probe-browser, monday migrate) and the rehearsal (probe-hooks). One line of output per call: JSON, or text for
+ * probe-browser, monday migrate, frontdoor restart) and the rehearsal (probe-hooks). One line of output per call: JSON, or text for
  * status, report, doctor and the free probes. Usage errors exit 64, anything
  * else 1.
  * Installed as ~/.agentd/bin/agentctl (runtime/templates/shim.sh), which runs
@@ -30,7 +30,7 @@ import { applyMigration, planMigration, readSnapshots, reverseMigration, type Mi
 import { parseVerdict, recordVerdict, verdictReply } from "../verdict.ts"
 import { fileMentionRequest, REQUEST_TYPES, type RequestType } from "../request.ts"
 import { readUsage } from "../usage.ts"
-import { frontDoorAlive, lastTickAt, readFrontDoorState } from "../agentd/frontdoor.ts"
+import { frontDoorAlive, lastTickAt, readFrontDoorState, requestFrontDoorRestart } from "../agentd/frontdoor.ts"
 import { realExec, type Exec } from "../worker/git.ts"
 import { probeHooks } from "../worker/probe.ts"
 import { formatBrowserProbe, probeBrowser } from "../usertest/probe.ts"
@@ -406,6 +406,20 @@ export async function run(argv: string[], out: (line: string) => void, overrides
       mkdirSync(paths.root, { recursive: true })
       writeFileSync(paths.pauseFile, JSON.stringify({ at: now().toISOString(), reason }))
       print({ paused: true })
+      return 0
+    }
+    case "frontdoor": {
+      // A deploy, a config change or a person restarting the front door (STEP-3370): no crash, so no step toward agentd's wait.
+      if (rest[0] !== "restart") throw new UsageError('usage: agentctl frontdoor restart [--reason "<why>"]')
+      // Its settings deny it too. A restart it asked for would reset nothing and count nothing.
+      if (deps.env.AGENTD_FRONT_DOOR === "1") throw new Error("the front door may not restart itself: agentd restarts it, and counts its exits")
+      const reason = typeof flags.reason === "string" && flags.reason.trim() ? flags.reason.trim() : "restarted by hand"
+      try {
+        assertNoSecretText(reason, "--reason")
+      } catch (error) {
+        throw new UsageError(message(error).replace(/^usage: /, ""))
+      }
+      print(await requestFrontDoorRestart({ paths, config: loadConfig(paths), exec: deps.exec, now }, reason))
       return 0
     }
     case "resume": {

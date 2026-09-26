@@ -19,6 +19,8 @@ import {
   FrontDoorRefused,
   frontDoorSettingsPath,
   readFrontDoorState,
+  readRestartRequest,
+  requestFrontDoorRestart,
   shellQuote,
   superviseFrontDoor,
   type FrontDoorState,
@@ -68,6 +70,81 @@ describe("decideFrontDoor", () => {
     const busy = state({ starts: [minutesAgo(50), minutesAgo(30), minutesAgo(5)] })
     expect(decideFrontDoor(input({ alive: false, state: busy }))).toMatchObject({ kind: "wait", alert: true, until: new Date(NOW.getTime() + 30 * 60_000).toISOString() })
     expect(decideFrontDoor(input({ alive: false, state: { ...busy, waitUntil: minutesAgo(-10) } }))).toEqual({ kind: "none" })
+  })
+})
+
+describe("a restart asked for on purpose (STEP-3370)", () => {
+  const asked = (at: string, reason = "the new plugin") => ({ at, reason })
+
+  it("starts again at once, resumed, and marks the start as not an exit, even inside a backoff wait", () => {
+    const busy = state({ starts: [minutesAgo(50), minutesAgo(30), minutesAgo(5)], lastStartAt: minutesAgo(5), waitUntil: minutesAgo(-20) })
+    expect(decideFrontDoor(input({ alive: false, state: busy, restartRequest: asked(minutesAgo(1)) }))).toEqual({
+      kind: "start", mode: "resume", reason: "restarted on purpose: the new plugin", fastExits: 0, intentional: true,
+    })
+  })
+
+  it("never excuses an exit it did not ask for: a request older than the last start, or older than ten minutes", () => {
+    const busy = state({ starts: [minutesAgo(50), minutesAgo(30), minutesAgo(5)], lastStartAt: minutesAgo(5) })
+    expect(decideFrontDoor(input({ alive: false, state: busy, restartRequest: asked(minutesAgo(6)) }))).toMatchObject({ kind: "wait", alert: true })
+    const quiet = state({ lastStartAt: minutesAgo(60) })
+    expect(decideFrontDoor(input({ alive: false, state: quiet, restartRequest: asked(minutesAgo(11)) }))).toMatchObject({ kind: "start", reason: "it exited" })
+    expect(decideFrontDoor(input({ alive: false, state: quiet, restartRequest: asked(minutesAgo(9)) }))).toMatchObject({ kind: "start", intentional: true })
+  })
+
+  it("waits for the session to go while it still runs", () => {
+    expect(decideFrontDoor(input({ restartRequest: asked(minutesAgo(1)) }))).toEqual({ kind: "none" })
+  })
+
+  it("keeps three restarts on purpose out of the backoff: the crash after them still starts it, and three crashes still wait", async () => {
+    // Eve on 2026-09-26: a model switch, the cross-session setting and a deploy, then 30 minutes' wait.
+    const { deps } = setup()
+    let at = new Date(NOW.getTime())
+    let current = state({ starts: [at.toISOString()], lastStartAt: at.toISOString() })
+    const step = async (restartRequest: { at: string; reason: string } | null) => {
+      at = new Date(at.getTime() + 2 * 60_000)
+      const action = decideFrontDoor({ ...input({ alive: false, state: current, restartRequest }), now: at })
+      current = await applyFrontDoor({ ...deps, now: () => at }, current, action)
+      return action
+    }
+    for (const reason of ["model", "cross-session setting", "deploy"]) {
+      const request = { at: new Date(at.getTime() + 60_000).toISOString(), reason }
+      expect(await step(request)).toMatchObject({ kind: "start", intentional: true })
+    }
+    expect(current.starts).toHaveLength(1)
+    expect(await step(null)).toMatchObject({ kind: "start", reason: "it exited" })
+    expect(await step(null)).toMatchObject({ kind: "start" })
+    expect(await step(null)).toMatchObject({ kind: "wait", alert: true })
+  })
+})
+
+describe("requestFrontDoorRestart and superviseFrontDoor (STEP-3370)", () => {
+  it("records the request before it ends the session, so agentd never sees the session gone without it", async () => {
+    const { deps, paths, f } = setup()
+    // What agentd would read at the moment the session goes.
+    let seenAtKill: unknown = "not called"
+    const exec: typeof deps.exec = async (cmd, args, opts) => {
+      if (args.includes("kill-session")) seenAtKill = readRestartRequest(paths)
+      return deps.exec(cmd, args, opts)
+    }
+    expect(await requestFrontDoorRestart({ ...deps, exec }, "the new plugin")).toEqual({ restarted: true })
+    expect(f.lines()).toEqual(["tmux -L agentd kill-session -t =frontdoor"])
+    expect(seenAtKill).toEqual({ at: NOW.toISOString(), reason: "the new plugin" })
+    expect(readRestartRequest(paths)).toEqual({ at: NOW.toISOString(), reason: "the new plugin" })
+  })
+
+  it("leaves no request behind when there was no session to end, so a later crash is never excused by it", async () => {
+    const { deps, paths } = setup([[/kill-session/, { code: 1, stderr: "can't find session: =frontdoor" }]])
+    expect(await requestFrontDoorRestart(deps, "x")).toEqual({ restarted: false, why: "the front door is not running: agentd starts it within 15 seconds" })
+    expect(readRestartRequest(paths)).toBeNull()
+  })
+
+  it("starts it again on the request, counts no exit, and spends the request", async () => {
+    const { deps, paths } = setup([[/has-session/, { code: 1 }]])
+    writeFileSync(join(paths.state, "frontdoor.json"), JSON.stringify(state({ starts: [minutesAgo(20)], lastStartAt: minutesAgo(20) })))
+    await requestFrontDoorRestart(deps, "the model switch")
+    expect(await superviseFrontDoor({ ...deps, usage: () => null })).toMatchObject({ kind: "start", intentional: true, reason: "restarted on purpose: the model switch" })
+    expect(readFrontDoorState(paths)).toMatchObject({ starts: [minutesAgo(20)], lastStartAt: NOW.toISOString() })
+    expect(readRestartRequest(paths)).toBeNull()
   })
 })
 

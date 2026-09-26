@@ -235,8 +235,8 @@ $AGENT is installed and paused. What is left:
 
 1. At the mini, as $AGENT (in person or over Screen Sharing): runbook
    section 7 if doctor's "front door plugin" line warns, and then
-   tmux -L agentd kill-session -t =frontdoor (agentd starts it again within
-   15 seconds, with the plugin). Then ~/.agentd/bin/agentctl doctor, which
+   ~/.agentd/bin/agentctl frontdoor restart --reason plugin (agentd starts it
+   again within 15 seconds, with the plugin, and counts it as no exit). Then ~/.agentd/bin/agentctl doctor, which
    checks the claude and gh logins that SSH cannot.
 2. On every other mini (Eve's too), as that agent: add $AGENT's bot to
    slack.otherAgentBots and restart its bridge. Over SSH, one call each,

@@ -4,6 +4,9 @@
  * third rate-limit stop, a /loop past its 7-day expiry, a hang), after the
  * usage limit resets when that is the cause. Three starts in an hour means a
  * restart will not fix it: wait 30 minutes and say so, at most once an hour.
+ * A restart someone asked for (`agentctl frontdoor restart`: a deploy, a
+ * config change) is no exit: it starts again at once and counts toward none
+ * of that (STEP-3370).
  *
  * Two things it does not take on trust. The session's id comes from the
  * status line (its payload carries `session_id`), so nothing has to pin one
@@ -21,7 +24,7 @@
  * status line records its session id and no other session's.
  */
 
-import { readFileSync } from "node:fs"
+import { readFileSync, rmSync } from "node:fs"
 import { join } from "node:path"
 import { channelApproval, MANAGED_SETTINGS } from "../channel/managed.ts"
 import { readSandboxProbe } from "../cli/sandbox-probe.ts"
@@ -121,9 +124,23 @@ export const FRESH_FRONT_DOOR: FrontDoorState = {
   kickedAt: null,
 }
 
+/**
+ * A restart a person or a deploy asked for (STEP-3370), written by `agentctl
+ * frontdoor restart` just before it ends the session: that exit is not a
+ * crash, and must not bring the three-in-an-hour wait closer.
+ */
+export interface RestartRequest {
+  at: string
+  reason: string
+}
+
+/** A request answers only the exit that follows it, and only for so long: an older one excuses nothing. */
+const RESTART_REQUEST_MINUTES = 10
+
 export type FrontDoorAction =
   | { kind: "none" }
-  | { kind: "start"; mode: "new" | "resume"; reason: string; fastExits: number }
+  /** intentional: a restart asked for, whose start counts toward no backoff. */
+  | { kind: "start"; mode: "new" | "resume"; reason: string; fastExits: number; intentional?: true }
   | { kind: "restart"; reason: string }
   | { kind: "kick"; reason: string }
   /** alert: the front door keeps exiting, which a person must hear about. Otherwise a usage limit, which resets by itself. */
@@ -136,12 +153,18 @@ export interface FrontDoorInput {
   state: FrontDoorState
   usage: UsageSnapshot | null
   staleTickMinutes: number
+  restartRequest?: RestartRequest | null
 }
 
 export function decideFrontDoor(i: FrontDoorInput): FrontDoorAction {
   const now = i.now.getTime()
-  if (i.state.waitUntil && now < Date.parse(i.state.waitUntil)) return { kind: "none" }
   const lastStart = i.state.lastStartAt ? Date.parse(i.state.lastStartAt) : null
+  // Gone because someone asked, since the last start: start it again now, even inside a wait, and count no exit.
+  const asked = i.restartRequest ? Date.parse(i.restartRequest.at) : NaN
+  if (!i.alive && asked >= (lastStart ?? 0) && now - asked <= RESTART_REQUEST_MINUTES * 60_000) {
+    return { kind: "start", mode: i.state.sessionId ? "resume" : "new", reason: `restarted on purpose: ${i.restartRequest!.reason}`, fastExits: 0, intentional: true }
+  }
+  if (i.state.waitUntil && now < Date.parse(i.state.waitUntil)) return { kind: "none" }
   if (!i.alive) {
     const recent = i.state.starts.filter((t) => Date.parse(t) > now - 3_600_000)
     if (recent.length >= 3) {
@@ -320,15 +343,47 @@ export async function applyFrontDoor(deps: FrontDoorDeps, state: FrontDoorState,
   appendLedger(deps.paths, { type: "frontdoor.start", mode, reason: action.reason }, now)
   deps.log.info("front door started", { mode, reason: action.reason, sessionId: resumeId })
   const hourAgo = now.getTime() - 3_600_000
+  const intentional = action.kind === "start" && action.intentional === true
+  // The request is spent on the start it asked for.
+  if (intentional) rmSync(restartRequestPath(deps.paths), { force: true })
   return {
     ...state,
     sessionId: resumeId,
     lastStartAt: now.toISOString(),
-    starts: [...state.starts.filter((t) => Date.parse(t) > hourAgo), now.toISOString()],
+    // Only an exit nobody asked for brings the three-in-an-hour wait closer.
+    starts: [...state.starts.filter((t) => Date.parse(t) > hourAgo), ...(intentional ? [] : [now.toISOString()])],
     fastExits: action.kind === "start" ? action.fastExits : 0,
     waitUntil: null,
     kickedAt: null,
   }
+}
+
+export const restartRequestPath = (paths: AgentPaths) => join(paths.state, "frontdoor-restart.json")
+
+export function readRestartRequest(paths: AgentPaths): RestartRequest | null {
+  const request = readJson<Partial<RestartRequest>>(restartRequestPath(paths))
+  return request && typeof request.at === "string" && typeof request.reason === "string" ? { at: request.at, reason: request.reason } : null
+}
+
+/**
+ * Restarts the front door on purpose (`agentctl frontdoor restart`): records
+ * the request first, then ends the session, so agentd never sees the session
+ * gone without it, and starts it again, resumed, counting no exit. With no
+ * session to end the request is taken back: it must never excuse a later crash.
+ */
+export async function requestFrontDoorRestart(
+  deps: { paths: AgentPaths; config: AgentConfig; exec: Exec; now: () => Date },
+  reason: string,
+): Promise<{ restarted: true } | { restarted: false; why: string }> {
+  const now = deps.now()
+  writeJsonAtomic(restartRequestPath(deps.paths), { at: now.toISOString(), reason } satisfies RestartRequest)
+  const r = await tmuxOn(deps, ["kill-session", "-t", `=${deps.config.frontDoor.tmuxSession}`])
+  if (r.code !== 0) {
+    rmSync(restartRequestPath(deps.paths), { force: true })
+    return { restarted: false, why: "the front door is not running: agentd starts it within 15 seconds" }
+  }
+  appendLedger(deps.paths, { type: "frontdoor.restartAsked", reason }, now)
+  return { restarted: true }
 }
 
 export async function superviseFrontDoor(deps: FrontDoorDeps & { usage: () => UsageSnapshot | null }): Promise<FrontDoorAction> {
@@ -342,6 +397,7 @@ export async function superviseFrontDoor(deps: FrontDoorDeps & { usage: () => Us
     state,
     usage,
     staleTickMinutes: deps.config.frontDoor.staleTickMinutes,
+    restartRequest: readRestartRequest(deps.paths),
   })
   const next = await applyFrontDoor(deps, state, action)
   if (next !== stored) writeJsonAtomic(statePath(deps.paths), next)

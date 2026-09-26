@@ -59,6 +59,7 @@ describe("templates/claude-settings.json, the front door's settings", () => {
         "Bash(~/.agentd/bin/agentctl retry:*)",
         "Bash(~/.agentd/bin/agentctl probe-hooks:*)",
         "Bash(~/.agentd/bin/agentctl probe-sandbox:*)",
+        "Bash(~/.agentd/bin/agentctl frontdoor:*)",
         "Bash(git push:*)",
         "Bash(gh pr create:*)",
         "Bash(gh pr merge:*)",
