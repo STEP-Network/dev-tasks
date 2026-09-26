@@ -9,12 +9,15 @@
 
 import { createServer, type ServerResponse } from "node:http"
 
-export type ToolCall = { name: string; input: Record<string, unknown> }
+/** A scripted tool call. Its input may be computed from the text of the last tool result, e.g. a name another tool reported. */
+export type ToolCall = { name: string; input: Record<string, unknown> | ((lastResult: string) => Record<string, unknown>) }
 
 export interface FakeApi {
   url: string
   /** The paths asked for, in order. */
   paths: string[]
+  /** The request bodies, in order: what reached the model. */
+  bodies: string[]
   close(): Promise<void>
 }
 
@@ -65,6 +68,7 @@ export async function startFakeLinear(): Promise<FakeLinear> {
  */
 export async function startFakeApi(script: ToolCall[], subagents: Record<string, ToolCall[]> = {}): Promise<FakeApi> {
   const paths: string[] = []
+  const bodies: string[] = []
   let n = 0
   const server = createServer((req, res) => {
     let body = ""
@@ -72,6 +76,7 @@ export async function startFakeApi(script: ToolCall[], subagents: Record<string,
     req.on("end", () => {
       const path = (req.url ?? "").split("?")[0]
       paths.push(path)
+      bodies.push(body)
       let request: MessagesRequest = {}
       try {
         request = JSON.parse(body || "{}") as MessagesRequest
@@ -92,10 +97,13 @@ export async function startFakeApi(script: ToolCall[], subagents: Record<string,
       const marker = Object.keys(subagents).find((m) => first.includes(m))
       const steps = marker ? subagents[marker] : script
       const main = marker !== undefined || (request.tools ?? []).some((t) => t.name === "Bash")
-      const answered = (request.messages ?? [])
-        .flatMap((m) => (Array.isArray(m.content) ? (m.content as Array<{ type?: string }>) : []))
-        .filter((c) => c.type === "tool_result").length
-      const call = main && answered < steps.length ? steps[answered] : null
+      const results = (request.messages ?? [])
+        .flatMap((m) => (Array.isArray(m.content) ? (m.content as Array<{ type?: string; content?: unknown }>) : []))
+        .filter((c) => c.type === "tool_result")
+      const answered = results.length
+      const step = main && answered < steps.length ? steps[answered] : null
+      const last = results.length ? results[results.length - 1].content : ""
+      const call = step && { name: step.name, input: typeof step.input === "function" ? step.input(typeof last === "string" ? last : JSON.stringify(last)) : step.input }
       const id = `msg_${++n}`
       const usage = { input_tokens: 10, output_tokens: 5, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 }
       const content = call ? [{ type: "tool_use", id: `toolu_${n}`, name: call.name, input: call.input }] : [{ type: "text", text: "done" }]
@@ -125,5 +133,5 @@ export async function startFakeApi(script: ToolCall[], subagents: Record<string,
   })
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", () => resolve()))
   const { port } = server.address() as { port: number }
-  return { url: `http://127.0.0.1:${port}`, paths, close: () => new Promise<void>((resolve) => server.close(() => resolve())) }
+  return { url: `http://127.0.0.1:${port}`, paths, bodies, close: () => new Promise<void>((resolve) => server.close(() => resolve())) }
 }

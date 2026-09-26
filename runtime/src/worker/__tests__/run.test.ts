@@ -1052,16 +1052,32 @@ describe("sdkOptions", () => {
   const options = () =>
     sdkOptions({ config, cwd: WT, model: "sonnet", abortController: new AbortController(), rules: "R", pnpmStore: "/store", env: { PATH: "/bin" }, home: "/Users/eve" }) as any
 
-  it("offers subagents only on worker.fanOut, and never the Workflow tool, the web or skills (STEP-3367)", () => {
+  it("fans out only on worker.fanOut: subagents, the Workflow tool without a prompt, in-process teammates, messages to its own (STEP-3367)", () => {
+    const never = ["ListAgents", "CronCreate", "ScheduleWakeup", "EnterWorktree", "ExitWorktree"]
     const off = options()
-    expect(off.disallowedTools).toEqual(expect.arrayContaining(["Agent", "Task", "Workflow"]))
+    expect(off.disallowedTools).toEqual(["WebFetch", "WebSearch", "Skill", ...never, "Agent", "Task", "Workflow", "SendMessage"])
+    expect(off).not.toHaveProperty("allowedTools")
+    expect(off.env).not.toHaveProperty("CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS")
+    expect(off.settings).not.toHaveProperty("teammateMode")
+    expect(off.hooks.PreToolUse.map((h: { matcher?: string }) => h.matcher)).toEqual(["Bash", undefined])
+    expect(off.hooks).not.toHaveProperty("PostToolUse")
     const fanned = ConfigSchema.parse({ mini: "eve", repo: { path: "/Users/eve/polads" }, pluginRoot: "/Users/eve/dev-tasks/plugin", slack: { allowedUsers: ["UNATE"] }, worker: { fanOut: true } })
     const on = sdkOptions({ config: fanned, cwd: WT, model: "sonnet", abortController: new AbortController(), rules: "R", pnpmStore: "/store", env: { PATH: "/bin" }, home: "/Users/eve" }) as any
-    // /ship would push; a workflow runs only on a person's own request, and the brief is not one.
-    expect(on.disallowedTools).toEqual(["WebFetch", "WebSearch", "Skill", "Workflow"])
-    // No agent teams, and nothing else changes: the same sandbox, settings, environment and hooks.
-    for (const key of ["allowedTools", "sandbox", "settings", "env"]) expect(on[key], key).toEqual(off[key])
-    expect(on.hooks.PreToolUse.map((h: { matcher?: string }) => h.matcher)).toEqual(off.hooks.PreToolUse.map((h: { matcher?: string }) => h.matcher))
+    // The web and skills stay off (/ship would push), and so do another session's names, a later prompt and another worktree.
+    expect(on.disallowedTools).toEqual(["WebFetch", "WebSearch", "Skill", ...never])
+    expect(on.allowedTools).toEqual(["Workflow"])
+    expect(on.env).toEqual({ PATH: "/bin", CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS: "1" })
+    expect(on.settings).toMatchObject({ teammateMode: "in-process", enableWorkflows: true, permissions: off.settings.permissions })
+    // SendMessage is limited to what this session started, which the subagent tool's hooks learn.
+    expect(on.hooks.PreToolUse.map((h: { matcher?: string }) => h.matcher)).toEqual(["Bash", undefined, "SendMessage", "Agent|Task"])
+    expect(on.hooks.PostToolUse.map((h: { matcher?: string }) => h.matcher)).toEqual(["Agent|Task"])
+    expect(on.sandbox).toEqual(off.sandbox)
+  })
+
+  it("refuses every other session's message, from this machine or another, fanOut or not (STEP-3367)", () => {
+    const fanned = ConfigSchema.parse({ mini: "eve", repo: { path: "/Users/eve/polads" }, pluginRoot: "/Users/eve/dev-tasks/plugin", slack: { allowedUsers: ["UNATE"] }, worker: { fanOut: true } })
+    const on = sdkOptions({ config: fanned, cwd: WT, model: "sonnet", abortController: new AbortController(), rules: "R", pnpmStore: "/store", env: {}, home: "/Users/eve" }) as any
+    for (const o of [options(), on]) expect(o.settings).toMatchObject({ crossSessionInbound: "refuse", isolatePeerMachines: true })
   })
 
   it("wires the plugin, the project settings, the guard, the sandbox and the limits", async () => {
@@ -1070,7 +1086,7 @@ describe("sdkOptions", () => {
       cwd: WT, model: "sonnet", maxTurns: 250, maxBudgetUsd: 15, permissionMode: "acceptEdits",
       settingSources: ["project"],
       plugins: [{ type: "local", path: "/Users/eve/dev-tasks/plugin", skipMcpDiscovery: true }],
-      disallowedTools: ["WebFetch", "WebSearch", "Skill", "Workflow", "Agent", "Task"],
+      disallowedTools: ["WebFetch", "WebSearch", "Skill", "ListAgents", "CronCreate", "ScheduleWakeup", "EnterWorktree", "ExitWorktree", "Agent", "Task", "Workflow", "SendMessage"],
       systemPrompt: { type: "preset", preset: "claude_code", append: "R" },
       outputFormat: { type: "json_schema" },
       env: { PATH: "/bin" },

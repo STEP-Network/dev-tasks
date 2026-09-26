@@ -110,6 +110,10 @@ describe("templates/claude-settings.json, the front door's settings", () => {
     })
   })
 
+  it("refuses every other session's message, from this machine or another (STEP-3367)", () => {
+    expect(rendered).toMatchObject({ crossSessionInbound: "refuse", isolatePeerMachines: true })
+  })
+
   it("turns on the status line and Remote Control, and the plugin", () => {
     expect(rendered.statusLine).toEqual({ type: "command", command: "/Users/eve/.agentd/bin/statusline" })
     expect(rendered).toMatchObject({ remoteControlAtStartup: true, autoContinueAtUsageLimit: true, enabledPlugins: { "dev-tasks@dev-tasks-marketplace": true } })

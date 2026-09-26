@@ -162,8 +162,26 @@ export function workerPathDenial(toolName: string, input: unknown, scope: Worker
   return null
 }
 
+/** The subagent tool's two names. */
+const AGENT_TOOLS = new Set(["Agent", "Task"])
+
+/**
+ * A subagent works in the worker's own worktree, process and sandbox: never
+ * in a worktree of its own under the main checkout (isolation "worktree"),
+ * nor in the cloud (isolation "remote").
+ */
+export function agentIsolationDenial(toolName: string, input: unknown): string | null {
+  if (!AGENT_TOOLS.has(toolName) || !input || typeof input !== "object") return null
+  const isolation = (input as { isolation?: unknown }).isolation
+  return isolation === undefined || isolation === null || isolation === ""
+    ? null
+    : `Subagents work in this worktree, under this session's sandbox: isolation (${String(isolation)}) is refused.`
+}
+
 /** The same rules for any tool: what the worker's canUseTool names before it denies. */
 export function workerToolDenial(toolName: string, input: unknown, scope: WorkerScope): string | null {
+  const isolation = agentIsolationDenial(toolName, input)
+  if (isolation) return isolation
   if (toolName !== "Bash") return workerPathDenial(toolName, input, scope)
   const command = (input as { command?: unknown } | null)?.command
   return typeof command === "string" ? workerBashDenial(command) : null
@@ -200,8 +218,37 @@ export async function denyBannedBash(input: HookInputLike) {
 export function denyWorkerPaths(scope: WorkerScope) {
   return async (input: HookInputLike) => {
     if (input.hook_event_name !== "PreToolUse" || !input.tool_name) return {}
-    const reason = workerPathDenial(input.tool_name, input.tool_input, scope, input.cwd || scope.worktree)
+    const reason = agentIsolationDenial(input.tool_name, input.tool_input) ?? workerPathDenial(input.tool_name, input.tool_input, scope, input.cwd || scope.worktree)
     return reason ? deny(reason) : {}
+  }
+}
+
+/**
+ * worker.fanOut: SendMessage reaches only what this session started, its
+ * subagents (by agentId) and teammates (by name), and "main", its own lead.
+ * Never another session on this machine or another: that is a person's, or
+ * another agent's. `record` (PreToolUse and PostToolUse on the subagent tool)
+ * learns the names; `limit` (PreToolUse on SendMessage) refuses the rest.
+ */
+export function ownAgentsOnly() {
+  const spawned = new Set<string>(["main"])
+  const learn = (text: string) => {
+    for (const m of text.matchAll(/agentId:\s*([A-Za-z0-9_-]+)/g)) spawned.add(m[1])
+  }
+  return {
+    spawned,
+    record: async (input: HookInputLike & { tool_response?: unknown }) => {
+      if (!input.tool_name || !AGENT_TOOLS.has(input.tool_name)) return {}
+      const name = (input.tool_input as { name?: unknown } | undefined)?.name
+      if (typeof name === "string" && name) spawned.add(name)
+      if (input.tool_response !== undefined) learn(typeof input.tool_response === "string" ? input.tool_response : JSON.stringify(input.tool_response))
+      return {}
+    },
+    limit: async (input: HookInputLike) => {
+      if (input.hook_event_name !== "PreToolUse" || input.tool_name !== "SendMessage") return {}
+      const to = String((input.tool_input as { to?: unknown } | undefined)?.to ?? "").replace(/\s*\[[^\]]*\]\s*$/, "").trim()
+      return spawned.has(to) ? {} : deny(`SendMessage reaches only the subagents and teammates this worker started. ${to || "That recipient"} is not one of them.`)
+    },
   }
 }
 

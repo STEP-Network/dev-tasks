@@ -33,7 +33,7 @@ import { branchNameFor, createLinearTracker, openSubIssues, type Tracker, type T
 import { buildBrief, WORKER_RESULT_SCHEMA, workerRules, type BriefInput } from "./brief.ts"
 import { finalize, FinalizeFailed, type MergeMode } from "./finalize.ts"
 import { changedFiles, commitMessages, commitsAhead, historyRewrite, ownChanges, prepareWorktree, startMerge, realExec, WorktreeRefused, type Exec } from "./git.ts"
-import { denyBannedBash, denyWorkerPaths, ENV_TEMPLATE, workerEnv, workerToolDenial } from "./guard.ts"
+import { denyBannedBash, denyWorkerPaths, ENV_TEMPLATE, ownAgentsOnly, workerEnv, workerToolDenial } from "./guard.ts"
 import { SMALL_CHANGE_FILES, clause, toOutcome, type Outcome, type ResultMessageLike } from "./outcome.ts"
 import { buildReviseBrief, finalizeRevise, gatherFeedback } from "./revise.ts"
 import { checkBilling, checkPlugins, runSession, type QueryFn, type SdkMessage } from "./session.ts"
@@ -82,17 +82,26 @@ export interface SdkOptionsInput {
 const GIT_POINTERS = ["commondir", "gitdir", "config.worktree"]
 
 /**
- * worker.fanOut's tools: subagents, "Agent" or "Task" as the SDK names it.
- * They run in this process under the worker's own hooks, guard and sandbox
+ * worker.fanOut's tools: subagents ("Agent", or "Task" as the SDK names it),
+ * a dynamic workflow's agents, named teammates, and SendMessage between them.
+ * Each runs in this process under the worker's own hooks, guard and sandbox
  * (sessions.test.ts proves it on the binary workers run). Off, none.
  */
-const FAN_OUT_TOOLS = ["Agent", "Task"]
+const FAN_OUT_TOOLS = ["Agent", "Task", "Workflow", "SendMessage"]
+
+/**
+ * Never, fanOut or not: another session's names (ListAgents), a prompt that
+ * fires later in this or a new session (CronCreate, ScheduleWakeup), and a
+ * move to another worktree (EnterWorktree).
+ */
+const NEVER = ["ListAgents", "CronCreate", "ScheduleWakeup", "EnterWorktree", "ExitWorktree"]
 
 /** Typed as the SDK's own Options: a misspelt or retired option fails the typecheck. */
 export function sdkOptions(o: SdkOptionsInput): Options {
   const repoGit = join(o.config.repo.path, ".git")
   const scope = { worktree: o.cwd, home: o.home }
   const fanOut = o.config.worker.fanOut
+  const own = fanOut ? ownAgentsOnly() : null
   return {
     cwd: o.cwd,
     model: o.model,
@@ -110,10 +119,11 @@ export function sdkOptions(o: SdkOptionsInput): Options {
         `${toolName} needs a permission prompt and an unattended worker has nobody to ask. Work around it, or finish with status blocked.`,
     }),
     // No web (token discipline, and less untrusted text), no skills: the brief
-    // is the whole procedure, and /ship would try to push. No subagents unless
-    // worker.fanOut. Never the Workflow tool: it runs only on a person's own
-    // request, and the brief is not one.
-    disallowedTools: ["WebFetch", "WebSearch", "Skill", "Workflow", ...(fanOut ? [] : FAN_OUT_TOOLS)],
+    // is the whole procedure, and /ship would try to push. No fan-out unless
+    // worker.fanOut, and then the Workflow tool without the prompt it asks
+    // for: this mini's owner turned it on (Nate, 2026-09-26).
+    disallowedTools: ["WebFetch", "WebSearch", "Skill", ...NEVER, ...(fanOut ? [] : FAN_OUT_TOOLS)],
+    ...(fanOut ? { allowedTools: ["Workflow"] } : {}),
     // PolAds's CLAUDE.md and project hooks. Not "user": that is the front door's
     // settings (Remote Control, the status line), not the worker's.
     settingSources: ["project"],
@@ -129,6 +139,12 @@ export function sdkOptions(o: SdkOptionsInput): Options {
     // rule has no exceptions, so .env files, where .env.example must stay
     // readable, are held by the hook and the sandbox.
     settings: {
+      // No other session's message reaches this one, from this machine or another.
+      crossSessionInbound: "refuse",
+      isolatePeerMachines: true,
+      // Teammates stay in this process, never a tmux pane's own claude, which
+      // would run without the SDK's hooks and canUseTool.
+      ...(fanOut ? { teammateMode: "in-process" as const, enableWorkflows: true } : {}),
       permissions: {
         deny: [
           "Read(~/.config/**)",
@@ -144,7 +160,9 @@ export function sdkOptions(o: SdkOptionsInput): Options {
         { matcher: "Bash", hooks: [denyBannedBash] },
         // Every tool: canUseTool never hears of a read, nor of an edit acceptEdits allows.
         { hooks: [denyWorkerPaths(scope)] },
+        ...(own ? [{ matcher: "SendMessage", hooks: [own.limit] }, { matcher: "Agent|Task", hooks: [own.record] }] : []),
       ],
+      ...(own ? { PostToolUse: [{ matcher: "Agent|Task", hooks: [own.record] }] } : {}),
     },
     sandbox: {
       enabled: true,
@@ -186,7 +204,7 @@ export function sdkOptions(o: SdkOptionsInput): Options {
       // The worker's own process needs the Claude token. Its commands never do.
       credentials: { envVars: [{ name: "CLAUDE_CODE_OAUTH_TOKEN", mode: "deny" }] },
     },
-    env: o.env,
+    env: fanOut ? { ...o.env, CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS: "1" } : o.env,
     systemPrompt: { type: "preset", preset: "claude_code", append: o.rules },
     outputFormat: { type: "json_schema", schema: WORKER_RESULT_SCHEMA },
   }

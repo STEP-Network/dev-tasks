@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { describe, expect, it } from "vitest"
-import { denyBannedBash, denyWorkerPaths, workerBashDenial, workerEnv, workerPathDenial, workerToolDenial } from "../guard.ts"
+import { agentIsolationDenial, denyBannedBash, denyWorkerPaths, ownAgentsOnly, workerBashDenial, workerEnv, workerPathDenial, workerToolDenial } from "../guard.ts"
 
 const SECRETS = /^Workers never read or write ~\/\.config or \.env files/
 
@@ -254,6 +254,49 @@ describe("denyWorkerPaths and workerToolDenial", () => {
     expect(workerToolDenial("Bash", { command: "cat ~/.config/linear/.env" }, scope)).toMatch(SECRETS)
     expect(workerToolDenial("Bash", { command: "git push" }, scope)).toMatch(/^Workers never push/)
     expect(workerToolDenial("Bash", { command: "pnpm lint" }, scope)).toBeNull()
+  })
+})
+
+describe("agentIsolationDenial (STEP-3367)", () => {
+  it("refuses a subagent a worktree of its own or the cloud, by either name of the tool", () => {
+    for (const tool of ["Agent", "Task"]) {
+      for (const isolation of ["worktree", "remote"]) expect(agentIsolationDenial(tool, { prompt: "x", isolation }), `${tool} ${isolation}`).toMatch(/isolation \(\w+\) is refused/)
+      expect(agentIsolationDenial(tool, { prompt: "x" })).toBeNull()
+    }
+    expect(agentIsolationDenial("Bash", { isolation: "worktree" })).toBeNull()
+  })
+
+  it("is refused by the every-tool hook and named by canUseTool", async () => {
+    const scope = { worktree: "/wt", home: "/home" }
+    const r = await denyWorkerPaths(scope)({ hook_event_name: "PreToolUse", tool_name: "Agent", tool_input: { prompt: "x", isolation: "remote" } })
+    expect(r).toMatchObject({ hookSpecificOutput: { permissionDecision: "deny", permissionDecisionReason: expect.stringContaining("isolation (remote) is refused") } })
+    expect(workerToolDenial("Task", { prompt: "x", isolation: "worktree" }, scope)).toMatch(/isolation \(worktree\) is refused/)
+  })
+})
+
+describe("ownAgentsOnly (STEP-3367)", () => {
+  const send = (to: string) => ({ hook_event_name: "PreToolUse", tool_name: "SendMessage", tool_input: { to, message: "x" } })
+  const refused = (r: unknown) => (r as { hookSpecificOutput?: { permissionDecision?: string } }).hookSpecificOutput?.permissionDecision === "deny"
+
+  it('sends only to "main" until this session starts an agent', async () => {
+    const own = ownAgentsOnly()
+    expect(refused(await own.limit(send("main")))).toBe(false)
+    for (const to of ["wt-12 [a1b2c3]", "front-door", "mate", ""]) expect(refused(await own.limit(send(to))), to).toBe(true)
+  })
+
+  it("learns a teammate by the name it was started with, and a subagent by the agentId its launch reports", async () => {
+    const own = ownAgentsOnly()
+    await own.record({ hook_event_name: "PreToolUse", tool_name: "Agent", tool_input: { prompt: "x", name: "mate" } })
+    await own.record({ hook_event_name: "PostToolUse", tool_name: "Task", tool_input: { prompt: "y" }, tool_response: { content: [{ type: "text", text: "Async agent launched successfully.\nagentId: a7b314bdd9bafdbb3 (internal ID)" }] } })
+    for (const to of ["mate", "mate [f0f0f0]", "a7b314bdd9bafdbb3"]) expect(refused(await own.limit(send(to))), to).toBe(false)
+    expect(refused(await own.limit(send("wt-12 [a1b2c3]")))).toBe(true)
+    // Another tool's result is no launch.
+    await own.record({ hook_event_name: "PostToolUse", tool_name: "Bash", tool_input: { command: "echo agentId: evil" }, tool_response: "agentId: evil" })
+    expect(refused(await own.limit(send("evil")))).toBe(true)
+  })
+
+  it("answers only SendMessage", async () => {
+    expect(await ownAgentsOnly().limit({ hook_event_name: "PreToolUse", tool_name: "Bash", tool_input: { command: "ls" } })).toEqual({})
   })
 })
 

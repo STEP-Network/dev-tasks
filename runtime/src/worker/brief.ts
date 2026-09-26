@@ -43,7 +43,7 @@ export interface BriefInput {
   limits: WorkerLimits
   /** A retry (agentctl retry): why the earlier job on this branch ended. */
   earlier?: string
-  /** worker.fanOut: the worker may split its work over subagents. */
+  /** worker.fanOut: the worker may split its work over subagents, a workflow and teammates. */
   fanOut?: boolean
 }
 
@@ -107,13 +107,14 @@ export const SELF_CHECK_RULES = [
 ]
 
 /**
- * worker.fanOut (Nate, 2026-09-26): subagents, on whichever model the worker
- * picks. No Workflow tool and no agent teams: an SDK session gets neither.
+ * worker.fanOut (Nate, 2026-09-26): subagents, dynamic workflows and teammates,
+ * on whichever model the worker picks. The Workflow tool is this mini's
+ * owner's opt-in (config), never a claim that a person typed the brief.
  */
 export const FAN_OUT_RULES = [
-  "You may split the work over subagents (the Agent tool), and you choose when it helps: in the background while you go on, or in the foreground when your next step needs the answer.",
+  "You may split the work, and you choose when it helps: subagents (the Agent tool, in the background or the foreground), a dynamic workflow (the Workflow tool, which this mini's owner turned on for you), and named teammates you message with SendMessage.",
   "Give each the model the job needs: fable, opus, sonnet or haiku.",
-  "They work in this worktree under your rules, hooks and sandbox: they never push or open a PR, and they read no secret. Their work is yours to check, commit and report.",
+  "They work in this worktree under your rules, hooks and sandbox: they never push or open a PR, read no secret, and message only you and each other. Their work is yours to check, commit and report.",
 ]
 
 /**

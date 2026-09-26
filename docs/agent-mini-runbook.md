@@ -276,19 +276,35 @@ Left out, each runs at its model's default. The template's models and effort
 are Eve's: `claude-opus-5-5` at `xhigh`. A change to `worker.effort` counts
 from the next job; the front door takes its own at its next start.
 
-`worker.fanOut` lets a develop or revise worker split its work over
-subagents (the Agent tool), in the background or the foreground, each on the
-model it picks (fable, opus, sonnet or haiku). Its brief says so. Off by
-default: no subagents, as before. The web, skills and the Workflow tool stay
-off either way (a workflow runs only on a person's own request, and a
-worker's brief is not one), and a worker has no agent teams. A subagent runs
-in the worker's own process, and `runtime/src/__tests__/sessions.test.ts`
-proves on the binary workers run that it is held as the worker is, with no
-prompt asked. The sandbox refuses a write outside the worktree and a read of
-`~/.config` that no guard recognises. The worker's guard refuses `~/.config`
-and `gh pr create`. The plugin's guard refuses `git reset --hard` and `git
-push origin main`. Its turns and spend count toward the worker's limits. The
-template turns it on, as it is on Eve.
+`worker.fanOut` lets a develop or revise worker split its work: subagents
+(the Agent tool, in the background or the foreground), a dynamic workflow
+(the Workflow tool, allowed outright: this mini's owner turned it on, and the
+brief never claims a person asked), and named teammates (agent teams,
+`CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS`, `teammateMode` `in-process`), each on
+the model it picks (fable, opus, sonnet or haiku). Off by default: no
+fan-out, as before.
+
+What holds the fan-out, and `runtime/src/__tests__/sessions.test.ts` proves
+each on the binary workers run, with no prompt asked:
+- A subagent, a teammate and a workflow's agent all run in the worker's own
+  process. The sandbox refuses a write outside the worktree, and a read of
+  `~/.config` that no guard recognises. The worker's guard refuses
+  `~/.config` and `gh pr create`. The plugin's guard refuses `git reset
+  --hard` and `git push origin main`.
+- SendMessage reaches only what this worker started (its teammates by name,
+  its subagents by agentId) and `main`, its own lead. Off, there is no
+  SendMessage.
+- A subagent never gets a worktree of its own or a cloud run (`isolation` is
+  refused).
+- No other session's message reaches a worker (`crossSessionInbound`
+  `refuse`, `isolatePeerMachines`), and the front door's settings file says
+  the same. Without it, a peer on the mini delivered to a worker whose
+  permission class matched its own.
+- Never offered, fanOut or not: ListAgents, CronCreate, ScheduleWakeup,
+  EnterWorktree, ExitWorktree, the web and skills.
+
+Their turns and spend count toward the worker's limits. The template turns
+fan-out on, as it is on Eve.
 
 `retro.enabled` turns on the weekly retro (section 11, The weekly retro) on
 this mini. Only one mini, the coordinator, has it on. It is off by default,
