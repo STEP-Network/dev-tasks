@@ -13,6 +13,7 @@ import type { TrackerIssue } from "../../tracker.ts"
 import { fakeTracker, issue } from "../../__tests__/fakes.ts"
 import { createMondayBridge } from "../bridge.ts"
 import { applyMigration, planMigration, reverseMigration, type MigrateDeps } from "../migrate.ts"
+import type { PeopleIssue } from "../people.ts"
 import { readRecords, saveRecord } from "../store.ts"
 import { BOARD, fakeMonday, fakePeople, GROUPS, NEEDS_COLUMNS as COL, REQ, REQUEST_COLUMNS, REQUEST_GROUPS, T0 } from "./fake-monday.ts"
 
@@ -124,6 +125,16 @@ describe("agentctl monday migrate (spec 8)", () => {
     expect((await applyMigration(deps, await planMigration(deps))).failed).toHaveLength(2)
     monday.broken.delete("moveItemToBoard")
     expect((await applyMigration(deps, await planMigration(deps))).moved).toEqual([a, b])
+  })
+
+  it("never labels a sub-issue or one filed from the board, whatever the people view gives", async () => {
+    const { deps } = setup({ enabled: false })
+    const view = (id: string, over: Partial<PeopleIssue>): PeopleIssue => ({
+      id, uuid: `uuid-${id}`, title: id, description: "Filed from Slack by Ada", url: `https://linear.app/step/issue/${id}`, state: "Triage", stateType: "triage",
+      labels: [], owner: null, requester: null, dueDate: null, prUrl: null, uatSteps: null, parent: null, slackThread: null, project: null, ...over,
+    })
+    const people = { openIssuesFiledFromSlack: async () => [view("STEP-50", {}), view("STEP-51", { parent: "STEP-50" }), view("STEP-52", { labels: ["intake/monday"] })] }
+    expect((await planMigration({ ...deps, people })).label.map((l) => l.issue)).toEqual(["STEP-50"])
   })
 
   it("plans one item alone with --only, and labels nothing then", async () => {

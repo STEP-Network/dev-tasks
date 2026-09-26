@@ -128,6 +128,7 @@ describe("the people's view of Linear (STEP-3289)", () => {
     const { request, calls } = fakeRequest([[raw("STEP-40", { description: "x\n\n---\nFiled from Slack by Ada: https://acme.slack.com/archives/C1/p1" })]])
     expect((await createPeopleView(request).openIssuesFiledFromSlack()).map((i) => i.id)).toEqual(["STEP-40"])
     expect(calls[0].query).toContain("description: { contains: $filed }")
+    expect(calls[0].query).toContain('state: { type: { nin: ["completed", "canceled", "duplicate"] } }')
     expect(calls[0].query).toContain("parent: { null: true }")
     expect(calls[0].variables).toMatchObject({ filed: "Filed from Slack by" })
   })
