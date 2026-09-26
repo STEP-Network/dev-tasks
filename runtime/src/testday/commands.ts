@@ -35,8 +35,11 @@ export function fileTestDayCommand(paths: AgentPaths, c: Filed<TestDayCommand>, 
 export function pendingCommands(paths: AgentPaths): Array<{ key: string; payload: TestDayCommand }> {
   return listNew<TestDayCommand>(paths.inbox)
     .filter((e) => e.payload.type === "testday")
-    .sort((a, b) => byCode(a.payload.at ?? a.payload.receivedAt, b.payload.at ?? b.payload.receivedAt) || byCode(a.payload.key, b.payload.key))
+    .sort((a, b) => byCode(actedOrLast(a.payload), actedOrLast(b.payload)) || byCode(a.payload.key, b.payload.key))
 }
+
+/** When the person acted; a command filed without it (none is, today) goes after every one that has it, never crashes the drain. */
+const actedOrLast = (c: TestDayCommand): string => (typeof c.at === "string" ? c.at : `~${c.receivedAt ?? ""}`)
 
 /** Plain code-point order: the same on every mini, whatever its locale. */
 const byCode = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0)

@@ -44,6 +44,15 @@ describe("test-day commands and state (Wave 3)", () => {
     expect(pendingCommands(p).map((e) => e.payload.key)).toEqual(["testday:x", "testday_a", "testday:log:1", "testday:monday:u9"])
   })
 
+  it("lists a command filed without when the person acted after every other, and does not crash", () => {
+    const p = paths()
+    const base = { who: "Ada", whoId: "111", whoKey: "monday:111", via: "slack" as const, door: { kind: "none" as const } }
+    // Its key sorts first, and it was filed first: it still goes last.
+    putOnce(p.inbox, "testday:a-old", { ...base, key: "testday:a-old", verb: "start", type: "testday", receivedAt: "2026-10-02T07:00:00.000Z" })
+    fileTestDayCommand(p, { ...base, key: "testday:z-new", verb: "cancel", at: "2026-10-02T09:00:00.000Z" }, T0)
+    expect(pendingCommands(p).map((e) => e.payload.key)).toEqual(["testday:z-new", "testday:a-old"])
+  })
+
   it("reads when a person acted, from a Slack ts or a Monday time, as full ISO", () => {
     expect(slackTime("1790000000.000100")).toBe("2026-09-21T14:13:20.000Z")
     expect(actedAt("2026-10-02T08:00:00Z", T0)).toBe("2026-10-02T08:00:00.000Z")
