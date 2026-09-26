@@ -165,6 +165,22 @@ describe("git_commands.py", () => {
     }
     expect(analyse('git commit -m "$(cat msg)"')).toEqual(["COMMIT ."])
     expect(analyse('cd "$(git rev-parse --show-toplevel)" && git commit -m x')).toEqual(["COMMIT @unknown"])
+    // No branch or path holds a control character, and a newline would split a finding in two.
+    expect(analyse("git push origin $'main\\nPUSH x'")).toEqual(["PUSH @unknown", "PUSH origin"])
+    expect(analyse("git push origin $'ma\\nin'")).toEqual(["PUSH @unknown", "PUSH origin"])
+    expect(analyse("cd $'a\\nb' && git commit -m x")).toEqual(["COMMIT @unknown"])
+  })
+
+  it("never prints a finding that could split a line: it stops instead", () => {
+    const code = "import sys; sys.path.insert(0, sys.argv[1]); import git_commands as g; g.analyse = lambda text: ['PUSH feat\\nEND']; g.main()"
+    const r = spawnSync("python3", ["-c", code, dirname(LIB)], { input: "", encoding: "utf8" })
+    expect(r.status).not.toBe(0)
+    expect(r.stdout).not.toContain("END")
+    expect(r.stderr).toContain("a word it cannot print")
+  })
+
+  it("reads an octal escape as one byte, as bash and zsh do: $'\\547it' is git", () => {
+    expect(analyse("$'\\547it' push origin main")).toEqual(["PUSH origin", "PUSH main"])
   })
 
   it("names each destructive command gate (a) refuses from what runs, never from text (#151 review)", () => {

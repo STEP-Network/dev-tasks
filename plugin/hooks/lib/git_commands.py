@@ -175,7 +175,7 @@ def ansi_c(body):
             i += 2 + (len(digits.group()) if digits else 0)
         elif e in "01234567":
             digits = re.match(r"[0-7]{1,3}", body[i + 1 :]).group()
-            out.append(chr(int(digits, 8)))
+            out.append(chr(int(digits, 8) & 0xFF))  # one byte: \\777 is \\377
             i += 1 + len(digits)
         elif e == "c" and i + 2 < len(body):
             out.append(chr(ord(body[i + 2]) & 0x1F))
@@ -287,8 +287,14 @@ def segments(text):
 
 
 def computed(word):
-    """A word bash, xargs or find fills in as it runs: a $ expansion, a substitution, a brace or glob, find's {}."""
-    return COMPUTED in word or any(c in word for c in "$`?[") or ("{" in word and "}" in word)
+    """A word bash, xargs or find fills in as it runs: a $ expansion, a substitution, a brace or glob,
+    find's {}. Or one no branch or path it prints can hold: a control character ($'main\\nPUSH x')."""
+    return (
+        COMPUTED in word
+        or any(c in word for c in "$`?[")
+        or ("{" in word and "}" in word)
+        or any(c < " " or c == "\x7f" for c in word)
+    )
 
 
 def readings(words):
@@ -497,6 +503,9 @@ def main():
         out = analyse(sys.stdin.read())
     except Unreadable as error:
         raise SystemExit("unreadable: " + str(error))
+    # One finding a line: a word that could split a line, or not print, is never one.
+    if not all(line.isprintable() for line in out):
+        raise SystemExit("unreadable: a word it cannot print")
     print("\n".join(out + ["END"]))
 
 
