@@ -432,8 +432,8 @@ export async function runJob(deps: RunDeps, jobId: string): Promise<JobResult> {
     const mode: MergeMode = deferred ? "deferred" : merge
     try {
       const fin = revise
-        ? await finalizeRevise({ exec, paths, config, issue, revise, worktree, now: deps.now }, outcome)
-        : await finalize({ exec, tracker, paths, config, issue, branch, worktree, merge: mode, model, minutes: minutes(), now: deps.now }, outcome)
+        ? await finalizeRevise({ exec, paths, config, issue, revise, worktree, now: deps.now, jobId }, outcome)
+        : await finalize({ exec, tracker, paths, config, issue, branch, worktree, merge: mode, model, minutes: minutes(), now: deps.now, jobId }, outcome)
       // It never throws, so a broken test never turns a done job into a blocked one. A revise round's push is tested however the round ended.
       if (fin.prUrl && (fin.status === "done" || (revise && fin.pushed))) await userTestStep(deps, { job, issue, prUrl: fin.prUrl, merge: mode, pushed: fin.pushed, revise })
       result = { status: fin.status, reason: fin.reason, prUrl: fin.prUrl, branch, costUsd: outcome.costUsd, turns: outcome.turns, minutes: minutes() }

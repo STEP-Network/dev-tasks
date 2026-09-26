@@ -30,6 +30,7 @@ import { cleanup, Every, healthStatus, inboxStuck, inboxUnhandled, linearDownNot
 import { actOnInstructions } from "./instructions.ts"
 import { spawnRetroProcess, spawnWorkerProcess, superviseJobs, workerLiveness, type Liveness } from "./jobrunner.ts"
 import { dueSlot, readRetroState, writeRetroState } from "../retro/retro.ts"
+import { flushPings } from "../notify.ts"
 
 const TICK_MS = 15_000
 
@@ -132,6 +133,8 @@ export async function runDuties(d: DutyDeps, memo: DutyMemo): Promise<void> {
     if (d.every.due("monday", bridge.pollEveryMs())) await step("monday", () => bridge.sync())
     else await step("monday replies", () => bridge.drain())
   }
+  // The pings that waited for the night to pass (spec 6), once working hours begin.
+  if (d.every.due("pings", 60_000)) await step("pings", async () => void flushPings(paths, config, now()))
   await step("jobs", () => superviseJobs({ paths, config, now, log, bootAt: d.bootAt, liveness: d.liveness, kill: d.kill, spawnWorker: d.spawnWorker }))
   if (d.every.due("decisions", 60_000)) {
     await step("decisions", () => takeDefaults({ exec: d.exec, paths, config, now, log, comment: (issue, body) => d.tracker.comment(issue, body) }))

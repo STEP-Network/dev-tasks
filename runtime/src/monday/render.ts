@@ -181,6 +181,9 @@ export const say = {
   filed: (name: string, id: string) => `Thanks, ${name}. I filed this for the agents as ${id}. It moves to Done when the change is released. ${NOTHING_NEEDED}`,
   /** On the Requests board, where Stage says how far it has come. */
   filedRequest: (name: string, id: string) => `Thanks, ${name}. I filed this for the agents as ${id}. Its Stage shows how far it has come. ${NOTHING_NEEDED}`,
+  /** A money or legal question due today or tomorrow (spec 6): the one ping it gets. */
+  moneyLegalDue: (id: string, due: string, url: string) =>
+    `${id} needs an answer by ${due}, and it touches money or legal wording. Please answer in this thread or on Monday: ${url}`,
   /** A Slack request's item, the first time: who asked, and what (spec 4). */
   askedInSlack: (name: string, about: string) =>
     `${name} asked for this in Slack${about ? `: ${about}${/[.!?]$/.test(about) ? "" : "."}` : "."} I keep this item up to date from Linear.`,

@@ -73,6 +73,17 @@ const root = (paths: AgentPaths) => join(paths.state, "monday")
 const itemsDir = (paths: AgentPaths) => join(root(paths), "items")
 const itemFile = (paths: AgentPaths, key: string) => join(itemsDir(paths), `${safeKey(key)}.json`)
 
+const digestFile = (paths: AgentPaths) => join(root(paths), "digest.json")
+
+/** The local day the last morning digest was posted for. */
+export function readDigestDay(paths: AgentPaths): string | null {
+  return readJson<{ day: string }>(digestFile(paths))?.day ?? null
+}
+
+export function writeDigestDay(paths: AgentPaths, day: string): void {
+  writeJsonAtomic(digestFile(paths), { day })
+}
+
 export function readRecords(paths: AgentPaths): ItemRecord[] {
   if (!existsSync(itemsDir(paths))) return []
   return readdirSync(itemsDir(paths))

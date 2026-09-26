@@ -73,6 +73,20 @@ const MONDAY_ID = z.union([z.string().regex(/^\d+$/, "must be a Monday id (digit
 const MONDAY_COLUMN = z.string().regex(/^[a-z0-9_]+$/, "must be a Monday column id")
 
 /**
+ * The morning digest (Wave 2, spec 6, D5): at `at` in queue.timeZone on
+ * `days` (1 is Monday), not on `skipDates`, in #polads-questions. Off until
+ * go-live turns it on.
+ */
+const DigestSchema = z
+  .object({
+    enabled: z.boolean().default(false),
+    at: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, "must be HH:MM").default("08:00"),
+    days: z.array(z.number().int().min(1).max(7)).default([1, 2, 3, 4, 5]),
+    skipDates: z.array(z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "must be YYYY-MM-DD")).default([]),
+  })
+  .prefault({})
+
+/**
  * The Requests board (Wave 2, spec 6): one item per ask, kept in step with
  * its anchor issue in Linear. Its ids are the board's own, made by a person
  * (N1), so none has a default: without this block the bridge runs on one
@@ -178,6 +192,7 @@ const MondayBridgeSchema = z
     archiveAfterDays: z.number().positive().default(14),
     /** The Requests board (Wave 2). Set, requests live there and the board above keeps no request groups. */
     requests: RequestsBoardSchema.optional(),
+    digest: DigestSchema,
   })
   .superRefine((m, ctx) => {
     if (!m.people.some((p) => p.id === m.defaultPerson)) {

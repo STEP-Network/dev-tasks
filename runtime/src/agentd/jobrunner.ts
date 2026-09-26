@@ -22,6 +22,7 @@ import { join } from "node:path"
 import type { AgentConfig, AgentPaths } from "../config.ts"
 import { heldBackIssues, jobPath, listJobs, moveJob, updateJob, type JobRecord } from "../jobs.ts"
 import { appendLedger, type Logger } from "../log.ts"
+import { blockedPing, ping } from "../notify.ts"
 import { enqueueSlack } from "../outbox.ts"
 import { commandOf } from "../pidlock.ts"
 import { plainReason, prLink } from "../plain.ts"
@@ -120,6 +121,12 @@ function endBlocked(deps: JobRunnerDeps, job: JobRecord, reason: string, started
     deps.log.error("issue held back after two early losses", { issue: job.issue, jobId: job.id })
   }
   enqueueSlack(deps.paths, { kind: "post", channel: "agents", text: `${job.issue}: I had to stop: ${plainReason(reason)}. ${notice}${more}` }, now)
+  // The people are asked too, once, in the issue's thread (spec 6). A ping that cannot be written never stops the ending.
+  try {
+    ping(deps.paths, deps.config, blockedPing(job.id, job.issue, reason), now)
+  } catch (error) {
+    deps.log.warn("ping not sent", { issue: job.issue, error: String(error) })
+  }
   return true
 }
 

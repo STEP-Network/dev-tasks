@@ -267,6 +267,12 @@ export function doorsSetup(
     keepOldGroups?: boolean
     requestsBoardMissing?: boolean
     dailyLimit?: number | null
+    /** When the clock starts (T0 unless named). */
+    start?: Date
+    /** The morning digest switched on (go-live). */
+    digest?: boolean
+    /** Wave 3's test-day line for the digest. */
+    testDayLine?: () => string | null
   } = {},
 ) {
   const newLayout = opts.newLayout ?? true
@@ -282,6 +288,7 @@ export function doorsSetup(
           ? { columns: { recommendation: "col_rec", request: "col_request", slackThread: "col_thread" }, groups: { needsYou: "Decide", approvePlan: "Approve plan", looks: "Looks good?", fyi: "FYI" } }
           : {}),
         ...(opts.requests ? { requests: { boardId: REQ, columns: REQUEST_COLUMNS } } : {}),
+        ...(opts.digest ? { digest: { enabled: true } } : {}),
       },
     },
   })
@@ -294,8 +301,9 @@ export function doorsSetup(
   const { people } = fakePeople(fake.issues, opts.extra, opts.parents)
   const warned: string[] = []
   const log: Logger = { info: () => {}, warn: (m) => warned.push(m), error: (m) => warned.push(m) }
-  let now = T0
-  const bridge = createMondayBridge({ paths, config, log, now: () => now, api: monday.api, tracker: fake.tracker, people })
+  let now = opts.start ?? T0
+  monday.at(now)
+  const bridge = createMondayBridge({ paths, config, log, now: () => now, api: monday.api, tracker: fake.tracker, people, ...(opts.testDayLine ? { testDayLine: opts.testDayLine } : {}) })
   const later = (minutes: number) => {
     now = new Date(now.getTime() + minutes * 60_000)
     monday.at(now)
