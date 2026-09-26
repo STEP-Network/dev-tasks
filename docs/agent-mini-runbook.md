@@ -456,6 +456,12 @@ the probes, run only at a person's terminal: over SSH use `ssh -t`.
 - `~/.agentd/bin/agentctl doctor`: the install's checks, any time.
 - `tmux -L agentd attach -t =frontdoor`: the front door. Do not type into it
   while it works. Pause first.
+- `~/.agentd/bin/agentctl frontdoor restart --reason <why>`: restarts the
+  front door, resumed, for a deploy or a config change (STEP-3370). agentd
+  counts three exits in an hour as a front door that restarting will not fix
+  and waits 30 minutes; a restart asked for this way is no exit, and starts
+  again at once even inside that wait. A `tmux kill-session` is an exit.
+  Over SSH it needs no terminal. The front door itself may not run it.
 - Remote Control on the phone or claude.ai, signed in as `<agent>@polads.eu`.
 - Logs in `~/.agentd/logs/`: `agentd.log`, `slack-bridge.log`,
   `worker.log`, `worker-<job>.log`, `ledger.jsonl`, and the two
@@ -789,7 +795,7 @@ cd ~/dev-tasks && git pull --ff-only
 bash ~/dev-tasks/runtime/scripts/install.sh      # re-renders, restarts agentd and the bridge
 ~/.agentd/bin/agentctl probe-sandbox             # every line ok, or stay paused
 ~/.agentd/bin/agentctl probe-hooks --scripted    # every line ok, or stay paused
-tmux -L agentd kill-session -t =frontdoor        # agentd resumes it within 15 seconds, on the new plugin
+~/.agentd/bin/agentctl frontdoor restart --reason update   # agentd resumes it within 15 seconds, on the new plugin
 ~/.agentd/bin/agentctl resume
 ```
 

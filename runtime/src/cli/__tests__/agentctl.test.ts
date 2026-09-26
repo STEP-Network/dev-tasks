@@ -111,6 +111,42 @@ describe("parseCli", () => {
   })
 })
 
+describe("agentctl frontdoor restart (STEP-3370)", () => {
+  const requestFile = () => join(root, "state", "frontdoor-restart.json")
+
+  it("records the restart with its reason, then ends the session on the front door's own tmux server", async () => {
+    writeConfig()
+    const tmux = fakeExec()
+    expect(await run(["frontdoor", "restart", "--reason", "the new plugin"], out, deps({ exec: tmux.exec, isTTY: () => false }))).toBe(0)
+    expect(JSON.parse(printed.at(-1)!)).toEqual({ restarted: true })
+    expect(tmux.lines()).toEqual([expect.stringMatching(/-L agentd kill-session -t =frontdoor$/)])
+    expect(JSON.parse(readFileSync(requestFile(), "utf8"))).toEqual({ at: NOW.toISOString(), reason: "the new plugin" })
+  })
+
+  it("says so, and leaves no request, when the front door is not running", async () => {
+    writeConfig()
+    const tmux = fakeExec([[/kill-session/, { code: 1, stderr: "can't find session: =frontdoor" }]])
+    expect(await run(["frontdoor", "restart"], out, deps({ exec: tmux.exec }))).toBe(0)
+    expect(JSON.parse(printed.at(-1)!)).toEqual({ restarted: false, why: "the front door is not running: agentd starts it within 15 seconds" })
+    expect(existsSync(requestFile())).toBe(false)
+  })
+
+  it("is refused to the front door itself, which must not talk its way past the backoff", async () => {
+    writeConfig()
+    const tmux = fakeExec()
+    await expect(run(["frontdoor", "restart"], out, deps({ exec: tmux.exec, env: { AGENTD_FRONT_DOOR: "1" } }))).rejects.toThrow(/front door may not restart itself/)
+    expect(tmux.lines()).toEqual([])
+    expect(existsSync(requestFile())).toBe(false)
+  })
+
+  it("refuses anything but restart, and a secret in the reason", async () => {
+    writeConfig()
+    await expect(run(["frontdoor"], out, deps())).rejects.toThrow(/agentctl frontdoor restart/)
+    await expect(run(["frontdoor", "restart", "--reason", "token xoxb-fake-token-000"], out, deps())).rejects.toThrow(/--reason/)
+    expect(existsSync(requestFile())).toBe(false)
+  })
+})
+
 describe("run", () => {
   it("queues a develop job and refuses a second for the same issue", async () => {
     expect(await run(["job", "submit", "--issue", "STEP-7"], out, deps())).toBe(0)
