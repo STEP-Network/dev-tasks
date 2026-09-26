@@ -80,7 +80,11 @@ describe("the in-memory Monday account", () => {
     expect(monday.subitems.get(parent)?.map((s) => [s.name, s.columns.col_verdict.text])).toEqual([["1. Public: the notice page", "To test"]])
     await monday.api.setColumns(SUBITEMS, sub, { col_verdict: { label: "FAIL" } })
     expect(monday.subitems.get(parent)?.[0].columns.col_verdict.text).toBe("FAIL")
+    await monday.api.setColumns(SUBITEMS, sub, { col_note: "the price shows 0" })
     const read = await monday.api.readSubitems(parent, ["col_verdict"])
+    // Only the columns asked for, as Monday answers.
+    expect(Object.keys(read[0].columns)).toEqual(["col_verdict"])
+    expect((await monday.api.readSubitems(parent, ["col_note"]))[0].columns).toEqual({ col_note: { text: "the price shows 0", value: JSON.stringify("the price shows 0") } })
     read[0].name = "changed by the reader"
     expect(monday.subitems.get(parent)?.[0].name).toBe("1. Public: the notice page")
     // A subitem is not an item of its parent's board.
