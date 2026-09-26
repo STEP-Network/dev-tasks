@@ -183,9 +183,9 @@ export function fakeMonday(
       return id
     },
     /** A person changing a column, the Answer column unless another is named, as the activity log records it. */
-    answers(itemId: string, userId: string, text: string, columnId: string = NEEDS_COLUMNS.answer) {
+    answers(itemId: string, userId: string, text: string, columnId: string = NEEDS_COLUMNS.answer, at: string = clock.toISOString()) {
       const id = `log${next++}`
-      logs.push({ id, itemId, userId, text, at: clock.toISOString(), columnId })
+      logs.push({ id, itemId, userId, text, at, columnId })
       return id
     },
     item: (name: RegExp) => [...items.values()].find((i) => name.test(i.name)),

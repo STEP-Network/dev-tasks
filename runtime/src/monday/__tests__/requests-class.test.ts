@@ -107,6 +107,22 @@ describe("a person's Class change on their request (D1)", () => {
     expect(s.warned.filter((w) => /class/.test(w))).toEqual([])
   })
 
+  it("never acts on a change whose time it cannot read, and it holds no later change back (review)", async () => {
+    const s = setup()
+    const itemId = requestRecord(s, "STEP-10")
+    await s.bridge.sync()
+    // Kept as Monday wrote it (client.ts logTime): as a string it sorts after every real time.
+    s.monday.answers(itemId, "111", "Auto", "r_class", "garbage")
+    s.later(1)
+    await s.bridge.sync()
+    expect(s.sent).toEqual([])
+    expect(readRecords(s.paths)[0].classAt).toBeUndefined()
+    await setClass(s, itemId, "111", "Look")
+    s.later(1)
+    await s.bridge.sync()
+    expect(s.lowered()).toEqual([["l-look"]])
+  })
+
   it("hears a change the log shows late, from before its last read", async () => {
     const s = setup()
     const itemId = requestRecord(s, "STEP-10")
