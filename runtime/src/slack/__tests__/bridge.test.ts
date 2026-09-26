@@ -785,6 +785,14 @@ describe("test day in Slack (Wave 3, WS7)", () => {
     expect(pendingCommands(paths)[0].payload).toMatchObject({ verb: "verdict", n: 4, note: "the page printed [redacted]" })
   })
 
+  it("keeps at most 4,000 characters of what someone saw, as the Monday board keeps words", async () => {
+    const { deps, paths } = testDaySetup()
+    await handleEnvelope(deps, say("1750.10", `4 fail ${"x".repeat(5000)}`, { thread_ts: "1750.1" }))
+    const note = (pendingCommands(paths)[0].payload as { note: string }).note
+    expect(note.length).toBeLessThanOrEqual(4000)
+    expect(note.length).toBeGreaterThan(3900)
+  })
+
   it("records no verdict from a message with several, and asks for one per message, once", async () => {
     const { deps, paths } = testDaySetup()
     await handleEnvelope(deps, say("1750.8", "<@UBOT> 5 pass\n6 fail no logo", { thread_ts: "1750.1", type: "app_mention" }))

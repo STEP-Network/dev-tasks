@@ -322,8 +322,12 @@ export type TestDayVerb =
 const SLACK_MENTIONS = /<@[A-Z0-9]+(\|[^>]*)?>/g
 const START = /^(please[\s,]+)?(begin|start)\s+test\s?day[\s.!]*$/i
 const VERDICT = /^#?(\d{1,3})\s*[:.)-]?\s*(pass|fail)\b[\s:,.-]*([\s\S]*)$/i
-/** Another verdict in a verdict's note: at its start, or after a new line, a comma or a semicolon ("5 pass, 6 fail no logo"). */
-const ANOTHER_VERDICT = /(^|[\n,;]\s*)#?\d{1,3}\s*[:.)-]?\s*(pass|fail)\b/i
+/**
+ * Another verdict in a verdict's note: any other number with pass or fail
+ * after it, whatever comes before ("5 pass and 6 fail", "5 pass ✅ 6 fail").
+ * Asking again costs a rephrase; a FAIL kept as a PASS's note costs a release.
+ */
+const ANOTHER_VERDICT = /(^|[^\p{L}\p{N}_])#?\d{1,3}\s*[:.)-]?\s*(pass|fail)\b/iu
 const FIX = /^(fix (it )?before (the )?release|fix now)[\s.!]*$/i
 const NEXT_WEEK = /^(next week|hold (it )?back( to next week)?)[\s.!]*$/i
 

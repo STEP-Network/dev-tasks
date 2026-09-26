@@ -21,12 +21,21 @@ describe("testDayVerb (Wave 3, spec 7: the fixed test-day verbs)", () => {
   })
 
   it("reads no verdict from a message with several: a FAIL never becomes a PASS's note", () => {
-    for (const text of ["5 pass\n6 fail no logo", "5 pass, 6 fail no logo", "5 pass; #6 fail", "5 pass 6 fail", "4 fail the price\n5. pass", "4 fail, 2 pass"]) {
-      expect(testDayVerb(text)).toEqual({ verb: "several" })
+    for (const text of [
+      "5 pass\n6 fail no logo", "5 pass, 6 fail no logo", "5 pass; #6 fail", "5 pass 6 fail", "4 fail the price\n5. pass", "4 fail, 2 pass",
+      // However the two are joined (review of eec5b29).
+      "5 pass and 6 fail no logo", "5 pass & 6 fail", "5 pass / 6 fail", "5 pass | 6 fail", "5 pass + 6 fail", "5 pass — 6 fail", "5 pass – 6 fail",
+      "5 pass (6 fail)", "5 pass * 6 fail", "5 pass then 6 fail", "5 pass but 6 fail", "5 pass ✅ 6 fail", "5 pass og 6 fail", "5 pass\n• 6 fail",
+      "5 fail no logo and 6 pass", "4 fail the price, 5 pass",
+    ]) {
+      expect(testDayVerb(text), text).toEqual({ verb: "several" })
     }
-    // A number inside what they saw is still one verdict.
-    expect(testDayVerb("4 fail: only 2 pass the check")).toEqual({ verb: "verdict", n: 4, verdict: "fail", note: "only 2 pass the check" })
-    expect(testDayVerb("4 fail the total shows 3 items")).toMatchObject({ verb: "verdict", n: 4, note: "the total shows 3 items" })
+    // A number that is not a checkpoint's is still one verdict.
+    for (const note of ["the total shows 3 items", "the price shows 0 kr", "step 3 fails", "2 of 3 buttons work", "tried 3 times, 2 failed"]) {
+      expect(testDayVerb(`4 fail ${note}`), note).toEqual({ verb: "verdict", n: 4, verdict: "fail", note })
+    }
+    // A number right before pass or fail is read as a second checkpoint: asked again, never guessed.
+    expect(testDayVerb("4 fail: only 2 pass the check")).toEqual({ verb: "several" })
   })
 
   it("never reads a verdict without its checkpoint, or a word that only starts like one", () => {

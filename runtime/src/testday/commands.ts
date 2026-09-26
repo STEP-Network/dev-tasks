@@ -22,7 +22,7 @@ export const DECISION_HELP = 'Here I read "fix before release" or "next week" fo
 
 /** Said to a person who sent several checkpoints in one message: none of them was recorded. */
 export const ONE_AT_A_TIME =
-  'I read one checkpoint per message, so I recorded nothing from this one. Please send each on its own, for example "5 pass", then "6 fail the price shows 0".'
+  'I read one checkpoint per message, so I recorded nothing from this one. Please send each on its own, for example "5 pass", then "6 fail the price shows 0". If this was one checkpoint, write what you saw without a number right before pass or fail.'
 
 /** A command as a bridge files it: each verb's own fields, without what filing adds. */
 type Filed<C> = C extends unknown ? Omit<C, "type" | "receivedAt"> : never
@@ -35,8 +35,11 @@ export function fileTestDayCommand(paths: AgentPaths, c: Filed<TestDayCommand>, 
 export function pendingCommands(paths: AgentPaths): Array<{ key: string; payload: TestDayCommand }> {
   return listNew<TestDayCommand>(paths.inbox)
     .filter((e) => e.payload.type === "testday")
-    .sort((a, b) => a.payload.at.localeCompare(b.payload.at) || a.key.localeCompare(b.key))
+    .sort((a, b) => byCode(a.payload.at ?? a.payload.receivedAt, b.payload.at ?? b.payload.receivedAt) || byCode(a.payload.key, b.payload.key))
 }
+
+/** Plain code-point order: the same on every mini, whatever its locale. */
+const byCode = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0)
 
 /** A Slack message's ts as the time it was written, ISO. */
 export const slackTime = (ts: string): string => new Date(Math.round(Number(ts) * 1000)).toISOString()

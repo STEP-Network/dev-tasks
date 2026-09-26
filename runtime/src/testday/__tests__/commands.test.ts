@@ -38,9 +38,10 @@ describe("test-day commands and state (Wave 3)", () => {
     // File names would order these testday:log < testday:monday < testday:msg.
     fileTestDayCommand(p, { ...base, key: "testday:monday:u9", verb: "cancel", via: "monday", at: "2026-10-02T08:03:00.000Z" }, T0)
     fileTestDayCommand(p, { ...base, key: "testday:log:1", verb: "release", via: "monday", at: "2026-10-02T08:02:00.000Z" }, T0)
-    fileTestDayCommand(p, { ...base, key: "testday:msg:CQ:2", verb: "start", via: "slack", at: "2026-10-02T08:01:00.000Z" }, T0)
-    fileTestDayCommand(p, { ...base, key: "testday:msg:CQ:1", verb: "start", via: "slack", at: "2026-10-02T08:01:00.000Z" }, T0)
-    expect(pendingCommands(p).map((e) => e.payload.key)).toEqual(["testday:msg:CQ:1", "testday:msg:CQ:2", "testday:log:1", "testday:monday:u9"])
+    // At the same moment, by key: file names sort these two the other way (testday_a before testday_x).
+    fileTestDayCommand(p, { ...base, key: "testday_a", verb: "start", via: "slack", at: "2026-10-02T08:01:00.000Z" }, T0)
+    fileTestDayCommand(p, { ...base, key: "testday:x", verb: "start", via: "slack", at: "2026-10-02T08:01:00.000Z" }, T0)
+    expect(pendingCommands(p).map((e) => e.payload.key)).toEqual(["testday:x", "testday_a", "testday:log:1", "testday:monday:u9"])
   })
 
   it("reads when a person acted, from a Slack ts or a Monday time, as full ISO", () => {
