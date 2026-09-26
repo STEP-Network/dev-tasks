@@ -1170,6 +1170,57 @@ goes into PolAds' `.github/approval-class.json` too, or the check fails a PR
 whose issue it lowered. Turn it on only once the people-doors guard (below)
 runs on every machine that has a Monday, Slack or Linear connector.
 
+### Moving the requests to their own board (Wave 2, `agentctl monday migrate`)
+
+Once the Requests board exists and its ids are in `bridges.monday.requests`,
+this moves every item in the Needs-you board's Requests and "Agents working
+on" groups there, and labels each open Slack ask `intake/slack`, so the
+bridge gives it its request item. On the coordinator mini, as `<agent>`:
+
+1. Turn the bridge off (`"enabled": false`) and restart agentd. The
+   migration refuses while the config has it on, and while agentd still
+   polls: the board was read within `pollMinutes`.
+2. `~/.agentd/bin/agentctl monday migrate` prints the plan and changes
+   nothing: the moves, the column mapping, the issues to label, and any item
+   it will not move, with why.
+3. `--apply --only <item id>` moves one item, then `--reverse <the snapshot
+   it printed>` puts it back: check it is back as it was.
+4. `--apply` moves the rest. Run it again until it moves and labels nothing.
+5. Turn the bridge back on and restart agentd.
+
+What the move keeps, and what it does not:
+
+- Monday's move keeps each item's id, updates and history, so every bridge
+  record stays valid. Only the Linear link and the Person carry over. Every
+  other column is dropped, and kept in the snapshot.
+- An item with subitems or files is not moved: the move would lose them, and
+  the API cannot put them back. The plan names it. Move them off or remove
+  them by hand, then run `--apply` again. The way back does the same for an
+  item that got subitems or files on the Requests board.
+- Before the first move, each run writes a snapshot of every item it will
+  move, with every column and its group, to
+  `~/.agentd/state/monday/migration-<time>.json`, readable by this user alone.
+  Before each move it writes down which item it is moving, so a run cut short
+  still leaves the way back for what it moved.
+
+The way back: `--reverse <snapshot>` for one run, or `--reverse
+~/.agentd/state/monday` for every run there, each item as the run that moved
+it found it. Each item goes back to its group, then each column as it was, one at a
+time. A connected item (the Request column) is written as item ids, and
+columns Monday computes (a formula, a mirror, a creation log) are left as
+they are. A run that stops half-way is finished by the next: it writes only
+what still differs. The two columns the move carried (the Linear link, and
+the Person, which the Requests board calls Requester) go back to their
+snapshot values too: an edit made to either on the Requests board since the
+move is undone. The labels come off, and the request items the bridge
+made for them are archived. An item a person made that the bridge took over
+stays on the board. While a migration runs, `~/.agentd/state/monday/migrating`
+is there and the bridge does not poll or post. While the bridge polls or
+posts, `~/.agentd/state/monday/syncing` is there, with agentd's process id,
+and a migration waits up to two minutes for it to go, then refuses. If a migration stops half-way, check that
+none runs, remove `migrating`, and run it again. A `syncing` left by an
+agentd that has since stopped holds nothing up.
+
 ### No agent session writes as a person (the people-doors guard, STEP-3330)
 
 The bridge takes a Monday user's update or Answer column as that person's

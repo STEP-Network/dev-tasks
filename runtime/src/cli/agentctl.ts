@@ -2,7 +2,7 @@
  * agentctl: the agent mini's local control, for the front door (tick, ack,
  * job submit, usertest, ask, decide, verdict, request, slack post and reply), a person on the machine (status,
  * report, retro, pause, resume, retry, doctor, probe-sandbox, probe-hooks --scripted,
- * probe-browser) and the rehearsal (probe-hooks). One line of output per call: JSON, or text for
+ * probe-browser, monday migrate) and the rehearsal (probe-hooks). One line of output per call: JSON, or text for
  * status, report, doctor and the free probes. Usage errors exit 64, anything
  * else 1.
  * Installed as ~/.agentd/bin/agentctl (runtime/templates/shim.sh), which runs
@@ -20,11 +20,13 @@ import { channelApproval, MANAGED_SETTINGS } from "../channel/managed.ts"
 import { actionsAsked, decisionText, fileInstructionFor, personEntry, recordDecision, type Decision } from "../decide.ts"
 import { handoff, RECOMMENDATION_LEAD, withRecommendation } from "../plain.ts"
 import type { Action, InstructionEntry } from "../slack/instruction.ts"
-import { loadClaudeOauthToken } from "../secrets.ts"
+import { loadClaudeOauthToken, loadMondayToken } from "../secrets.ts"
 import { buildDigest, inboxEvents, pauseReason } from "../tick.ts"
 import { readChannelState } from "../channel/state.ts"
 import { assertNoSecretText, createLinearTracker, readTextFile, type Tracker } from "../tracker.ts"
 import { createPeopleView, type PeopleView } from "../monday/people.ts"
+import { createMondayApi, type MondayApi } from "../monday/client.ts"
+import { applyMigration, planMigration, readSnapshots, reverseMigration, type MigrateDeps, type MigrationSnapshot } from "../monday/migrate.ts"
 import { parseVerdict, recordVerdict, verdictReply } from "../verdict.ts"
 import { fileMentionRequest, REQUEST_TYPES, type RequestType } from "../request.ts"
 import { readUsage } from "../usage.ts"
@@ -68,8 +70,10 @@ export interface AgentctlDeps {
   workerClaude: () => string | null
   /** Claude Code's managed settings on this machine, which approve the Slack channel. */
   managedSettings: string
-  /** Linear's people-facing reads: a UAT fix's parent and its adoption (verdict). */
-  people: () => Pick<PeopleView, "adoptFix" | "parentOf">
+  /** Linear's people-facing reads: a UAT fix's parent and its adoption (verdict), the issues the migration labels. */
+  people: () => Pick<PeopleView, "adoptFix" | "parentOf" | "openIssuesFiledFromSlack">
+  /** The Monday API, with the agent's token (~/.config/agentd/monday.env): monday migrate. */
+  mondayApi: () => MondayApi
 }
 
 const DEFAULTS: AgentctlDeps = {
@@ -82,6 +86,7 @@ const DEFAULTS: AgentctlDeps = {
   workerClaude: workerClaudePath,
   managedSettings: MANAGED_SETTINGS,
   people: () => createPeopleView(),
+  mondayApi: () => createMondayApi(loadMondayToken(agentPaths().home)),
 }
 
 /** Why agentd starts the front door without the Slack channel, or null when it opens it (agentd/frontdoor.ts). */
@@ -362,6 +367,34 @@ export async function run(argv: string[], out: (line: string) => void, overrides
       }
       throw new UsageError("usage: agentctl slack post --channel <key> --text <t> | agentctl slack reply --channel <id> --thread <ts> --text <t> (or --text-file <path> for either)")
     }
+    case "monday": {
+      // Spec 8's move to two boards (Wave 2 Task 11): the plan, --apply to do it (--only <item id> for one item), or --reverse <snapshot>.
+      if (rest[0] !== "migrate" || rest.length > 1) throw new UsageError("usage: agentctl monday migrate [--apply [--only <item id>] | --reverse <snapshot, or the directory of every run's>]")
+      const reverse = typeof flags.reverse === "string" ? flags.reverse : undefined
+      const only = typeof flags.only === "string" ? flags.only : undefined
+      if (flags.reverse === true) throw new UsageError("--reverse needs the snapshot file --apply printed, or its directory for every run")
+      if (reverse && (flags.apply !== undefined || only)) throw new UsageError("--reverse undoes a migration: give it without --apply or --only")
+      const m: MigrateDeps = { config: loadConfig(paths), paths, api: deps.mondayApi(), tracker: deps.tracker(), people: deps.people() }
+      if (reverse) {
+        let snapshot: MigrationSnapshot
+        try {
+          snapshot = readSnapshots(reverse)
+        } catch (error) {
+          throw new UsageError(`${reverse} is not a migration snapshot: ${message(error)}`)
+        }
+        const back = await reverseMigration(m, snapshot)
+        print(back)
+        return back.failed.length ? 1 : 0
+      }
+      const plan = await planMigration(m, only)
+      if (flags.apply !== true) {
+        print({ plan, apply: "run again with --apply to do it" })
+        return 0
+      }
+      const done = await applyMigration(m, plan)
+      print(done)
+      return done.failed.length ? 1 : 0
+    }
     case "pause": {
       const reason = typeof flags.reason === "string" ? flags.reason : ""
       try {
@@ -537,7 +570,7 @@ export async function run(argv: string[], out: (line: string) => void, overrides
     }
     default:
       throw new UsageError(
-        "usage: agentctl <tick|ack|job|usertest|ask|decide|verdict|request|instruct|slack|pause|resume|retry|status|report|retro|doctor|probe-hooks|probe-sandbox|probe-browser> (see runtime/src/cli/agentctl.ts)",
+        "usage: agentctl <tick|ack|job|usertest|ask|decide|verdict|request|monday|instruct|slack|pause|resume|retry|status|report|retro|doctor|probe-hooks|probe-sandbox|probe-browser> (see runtime/src/cli/agentctl.ts)",
       )
   }
 }

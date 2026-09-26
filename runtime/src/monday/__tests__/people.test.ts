@@ -124,6 +124,15 @@ describe("the people's view of Linear (STEP-3289)", () => {
     expect(calls[0].variables).toMatchObject({ label: "intake/slack" })
   })
 
+  it("reads the open, parentless issues filed from Slack, for the migration", async () => {
+    const { request, calls } = fakeRequest([[raw("STEP-40", { description: "x\n\n---\nFiled from Slack by Ada: https://acme.slack.com/archives/C1/p1" })]])
+    expect((await createPeopleView(request).openIssuesFiledFromSlack()).map((i) => i.id)).toEqual(["STEP-40"])
+    expect(calls[0].query).toContain("description: { contains: $filed }")
+    expect(calls[0].query).toContain('state: { type: { nin: ["completed", "canceled", "duplicate"] } }')
+    expect(calls[0].query).toContain("parent: { null: true }")
+    expect(calls[0].variables).toMatchObject({ filed: "Filed from Slack by" })
+  })
+
   it("reads issues by their identifiers, in one query sized to them", async () => {
     const { request, calls } = fakeRequest([[raw("STEP-7"), raw("STEP-9")]])
     expect((await createPeopleView(request).byIdentifiers(["STEP-7", "STEP-9", "BAD-1"])).map((i) => i.id)).toEqual(["STEP-7", "STEP-9"])
