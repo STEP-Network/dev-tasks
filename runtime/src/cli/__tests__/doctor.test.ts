@@ -271,6 +271,17 @@ describe("doctorChecks", () => {
     expect(await failed(deps())).toEqual([])
   })
 
+  it("says whether the answer recorder's key is there, fails neither way, and never prints it (Wave 2, D1)", async () => {
+    const recorder = async () => (await doctorChecks(deps())).filter((c) => c.name === "recorder").map((c) => `${c.level} ${c.detail}`)
+    expect(await recorder()).toEqual(["ok no key (lowering stays in Linear)"])
+    secret(".config/agentd/recorder.env", "RECORDER_LINEAR_KEY=lin_api_recorder_x\n")
+    expect(await recorder()).toEqual(["ok key present (lowering from Monday and Slack is on)"])
+    chmodSync(join(home, ".config/agentd/recorder.env"), 0o644)
+    const refused = await recorder()
+    expect(refused).toEqual([expect.stringMatching(/^fail .*recorder\.env is readable by other users.*chmod 600/)])
+    expect(refused.join()).not.toContain("lin_api_recorder_x")
+  })
+
   it("refuses a GitHub login that cannot push, and no login at all", async () => {
     expect(await failed(deps({}, [[/--jq \.permissions\.push$/, { stdout: "false\n" }]]))).toEqual([
       expect.stringMatching(/^gh: eve-polads cannot push to STEP-Network\/v0-politiske-annoncer.*Write/),

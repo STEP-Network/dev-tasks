@@ -30,9 +30,9 @@ import { onQueue } from "../select.ts"
 import { issueForThread, saveThread, threadFor } from "../threads.ts"
 import { createLinearTracker, type Tracker } from "../tracker.ts"
 import { classify, type Classified, type ClassifyContext, type SlackEnvelope } from "./classify.ts"
-import { parseInstruction, type Action, type InstructionEntry } from "./instruction.ts"
+import { classVerb, parseInstruction, type Action, type InstructionEntry } from "./instruction.ts"
 import { isSlackTrouble, slackErrorCode, startOutbox, type SendContext, type SlackWeb } from "./send.ts"
-import { fromSlack, intakeIssue, mentionedUsers } from "./text.ts"
+import { fromSlack, intakeIssue, mentionedUsers, withoutMentions } from "./text.ts"
 import { frontDoorUp, lastTickAt } from "../agentd/frontdoor.ts"
 import { NOTHING_NEEDED } from "../plain.ts"
 import { noteCorrection } from "../answer.ts"
@@ -70,6 +70,8 @@ type PersonEntry = Extract<Classified, { type: "reply" | "mention" }> & {
   acted?: Action[]
   /** On a reply: the questions open in the thread when it came. */
   openQuestions?: number
+  /** The message's own link, once Slack gives it. */
+  permalink?: string | null
 }
 
 export async function handleEnvelope(deps: BridgeDeps, envelope: SlackEnvelope): Promise<Classified["type"]> {
@@ -128,10 +130,9 @@ const TRAIL = "([\\s,]+(now|for now|please))*[\\s.!]*$"
 const SHORT_PAUSE = new RegExp(`^${POLITELY}(pause|pause everything|stop everything|hold everything)${TRAIL}`, "i")
 const LEAVE = "(leave (it|this|that)( to me)?|i'?ll (take|handle) (it|this|that))"
 const SHORT_LEAVE = new RegExp(`^${POLITELY}${LEAVE}([\\s,.!]+${LEAVE})*${TRAIL}`, "i")
-const bare = (text: string) => text.replace(/<@[A-Z0-9]+(\|[^>]*)?>/g, " ").trim()
 
-export const shortPause = (text: string) => SHORT_PAUSE.test(bare(text))
-export const shortLeave = (text: string) => SHORT_LEAVE.test(bare(text))
+export const shortPause = (text: string) => SHORT_PAUSE.test(withoutMentions(text))
+export const shortLeave = (text: string) => SHORT_LEAVE.test(withoutMentions(text))
 
 /** What the bridge says in a thread while the front door cannot read it: a restart, a usage limit. */
 export const AWAY_NOTE = `I am not reading messages right now, and I will read this one as soon as I am back. ${NOTHING_NEEDED}`
@@ -143,9 +144,11 @@ export const AWAY_NOTE = `I am not reading messages right now, and I will read t
  * that is only a command: a pause at once, unless it replies in a thread with
  * a question open, where "pause" may be the answer, and a leave while the
  * front door is down. A pause is the whole mini's and needs no issue or PR.
- * The entry records what it did (`acted`), so the front door handles the rest
- * and does nothing twice. While the front door is down, it says so in the
- * thread, once each time.
+ * A whole "make it look" in an issue's thread (Wave 2, D1) is read here too,
+ * front door up or down: a class is changed on code's reading alone, never a
+ * model's. The entry records what it did (`acted`), so the front door handles
+ * the rest and does nothing twice. While the front door is down, it says so
+ * in the thread, once each time.
  */
 export function actForFrontDoor(deps: BridgeDeps, key: string): void {
   const path = entryPath(deps.paths.inbox, key)
@@ -159,7 +162,9 @@ export function actForFrontDoor(deps: BridgeDeps, key: string): void {
   const aimed = Boolean(issue || said.target.issue || said.target.pr)
   // "Ship it now, or pause?": with a question open in the thread, a pause may be the answer.
   const answering = entry.type === "reply" && (entry.openQuestions ?? 0) > 0
+  const verb = issue ? classVerb(entry.text) : null
   const wanted: Action[] = [
+    ...(verb ? ([`class-${verb}`] as const) : []),
     ...(shortPause(entry.text) && !answering ? (["pause"] as const) : []),
     ...(!up && aimed && shortLeave(entry.text) ? (["leave"] as const) : []),
   ]
@@ -168,6 +173,7 @@ export function actForFrontDoor(deps: BridgeDeps, key: string): void {
     // A key of its own: the front door's instruct files instr:<channel>:<ts> for the rest of the words.
     fileInstruction(deps, `instr:bridge-${due.join("-")}:${entry.channel}:${entry.ts}`, {
       issue, channel: entry.channel, ts: entry.ts, threadTs: entry.threadTs, user: entry.user, userName: entry.userName, text: entry.text, actions: due, target: said.target,
+      ...(entry.permalink ? { permalink: entry.permalink } : {}),
     })
     writeJsonAtomic(path, { ...entry, acted: [...acted, ...due] })
   }

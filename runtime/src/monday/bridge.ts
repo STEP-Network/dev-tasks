@@ -47,11 +47,12 @@ import { digestDue, digestText, dueSoon, ping, workingHours, type DigestGroup } 
 import { enqueueSlack, lastQuestion } from "../outbox.ts"
 import { prRef, recommendationOf } from "../plain.ts"
 import { openDecisions, questionText, type Decision } from "../agentd/decisions.ts"
+import { isClassAction } from "../slack/instruction.ts"
 import { truncateChars } from "../slack/text.ts"
 import { threadFor } from "../threads.ts"
 import { extractAcceptanceCriteria, isIssueGone, type Tracker } from "../tracker.ts"
 import { MondayRefused, type MondayApi, type MondayBoard, type MondayItem } from "./client.ts"
-import type { PeopleIssue, PeopleView } from "./people.ts"
+import type { LinearRequest, PeopleIssue, PeopleView } from "./people.ts"
 import { aboutText, lookBody, lookName, needBody, needKind, needName, plainText, planBody, planName, quote, say, stableUuid, toHtml, uatBody, uatName, type MondayKind, type NeedSource } from "./render.ts"
 import { createRequests, fileRequest, type RequestsPass } from "./requests.ts"
 import { routeWords, type Words } from "./route.ts"
@@ -70,6 +71,8 @@ export interface MondayBridgeDeps {
   people: PeopleView
   /** Wave 3's test-day line for the morning digest ("Test day in progress (14 of 20 checked)."), in place of its count. */
   testDayLine?: () => string | null
+  /** The answer recorder's Linear transport, read when a person lowers a class on the Requests board (D1): null without its key. */
+  recorder?: () => LinearRequest | null
 }
 
 export interface MondayBridge {
@@ -212,7 +215,10 @@ export function createMondayBridge(deps: MondayBridgeDeps): MondayBridge {
   const save = (rec: ItemRecord) => saveRecord(paths, rec)
 
   const requestsBoard = cfg.requests
-    ? createRequests({ paths, config: deps.config, log, api, tracker, people, once, reply: (itemId, text, now) => reply(itemId, null, text, now) })
+    ? createRequests({
+        paths, config: deps.config, log, api, tracker, people, once, reply: (itemId, text, now) => reply(itemId, null, text, now),
+        ...(deps.recorder ? { recorder: deps.recorder } : {}),
+      })
     : null
 
   async function setState(rec: ItemRecord, state: MondayState): Promise<void> {
@@ -366,9 +372,12 @@ export function createMondayBridge(deps: MondayBridgeDeps): MondayBridge {
         by: personKey(deps.config, { monday: who.id }),
         // What the item recommends (its Recommendation column): a yes agrees to it where this mini asked nothing (another mini's plan).
         recommendation: cfg!.columns.recommendation ? (item.columns[cfg!.columns.recommendation]?.text?.trim() || null) : null,
+        itemUrl: item.url,
       },
     )
     mark(rec, words.id)
+    // A class change (D1) answers nothing: the item still asks what it asked, and agentd says what it did.
+    if (routed.to === "agentd" && routed.actions.every(isClassAction)) return
     if (routed.to === "same") {
       reply(item.id, words, say.sameAnswer(who.name, routed.first.who), pass.now)
       return
@@ -823,10 +832,10 @@ export function createMondayBridge(deps: MondayBridgeDeps): MondayBridge {
     appendLedger(paths, { type: "digest.posted", day }, pass.now)
   }
 
-  /** The Requests board, read once a poll: its items, and its three groups found by title. */
+  /** The Requests board, read once a poll: its items, its three groups found by title, and who changed a Class (D1). */
   async function readRequests(now: Date, since: Date): Promise<RequestsPass> {
     const r = cfg!.requests!
-    const board = await api.readBoard(r.boardId, Object.values(r.columns), { columnIds: [], since })
+    const board = await api.readBoard(r.boardId, Object.values(r.columns), { columnIds: [r.columns.class], since: new Date(since.getTime() - OVERLAP_MS) })
     const byTitle = new Map(board.groups.map((g) => [g.title.trim().toLowerCase(), g.id]))
     const find = (title: string) => {
       const id = byTitle.get(title.trim().toLowerCase())
@@ -867,6 +876,8 @@ export function createMondayBridge(deps: MondayBridgeDeps): MondayBridge {
       const linked = await part("needs", () => needs(pass))
       // Not without the needs: an item whose issue has a thread on another mini would get a second one.
       if (doors && linked) await part("threads", () => threads(pass, linked))
+      // A person's Class change first, so this poll's columns show what Linear has after it.
+      if (requestsBoard && asked) await part("request class", () => requestsBoard.hearClass(asked))
       if (requestsBoard && asked) await part("request stages", () => requestsBoard.update(asked))
       await part("digest", () => digest(pass, asked))
       await part("archive", () => archive(pass))

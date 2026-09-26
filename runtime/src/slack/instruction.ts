@@ -11,10 +11,25 @@
  *   retry   retry, try again, carry on (a blocked job, on its branch)
  *   pause   pause, hold off, stop working (never a resume: only a person on the mini lifts a pause)
  *   leave   leave it, I'll take it: the answer to one of the mini's questions
+ *   class-look, class-auto   "make it look", "make it auto": the whole message
+ *           and nothing else, in a request's or plan's thread or item (Wave 2, D1)
  * "don't merge" and the like name no action.
  */
 
-export type Action = "revise" | "rerun" | "merge" | "retry" | "pause" | "leave"
+import { withoutMentions } from "./text.ts"
+
+export type ClassAction = "class-look" | "class-auto"
+export type Action = "revise" | "rerun" | "merge" | "retry" | "pause" | "leave" | ClassAction
+
+export const isClassAction = (a: Action): a is ClassAction => a === "class-look" || a === "class-auto"
+
+const CLASS_VERB = /^(?:please[\s,]+)?(?:make it|lower it to)\s+(look|auto)[\s.!]*$/i
+
+/** A class change in a person's own words (D1): the whole message only, so "make it look nicer" is not one. */
+export function classVerb(text: string): "look" | "auto" | null {
+  const m = CLASS_VERB.exec(withoutMentions(text))
+  return m ? (m[1].toLowerCase() as "look" | "auto") : null
+}
 
 export interface Instruction {
   actions: Action[]
@@ -44,6 +59,8 @@ interface InstructionBase {
   actions: Action[]
   target: Instruction["target"]
   receivedAt: string
+  /** A link to the words, where the door gives one: a class change is announced with it. */
+  permalink?: string | null
 }
 
 /** An instruction as the Slack bridge files it in the inbox, for agentd (agentd/instructions.ts). */
@@ -83,6 +100,9 @@ export function instructionFor(text: string, issue: { labels: readonly string[] 
 }
 
 export function parseInstruction(text: string): Instruction {
+  // A class verb is the whole message, so it names nothing else.
+  const verb = classVerb(text)
+  if (verb) return { actions: [`class-${verb}`], target: {} }
   // Mentions (<@U123>) and links in Slack's markup, as plain words.
   const plain = text.replace(/<@[A-Z0-9]+(\|[^>]*)?>/g, " ").replace(/<(https?:\/\/[^|>]+)(\|[^>]*)?>/g, "$1")
   const actions: Action[] = []

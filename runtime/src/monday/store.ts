@@ -67,6 +67,13 @@ export interface ItemRecord {
   slack?: { permalink: string }
   /** A Slack request's item, not yet linked from Linear and told to its thread: false until the poll after it is made. */
   announced?: boolean
+  /** When the last Class change settled was made (D1): one made at or before it, read again, is never acted on. */
+  classAt?: string
+  /**
+   * A person's Class change Linear could not take yet, kept whole, as `retry`
+   * keeps the Answer column's: the log is read a few minutes back only.
+   */
+  classRetry?: { id: string; userId: string; text: string; at: string }
 }
 
 const root = (paths: AgentPaths) => join(paths.state, "monday")
