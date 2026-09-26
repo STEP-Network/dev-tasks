@@ -162,11 +162,17 @@ function checked(value: string, re: RegExp, what: string): string {
   return value
 }
 
-/** An activity log's time: Monday's own count of 100-nanosecond ticks since 1970, or an ISO string. */
+/**
+ * An activity log's time, as ISO, so times compare in order as strings:
+ * Monday's own count of 100-nanosecond ticks since 1970, or a date string in
+ * any form it writes. One it cannot read stays as written: a person's change
+ * is never dropped for it.
+ */
 function logTime(createdAt: string): string {
   const ticks = Number(createdAt)
   if (/^\d{15,}$/.test(createdAt) && Number.isFinite(ticks)) return new Date(Math.floor(ticks / 10_000)).toISOString()
-  return createdAt
+  const parsed = Date.parse(createdAt)
+  return Number.isFinite(parsed) ? new Date(parsed).toISOString() : createdAt
 }
 
 /** What a changed column now says, from its log entry: a long text's `text`, a status's label, or the log's own text value. */
@@ -340,6 +346,12 @@ export function createMondayApi(token: string, opts: MondayApiOptions = {}): Mon
         checked(m.source, COLUMN_RE, "Monday column id")
         if (m.target !== null) checked(m.target, COLUMN_RE, "Monday column id")
       }
+      // The move sends no subitem mapping, so an item's subitems would be lost: it is refused.
+      const found = await request<{ items: Array<{ subitems: Array<{ id: string }> | null }> }>(`query($item: [ID!]) { items(ids: $item) { subitems { id } } }`, {
+        item: [checked(itemId, ID_RE, "Monday id")],
+      })
+      const subitems = found.items[0]?.subitems?.length ?? 0
+      if (subitems) throw new MondayRefused(`Monday: item ${itemId} has ${subitems} subitems, which a move to another board would lose: move them off it first`)
       await request(
         `mutation($board: ID!, $group: ID!, $item: ID!, $mapping: [ColumnMappingInput!]) {
            move_item_to_board(board_id: $board, group_id: $group, item_id: $item, columns_mapping: $mapping) { id }

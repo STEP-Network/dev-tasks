@@ -80,8 +80,8 @@ describe("createProject", () => {
     const p = await createLinearTracker().createProject({ name: "Translations", summary: "Every locale, by AI with page context", content: "# Plan", targetDate: "2026-10-30", milestones: [{ name: "Nordic", targetDate: "2026-10-16" }, { name: "The rest" }], clientId: PROJECT_KEY })
     expect(sentWith("projectCreate")[0].input).toEqual({ id: PROJECT_KEY, name: "Translations", teamIds: ["team-uuid"], description: "Every locale, by AI with page context", content: "# Plan", targetDate: "2026-10-30" })
     expect(sentWith("projectMilestoneCreate").map((v) => v.input)).toEqual([
-      { id: stableUuid(`${PROJECT_KEY}:milestone:0`), projectId: PROJECT_KEY, name: "Nordic", targetDate: "2026-10-16" },
-      { id: stableUuid(`${PROJECT_KEY}:milestone:1`), projectId: PROJECT_KEY, name: "The rest" },
+      { id: stableUuid(`${PROJECT_KEY}:milestone:Nordic`), projectId: PROJECT_KEY, name: "Nordic", targetDate: "2026-10-16" },
+      { id: stableUuid(`${PROJECT_KEY}:milestone:The rest`), projectId: PROJECT_KEY, name: "The rest" },
     ])
     expect(p).toEqual({ id: PROJECT_KEY, name: "Translations", url: "https://linear.app/step/project/translations", targetDate: "2026-10-30", milestones: made.map((m) => ({ ...m, targetDate: null })) })
   })
@@ -95,6 +95,33 @@ describe("createProject", () => {
     ])
     await createLinearTracker().createProject({ name: "Translations", milestones: [{ name: "Nordic" }, { name: "The rest" }], clientId: PROJECT_KEY })
     expect(sentWith("projectMilestoneCreate").map((v) => v.input.name)).toEqual(["The rest"])
+  })
+
+  it("keys each milestone by its name, so a rerun with a changed list, or a milestone whose answer was lost, makes nothing twice and never throws (review)", async () => {
+    // The list changed since the first run: "Nordic" is made, a new first milestone comes before it.
+    const taken = new Set([stableUuid(`${PROJECT_KEY}:milestone:Nordic`), stableUuid(`${PROJECT_KEY}:milestone:The rest`)])
+    route([
+      ["teams(", () => TEAM],
+      ["projectCreate", () => Promise.reject(new Error("Linear: Entity id already exists"))],
+      // The Linear API answers a taken id this way: "The rest" landed, but its answer was lost, so the read-back misses it.
+      ["projectMilestoneCreate", (v) => (taken.has(v.input.id) ? Promise.reject(new Error("Linear: Entity id already exists")) : { projectMilestoneCreate: { success: true } })],
+      ["project(id:", () => ({ project: project([{ id: "ms-a", name: "Nordic" }]) })],
+    ])
+    await createLinearTracker().createProject({ name: "Translations", milestones: [{ name: "Pilot" }, { name: "Nordic" }, { name: "The rest" }], clientId: PROJECT_KEY })
+    expect(sentWith("projectMilestoneCreate").map((v) => [v.input.name, v.input.id])).toEqual([
+      ["Pilot", stableUuid(`${PROJECT_KEY}:milestone:Pilot`)],
+      ["The rest", stableUuid(`${PROJECT_KEY}:milestone:The rest`)],
+    ])
+  })
+
+  it("still stops on any other milestone error", async () => {
+    route([
+      ["teams(", () => TEAM],
+      ["projectCreate", () => ({ projectCreate: { project: project([]) } })],
+      ["projectMilestoneCreate", () => Promise.reject(new Error("Linear: name is too long"))],
+      ["project(id:", () => ({ project: project([]) })],
+    ])
+    await expect(createLinearTracker().createProject({ name: "p", milestones: [{ name: "m".repeat(300) }], clientId: PROJECT_KEY })).rejects.toThrow(/name is too long/)
   })
 
   it("keeps a create's own error when nothing landed", async () => {

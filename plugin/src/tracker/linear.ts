@@ -474,13 +474,18 @@ export function createLinearTracker(): Tracker {
       } catch (error) {
         project = await readBackAfterFailure(error, read)
       }
-      // Each milestone by name, once, under an id named from the project's and its place: a rerun makes only the missing ones.
+      // Each milestone by name, once, under an id named from the project's and its own name: a rerun makes only the missing ones,
+      // whatever else the list says now. An id Linear already has is one made before (its answer lost, or missed by the read-back).
       const have = new Set(project.projectMilestones.nodes.map((m) => m.name))
-      for (const [i, m] of p.milestones.entries()) {
+      for (const m of p.milestones) {
         if (have.has(m.name)) continue
-        await linearRequest(`mutation($input: ProjectMilestoneCreateInput!) { projectMilestoneCreate(input: $input) { success } }`, {
-          input: { id: stableUuid(`${id}:milestone:${i}`), projectId: project.id, name: m.name, ...(m.targetDate ? { targetDate: m.targetDate } : {}) },
-        })
+        try {
+          await linearRequest(`mutation($input: ProjectMilestoneCreateInput!) { projectMilestoneCreate(input: $input) { success } }`, {
+            input: { id: stableUuid(`${id}:milestone:${m.name}`), projectId: project.id, name: m.name, ...(m.targetDate ? { targetDate: m.targetDate } : {}) },
+          })
+        } catch (error) {
+          if (!/already exists/i.test(error instanceof Error ? error.message : String(error))) throw error
+        }
       }
       const done = await read()
       if (!done) throw new Error(`Linear: project ${id} could not be read back`)
