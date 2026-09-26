@@ -158,3 +158,38 @@ describe("classify beside other agents' bots", () => {
     expect(classify(envelope({ type: "message", channel: "CIN", ts: "2000.9", text: "<@UNATE> says <@UBOT> should fix the date" }), CTX)).toMatchObject({ type: "intake" })
   })
 })
+
+describe("classify: begin testday (Wave 3, spec 7)", () => {
+  const TD = { ...CTX, testDay: true }
+
+  it("reads begin testday as a command: top level in #polads-questions on the test-day mini, or a mention of this bot anywhere", () => {
+    expect(classify(envelope({ type: "message", channel: "CQ", ts: "2000.1", text: "begin testday" }), TD)).toEqual({
+      type: "command", key: "msg:CQ:2000.1", channel: "CQ", ts: "2000.1", threadTs: "2000.1", user: "UNATE", text: "begin testday",
+    })
+    expect(classify(envelope({ type: "app_mention", channel: "CAG", ts: "2000.2", text: "<@UBOT> begin testday" }), TD)).toMatchObject({ type: "command", threadTs: "2000.2" })
+    // A mention in a thread no issue owns, on a mini without test day (it says so there): the reply goes to that thread.
+    expect(classify(envelope({ type: "message", channel: "CAG", ts: "2000.5", thread_ts: "1999.1", text: "<@UBOT> begin testday" }), CTX)).toMatchObject({ type: "command", threadTs: "1999.1" })
+  })
+
+  it("leaves begin testday alone where it is not this mini's to hear", () => {
+    // Not in #polads-questions and not addressed to this bot.
+    expect(classify(envelope({ type: "message", channel: "CAG", ts: "2000.3", text: "begin testday" }), TD)).toMatchObject({ type: "ignore" })
+    // In #polads-questions, but this mini runs no test day: the one that does answers.
+    expect(classify(envelope({ type: "message", channel: "CQ", ts: "2000.6", text: "begin testday" }), CTX)).toMatchObject({ type: "ignore" })
+    // Someone not on the allowlist.
+    expect(classify(envelope({ type: "message", channel: "CQ", ts: "2000.4", text: "begin testday", user: "USTRANGER" }), TD)).toMatchObject({ type: "ignore" })
+    // Another agent's mention: that agent's, even in #polads-questions.
+    expect(classify(envelope({ type: "message", channel: "CAG", ts: "2000.7", text: "<@UOTHER> begin testday" }), TD)).toMatchObject({ type: "ignore" })
+    expect(classify(envelope({ type: "message", channel: "CQ", ts: "2000.10", text: "<@UOTHER> begin testday" }), TD)).toMatchObject({ type: "ignore" })
+    // A reply in a thread no issue owns, without this bot's name.
+    expect(classify(envelope({ type: "message", channel: "CQ", ts: "2000.11", thread_ts: "1999.1", text: "begin testday" }), TD)).toMatchObject({ type: "ignore" })
+  })
+
+  it("leaves a sentence about test day to the front door", () => {
+    expect(classify(envelope({ type: "app_mention", channel: "CAG", ts: "2000.8", text: "<@UBOT> when do we begin testday?" }), TD)).toMatchObject({ type: "mention" })
+  })
+
+  it("keeps a reply in an issue's thread a reply: the bridge reads its verbs there", () => {
+    expect(classify(envelope({ type: "message", channel: "CQ", ts: "1700.9", thread_ts: "1700.1", text: "begin testday" }), TD)).toMatchObject({ type: "reply", issue: "STEP-7" })
+  })
+})

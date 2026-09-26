@@ -310,3 +310,41 @@ export function noteCorrection(
     deps.log?.warn("lesson not recorded", { issue: said.issue, error: String(error) })
   }
 }
+
+/** A test-day phrase (Wave 3, spec 7: "The phrase is a fixed verb for the answer recorder"). */
+export type TestDayVerb =
+  | { verb: "start" }
+  | { verb: "verdict"; n: number; verdict: "pass" | "fail"; note: string }
+  | { verb: "decide"; answer: "fix" | "next-week" }
+  /** More than one checkpoint's verdict in one message: none is read, so a FAIL never becomes a PASS's note. */
+  | { verb: "several" }
+
+const SLACK_MENTIONS = /<@[A-Z0-9]+(\|[^>]*)?>/g
+const START = /^(please[\s,]+)?(begin|start)\s+test\s?day[\s.!]*$/i
+const VERDICT = /^#?(\d{1,3})\s*[:.)-]?\s*(pass|fail)\b[\s:,.-]*([\s\S]*)$/i
+/**
+ * Another verdict in a verdict's note: any other number with pass or fail
+ * after it, whatever comes before ("5 pass and 6 fail", "5 pass ✅ 6 fail").
+ * Asking again costs a rephrase; a FAIL kept as a PASS's note costs a release.
+ */
+const ANOTHER_VERDICT = /(^|[^\p{L}\p{N}_])#?\d{1,3}\s*[:.)-]?\s*(pass|fail)\b/iu
+const FIX = /^(fix (it )?before (the )?release|fix now)[\s.!]*$/i
+const NEXT_WEEK = /^(next week|hold (it )?back( to next week)?)[\s.!]*$/i
+
+/**
+ * The whole message must be the phrase: "begin testday" starts test day,
+ * "when do we begin testday?" does not. Mentions and a "please" are allowed
+ * around the start phrase; a verdict carries what the person saw after it.
+ * One checkpoint a message: "5 pass\n6 fail no logo" is `several`, and the
+ * person is asked to send each on its own.
+ */
+export function testDayVerb(text: string): TestDayVerb | null {
+  const plain = text.replace(SLACK_MENTIONS, " ").trim()
+  if (START.test(plain)) return { verb: "start" }
+  const v = VERDICT.exec(plain)
+  if (v && ANOTHER_VERDICT.test(v[3])) return { verb: "several" }
+  if (v) return { verb: "verdict", n: Number(v[1]), verdict: v[2].toLowerCase() as "pass" | "fail", note: v[3].replace(/\s+/g, " ").trim() }
+  if (FIX.test(plain)) return { verb: "decide", answer: "fix" }
+  if (NEXT_WEEK.test(plain)) return { verb: "decide", answer: "next-week" }
+  return null
+}

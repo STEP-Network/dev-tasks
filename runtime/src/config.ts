@@ -267,6 +267,49 @@ const UserTestSchema = z
     }
   })
 
+/** A bounded Agent SDK session's limits, each with its default. */
+const SessionLimits = (model: string, maxTurns: number, maxBudgetUsd: number, wallClockMinutes: number) =>
+  z
+    .object({
+      model: z.string().default(model),
+      maxTurns: z.number().int().positive().default(maxTurns),
+      maxBudgetUsd: z.number().positive().default(maxBudgetUsd),
+      wallClockMinutes: z.number().int().positive().default(wallClockMinutes),
+    })
+    .prefault({})
+
+/**
+ * Test day (Wave 3, WS7): on the coordinator mini only, beside the Monday
+ * bridge. The Monday ids have no defaults on purpose (dev-tasks is public):
+ * they are written into this mini's config.json.
+ */
+const TestDaySchema = z.object({
+  enabled: z.boolean().default(false),
+  /** The Test day item's status column on the Needs-you board (ITEM_STATUS labels). */
+  statusColumn: MONDAY_COLUMN,
+  /** The item's doc column, where the guide goes. */
+  docColumn: MONDAY_COLUMN,
+  /** The board Monday keeps the Needs-you board's subitems on, and its three columns. */
+  subitemBoardId: MONDAY_ID,
+  subitemColumns: z.object({ verdict: MONDAY_COLUMN, note: MONDAY_COLUMN, linear: MONDAY_COLUMN }),
+  /** The guide's roles in journey order, each with the usertest persona it signs in as (null: not signed in). */
+  roles: z.array(z.object({ name: z.enum(["Advertiser", "Publisher", "Admin", "Public"]), persona: z.string().nullable() })).min(1),
+  releaseBranch: z.string().default("release/current"),
+  workflows: z
+    .object({
+      cut: z.string().default("release-candidate-cut.yml"),
+      pick: z.string().default("release-candidate-pick.yml"),
+      hold: z.string().default("release-candidate-hold.yml"),
+      release: z.string().default("release-candidate-release.yml"),
+    })
+    .prefault({}),
+  /** How long a cut or a pick may take to show on the release candidate before the run stops and says so. */
+  deployWaitMinutes: z.number().int().positive().default(45),
+  guide: SessionLimits("opus", 150, 10, 45),
+  /** Per journey. */
+  dryRun: SessionLimits("sonnet", 300, 20, 60),
+})
+
 /** Claude's reasoning effort: the Agent SDK's `effort`, the CLI's --effort. Left out, the model's own default. */
 const EffortSchema = z.enum(["low", "medium", "high", "xhigh", "max"])
 
@@ -381,10 +424,19 @@ export const ConfigSchema = z.object({
     .prefault({}),
   usertest: UserTestSchema.prefault({}),
   bridges: z.object({ monday: MondayBridgeSchema.optional() }).prefault({}),
+  /** Test day (Wave 3): absent on every mini but the coordinator. */
+  testDay: TestDaySchema.optional(),
+}).superRefine((c, ctx) => {
+  // The Test day item's presses come from its status column: made the Answer column, every answer there would be lost.
+  const answer = c.bridges.monday?.columns.answer
+  if (c.testDay && answer && c.testDay.statusColumn === answer) {
+    ctx.addIssue({ code: "custom", path: ["testDay", "statusColumn"], message: "must not be the Needs-you board's Answer column (bridges.monday.columns.answer)" })
+  }
 })
 
 export type AgentConfig = z.infer<typeof ConfigSchema>
 export type MondayBridgeConfig = z.infer<typeof MondayBridgeSchema>
+export type TestDayConfig = z.infer<typeof TestDaySchema>
 
 export function loadConfig(paths: AgentPaths): AgentConfig {
   let raw: string

@@ -19,6 +19,7 @@ import {
   AWAY_NOTE,
   bridgeStatus,
   checkLocal,
+  classifyContextFor,
   exitCodeFor,
   fileIntake,
   handleEnvelope,
@@ -33,6 +34,9 @@ import {
 } from "../bridge.ts"
 import type { SlackEnvelope } from "../classify.ts"
 import { SlackAccessRefused } from "../send.ts"
+import { ONE_AT_A_TIME, pendingCommands, TESTDAY_HELP } from "../../testday/commands.ts"
+import { saveRun } from "../../testday/store.ts"
+import { FAILED_WAITING, run } from "../../testday/__tests__/fixtures.ts"
 
 const quiet: Logger = { info() {}, warn() {}, error() {} }
 
@@ -708,5 +712,144 @@ describe("wireSocket", () => {
     socket.emit("message", { body: {}, ack: async () => {} })
     await new Promise((resolve) => setTimeout(resolve, 0))
     expect(errors).toEqual(["event failed"])
+  })
+})
+
+describe("test day in Slack (Wave 3, WS7)", () => {
+  const TESTDAY = { enabled: true, statusColumn: "col_status", docColumn: "col_doc", subitemBoardId: "77", subitemColumns: { verdict: "col_verdict", note: "col_note", linear: "col_link" }, roles: [{ name: "Public", persona: null }] }
+  /** A test-day mini: Ada (made up) on the allowlist, the test day thread 1750.1 and STEP-7's thread 1700.1 in #polads-questions. */
+  function testDaySetup(opts: { enabled?: boolean } = {}) {
+    const s = setup()
+    const enabled = opts.enabled ?? true
+    s.deps.config = ConfigSchema.parse({
+      ...CONFIG, slack: { allowedUsers: ["UADA"] }, ...(enabled ? { testDay: TESTDAY } : {}),
+      bridges: { monday: { people: [{ id: "111", name: "Ada", slackId: "UADA" }], defaultPerson: "111" } },
+    })
+    s.deps.classifyContext = {
+      ...s.deps.classifyContext,
+      allowedUsers: ["UADA"],
+      testDay: enabled,
+      issueForThread: (channel, ts) => (channel !== "CQ" ? null : ts === "1750.1" ? "testday-2026-10-02" : ts === "1700.1" ? "STEP-7" : null),
+    }
+    s.deps.web = { ...s.deps.web, userName: async (id) => (id === "UADA" ? "Ada" : id) }
+    return s
+  }
+  const say = (ts: string, text: string, extra: Record<string, unknown> = {}): SlackEnvelope => ({ team_id: "T1", event: { type: "message", user: "UADA", channel: "CQ", ts, text, ...extra } })
+  const forFrontDoor = (paths: BridgeDeps["paths"]) => listNew<{ type: string }>(paths.inbox).filter((e) => e.payload.type !== "testday")
+
+  it("files begin testday for agentd once, however many copies Slack sends, and nothing for the front door", async () => {
+    const { deps, paths } = testDaySetup()
+    await handleEnvelope(deps, say("2000.1", "begin testday"))
+    await handleEnvelope(deps, say("2000.2", "<@UBOT> begin testday", { type: "app_mention", channel: "CAG" }))
+    await handleEnvelope(deps, say("2000.2", "<@UBOT> begin testday", { channel: "CAG" }))
+    // Oldest first, by when the person wrote it. The name is config's: nothing waits on Slack before the command is on disk.
+    expect(pendingCommands(paths).map((e) => e.payload)).toEqual([
+      expect.objectContaining({
+        verb: "start", who: "Ada", whoId: "UADA", whoKey: "monday:111", via: "slack", at: "1970-01-01T00:33:20.100Z", door: { kind: "slack", channel: "CQ", threadTs: "2000.1", ts: "2000.1" },
+      }),
+      expect.objectContaining({ verb: "start", at: "1970-01-01T00:33:20.200Z", door: { kind: "slack", channel: "CAG", threadTs: "2000.2", ts: "2000.2" } }),
+    ])
+    expect(forFrontDoor(paths)).toEqual([])
+    expect(listNew(paths.outbox)).toEqual([])
+  })
+
+  it("files a checkpoint verdict from the test day thread, and answers anything else there with the three things it reads, once", async () => {
+    const { deps, paths } = testDaySetup()
+    await handleEnvelope(deps, say("1750.5", "4 fail the price shows 0", { thread_ts: "1750.1" }))
+    expect(pendingCommands(paths)[0].payload).toMatchObject({ verb: "verdict", n: 4, verdict: "fail", note: "the price shows 0", door: { kind: "slack", channel: "CQ", threadTs: "1750.1", ts: "1750.5" } })
+    await handleEnvelope(deps, say("1750.6", "<@UBOT> how is it going?", { thread_ts: "1750.1", type: "app_mention" }))
+    await handleEnvelope(deps, say("1750.6", "<@UBOT> how is it going?", { thread_ts: "1750.1" }))
+    expect(outboxTexts(paths)).toEqual([TESTDAY_HELP])
+    expect(listNew<{ threadTs?: string }>(paths.outbox)[0].payload.threadTs).toBe("1750.1")
+    expect(forFrontDoor(paths)).toEqual([])
+    expect(pendingCommands(paths)).toHaveLength(1)
+  })
+
+  it("files fix before release from an issue's thread only while that issue has a failed checkpoint waiting", async () => {
+    const { deps, paths } = testDaySetup()
+    await handleEnvelope(deps, say("1700.8", "fix before release", { thread_ts: "1700.1" }))
+    expect(pendingCommands(paths)).toEqual([])
+    // With nothing waiting, it is words in the issue's thread, for the front door as always.
+    expect(forFrontDoor(paths).map((e) => e.payload.type)).toEqual(["reply"])
+    saveRun(paths, run({ checkpoints: [FAILED_WAITING] }))
+    await handleEnvelope(deps, say("1700.9", "next week", { thread_ts: "1700.1" }))
+    expect(pendingCommands(paths)[0].payload).toMatchObject({ verb: "decide", issue: "STEP-7", answer: "next-week", door: { kind: "slack", channel: "CQ", threadTs: "1700.1", ts: "1700.9" } })
+    expect(forFrontDoor(paths)).toHaveLength(1)
+  })
+
+  it("files what someone names in their verdict with secrets redacted", async () => {
+    const { deps, paths } = testDaySetup()
+    // Built at run time, so no secret scanner mistakes the fixture for a real token.
+    const token = ["xoxb", "1234567890", "abcdefghijklmnop"].join("-")
+    await handleEnvelope(deps, say("1750.7", `4 fail the page printed ${token}`, { thread_ts: "1750.1" }))
+    expect(pendingCommands(paths)[0].payload).toMatchObject({ verb: "verdict", n: 4, note: "the page printed [redacted]" })
+  })
+
+  it("keeps at most 4,000 characters of what someone saw, as the Monday board keeps words", async () => {
+    const { deps, paths } = testDaySetup()
+    await handleEnvelope(deps, say("1750.10", `4 fail ${"x".repeat(5000)}`, { thread_ts: "1750.1" }))
+    const note = (pendingCommands(paths)[0].payload as { note: string }).note
+    expect(note.length).toBeLessThanOrEqual(4000)
+    expect(note.length).toBeGreaterThan(3900)
+  })
+
+  it("records no verdict from a message with several, and asks for one per message, once", async () => {
+    const { deps, paths } = testDaySetup()
+    await handleEnvelope(deps, say("1750.8", "<@UBOT> 5 pass\n6 fail no logo", { thread_ts: "1750.1", type: "app_mention" }))
+    await handleEnvelope(deps, say("1750.8", "<@UBOT> 5 pass\n6 fail no logo", { thread_ts: "1750.1" }))
+    expect(pendingCommands(paths)).toEqual([])
+    expect(outboxTexts(paths)).toEqual([ONE_AT_A_TIME])
+  })
+
+  it("reads no decision in the test day thread: that is asked about in the change's own thread", async () => {
+    const { deps, paths } = testDaySetup()
+    saveRun(paths, run({ checkpoints: [FAILED_WAITING] }))
+    await handleEnvelope(deps, say("1750.9", "fix before release", { thread_ts: "1750.1" }))
+    expect(pendingCommands(paths)).toEqual([])
+    expect(outboxTexts(paths)).toEqual([TESTDAY_HELP])
+  })
+
+  it("pauses the whole mini from the test day thread too, and answers no help", async () => {
+    const { deps, paths } = testDaySetup()
+    await handleEnvelope(deps, say("1751.1", "pause everything", { thread_ts: "1750.1" }))
+    expect(listNew<{ type: string; actions?: string[]; issue?: string | null; threadTs?: string }>(paths.inbox).map((e) => e.payload).filter((p) => p.type === "instruction")).toEqual([
+      expect.objectContaining({ type: "instruction", key: "instr:bridge-pause:CQ:1751.1", actions: ["pause"], issue: null, threadTs: "1750.1", userName: "Ada" }),
+    ])
+    expect(outboxTexts(paths)).toEqual([])
+    expect(pendingCommands(paths)).toEqual([])
+  })
+
+  it("reads a verdict only in the test day thread: in an issue's thread it is the front door's", async () => {
+    const { deps, paths } = testDaySetup()
+    await handleEnvelope(deps, say("1700.5", "4 pass", { thread_ts: "1700.1" }))
+    expect(pendingCommands(paths)).toEqual([])
+    expect(forFrontDoor(paths)).toHaveLength(1)
+  })
+
+  it("files begin testday said in an issue's thread, answered there", async () => {
+    const { deps, paths } = testDaySetup()
+    await handleEnvelope(deps, say("1700.6", "begin testday", { thread_ts: "1700.1" }))
+    expect(pendingCommands(paths)[0].payload).toMatchObject({ verb: "start", door: { kind: "slack", channel: "CQ", threadTs: "1700.1", ts: "1700.6" } })
+    expect(forFrontDoor(paths)).toEqual([])
+  })
+
+  it("tells classify this mini runs test day only when its config turns it on", () => {
+    const { paths } = setup()
+    const slack = { teamId: "T1", botUserId: "UBOT", channelIds: { agents: "CAG", questions: "CQ", intake: "CIN", releases: "CREL" } }
+    const on = classifyContextFor(paths, ConfigSchema.parse({ ...CONFIG, testDay: TESTDAY }), slack)
+    expect(on).toMatchObject({ teamId: "T1", botUserId: "UBOT", allowedUsers: ["UNATE"], channels: slack.channelIds, testDay: true })
+    expect(classifyContextFor(paths, ConfigSchema.parse({ ...CONFIG, testDay: { ...TESTDAY, enabled: false } }), slack).testDay).toBe(false)
+    expect(classifyContextFor(paths, ConfigSchema.parse(CONFIG), slack).testDay).toBe(false)
+  })
+
+  it("says test day is not set up, once, when this bot is asked on a mini without it, and files nothing", async () => {
+    const { deps, paths } = testDaySetup({ enabled: false })
+    await handleEnvelope(deps, say("2000.9", "<@UBOT> begin testday", { type: "app_mention" }))
+    await handleEnvelope(deps, say("2000.9", "<@UBOT> begin testday"))
+    expect(pendingCommands(paths)).toEqual([])
+    expect(outboxTexts(paths)).toEqual([expect.stringMatching(/^Test day is not set up on eve yet\. Nothing needed from you\.$/)])
+    // Top level in #polads-questions without its name: the test-day mini's to answer, not this one's.
+    await handleEnvelope(deps, say("2001.1", "begin testday"))
+    expect(outboxTexts(paths)).toHaveLength(1)
   })
 })

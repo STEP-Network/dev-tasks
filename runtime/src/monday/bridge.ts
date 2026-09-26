@@ -44,7 +44,9 @@ import { dirname } from "node:path"
 import type { AgentConfig, AgentPaths } from "../config.ts"
 import { ack, fail, listNew } from "../fsq.ts"
 import { appendLedger, redact, type Logger } from "../log.ts"
-import { answeredSince, answerSaid, personKey, recordedAnswers, secondAnswerText } from "../answer.ts"
+import { answeredSince, answerSaid, personKey, recordedAnswers, secondAnswerText, testDayVerb } from "../answer.ts"
+import { actedAt, DECISION_HELP, fileTestDayCommand, ONE_AT_A_TIME, TESTDAY_HELP } from "../testday/commands.ts"
+import { PERSON_PRESSES } from "../testday/types.ts"
 import { digestDue, digestText, dueSoon, ping, workingHours, type DigestGroup } from "../notify.ts"
 import { enqueueSlack, lastQuestion } from "../outbox.ts"
 import { prRef, recommendationOf } from "../plain.ts"
@@ -53,7 +55,7 @@ import { isClassAction } from "../slack/instruction.ts"
 import { truncateChars } from "../slack/text.ts"
 import { threadFor } from "../threads.ts"
 import { extractAcceptanceCriteria, isIssueGone, type Tracker } from "../tracker.ts"
-import { MondayRefused, type MondayApi, type MondayBoard, type MondayItem } from "./client.ts"
+import { MondayRefused, type ColumnChange, type MondayApi, type MondayBoard, type MondayItem } from "./client.ts"
 import type { LinearRequest, PeopleIssue, PeopleView } from "./people.ts"
 import { aboutText, lookBody, lookName, needBody, needKind, needName, plainText, planBody, planName, quote, say, stableUuid, toHtml, uatBody, uatName, type MondayKind, type NeedSource } from "./render.ts"
 import { createRequests, fileRequest, type RequestsPass } from "./requests.ts"
@@ -152,6 +154,8 @@ export function createMondayBridge(deps: MondayBridgeDeps): MondayBridge {
   const agentLabel = cfg.agentLabel ?? capitalised(deps.config.mini)
   const agentLabels = cfg.agentLabels ?? [agentLabel]
   const person = new Map(cfg.people.map((p) => [p.id, p]))
+  /** Test day (Wave 3), when it is on: its verbs and the Test day item's presses are heard. */
+  const testDay = deps.config.testDay?.enabled ? deps.config.testDay : null
   /** The two doors (spec 6), open once the board has its Slack thread column: until go-live the bridge runs as before. */
   const doors = Boolean(cfg.columns.slackThread)
   const noted = new Set<string>()
@@ -318,6 +322,10 @@ export function createMondayBridge(deps: MondayBridgeDeps): MondayBridge {
       }
     }
     for (const change of pass.board.changes) {
+      if (testDay && change.columnId === testDay.statusColumn) {
+        pressed(byItem.get(change.itemId), change, pass)
+        continue
+      }
       // Only the Answer column holds words: another watched column (the Class column, Task 12) is not an answer.
       if (change.columnId !== cfg!.columns.answer) continue
       const rec = byItem.get(change.itemId)
@@ -340,6 +348,28 @@ export function createMondayBridge(deps: MondayBridgeDeps): MondayBridge {
     writeCursor(paths, pass.now)
   }
 
+  /**
+   * A change to the Test day item's status column (Wave 3): a person's Start,
+   * Release or Cancel files one command for agentd. Every other label is the
+   * agent's to write, and one a person sets is left alone. Only on the Test
+   * day item, and only from the configured people.
+   */
+  function pressed(rec: ItemRecord | undefined, change: ColumnChange, pass: Pass): void {
+    const who = person.get(change.userId)
+    const id = `log:${change.id}`
+    if (rec?.kind !== "testday" || !who || rec.handled.includes(id)) return
+    const verb = PERSON_PRESSES[change.text.trim()]
+    if (verb) {
+      const door = { kind: "monday" as const, itemId: rec.itemId, updateId: null, threadId: null }
+      fileTestDayCommand(
+        paths,
+        { key: `testday:${id}`, verb, who: who.name, whoId: who.id, whoKey: personKey(deps.config, { monday: who.id }), via: "monday", door, at: actedAt(change.at, pass.now) },
+        pass.now,
+      )
+    }
+    mark(rec, id)
+  }
+
   function mark(rec: ItemRecord, id: string): void {
     rec.handled.push(id)
     if (rec.failing?.[id]) {
@@ -356,6 +386,7 @@ export function createMondayBridge(deps: MondayBridgeDeps): MondayBridge {
   async function hear(rec: ItemRecord, item: MondayItem, who: Person, raw: Words, pass: Pass): Promise<void> {
     const words: Words = { ...raw, text: truncateChars(redact(raw.text).trim(), WORDS_MAX) }
     if (!words.text) return mark(rec, words.id)
+    if (heardForTestDay(rec, item, who, words, pass)) return
     try {
       // Each marks the words handled once their Linear write has landed: whatever fails after, they are never routed twice.
       if (rec.kind === "uat") await verdict(rec, item, who, words, pass)
@@ -376,6 +407,28 @@ export function createMondayBridge(deps: MondayBridgeDeps): MondayBridge {
       save(rec)
       log.warn("monday words not acted on yet", { issue: rec.issue, item: item.id, error: message(error) })
     }
+  }
+
+  /**
+   * Test day's fixed verbs come first (Wave 3): "begin testday" on any item,
+   * a checkpoint's verdict on the Test day item, and a decision on a failed
+   * checkpoint's item, each filed once for agentd. Words on those two items
+   * never reach Linear: they stand for no issue's answer. true when handled.
+   */
+  function heardForTestDay(rec: ItemRecord, item: MondayItem, who: Person, words: Words, pass: Pass): boolean {
+    const said = testDay ? testDayVerb(words.text) : null
+    const door = { kind: "monday" as const, itemId: item.id, updateId: words.updateId, threadId: words.threadId }
+    const base = {
+      key: `testday:monday:${words.id}`, who: who.name, whoId: who.id, whoKey: personKey(deps.config, { monday: who.id }), via: "monday" as const, door, at: actedAt(words.at, pass.now),
+    }
+    if (said?.verb === "start") fileTestDayCommand(paths, { ...base, verb: "start" }, pass.now)
+    else if (rec.kind === "testday" && said?.verb === "verdict") fileTestDayCommand(paths, { ...base, verb: "verdict", n: said.n, verdict: said.verdict, note: said.note }, pass.now)
+    else if (rec.kind === "testday-decision" && said?.verb === "decide") fileTestDayCommand(paths, { ...base, verb: "decide", issue: rec.issue, answer: said.answer }, pass.now)
+    else if (rec.kind === "testday") reply(item.id, words, said?.verb === "several" ? ONE_AT_A_TIME : TESTDAY_HELP, pass.now, false)
+    else if (rec.kind === "testday-decision") reply(item.id, words, DECISION_HELP, pass.now, false)
+    else return false
+    mark(rec, words.id)
+    return true
   }
 
   /** What follows words already recorded in Linear: a failure is logged, never a reason to hear them again. */
@@ -684,7 +737,8 @@ export function createMondayBridge(deps: MondayBridgeDeps): MondayBridge {
     for (const issue of linear) if (!wanted.has(`needs-${issue.id}`)) wanted.set(`needs-${issue.id}`, linearNeed(issue, requestItemFor(issue, requests)))
     for (const issue of uat) wanted.set(`uat-${issue.id}`, uatNeed(issue, requestItemFor(issue, requests)))
 
-    const recs = readRecords(paths).filter((r) => r.kind !== "request")
+    // Only the needs' own items: requests are theirs, and test day's are the controller's.
+    const recs = readRecords(paths).filter((r) => r.kind === "needs" || r.kind === "uat")
     const byKey = new Map(recs.map((r) => [r.key, r]))
     for (const need of wanted.values()) {
       let rec: ItemRecord | null
@@ -722,7 +776,8 @@ export function createMondayBridge(deps: MondayBridgeDeps): MondayBridge {
   /** Spec 6: every Needs-you item has one Slack thread, with the item's link. */
   async function threads(pass: Pass, linked: Map<string, string | null>): Promise<void> {
     for (const rec of readRecords(paths)) {
-      if (rec.kind === "request" || rec.state === "Done") continue
+      // The Test day item stands for no issue: its thread is the test day's own (Task 13).
+      if (rec.kind === "request" || rec.kind === "testday" || rec.state === "Done") continue
       // An item made this pass waits for the next one: the board gives its link then.
       const item = pass.byId.get(rec.itemId)
       if (!item) continue
@@ -835,7 +890,8 @@ export function createMondayBridge(deps: MondayBridgeDeps): MondayBridge {
     if (!day) return
     // Written before the post: a restart loses one digest at worst, and never posts two.
     writeDigestDay(paths, day)
-    const open = readRecords(paths).filter((r) => r.kind !== "request" && r.state !== "Done" && pass.byId.has(r.itemId))
+    // The Test day item is not a change to try: the test-day line speaks for it.
+    const open = readRecords(paths).filter((r) => r.kind !== "request" && r.kind !== "testday" && r.state !== "Done" && pass.byId.has(r.itemId))
     const NOUNS: Partial<Record<GroupKey, [string, string]>> = {
       needsYou: ["decision", "decisions"],
       approvePlan: ["plan to approve", "plans to approve"],
@@ -878,7 +934,9 @@ export function createMondayBridge(deps: MondayBridgeDeps): MondayBridge {
     const now = deps.now()
     await readLimit(now)
     const since = readCursor(paths) ?? new Date(now.getTime() - 2 * OVERLAP_MS)
-    const board = await api.readBoard(cfg!.boardId, Object.values(cfg!.columns).filter((c): c is string => Boolean(c)), { columnIds: [cfg!.columns.answer], since: new Date(since.getTime() - OVERLAP_MS) })
+    // The Answer column's words, and while test day is on, the Test day item's presses.
+    const watched = [cfg!.columns.answer, ...(testDay ? [testDay.statusColumn] : [])]
+    const board = await api.readBoard(cfg!.boardId, Object.values(cfg!.columns).filter((c): c is string => Boolean(c)), { columnIds: watched, since: new Date(since.getTime() - OVERLAP_MS) })
     const pass: Pass = { board, groups: groupIds(board.groups), byId: new Map(board.items.map((i) => [i.id, i])), now }
     // Each part on its own: Linear down stops the needs, not the replies.
     const part = async <T>(name: string, fn: () => Promise<T>): Promise<T | null> => {

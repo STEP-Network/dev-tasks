@@ -229,3 +229,44 @@ describe("usertest config", () => {
     expect(agentPaths("/Users/eve").usertest).toBe("/Users/eve/.agentd/usertest")
   })
 })
+
+describe("test day's config (Wave 3)", () => {
+  const base = { mini: "eve", repo: { path: "/r" }, pluginRoot: "/p", slack: { allowedUsers: ["U1"] } }
+  const TESTDAY = { statusColumn: "col_status", docColumn: "col_doc", subitemBoardId: "77", subitemColumns: { verdict: "col_verdict", note: "col_note", linear: "col_link" }, roles: [{ name: "Public", persona: null }] }
+
+  it("is absent unless configured, and off until enabled, with the workflows and session limits by default", () => {
+    expect(ConfigSchema.parse(base).testDay).toBeUndefined()
+    const td = ConfigSchema.parse({ ...base, testDay: TESTDAY }).testDay!
+    expect(td.enabled).toBe(false)
+    expect(td.subitemBoardId).toBe("77")
+    expect(td.releaseBranch).toBe("release/current")
+    expect(td.workflows).toEqual({ cut: "release-candidate-cut.yml", pick: "release-candidate-pick.yml", hold: "release-candidate-hold.yml", release: "release-candidate-release.yml" })
+    expect(td.deployWaitMinutes).toBe(45)
+    expect(td.guide).toEqual({ model: "opus", maxTurns: 150, maxBudgetUsd: 10, wallClockMinutes: 45 })
+    expect(td.dryRun).toEqual({ model: "sonnet", maxTurns: 300, maxBudgetUsd: 20, wallClockMinutes: 60 })
+  })
+
+  it("has no default for a Monday id or column, and checks each (dev-tasks is public)", () => {
+    for (const key of ["statusColumn", "docColumn", "subitemBoardId", "subitemColumns", "roles"] as const) {
+      const { [key]: _, ...missing } = TESTDAY
+      expect(ConfigSchema.safeParse({ ...base, testDay: missing }).success).toBe(false)
+    }
+    expect(ConfigSchema.safeParse({ ...base, testDay: { ...TESTDAY, subitemColumns: { verdict: "col_verdict", note: "col_note" } } }).success).toBe(false)
+    expect(ConfigSchema.safeParse({ ...base, testDay: { ...TESTDAY, statusColumn: "Status" } }).success).toBe(false)
+    expect(ConfigSchema.safeParse({ ...base, testDay: { ...TESTDAY, subitemBoardId: "board 77" } }).success).toBe(false)
+  })
+
+  it("refuses a status column that is the Answer column: every answer would be read as a press", () => {
+    const monday = { people: [{ id: "111", name: "Ada" }], defaultPerson: "111", columns: { answer: "col_answer" } }
+    expect(ConfigSchema.safeParse({ ...base, bridges: { monday }, testDay: { ...TESTDAY, statusColumn: "col_answer" } }).success).toBe(false)
+    expect(ConfigSchema.safeParse({ ...base, bridges: { monday }, testDay: TESTDAY }).success).toBe(true)
+    // The Answer column's own default counts too.
+    expect(ConfigSchema.safeParse({ ...base, bridges: { monday: { people: monday.people, defaultPerson: "111" } }, testDay: { ...TESTDAY, statusColumn: "long_text_mm7hzj39" } }).success).toBe(false)
+  })
+
+  it("takes the four journeys' roles only, at least one", () => {
+    expect(ConfigSchema.safeParse({ ...base, testDay: { ...TESTDAY, roles: [] } }).success).toBe(false)
+    expect(ConfigSchema.safeParse({ ...base, testDay: { ...TESTDAY, roles: [{ name: "Other", persona: null }] } }).success).toBe(false)
+    expect(ConfigSchema.parse({ ...base, testDay: { ...TESTDAY, roles: [{ name: "Advertiser", persona: "advertiser" }, { name: "Public", persona: null }] } }).testDay!.roles).toHaveLength(2)
+  })
+})

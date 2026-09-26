@@ -4,7 +4,8 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { describe, expect, it } from "vitest"
 import { agentPaths, ConfigSchema } from "../../config.ts"
-import { listNew, putOnce } from "../../fsq.ts"
+import { entryPath, listNew, putOnce } from "../../fsq.ts"
+import { heardDir, heardOnce } from "../../testday/commands.ts"
 import { listJobs, moveJob, readWatchedPrs, recordPr, submitJob, updateWatchedPr } from "../../jobs.ts"
 import type { Logger } from "../../log.ts"
 import { realExec, type Exec } from "../../worker/git.ts"
@@ -556,6 +557,18 @@ describe("cleanup", () => {
     // A process's own log is rotated by size, never deleted.
     expect(existsSync(join(paths.logs, "agentd.log"))).toBe(true)
     expect(f.lines()).toEqual([`${GIT} -C /r worktree remove --force ${join(paths.worktrees, "STEP-1-x")}`, `${GIT} -C /r worktree prune`])
+  })
+
+  it("forgets the Slack messages test day heard after 14 days (Wave 3)", async () => {
+    const paths = agentPaths(mkdtempSync(join(tmpdir(), "agentd-clean-")))
+    const config = ConfigSchema.parse({ mini: "eve", repo: { path: "/r" }, pluginRoot: "/p", slack: { allowedUsers: ["UNATE"] } })
+    heardOnce(paths, "msg:CQ:1.1")
+    heardOnce(paths, "msg:CQ:1.2")
+    const old = new Date(NOW.getTime() - 20 * 86_400_000)
+    utimesSync(entryPath(heardDir(paths), "msg:CQ:1.1"), old, old)
+    await cleanup({ paths, config, exec: fakeExec().exec, now: () => NOW })
+    expect(existsSync(entryPath(heardDir(paths), "msg:CQ:1.1"))).toBe(false)
+    expect(existsSync(entryPath(heardDir(paths), "msg:CQ:1.2"))).toBe(true)
   })
 
   it("removes a browser test's folder and its recorded verdict after 14 days, and keeps newer ones (WS5)", async () => {
