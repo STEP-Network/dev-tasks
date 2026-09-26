@@ -102,6 +102,9 @@ export async function planMigration(deps: MigrateDeps, only?: string): Promise<M
 
 const OFF_FIRST = "turn the Monday bridge off first (bridges.monday.enabled false, then restart agentd): it must not poll while its items move"
 
+/** How long a migration waits for a bridge poll under way to end, and how often it looks. Tests shorten them. */
+export const BRIDGE_WAIT = { waitMs: 120_000, stepMs: 1_000 }
+
 /** Whether a process runs with this pid: a mark left by one that died holds nothing up. */
 function alive(pid: unknown): boolean {
   if (typeof pid !== "number") return false
@@ -138,8 +141,13 @@ async function alone<T>(deps: MigrateDeps, fn: () => Promise<T>): Promise<T> {
   writeSync(fd, JSON.stringify({ pid: process.pid, at: new Date().toISOString() }))
   closeSync(fd)
   try {
-    if (alive(readJson<{ pid?: unknown }>(syncingPath(deps.paths))?.pid)) {
-      throw new Error("the Monday bridge is reading the board right now: restart agentd with the bridge off, and run this again")
+    // A poll under way ends within seconds: it is waited for, a while, and a mark whose process is gone is none.
+    const deadline = Date.now() + BRIDGE_WAIT.waitMs
+    while (alive(readJson<{ pid?: unknown }>(syncingPath(deps.paths))?.pid)) {
+      if (Date.now() >= deadline) {
+        throw new Error(`the Monday bridge is still reading the board after ${Math.round(BRIDGE_WAIT.waitMs / 1000)} seconds: restart agentd with the bridge off, and run this again`)
+      }
+      await new Promise((resolve) => setTimeout(resolve, BRIDGE_WAIT.stepMs))
     }
     const polled = readCursor(deps.paths)
     const ago = polled ? Date.now() - polled.getTime() : Infinity
