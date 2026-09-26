@@ -31,6 +31,7 @@ import { truncateChars } from "../slack/text.ts"
 import type { Tracker, TrackerIssue } from "../tracker.ts"
 import { commitsAhead, conflictMarkers, isDirty, leftoverMarkers, must, pushBranch, removeWorktree, type Exec } from "./git.ts"
 import { CHECKLIST, checklistGaps, clause, type Outcome, type WorkerReport } from "./outcome.ts"
+import { blockedPing, ping } from "../notify.ts"
 
 /**
  * Who merges the PR. auto: auto-merge is armed, as the project's policy
@@ -56,6 +57,8 @@ export interface FinalizeContext {
   model: string
   minutes: number
   now: () => Date
+  /** The job: its blocked ending calls the people, once (spec 6). */
+  jobId?: string
 }
 
 export interface FinalizeResult {
@@ -247,6 +250,14 @@ async function settle(ctx: FinalizeContext, outcome: Outcome, progress: { pushed
   const more = beyondReason(reason, outcome.report?.summary)
   const why = plainReason(reason)
   inThread(`I had to stop work on ${issue.id}: ${why}. ${more ? `${more} ` : ""}Reply "retry" when it can go on, and I will pick it up where I left off.`)
+  // The people are called to it, once per job (spec 6). A ping that cannot be written never stops the ending.
+  if (ctx.jobId) {
+    try {
+      ping(ctx.paths, ctx.config, blockedPing(ctx.jobId, issue.id, null), ctx.now())
+    } catch {
+      // The question stands in the thread without it.
+    }
+  }
   post(`${issue.id}: I had to stop: ${why}. I asked in the issue's thread what to do.`)
   await ctx.tracker.updateIssue(issue.id, { state: "On hold" })
   await ctx.tracker.comment(issue.id, blockedReport(reason, outcome.report, { branch: ctx.branch, pushed }))

@@ -17,6 +17,7 @@ import { join } from "node:path"
 import type { AgentPaths } from "../config.ts"
 import { putOnce, readJson, safeKey, writeJsonAtomic } from "../fsq.ts"
 import { redact } from "../log.ts"
+import type { Stage } from "./stage.ts"
 
 /** The State column's labels. */
 export type MondayState = "Needs you" | "Waiting on agent" | "Done" | "Blocked"
@@ -58,11 +59,30 @@ export interface ItemRecord {
   retry?: Record<string, { userId: string; text: string; at?: string }>
   /** A request whose Linear link, State and group are written to the board. */
   linked?: boolean
+  /** A request's Stage when the bridge last wrote it (Requests board): a change is said once. */
+  stage?: Stage
+  /** Each Requests board column the bridge last wrote, as JSON: written again only when Linear changes it, so a person's edit stands. */
+  written?: Record<string, string>
+  /** The request's own Slack thread, when it came from Slack (Task 8). */
+  slack?: { permalink: string }
+  /** A Slack request's item, not yet linked from Linear and told to its thread: false until the poll after it is made. */
+  announced?: boolean
 }
 
 const root = (paths: AgentPaths) => join(paths.state, "monday")
 const itemsDir = (paths: AgentPaths) => join(root(paths), "items")
 const itemFile = (paths: AgentPaths, key: string) => join(itemsDir(paths), `${safeKey(key)}.json`)
+
+const digestFile = (paths: AgentPaths) => join(root(paths), "digest.json")
+
+/** The local day the last morning digest was posted for. */
+export function readDigestDay(paths: AgentPaths): string | null {
+  return readJson<{ day: string }>(digestFile(paths))?.day ?? null
+}
+
+export function writeDigestDay(paths: AgentPaths, day: string): void {
+  writeJsonAtomic(digestFile(paths), { day })
+}
 
 export function readRecords(paths: AgentPaths): ItemRecord[] {
   if (!existsSync(itemsDir(paths))) return []

@@ -1,6 +1,6 @@
 /**
  * agentctl: the agent mini's local control, for the front door (tick, ack,
- * job submit, usertest, ask, slack post and reply), a person on the machine (status,
+ * job submit, usertest, ask, decide, verdict, request, slack post and reply), a person on the machine (status,
  * report, retro, pause, resume, retry, doctor, probe-sandbox, probe-hooks --scripted,
  * probe-browser) and the rehearsal (probe-hooks). One line of output per call: JSON, or text for
  * status, report, doctor and the free probes. Usage errors exit 64, anything
@@ -26,6 +26,7 @@ import { readChannelState } from "../channel/state.ts"
 import { assertNoSecretText, createLinearTracker, readTextFile, type Tracker } from "../tracker.ts"
 import { createPeopleView, type PeopleView } from "../monday/people.ts"
 import { parseVerdict, recordVerdict, verdictReply } from "../verdict.ts"
+import { fileMentionRequest, REQUEST_TYPES, type RequestType } from "../request.ts"
 import { readUsage } from "../usage.ts"
 import { frontDoorAlive, lastTickAt, readFrontDoorState } from "../agentd/frontdoor.ts"
 import { realExec, type Exec } from "../worker/git.ts"
@@ -267,6 +268,22 @@ export async function run(argv: string[], out: (line: string) => void, overrides
         print({ decided: await recordDecision({ paths, tracker: deps.tracker(), now, config: loadConfig(paths) }, entry, decision), decision: decision.recorded })
       } catch (error) {
         if (!(error instanceof Error) || !/human-todo|not in an issue's thread/.test(error.message)) throw error
+        throw new UsageError(error.message)
+      }
+      spend()
+      return 0
+    }
+    case "request": {
+      // A mention the front door read as an ask for work or a product decision (spec 4, D3): a request, with the person's own words quoted.
+      const entry = personEntry(paths, need("key"))
+      const title = need("title")
+      const type = flags.type
+      if (type !== undefined && !REQUEST_TYPES.includes(type as RequestType)) throw new UsageError("--type is feature, change, bug or question")
+      const summary = textFlag()
+      try {
+        print(await fileMentionRequest({ paths, config: loadConfig(paths), tracker: deps.tracker(), now }, entry, { title, summary, ...(type ? { type: type as RequestType } : {}) }))
+      } catch (error) {
+        if (!(error instanceof Error) || !/is not a mention|another agent/.test(error.message)) throw error
         throw new UsageError(error.message)
       }
       spend()
@@ -520,7 +537,7 @@ export async function run(argv: string[], out: (line: string) => void, overrides
     }
     default:
       throw new UsageError(
-        "usage: agentctl <tick|ack|job|usertest|ask|decide|verdict|instruct|slack|pause|resume|retry|status|report|retro|doctor|probe-hooks|probe-sandbox|probe-browser> (see runtime/src/cli/agentctl.ts)",
+        "usage: agentctl <tick|ack|job|usertest|ask|decide|verdict|request|instruct|slack|pause|resume|retry|status|report|retro|doctor|probe-hooks|probe-sandbox|probe-browser> (see runtime/src/cli/agentctl.ts)",
       )
   }
 }

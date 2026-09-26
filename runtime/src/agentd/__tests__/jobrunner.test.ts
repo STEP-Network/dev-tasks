@@ -12,7 +12,7 @@ import { superviseJobs, workerLiveness, type JobRunnerDeps } from "../jobrunner.
 
 const quiet: Logger = { info() {}, warn() {}, error() {} }
 const NOW = new Date("2026-09-24T12:00:00.000Z")
-const config = ConfigSchema.parse({ mini: "eve", repo: { path: "/r" }, pluginRoot: "/p", slack: { allowedUsers: ["UNATE"] } })
+const config = ConfigSchema.parse({ mini: "eve", repo: { path: "/r" }, pluginRoot: "/p", slack: { allowedUsers: ["UADA", "UBEN", "UCY"] } })
 
 function setup(over: Partial<JobRunnerDeps> = {}) {
   const paths = agentPaths(mkdtempSync(join(tmpdir(), "agentd-jobs-")))
@@ -38,7 +38,10 @@ const running = (paths: JobRunnerDeps["paths"], issue: string, patch: Record<str
   return job
 }
 
-const outbox = (paths: JobRunnerDeps["paths"]) => listNew<{ text: string }>(paths.outbox).map((e) => e.payload.text)
+/** What agentd posts in #polads-agents. */
+const outbox = (paths: JobRunnerDeps["paths"]) => listNew<{ kind: string; text: string }>(paths.outbox).filter((e) => e.payload.kind === "post").map((e) => e.payload.text)
+/** Its urgent pings (notify.ts), in the issue's thread. */
+const pinged = (paths: JobRunnerDeps["paths"]) => listNew<{ kind: string; text: string }>(paths.outbox).filter((e) => e.payload.kind === "issue").map((e) => e.payload.text)
 
 describe("superviseJobs", () => {
   it("starts the oldest pending job when idle, and only that one", () => {
@@ -141,6 +144,21 @@ describe("superviseJobs", () => {
     expect(spawned).toHaveLength(1)
     // A lesson for the weekly retro (STEP-3290), in agentd's own words.
     expect(readLessons(paths)).toEqual([expect.objectContaining({ category: "blocked", source: "agentd", issue: "STEP-1", text: "the worker process died before reporting" })])
+  })
+
+  it("a worker that died at night pings nobody until the morning", () => {
+    const { paths, deps } = setup({ liveness: () => "gone", now: () => new Date("2026-09-24T21:30:00.000Z") })
+    running(paths, "STEP-7", {})
+    superviseJobs(deps)
+    expect(pinged(paths)).toEqual([])
+  })
+
+  it("a blocked job pings all three once", () => {
+    const { paths, deps } = setup({ liveness: () => "gone" })
+    running(paths, "STEP-7", {})
+    superviseJobs(deps)
+    superviseJobs(deps)
+    expect(pinged(paths)).toEqual([expect.stringMatching(/^<@UADA> <@UBEN> <@UCY> STEP-7 is blocked: my run stopped unexpectedly\. Reply "retry" here once the cause is fixed, or "leave it" to take it over\.$/)])
   })
 
   it("treats a job that started before the last boot as dead, even if its pid is in use again", () => {

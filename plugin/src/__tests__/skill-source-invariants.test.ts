@@ -223,9 +223,14 @@ describe("/front-door", () => {
     expect(source).toMatch(/new delimiter every time/)
     expect(source).not.toMatch(/<<'TEXT(_[a-z0-9]+)?'/)
     expect(source).toMatch(/agentctl slack reply --channel "<channel>" --thread "<threadTs>" --text-file ~\/\.front-door\/reply-<threadTs>\.md/)
-    expect(source).toMatch(/trackerctl create --title "[^"]*" --description-file ~\/\.front-door\/intake-<ts>\.md/)
+    expect(source).toMatch(/agentctl request --key <key> --title "[^"]*" --text-file ~\/\.front-door\/ask-<ts>\.md/)
     expect(source).not.toMatch(/--text "</)
     expect(source).not.toMatch(/--description "</)
+  })
+
+  it("files an ask from a mention with agentctl request, and never for a question about the agents", () => {
+    expect(source).toMatch(/~\/\.agentd\/bin\/agentctl request --key <key>/)
+    expect(source).toMatch(/what are you working on[\s\S]{0,200}no request/i)
   })
 
   it("records a verdict only through agentctl verdict, from the person's own words", () => {

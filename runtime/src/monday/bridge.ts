@@ -15,7 +15,9 @@
  *     review-uat does.
  *  2. Requests. A person's new item in Requests becomes a Linear Triage
  *     issue, linked both ways, and moves to Agents working on. It is Blocked
- *     while the issue is On hold, and Done once it is released.
+ *     while the issue is On hold, and Done once it is released. With the
+ *     Requests board configured (Wave 2), requests live there instead
+ *     (requests.ts), and each poll reads both boards.
  *  3. Needs you and Test day. One item per Linear id: this mini's open
  *     decisions, needs-human, and a question or to-do an issue is On hold
  *     for, in Needs you; this mini's product's Waiting for UAT in Test day,
@@ -41,6 +43,7 @@ import type { AgentConfig, AgentPaths } from "../config.ts"
 import { ack, fail, listNew } from "../fsq.ts"
 import { appendLedger, redact, type Logger } from "../log.ts"
 import { answeredSince, answerSaid, personKey, recordedAnswers, secondAnswerText } from "../answer.ts"
+import { digestDue, digestText, dueSoon, ping, workingHours, type DigestGroup } from "../notify.ts"
 import { enqueueSlack, lastQuestion } from "../outbox.ts"
 import { prRef, recommendationOf } from "../plain.ts"
 import { openDecisions, questionText, type Decision } from "../agentd/decisions.ts"
@@ -49,11 +52,13 @@ import { threadFor } from "../threads.ts"
 import { extractAcceptanceCriteria, isIssueGone, type Tracker } from "../tracker.ts"
 import { MondayRefused, type MondayApi, type MondayBoard, type MondayItem } from "./client.ts"
 import type { PeopleIssue, PeopleView } from "./people.ts"
-import { aboutText, lookBody, lookName, needBody, needKind, needName, plainText, planBody, planName, quote, requestIssue, say, stableUuid, toHtml, uatBody, uatName, type MondayKind, type NeedSource } from "./render.ts"
+import { aboutText, lookBody, lookName, needBody, needKind, needName, plainText, planBody, planName, quote, say, stableUuid, toHtml, uatBody, uatName, type MondayKind, type NeedSource } from "./render.ts"
+import { createRequests, fileRequest, type RequestsPass } from "./requests.ts"
 import { routeWords, type Words } from "./route.ts"
+import { requestGroup } from "./stage.ts"
 import { slackMessage, threadTarget } from "./threads.ts"
 import { parseVerdict, recordVerdict, verdictReply } from "../verdict.ts"
-import { dropRecord, enqueueMonday, mondayOutbox, readCursor, readRecords, saveRecord, writeCursor, type ItemRecord, type MondayReply, type MondayState } from "./store.ts"
+import { dropRecord, enqueueMonday, mondayOutbox, readCursor, readDigestDay, readRecords, saveRecord, writeCursor, writeDigestDay, type ItemRecord, type MondayReply, type MondayState } from "./store.ts"
 
 export interface MondayBridgeDeps {
   paths: AgentPaths
@@ -63,6 +68,8 @@ export interface MondayBridgeDeps {
   api: MondayApi
   tracker: Tracker
   people: PeopleView
+  /** Wave 3's test-day line for the morning digest ("Test day in progress (14 of 20 checked)."), in place of its count. */
+  testDayLine?: () => string | null
 }
 
 export interface MondayBridge {
@@ -174,8 +181,9 @@ export function createMondayBridge(deps: MondayBridgeDeps): MondayBridge {
   function pollEveryMs(): number {
     const floor = cfg!.pollMinutes * MINUTE
     if (!limit) return floor
-    // One read a poll, within apiShare of what the whole account may call in a day.
-    return Math.max(floor, Math.ceil(DAY / MINUTE / (limit.calls * cfg!.apiShare)) * MINUTE)
+    // Each poll reads every board once, within apiShare of what the whole account may call in a day.
+    const reads = cfg!.requests ? 2 : 1
+    return Math.max(floor, Math.ceil(((DAY / MINUTE) * reads) / (limit.calls * cfg!.apiShare)) * MINUTE)
   }
 
   async function readLimit(now: Date): Promise<void> {
@@ -202,6 +210,10 @@ export function createMondayBridge(deps: MondayBridgeDeps): MondayBridge {
     enqueueMonday(paths, { itemId, threadId: words?.threadId ?? null, text, like: like ? (words?.updateId ?? null) : null }, now)
 
   const save = (rec: ItemRecord) => saveRecord(paths, rec)
+
+  const requestsBoard = cfg.requests
+    ? createRequests({ paths, config: deps.config, log, api, tracker, people, once, reply: (itemId, text, now) => reply(itemId, null, text, now) })
+    : null
 
   async function setState(rec: ItemRecord, state: MondayState): Promise<void> {
     if (rec.state === state) return
@@ -427,7 +439,8 @@ export function createMondayBridge(deps: MondayBridgeDeps): MondayBridge {
       [c.state]: { label: "Waiting on agent" },
       ...(item.creatorId ? { [c.person]: { personsAndTeams: [{ id: Number(item.creatorId), kind: "person" }] } } : {}),
     })
-    if (item.groupId !== groupOf(pass, "working")) await api.moveItem(item.id, groupOf(pass, "working"))
+    const working = pass.groups.working
+    if (working && item.groupId !== working) await api.moveItem(item.id, working)
     rec.linked = true
     rec.state = "Waiting on agent"
     save(rec)
@@ -435,27 +448,14 @@ export function createMondayBridge(deps: MondayBridgeDeps): MondayBridge {
     if (who) reply(item.id, null, say.filed(who.name, issue.id), pass.now)
   }
 
-  async function fileRequest(item: MondayItem, who: Person, pass: Pass): Promise<void> {
-    const details = item.updates.filter((u) => u.creatorId === item.creatorId).sort(byCreated)
-    const input = requestIssue(item, who, details.map((u) => u.text), { product: deps.config.repo.product, label: cfg!.requestLabel })
-    const filed = await tracker.createIssue(input)
-    if (!filed.labels.includes(cfg!.requestLabel)) {
-      once("request-label", () => log.warn(`Linear has no label ${cfg!.requestLabel}, so requests from the board are filed without it (runbook, The Monday board)`))
-    }
-    // Written down before the board is touched: from here on the item is this issue's, whatever fails next.
-    const rec: ItemRecord = {
-      key: `request-${item.id}`, kind: "request", issue: filed.id, itemId: item.id, state: "Needs you", bodyHash: null,
-      createdAt: pass.now.toISOString(), doneAt: null, handled: details.map((u) => u.id), linked: false,
-    }
-    save(rec)
-    appendLedger(paths, { type: "intake.filed", issue: filed.id, via: "monday" }, pass.now)
-    await tracker.attachLink(filed.id, item.url, "Monday request").catch((error: unknown) => {
-      log.warn("monday request not linked from Linear", { issue: filed.id, error: message(error) })
-    })
-    await link(rec, item, filed, pass)
-  }
 
   async function requests(pass: Pass): Promise<void> {
+    await fileRequests(pass)
+    await updateRequests(pass)
+  }
+
+  /** A person's new item in the Requests group, filed. */
+  async function fileRequests(pass: Pass): Promise<void> {
     const tracked = new Set(readRecords(paths).map((r) => r.itemId))
     for (const item of pass.board.items) {
       if (item.groupId !== groupOf(pass, "requests") || tracked.has(item.id)) continue
@@ -466,13 +466,20 @@ export function createMondayBridge(deps: MondayBridgeDeps): MondayBridge {
       }
       // One at a time: a request Linear refuses waits for the next poll, and the others go on.
       try {
-        await fileRequest(item, who, pass)
+        await fileRequest({ paths, config: deps.config, log, tracker, once }, item, who, pass.now, (rec, filed) => link(rec, item, filed, pass))
       } catch (error) {
         log.warn("monday request not filed yet", { item: item.id, error: message(error) })
       }
     }
+  }
 
-    const open = readRecords(paths).filter((r) => r.kind === "request" && r.state !== "Done")
+  /**
+   * Each request item on this board kept in step with its issue. With the
+   * Requests board configured, only the ones still here (the migration,
+   * Task 11, moves them): that board's own are its part's.
+   */
+  async function updateRequests(pass: Pass): Promise<void> {
+    const open = readRecords(paths).filter((r) => r.kind === "request" && r.state !== "Done" && pass.byId.has(r.itemId))
     if (!open.length) return
     const issues = new Map((await people.byIdentifiers(open.map((r) => r.issue))).map((i) => [i.id, i]))
     for (const rec of open) {
@@ -542,13 +549,13 @@ export function createMondayBridge(deps: MondayBridgeDeps): MondayBridge {
     return requests.find((r) => r.issue === issue.id || (issue.parent !== null && r.issue === issue.parent))?.itemId ?? null
   }
 
-  async function upsert(need: Need, found: ItemRecord | null, pass: Pass): Promise<void> {
+  async function upsert(need: Need, found: ItemRecord | null, pass: Pass): Promise<ItemRecord | null> {
     const hash = createHash("sha256").update(`${need.name}\n${need.body}`).digest("hex").slice(0, 16)
     const group = groupOf(pass, need.group)
     let rec = found
     if (rec && !pass.byId.has(rec.itemId)) {
       // A person deleted or archived the item: it is not put back while this need lasts. A later need gets a new one.
-      if (rec.state !== "Done") return
+      if (rec.state !== "Done") return null
       dropRecord(paths, rec.key)
       rec = null
     }
@@ -579,7 +586,7 @@ export function createMondayBridge(deps: MondayBridgeDeps): MondayBridge {
       rec.requestItem = need.request
       save(rec)
     }
-    if (rec.bodyHash === hash && rec.state !== "Done") return
+    if (rec.bodyHash === hash && rec.state !== "Done") return rec
     await api.postUpdate(rec.itemId, toHtml(need.body))
     // The item asks: the first answer after this counts, in either door.
     rec.askedAt = pass.now.toISOString()
@@ -588,6 +595,34 @@ export function createMondayBridge(deps: MondayBridgeDeps): MondayBridge {
     rec.state = "Needs you"
     rec.doneAt = null
     save(rec)
+    return rec
+  }
+
+  /**
+   * Spec 6: a money or legal question due today or tomorrow pings its person
+   * once per due date, in working hours, in its thread, with the item's link.
+   * A new item is pinged on the next poll, when the board gives its link.
+   */
+  function pingIfDue(need: Need, rec: ItemRecord | null, pass: Pass): void {
+    const timeZone = deps.config.queue.timeZone
+    if (need.kind !== "needs" || !need.due || !need.issue.labels.some((l) => l === "money" || l === "regulatory")) return
+    if (!dueSoon(need.due, pass.now, timeZone) || !workingHours(pass.now, timeZone)) return
+    const item = rec ? pass.byId.get(rec.itemId) : undefined
+    if (!item) return
+    const target = threadTarget(paths, need.issue.id, need.issue.slackThread)
+    ping(
+      paths,
+      deps.config,
+      {
+        key: `money-legal:${need.issue.id}:${need.due}`,
+        issue: need.issue.id,
+        reason: "money-legal-due",
+        text: say.moneyLegalDue(need.issue.id, need.due, item.url),
+        person: cfg!.people.find((p) => p.id === personFor(need.issue))?.slackId ?? null,
+        thread: target.kind === "linked" ? { channelId: target.channelId, threadTs: target.threadTs } : null,
+      },
+      pass.now,
+    )
   }
 
   /** Each need's issue's Slack thread link, as Linear keeps it: where threads() posts. */
@@ -616,10 +651,17 @@ export function createMondayBridge(deps: MondayBridgeDeps): MondayBridge {
     const recs = readRecords(paths).filter((r) => r.kind !== "request")
     const byKey = new Map(recs.map((r) => [r.key, r]))
     for (const need of wanted.values()) {
+      let rec: ItemRecord | null
       try {
-        await upsert(need, byKey.get(need.key) ?? null, pass)
+        rec = await upsert(need, byKey.get(need.key) ?? null, pass)
       } catch (error) {
         log.error("monday item not written", { key: need.key, error: message(error) })
+        continue
+      }
+      try {
+        pingIfDue(need, rec, pass)
+      } catch (error) {
+        log.warn("monday ping not sent", { key: need.key, error: message(error) })
       }
     }
     // What settled the ones going to Done, when it was the other door: read once.
@@ -739,12 +781,59 @@ export function createMondayBridge(deps: MondayBridgeDeps): MondayBridge {
     for (const [key, title] of Object.entries(cfg!.groups) as Array<[GroupKey, string | undefined]>) {
       // A Wave 2 group not in config (its type allows none; JSON config never gives one).
       if (!title) continue
+      // With the Requests board, this board keeps no request groups.
+      if (cfg!.requests && (key === "requests" || key === "working")) continue
       const id = byTitle.get(title.trim().toLowerCase())
       if (id) ids[key] = id
       else missing.push(`"${title}"`)
     }
     if (missing.length) throw new Error(`monday: board ${cfg!.boardId} has no group named ${missing.join(", ")} (bridges.monday.groups)`)
     return ids
+  }
+
+  /** The morning digest (spec 6, D5): once a working day, from 08:00 until noon, in #polads-questions. */
+  async function digest(pass: Pass, requests: RequestsPass | null): Promise<void> {
+    const d = cfg!.digest
+    if (!d.enabled) return
+    const day = digestDue(pass.now, deps.config.queue.timeZone, d, readDigestDay(paths))
+    if (!day) return
+    // Written before the post: a restart loses one digest at worst, and never posts two.
+    writeDigestDay(paths, day)
+    const open = readRecords(paths).filter((r) => r.kind !== "request" && r.state !== "Done" && pass.byId.has(r.itemId))
+    const NOUNS: Partial<Record<GroupKey, [string, string]>> = {
+      needsYou: ["decision", "decisions"],
+      approvePlan: ["plan to approve", "plans to approve"],
+      looks: ["look", "looks"],
+      testDay: ["change to try on test day", "changes to try on test day"],
+    }
+    const groups: DigestGroup[] = []
+    for (const [key, [one, many]] of Object.entries(NOUNS) as Array<[GroupKey, [string, string]]>) {
+      const id = pass.groups[key]
+      if (!id) continue
+      const title = pass.board.groups.find((g) => g.id === id)?.title ?? key
+      const items = open.map((r) => pass.byId.get(r.itemId)!).filter((i) => i.groupId === id).map((i) => ({ name: i.name, url: i.url }))
+      groups.push({ title, one, many, items, testDay: key === "testDay" })
+    }
+    const reqs = requests ? readRecords(paths).filter((r) => r.kind === "request" && requests.byId.has(r.itemId)) : null
+    const text = digestText(groups, {
+      testDay: deps.testDayLine?.() ?? null,
+      requests: reqs ? { active: reqs.filter((r) => r.stage && requestGroup(r.stage) === "active").length, readyToTest: reqs.filter((r) => r.stage === "Ready to test").length } : null,
+    })
+    enqueueSlack(paths, { kind: "post", channel: "questions", text }, pass.now)
+    appendLedger(paths, { type: "digest.posted", day }, pass.now)
+  }
+
+  /** The Requests board, read once a poll: its items, and its three groups found by title. */
+  async function readRequests(now: Date, since: Date): Promise<RequestsPass> {
+    const r = cfg!.requests!
+    const board = await api.readBoard(r.boardId, Object.values(r.columns), { columnIds: [], since })
+    const byTitle = new Map(board.groups.map((g) => [g.title.trim().toLowerCase(), g.id]))
+    const find = (title: string) => {
+      const id = byTitle.get(title.trim().toLowerCase())
+      if (!id) throw new Error(`monday: board ${r.boardId} has no group named "${title}" (bridges.monday.requests.groups)`)
+      return id
+    }
+    return { board, groups: { active: find(r.groups.active), released: find(r.groups.released), closed: find(r.groups.closed) }, byId: new Map(board.items.map((i) => [i.id, i])), now }
   }
 
   return {
@@ -764,12 +853,24 @@ export function createMondayBridge(deps: MondayBridgeDeps): MondayBridge {
           return null
         }
       }
+      // The Requests board on its own read: a problem there stops only the requests.
+      const asked = requestsBoard ? await part("requests board", () => readRequests(now, since)) : null
       await part("words", () => hearWords(pass))
-      await part("requests", () => requests(pass))
+      if (asked) await part("request words", () => hearWords({ board: asked.board, groups: {}, byId: asked.byId, now }))
+      if (!requestsBoard) await part("requests", () => requests(pass))
+      else {
+        // New asks come to the Requests board. Those still on this one stay in step until the migration moves them.
+        if (asked) await part("requests", () => requestsBoard.fromBoard(asked))
+        if (asked) await part("slack requests", () => requestsBoard.adopt(asked))
+        await part("old requests", () => updateRequests(pass))
+      }
       const linked = await part("needs", () => needs(pass))
       // Not without the needs: an item whose issue has a thread on another mini would get a second one.
       if (doors && linked) await part("threads", () => threads(pass, linked))
+      if (requestsBoard && asked) await part("request stages", () => requestsBoard.update(asked))
+      await part("digest", () => digest(pass, asked))
       await part("archive", () => archive(pass))
+      if (requestsBoard && asked) await part("request archive", () => requestsBoard.archive(asked))
       await part("replies", drain)
     },
     drain,

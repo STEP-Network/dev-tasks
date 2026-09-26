@@ -394,6 +394,11 @@ describe("runJob", () => {
       expect(await runJob(deps, job.id)).toMatchObject({ status: "blocked", reason: "the worker reported done but made no commits" })
       expect(q.seen).toHaveLength(2)
       expect(outbox().at(-1)).toBe("STEP-7: I had to stop: I finished without changing any code. I asked in the issue's thread what to do.")
+      // The people are called to its question, once, right after it (spec 6).
+      const texts = outbox()
+      const asked = texts.findIndex((t) => t.startsWith("I had to stop work on STEP-7"))
+      expect(texts[asked + 1]).toBe("<@UNATE> STEP-7 is blocked. What happened, and what you can reply, is just above.")
+      expect(texts.filter((t) => t.startsWith("<@"))).toHaveLength(1)
     })
 
     it("counts only test files, and leaves a report with its checks, or any other status, as it is", () => {
@@ -695,6 +700,8 @@ describe("runJob", () => {
       earlierRound(other.paths, "the wall-clock limit of 90 minutes")
       await runJob(other.deps, other.job.id)
       expect(sent(other.paths).filter((p) => p.question)).toHaveLength(1)
+      // That one calls the people to it (spec 6); the repeat above called nobody.
+      expect(sent(other.paths).filter((p) => p.text.startsWith("<@UNATE> STEP-7 is blocked."))).toHaveLength(1)
     })
 
     it("answers in the issue's thread too when the round before asked there", async () => {

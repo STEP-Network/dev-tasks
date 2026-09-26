@@ -14,6 +14,7 @@ import { recordSandboxProbe } from "../../cli/sandbox-probe.ts"
 import { frontDoorSettingsPath } from "../frontdoor.ts"
 import { Every } from "../health.ts"
 import { checkLocal, freshMemo, killGroup, runDuties, type DutyDeps } from "../main.ts"
+import { ping } from "../../notify.ts"
 
 const CONFIG = { mini: "eve", repo: { path: "/r" }, pluginRoot: "/p", slack: { allowedUsers: ["UNATE"] } }
 const RUNTIME = fileURLToPath(new URL("../../..", import.meta.url))
@@ -174,6 +175,14 @@ describe("runDuties", () => {
     await runDuties(idle.d, freshMemo())
     expect(idle.f.lines().some((l) => l.includes(" ls-remote "))).toBe(true)
     expect(idle.f.lines().some((l) => l.includes(" worktree prune"))).toBe(true)
+  })
+
+  it("sends a ping that waited for the night once working hours begin (spec 6)", async () => {
+    const { d, paths } = duties()
+    ping(paths, d.config, { key: "blocked:job-9", issue: "STEP-9", reason: "blocked", text: "STEP-9 is blocked." }, new Date("2026-09-23T21:00:00.000Z"))
+    expect(listNew(paths.outbox)).toEqual([])
+    await runDuties(d, freshMemo())
+    expect(listNew<{ text: string }>(paths.outbox).map((e) => e.payload.text)).toContain("<@UNATE> STEP-9 is blocked.")
   })
 
   it("checks in to Sentry only when a check-in URL is configured", async () => {

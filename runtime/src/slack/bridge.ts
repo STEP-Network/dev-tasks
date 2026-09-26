@@ -262,6 +262,7 @@ export async function fileIntake(deps: BridgeDeps, key: string): Promise<void> {
     const permalink = await deps.web.permalink(entry.channel, entry.ts).catch(() => null)
     const input = intakeIssue(entry.text, {
       userName: entry.userName,
+      userId: entry.user,
       permalink: permalink ?? "(no link)",
       botUserId: deps.classifyContext.botUserId,
       otherAgentBots: deps.classifyContext.otherAgentBots,

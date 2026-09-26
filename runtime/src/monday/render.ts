@@ -14,6 +14,7 @@ import { NOTHING_NEEDED } from "../plain.ts"
 import { truncateChars } from "../slack/text.ts"
 import type { CreateIssueInput } from "../tracker.ts"
 import type { VerdictOutcome } from "../verdict.ts"
+import type { Stage } from "./stage.ts"
 
 /** The Kind column's labels. */
 export type MondayKind = "Decision" | "Approval" | "Check" | "Request" | "FYI"
@@ -178,6 +179,25 @@ export const say = {
   answered: (name: string, movedTo: string | null) =>
     `Thanks, ${name}. I added your answer to the issue${movedTo === "Ready" ? ", and an agent picks it up again" : movedTo ? ", and an agent looks at it again" : ""}. ${NOTHING_NEEDED}`,
   filed: (name: string, id: string) => `Thanks, ${name}. I filed this for the agents as ${id}. It moves to Done when the change is released. ${NOTHING_NEEDED}`,
+  /** On the Requests board, where Stage says how far it has come. */
+  filedRequest: (name: string, id: string) => `Thanks, ${name}. I filed this for the agents as ${id}. Its Stage shows how far it has come. ${NOTHING_NEEDED}`,
+  /** A money or legal question due today or tomorrow (spec 6): the one ping it gets. */
+  moneyLegalDue: (id: string, due: string, url: string) =>
+    `${id} needs an answer by ${due}, and it touches money or legal wording. Please answer in this thread or on Monday: ${url}`,
+  /** A Slack request's item, the first time: who asked, and what (spec 4). */
+  askedInSlack: (name: string, about: string) =>
+    `${name} asked for this in Slack${about ? `: ${about}${/[.!?]$/.test(about) ? "" : "."}` : "."} I keep this item up to date from Linear.`,
+  /** The request's Slack thread, once its item exists. */
+  onRequestsBoard: (id: string, url: string) => `${id} is on the Monday Requests board: ${url}. I will post its progress in this thread. ${NOTHING_NEEDED}`,
+  /** A request's new Stage (spec 4), once, on its item and in its Slack thread. */
+  stage: (id: string, stage: Stage, progress: string) =>
+    stage === "Released"
+      ? `${id} is released${progress ? ` (${progress})` : ""}. ${NOTHING_NEEDED}`
+      : stage === "Declined"
+        ? `${id} was closed without a change. ${NOTHING_NEEDED}`
+        : stage === "Clarifying" || stage === "Plan to approve"
+          ? `${id}: ${stage}. One of you is asked about it on the Needs you board and in its Slack thread.`
+          : `${id}: ${stage}${progress ? ` (${progress})` : ""}. ${NOTHING_NEEDED}`,
   released: (id: string) => `Done: ${id} is released. ${NOTHING_NEEDED}`,
   closed: (id: string) => `${id} was closed without a change, so this is done. ${NOTHING_NEEDED}`,
   passed: (name: string) => `Thanks, ${name}. I marked it as approved, so it goes out with the next release. ${NOTHING_NEEDED}`,
