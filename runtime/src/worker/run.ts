@@ -160,7 +160,7 @@ export function sdkOptions(o: SdkOptionsInput): Options {
         { matcher: "Bash", hooks: [denyBannedBash] },
         // Every tool: canUseTool never hears of a read, nor of an edit acceptEdits allows.
         { hooks: [denyWorkerPaths(scope)] },
-        ...(own ? [{ matcher: "SendMessage", hooks: [own.limit] }, { matcher: "Agent|Task", hooks: [own.record] }] : []),
+        ...(own ? [{ matcher: "SendMessage", hooks: [own.limit] }] : []),
       ],
       ...(own ? { PostToolUse: [{ matcher: "Agent|Task", hooks: [own.record] }] } : {}),
     },

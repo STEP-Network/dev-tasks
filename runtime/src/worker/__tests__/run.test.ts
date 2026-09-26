@@ -1069,7 +1069,7 @@ describe("sdkOptions", () => {
     expect(on.env).toEqual({ PATH: "/bin", CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS: "1" })
     expect(on.settings).toMatchObject({ teammateMode: "in-process", enableWorkflows: true, permissions: off.settings.permissions })
     // SendMessage is limited to what this session started, which the subagent tool's hooks learn.
-    expect(on.hooks.PreToolUse.map((h: { matcher?: string }) => h.matcher)).toEqual(["Bash", undefined, "SendMessage", "Agent|Task"])
+    expect(on.hooks.PreToolUse.map((h: { matcher?: string }) => h.matcher)).toEqual(["Bash", undefined, "SendMessage"])
     expect(on.hooks.PostToolUse.map((h: { matcher?: string }) => h.matcher)).toEqual(["Agent|Task"])
     expect(on.sandbox).toEqual(off.sandbox)
   })

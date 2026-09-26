@@ -227,21 +227,24 @@ export function denyWorkerPaths(scope: WorkerScope) {
  * worker.fanOut: SendMessage reaches only what this session started, its
  * subagents (by agentId) and teammates (by name), and "main", its own lead.
  * Never another session on this machine or another: that is a person's, or
- * another agent's. `record` (PreToolUse and PostToolUse on the subagent tool)
- * learns the names; `limit` (PreToolUse on SendMessage) refuses the rest.
+ * another agent's. `record` (PostToolUse on the subagent tool) learns them;
+ * `limit` (PreToolUse on SendMessage) refuses the rest.
+ *
+ * Only a launch that ran: a refused one never reaches PostToolUse, so its name
+ * is never learnt. The id is the harness's own field on the result, never text:
+ * a subagent's report is in that result too, and writes what it likes.
  */
 export function ownAgentsOnly() {
   const spawned = new Set<string>(["main"])
-  const learn = (text: string) => {
-    for (const m of text.matchAll(/agentId:\s*([A-Za-z0-9_-]+)/g)) spawned.add(m[1])
-  }
   return {
     spawned,
     record: async (input: HookInputLike & { tool_response?: unknown }) => {
-      if (!input.tool_name || !AGENT_TOOLS.has(input.tool_name)) return {}
+      if (input.hook_event_name !== "PostToolUse" || !input.tool_name || !AGENT_TOOLS.has(input.tool_name)) return {}
       const name = (input.tool_input as { name?: unknown } | undefined)?.name
       if (typeof name === "string" && name) spawned.add(name)
-      if (input.tool_response !== undefined) learn(typeof input.tool_response === "string" ? input.tool_response : JSON.stringify(input.tool_response))
+      const response = input.tool_response
+      const id = response && typeof response === "object" ? (response as { agentId?: unknown }).agentId : undefined
+      if (typeof id === "string" && id) spawned.add(id)
       return {}
     },
     limit: async (input: HookInputLike) => {

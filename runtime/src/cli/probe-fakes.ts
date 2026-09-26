@@ -11,6 +11,8 @@ import { createServer, type ServerResponse } from "node:http"
 
 /** A scripted tool call. Its input may be computed from the text of the last tool result, e.g. a name another tool reported. */
 export type ToolCall = { name: string; input: Record<string, unknown> | ((lastResult: string) => Record<string, unknown>) }
+/** A step of a script: a tool call, or the text the conversation ends with (else "done"). */
+export type Step = ToolCall | { reply: string }
 
 export interface FakeApi {
   url: string
@@ -66,7 +68,7 @@ export async function startFakeLinear(): Promise<FakeLinear> {
  * subagent's prompt) gets that script instead, for probing what a worker's
  * subagents may do (worker.fanOut).
  */
-export async function startFakeApi(script: ToolCall[], subagents: Record<string, ToolCall[]> = {}): Promise<FakeApi> {
+export async function startFakeApi(script: Step[], subagents: Record<string, Step[]> = {}): Promise<FakeApi> {
   const paths: string[] = []
   const bodies: string[] = []
   let n = 0
@@ -103,10 +105,11 @@ export async function startFakeApi(script: ToolCall[], subagents: Record<string,
       const answered = results.length
       const step = main && answered < steps.length ? steps[answered] : null
       const last = results.length ? results[results.length - 1].content : ""
-      const call = step && { name: step.name, input: typeof step.input === "function" ? step.input(typeof last === "string" ? last : JSON.stringify(last)) : step.input }
+      const call = step && "name" in step ? { name: step.name, input: typeof step.input === "function" ? step.input(typeof last === "string" ? last : JSON.stringify(last)) : step.input } : null
+      const text = step && "reply" in step ? step.reply : "done"
       const id = `msg_${++n}`
       const usage = { input_tokens: 10, output_tokens: 5, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 }
-      const content = call ? [{ type: "tool_use", id: `toolu_${n}`, name: call.name, input: call.input }] : [{ type: "text", text: "done" }]
+      const content = call ? [{ type: "tool_use", id: `toolu_${n}`, name: call.name, input: call.input }] : [{ type: "text", text }]
       const stop = call ? "tool_use" : "end_turn"
       if (!request.stream) {
         res.writeHead(200, { "content-type": "application/json" })
@@ -123,7 +126,7 @@ export async function startFakeApi(script: ToolCall[], subagents: Record<string,
         {
           type: "content_block_delta",
           index: 0,
-          delta: call ? { type: "input_json_delta", partial_json: JSON.stringify(call.input) } : { type: "text_delta", text: "done" },
+          delta: call ? { type: "input_json_delta", partial_json: JSON.stringify(call.input) } : { type: "text_delta", text },
         },
         { type: "content_block_stop", index: 0 },
         { type: "message_delta", delta: { stop_reason: stop, stop_sequence: null }, usage: { output_tokens: 5 } },

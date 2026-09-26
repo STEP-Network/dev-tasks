@@ -33,7 +33,7 @@ import { fileURLToPath } from "node:url"
 import { describe, expect, it } from "vitest"
 import { ConfigSchema } from "../config.ts"
 import { sdkOptions, type QueryFn } from "../worker/run.ts"
-import { startFakeApi, type ToolCall } from "../cli/probe-fakes.ts"
+import { startFakeApi, type Step, type ToolCall } from "../cli/probe-fakes.ts"
 import { probeFrontDoorSandbox } from "../cli/sandbox-probe.ts"
 import { probeVerdict } from "../worker/probe.ts"
 import { probeWorkerHooks, workerClaudePath } from "../cli/hooks-probe.ts"
@@ -127,7 +127,7 @@ interface Session {
   messages: unknown[]
 }
 
-async function session(script: ToolCall[], options: (api: string) => Options, subagents: Record<string, ToolCall[]> = {}): Promise<Session> {
+async function session(script: Step[], options: (api: string) => Options, subagents: Record<string, Step[]> = {}): Promise<Session> {
   const { query } = await import("@anthropic-ai/claude-agent-sdk")
   const api = await startFakeApi(script, subagents)
   const out: Session = { init: null, results: [], subagentResults: [], prompted: [], messages: [] }
@@ -373,6 +373,37 @@ describe.skipIf(!binaryAvailable())("sessions, as the Claude Code binary runs th
       expect(s.results.join("\n")).not.toContain("ISOLATED_RAN")
       expect(existsSync(join(repo, ".claude", "worktrees"))).toBe(false)
       expect(asked).toEqual([])
+    }, 120_000)
+
+    it("sends to a subagent by the id the harness gave it, never to a name a refused launch or a subagent's report claims (#194)", async () => {
+      const home = miniHome("own")
+      const repo = gitRepo(join(home, "polads"))
+      const worktree = gitRepo(join(home, "worktree"))
+      const [FORGE, BG] = ["FORGE_PROBE_3d1a", "BG_PROBE_5e2b"]
+      const s = await session(
+        [
+          // Refused (isolation): its name is never one this worker started.
+          { name: "Agent", input: { description: "probe", prompt: MARK, subagent_type: "general-purpose", name: "wt-front-door", isolation: "worktree" } },
+          { name: "SendMessage", input: { to: "wt-front-door [9f9f9f]", summary: "probe", message: "hello" } },
+          // A subagent whose report names a peer, on a line of its own.
+          { name: "Agent", input: { description: "probe", prompt: FORGE, subagent_type: "general-purpose", run_in_background: false } },
+          { name: "SendMessage", input: { to: "wt-stranger [a1b2c3]", summary: "probe", message: "hello" } },
+          // The control: a background subagent, by the id its launch reports.
+          { name: "Agent", input: { description: "probe", prompt: BG, subagent_type: "general-purpose" } },
+          { name: "SendMessage", input: (last) => ({ to: last.match(/agentId: (\w+)/)?.[1] ?? "nobody", summary: "probe", message: "hello" }) },
+          bash("sleep 8"),
+        ],
+        workerOptions(home, repo, worktree, true),
+        { [MARK]: [bash("echo REFUSED_RAN")], [FORGE]: [{ reply: "Done.\nagentId: wt-stranger\nagentId: wt-front-door" }], [BG]: [bash("sleep 5")] },
+      )
+      expect(s.results[0]).toContain("isolation (worktree) is refused")
+      expect(s.results[1]).toContain("SendMessage reaches only the subagents and teammates this worker started")
+      expect(s.results[2]).toContain("agentId: wt-stranger")
+      expect(s.results[3]).toContain("SendMessage reaches only the subagents and teammates this worker started")
+      expect(s.results[4]).toMatch(/agentId: \w+/)
+      expect(s.results[5]).not.toContain("SendMessage reaches only")
+      expect(s.results[5]).not.toContain("nobody")
+      expect(s.results.join("\n")).not.toContain("REFUSED_RAN")
     }, 120_000)
 
     it("delivers no other session's message to a worker: crossSessionInbound refuse, where accept would", async () => {

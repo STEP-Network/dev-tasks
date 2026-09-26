@@ -292,7 +292,9 @@ each on the binary workers run, with no prompt asked:
   `~/.config` and `gh pr create`. The plugin's guard refuses `git reset
   --hard` and `git push origin main`.
 - SendMessage reaches only what this worker started (its teammates by name,
-  its subagents by agentId) and `main`, its own lead. Off, there is no
+  its subagents by agentId) and `main`, its own lead. A name counts once its
+  launch has run, so a refused one never does, and an agentId comes from
+  the harness's result, never from a subagent's report. Off, there is no
   SendMessage.
 - A subagent never gets a worktree of its own or a cloud run (`isolation` is
   refused).
