@@ -276,6 +276,20 @@ Left out, each runs at its model's default. The template's models and effort
 are Eve's: `claude-opus-5-5` at `xhigh`. A change to `worker.effort` counts
 from the next job; the front door takes its own at its next start.
 
+`worker.fanOut` lets a develop or revise worker split its work: subagents
+(the Agent tool), a dynamic workflow (the Workflow tool, which then runs
+without the prompt it would ask for), and named teammates (agent teams,
+`CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS`), each on the model it picks (fable,
+opus, sonnet or haiku). Its brief says so, and asks for the Workflow tool
+outright. Off by default: no fan-out, as before. The web and skills stay off
+either way. All three run in the worker's own process, at `teammateMode`
+`in-process`, and `runtime/src/__tests__/sessions.test.ts` proves on the
+binary workers run that each is held as the worker is. A write outside the
+worktree is refused by the sandbox, `~/.config` and `gh pr create` by the
+worker's guard, and `git reset --hard` by the plugin's guard, with no prompt
+asked. Their turns and spend count toward the worker's limits. The template
+turns it on, as it is on Eve.
+
 `retro.enabled` turns on the weekly retro (section 11, The weekly retro) on
 this mini. Only one mini, the coordinator, has it on. It is off by default,
 as in the example. The retro pushes a branch to STEP-Network/dev-tasks with

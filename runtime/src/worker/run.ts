@@ -81,10 +81,19 @@ export interface SdkOptionsInput {
 /** git's files that say where a worktree's repository, config and common directory are. */
 const GIT_POINTERS = ["commondir", "gitdir", "config.worktree"]
 
+/**
+ * worker.fanOut's tools: subagents ("Agent", or "Task" as the SDK names it), a
+ * dynamic workflow's agents and named teammates. Each runs in this process
+ * under the worker's own hooks, guard and sandbox (sessions.test.ts proves it
+ * on the binary workers run). Off, none of them.
+ */
+const FAN_OUT_TOOLS = ["Agent", "Task", "Workflow"]
+
 /** Typed as the SDK's own Options: a misspelt or retired option fails the typecheck. */
 export function sdkOptions(o: SdkOptionsInput): Options {
   const repoGit = join(o.config.repo.path, ".git")
   const scope = { worktree: o.cwd, home: o.home }
+  const fanOut = o.config.worker.fanOut
   return {
     cwd: o.cwd,
     model: o.model,
@@ -101,10 +110,11 @@ export function sdkOptions(o: SdkOptionsInput): Options {
         workerToolDenial(toolName, input, scope) ??
         `${toolName} needs a permission prompt and an unattended worker has nobody to ask. Work around it, or finish with status blocked.`,
     }),
-    // No web (token discipline, and less untrusted text), no subagents (spec
-    // 6.6: no fan-out), no skills: the brief is the whole procedure, and /ship
-    // would try to push. "Agent" and "Task" are the subagent tool's two names.
-    disallowedTools: ["WebFetch", "WebSearch", "Agent", "Task", "Skill"],
+    // No web (token discipline, and less untrusted text), no skills: the brief
+    // is the whole procedure, and /ship would try to push. No fan-out unless
+    // worker.fanOut, and then the Workflow tool without the prompt it asks for.
+    disallowedTools: ["WebFetch", "WebSearch", "Skill", ...(fanOut ? [] : FAN_OUT_TOOLS)],
+    ...(fanOut ? { allowedTools: ["Workflow"] } : {}),
     // PolAds's CLAUDE.md and project hooks. Not "user": that is the front door's
     // settings (Remote Control, the status line), not the worker's.
     settingSources: ["project"],
@@ -120,6 +130,9 @@ export function sdkOptions(o: SdkOptionsInput): Options {
     // rule has no exceptions, so .env files, where .env.example must stay
     // readable, are held by the hook and the sandbox.
     settings: {
+      // Teammates stay in this process, never a tmux pane's own claude, which
+      // would run without the SDK's hooks and canUseTool.
+      ...(fanOut ? { teammateMode: "in-process" as const, enableWorkflows: true } : {}),
       permissions: {
         deny: [
           "Read(~/.config/**)",
@@ -177,7 +190,7 @@ export function sdkOptions(o: SdkOptionsInput): Options {
       // The worker's own process needs the Claude token. Its commands never do.
       credentials: { envVars: [{ name: "CLAUDE_CODE_OAUTH_TOKEN", mode: "deny" }] },
     },
-    env: o.env,
+    env: fanOut ? { ...o.env, CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS: "1" } : o.env,
     systemPrompt: { type: "preset", preset: "claude_code", append: o.rules },
     outputFormat: { type: "json_schema", schema: WORKER_RESULT_SCHEMA },
   }
@@ -488,7 +501,7 @@ export async function runJob(deps: RunDeps, jobId: string): Promise<JobResult> {
 
   // 3. the session
   const earlier = job.retryOf ? readJson<JobRecord>(jobPath(paths, "done", job.retryOf))?.result?.reason : undefined
-  const brief: BriefInput = { mini: config.mini, issue, worktree: worktree.path, branch, base: config.repo.base, resumed: worktree.resumed, limits, ...(earlier ? { earlier } : {}) }
+  const brief: BriefInput = { mini: config.mini, issue, worktree: worktree.path, branch, base: config.repo.base, resumed: worktree.resumed, limits, fanOut: config.worker.fanOut, ...(earlier ? { earlier } : {}) }
   const options = () =>
     sdkOptions({
       config,

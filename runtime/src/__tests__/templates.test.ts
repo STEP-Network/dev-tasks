@@ -20,7 +20,7 @@ describe("templates/config.example.json", () => {
 
   it("runs Eve's model at xhigh, in the workers and at the front door (STEP-3367)", () => {
     const config = ConfigSchema.parse(example)
-    expect(config.worker).toMatchObject({ defaultModel: "claude-opus-5-5", complexModel: "claude-opus-5-5", effort: "xhigh" })
+    expect(config.worker).toMatchObject({ defaultModel: "claude-opus-5-5", complexModel: "claude-opus-5-5", effort: "xhigh", fanOut: true })
     expect(config.frontDoor).toMatchObject({ model: "claude-opus-5-5", effort: "xhigh" })
   })
 

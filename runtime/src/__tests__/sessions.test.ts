@@ -24,7 +24,7 @@
  */
 
 import type { Options } from "@anthropic-ai/claude-agent-sdk"
-import { chmodSync, cpSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs"
+import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs"
 import { createRequire } from "node:module"
 import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
@@ -120,15 +120,17 @@ function env(home: string, api: string): Record<string, string> {
 interface Session {
   init: { plugins?: Array<{ name: string; path: string; source?: string }>; mcp_servers?: Array<{ name: string; status: string }>; tools?: string[] } | null
   results: string[]
+  /** The tool results of a subagent's own calls (a message with a parent_tool_use_id). */
+  subagentResults: string[]
   prompted: string[]
   /** Every message, as agentctl probe-hooks reads them. */
   messages: unknown[]
 }
 
-async function session(script: ToolCall[], options: (api: string) => Options): Promise<Session> {
+async function session(script: ToolCall[], options: (api: string) => Options, subagents: Record<string, ToolCall[]> = {}): Promise<Session> {
   const { query } = await import("@anthropic-ai/claude-agent-sdk")
-  const api = await startFakeApi(script)
-  const out: Session = { init: null, results: [], prompted: [], messages: [] }
+  const api = await startFakeApi(script, subagents)
+  const out: Session = { init: null, results: [], subagentResults: [], prompted: [], messages: [] }
   const o = options(api.url)
   // Nobody is there to answer a prompt: record it and refuse, as the front door's --permission-prompts none would.
   o.canUseTool ??= async (name, input) => {
@@ -141,7 +143,10 @@ async function session(script: ToolCall[], options: (api: string) => Options): P
       if (m.type === "system" && m.subtype === "init") out.init = m as unknown as Session["init"]
       if (m.type === "user" && Array.isArray(m.message.content)) {
         for (const c of m.message.content as Array<{ type: string; content?: unknown }>) {
-          if (c.type === "tool_result") out.results.push(typeof c.content === "string" ? c.content : JSON.stringify(c.content))
+          if (c.type !== "tool_result") continue
+          const text = typeof c.content === "string" ? c.content : JSON.stringify(c.content)
+          out.results.push(text)
+          if (m.parent_tool_use_id) out.subagentResults.push(text)
         }
       }
     }
@@ -238,6 +243,114 @@ describe.skipIf(!binaryAvailable())("sessions, as the Claude Code binary runs th
     commands.forEach(([command, block], i) => expect(s.results[i], command).toContain(block))
     expect(probeVerdict(s.messages)).toMatchObject({ pluginHookFired: true, loadedPlugins: expect.arrayContaining(["dev-tasks"]) })
   }, 120_000)
+
+  describe("worker.fanOut (STEP-3367): what a subagent, a teammate and a workflow's agent may do", () => {
+    const MARK = "FANOUT_PROBE_7c1e"
+    /**
+     * A worker whose main loop hands MARK to one of the three, then waits
+     * for it. What it tries: a write inside the
+     * worktree, a write outside it (the sandbox), ~/.config (the worker's own
+     * guard, an in-process SDK hook), git reset --hard (the plugin's guard)
+     * and gh pr create (the worker's guard).
+     */
+    async function fannedOut(start: (mark: string) => ToolCall, env2: Record<string, string> = {}) {
+      const home = miniHome("fanout")
+      const repo = gitRepo(join(home, "polads"))
+      const worktree = gitRepo(join(home, "worktree"))
+      const config = ConfigSchema.parse({ mini: "eve", repo: { path: repo }, pluginRoot: PLUGIN, slack: { allowedUsers: ["UNATE"] }, worker: { fanOut: true } })
+      const bash = (command: string): ToolCall => ({ name: "Bash", input: { command, description: "probe" } })
+      const asked: string[] = []
+      const s = await session(
+        // The main loop waits for a background agent: a plain sleep, which the sandbox allows without a prompt.
+        [start(MARK), bash("sleep 10")],
+        (api) => {
+          const o = sdkOptions({ config, cwd: worktree, model: "sonnet", abortController: new AbortController(), rules: "test", pnpmStore: null, env: {}, home })
+          o.env = { ...o.env, ...env(home, api), DEV_TASKS_PROFILE: "agent", ...env2 }
+          delete o.outputFormat
+          const inner = o.canUseTool!
+          o.canUseTool = async (name, input, opts) => {
+            asked.push(name)
+            return inner(name, input, opts)
+          }
+          return o
+        },
+        {
+          [MARK]: [
+            bash(`touch ${worktree}/inside.txt && echo WROTE_INSIDE`),
+            bash(`touch ${home}/escaped.txt; echo AFTER_ESCAPE`),
+            bash("cat ~/.config/linear/.env"),
+            bash("git reset --hard HEAD"),
+            bash("gh pr create --fill"),
+          ],
+        },
+      )
+      // A workflow's agents stream nothing to the SDK: their results are in the transcript its launch names.
+      const transcript = s.results.join("\n").match(/Transcript dir: (\S+)/)?.[1]
+      const results = transcript ? transcriptResults(transcript) : s.subagentResults
+      return { results, asked, inside: existsSync(join(worktree, "inside.txt")), escaped: existsSync(join(home, "escaped.txt")), all: s.results }
+    }
+
+    function transcriptResults(dir: string): string[] {
+      const files = readdirSync(dir, { recursive: true, encoding: "utf8" }).filter((f) => f.endsWith(".jsonl")).map((f) => join(dir, f))
+      return files.flatMap((f) =>
+        readFileSync(f, "utf8")
+          .split("\n")
+          .filter(Boolean)
+          .flatMap((line) => {
+            const m = JSON.parse(line) as { message?: { content?: unknown } }
+            const content = Array.isArray(m.message?.content) ? (m.message!.content as Array<{ type?: string; content?: unknown }>) : []
+            return content.filter((c) => c.type === "tool_result").map((c) => (typeof c.content === "string" ? c.content : JSON.stringify(c.content)))
+          }),
+      )
+    }
+
+    function held(r: Awaited<ReturnType<typeof fannedOut>>) {
+      expect(r.results[0]).toContain("WROTE_INSIDE")
+      expect(r.results[1]).toContain("Operation not permitted")
+      expect(r.results[2]).toContain("Workers never read or write ~/.config")
+      expect(r.results[3]).toContain("Destructive command detected: 'git reset --hard'")
+      expect(r.results[4]).toContain("Workers never open or merge PRs")
+      expect([r.inside, r.escaped]).toEqual([true, false])
+      // No prompt was needed or asked: the Workflow tool is allowed, the rest is the sandbox's.
+      expect(r.asked).toEqual([])
+      expect(r.all.join("\n")).not.toContain("lin_api_SESSIONTEST")
+    }
+
+    it("holds a subagent, in the foreground and in the background", async () => {
+      held(await fannedOut((m) => ({ name: "Agent", input: { description: "probe", prompt: m, subagent_type: "general-purpose", run_in_background: false } })))
+      held(await fannedOut((m) => ({ name: "Agent", input: { description: "probe", prompt: m, subagent_type: "general-purpose" } })))
+    }, 180_000)
+
+    it("holds a named teammate: agent teams run in this process", async () => {
+      held(await fannedOut((m) => ({ name: "Agent", input: { description: "probe", prompt: m, subagent_type: "general-purpose", name: "mate" } })))
+    }, 120_000)
+
+    it("holds a dynamic workflow's agents, and runs the Workflow tool without a prompt", async () => {
+      const script = `export const meta = { name: "probe", description: "probe", phases: [] }\nawait agent(${JSON.stringify(MARK)})\n`
+      held(await fannedOut(() => ({ name: "Workflow", input: { script } })))
+    }, 120_000)
+
+    it("offers a worker no fan-out unless worker.fanOut is on, and never the web or skills", async () => {
+      const home = miniHome("tools")
+      const repo = gitRepo(join(home, "polads"))
+      const worktree = gitRepo(join(home, "worktree"))
+      const tools = async (fanOut: boolean) => {
+        const config = ConfigSchema.parse({ mini: "eve", repo: { path: repo }, pluginRoot: PLUGIN, slack: { allowedUsers: ["UNATE"] }, worker: { fanOut } })
+        const s = await session([], (api) => {
+          const o = sdkOptions({ config, cwd: worktree, model: "sonnet", abortController: new AbortController(), rules: "test", pnpmStore: null, env: {}, home })
+          o.env = { ...o.env, ...env(home, api), DEV_TASKS_PROFILE: "agent" }
+          delete o.outputFormat
+          return o
+        })
+        return s.init?.tools ?? []
+      }
+      const off = await tools(false)
+      for (const tool of ["Task", "Agent", "Workflow"]) expect(off, tool).not.toContain(tool)
+      const on = await tools(true)
+      for (const tool of ["Task", "Workflow"]) expect(on, tool).toContain(tool)
+      for (const tool of ["WebFetch", "WebSearch", "Skill"]) expect(on, tool).not.toContain(tool)
+    }, 120_000)
+  })
 
   it("proves the worker's hooks for free: agentctl probe-hooks --scripted passes on the binary workers run", async () => {
     const { query } = await import("@anthropic-ai/claude-agent-sdk")

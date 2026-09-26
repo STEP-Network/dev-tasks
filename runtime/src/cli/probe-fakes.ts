@@ -58,7 +58,12 @@ export async function startFakeLinear(): Promise<FakeLinear> {
   return { url: `http://127.0.0.1:${port}/graphql`, requests, close: () => new Promise<void>((resolve) => server.close(() => resolve())) }
 }
 
-export async function startFakeApi(script: ToolCall[]): Promise<FakeApi> {
+/**
+ * subagents: a conversation whose first message holds one of these markers (a
+ * subagent's prompt) gets that script instead, for probing what a worker's
+ * subagents may do (worker.fanOut).
+ */
+export async function startFakeApi(script: ToolCall[], subagents: Record<string, ToolCall[]> = {}): Promise<FakeApi> {
   const paths: string[] = []
   let n = 0
   const server = createServer((req, res) => {
@@ -83,11 +88,14 @@ export async function startFakeApi(script: ToolCall[]): Promise<FakeApi> {
         res.end(JSON.stringify({ type: "error", error: { type: "not_found_error", message: "not in the fake" } }))
         return
       }
-      const main = (request.tools ?? []).some((t) => t.name === "Bash")
+      const first = JSON.stringify(request.messages?.[0]?.content ?? "")
+      const marker = Object.keys(subagents).find((m) => first.includes(m))
+      const steps = marker ? subagents[marker] : script
+      const main = marker !== undefined || (request.tools ?? []).some((t) => t.name === "Bash")
       const answered = (request.messages ?? [])
         .flatMap((m) => (Array.isArray(m.content) ? (m.content as Array<{ type?: string }>) : []))
         .filter((c) => c.type === "tool_result").length
-      const call = main && answered < script.length ? script[answered] : null
+      const call = main && answered < steps.length ? steps[answered] : null
       const id = `msg_${++n}`
       const usage = { input_tokens: 10, output_tokens: 5, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 }
       const content = call ? [{ type: "tool_use", id: `toolu_${n}`, name: call.name, input: call.input }] : [{ type: "text", text: "done" }]

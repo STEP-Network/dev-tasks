@@ -58,6 +58,14 @@ describe("effort (STEP-3367)", () => {
   })
 })
 
+describe("worker.fanOut (STEP-3367)", () => {
+  it("is off unless configured, and takes only a boolean", () => {
+    expect(ConfigSchema.parse(MINIMAL).worker.fanOut).toBe(false)
+    expect(ConfigSchema.parse({ ...MINIMAL, worker: { fanOut: true } }).worker.fanOut).toBe(true)
+    for (const fanOut of ["yes", 1, "true"]) expect(() => ConfigSchema.parse({ ...MINIMAL, worker: { fanOut } }), String(fanOut)).toThrow()
+  })
+})
+
 describe("agentPaths", () => {
   it("puts everything under ~/.agentd", () => {
     const paths = agentPaths("/Users/eve")
@@ -79,7 +87,7 @@ describe("loadConfig", () => {
     expect(config.repo).toEqual({ path: "/Users/eve/polads", slug: "STEP-Network/v0-politiske-annoncer", base: "staging", product: "polads" })
     expect(config.slack.channels).toEqual({ agents: "polads-agents", questions: "polads-questions", intake: "polads-intake", releases: "polads-releases" })
     expect(config.slack.otherAgentBots).toEqual([])
-    expect(config.worker).toEqual({ defaultModel: "sonnet", complexModel: "opus", maxTurns: 250, maxBudgetUsd: 15, wallClockMinutes: 90, autoMerge: true })
+    expect(config.worker).toEqual({ defaultModel: "sonnet", complexModel: "opus", maxTurns: 250, maxBudgetUsd: 15, wallClockMinutes: 90, autoMerge: true, fanOut: false })
     expect(config.queue.mode).toBe("allowlist")
     expect(config.claims).toEqual({ heartbeatMinutes: 15, ttlHours: 6 })
     expect(config.frontDoor.model).toBe("sonnet")

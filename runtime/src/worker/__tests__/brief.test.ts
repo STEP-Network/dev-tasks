@@ -41,6 +41,16 @@ describe("workerRules", () => {
     expect(rules).not.toMatch(/--admin/)
   })
 
+  it("lets the worker fan out, on any model, and asks for the Workflow tool outright, only on worker.fanOut (STEP-3367)", () => {
+    const on = workerRules({ ...input, fanOut: true })
+    expect(on).toMatch(/subagents \(the Agent tool\), a dynamic workflow \(the Workflow tool: this is the explicit request it needs\), and named teammates/)
+    expect(on).toMatch(/fable, opus, sonnet or haiku/)
+    expect(on).toMatch(/under your rules, hooks and sandbox: they never push or open a PR/)
+    for (const off of [workerRules(input), workerRules({ ...input, fanOut: false })]) {
+      expect(off).not.toMatch(/Workflow|subagent|teammate/)
+    }
+  })
+
   it("puts ~/.config, every .env file but the template, and the agent configuration off limits", () => {
     const rules = workerRules(input)
     expect(rules).toMatch(/Never read or write \.env files \(the tracked \.env\.example template aside\) or anything in ~\/\.config/)
