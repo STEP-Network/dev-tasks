@@ -861,6 +861,7 @@ export function createMondayBridge(deps: MondayBridgeDeps): MondayBridge {
       else {
         // New asks come to the Requests board. Those still on this one stay in step until the migration moves them.
         if (asked) await part("requests", () => requestsBoard.fromBoard(asked))
+        if (asked) await part("slack requests", () => requestsBoard.adopt(asked))
         await part("old requests", () => updateRequests(pass))
       }
       const linked = await part("needs", () => needs(pass))

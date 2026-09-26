@@ -184,6 +184,11 @@ export const say = {
   /** A money or legal question due today or tomorrow (spec 6): the one ping it gets. */
   moneyLegalDue: (id: string, due: string, url: string) =>
     `${id} needs an answer by ${due}, and it touches money or legal wording. Please answer in this thread or on Monday: ${url}`,
+  /** A Slack request's item, the first time: who asked, and what (spec 4). */
+  askedInSlack: (name: string, about: string) =>
+    `${name} asked for this in Slack${about ? `: ${about}${/[.!?]$/.test(about) ? "" : "."}` : "."} I keep this item up to date from Linear.`,
+  /** The request's Slack thread, once its item exists. */
+  onRequestsBoard: (id: string, url: string) => `${id} is on the Monday Requests board: ${url}. I will post its progress in this thread. ${NOTHING_NEEDED}`,
   /** A request's new Stage (spec 4), once, on its item and in its Slack thread. */
   stage: (id: string, stage: Stage, progress: string) =>
     stage === "Released"

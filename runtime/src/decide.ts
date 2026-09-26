@@ -55,6 +55,8 @@ export interface PersonEntry {
   openQuestions?: number
   /** What the bridge did about the words itself (pause, leave). */
   acted?: Action[]
+  /** On a mention: another agent was named first, and files the request. */
+  filedBy?: string
 }
 
 const PERSON_TYPES = new Set(["reply", "answer", "mention"])

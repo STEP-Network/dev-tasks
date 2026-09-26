@@ -218,6 +218,11 @@ export function fakePeople(issues: Map<string, TrackerIssue>, extra: Record<stri
       const p = byUuid(parent)
       if (c && p) parentOf.set(c.id, p.id)
     },
+    async slackRequests() {
+      return [...issues.values()]
+        .filter((i) => i.labels.includes("intake/slack") && !i.labels.includes("intake/monday") && !["Released", "Canceled", "Duplicate"].includes(i.state) && !parentOf.has(i.id))
+        .map(view)
+    },
     async childrenOf(anchorUuids) {
       const anchors = [...issues.values()].filter((i) => anchorUuids.includes(i.uuid)).map((i) => i.id)
       return new Map(anchors.map((a) => [a, [...parentOf].filter(([, p]) => p === a).flatMap(([c]) => (issues.has(c) ? [view(issues.get(c)!)] : []))]))
