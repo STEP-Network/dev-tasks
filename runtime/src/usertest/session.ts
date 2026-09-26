@@ -107,6 +107,7 @@ export function userTestSdkOptions(o: {
   return {
     cwd: o.cwd,
     model: u.model,
+    ...(o.config.worker.effort ? { effort: o.config.worker.effort } : {}),
     maxTurns: u.maxTurns,
     maxBudgetUsd: u.maxBudgetUsd,
     abortController: o.abortController,

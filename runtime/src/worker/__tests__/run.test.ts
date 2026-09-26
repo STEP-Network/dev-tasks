@@ -13,6 +13,7 @@ import { fakeExec, fakeTracker, issue, SWEEP } from "../../__tests__/fakes.ts"
 import { JARGON } from "../../plain.ts"
 import { readLessons } from "../../retro/lessons.ts"
 import type { ExecResult } from "../git.ts"
+import { FAN_OUT_RULES } from "../brief.ts"
 import { acceptWithGaps, checkBilling, checkPlugins, correctionMinutes, correctionPrompt, mergeMode, requireMutations, modelFor, runJob, runSession, sdkOptions, type QueryFn, type RunDeps, type SdkMessage } from "../run.ts"
 
 const quiet: Logger = { info() {}, warn() {}, error() {} }
@@ -107,6 +108,27 @@ describe("runJob", () => {
     expect(fake.issues.get("STEP-7")!.labels).not.toContain("agent-ready")
     expect(fake.calls.filter((c) => c.method === "claimIssue")).toEqual([])
     expect(q.seen).toHaveLength(0)
+  })
+
+  it("tells a worker it may fan out, on any model, only on worker.fanOut (STEP-3367)", async () => {
+    const on = setup({ worker: { fanOut: true } })
+    await runJob(on.deps, on.job.id)
+    const rules = (on.q.seen[0].options.systemPrompt as { append: string }).append
+    for (const line of FAN_OUT_RULES) expect(rules).toContain(line)
+    expect(on.q.seen[0].options.disallowedTools).not.toContain("Agent")
+    const off = setup()
+    await runJob(off.deps, off.job.id)
+    expect((off.q.seen[0].options.systemPrompt as { append: string }).append).not.toContain("subagent")
+    expect(off.q.seen[0].options.disallowedTools).toContain("Agent")
+  })
+
+  it("runs the session at worker.effort, and at the model's default when it is unset (STEP-3367)", async () => {
+    const on = setup({ worker: { effort: "xhigh" } })
+    await runJob(on.deps, on.job.id)
+    expect(on.q.seen[0].options.effort).toBe("xhigh")
+    const off = setup()
+    await runJob(off.deps, off.job.id)
+    expect(off.q.seen[0].options).not.toHaveProperty("effort")
   })
 
   it("claims, prepares the worktree, runs the session and opens the PR", async () => {
@@ -1030,13 +1052,41 @@ describe("sdkOptions", () => {
   const options = () =>
     sdkOptions({ config, cwd: WT, model: "sonnet", abortController: new AbortController(), rules: "R", pnpmStore: "/store", env: { PATH: "/bin" }, home: "/Users/eve" }) as any
 
+  it("fans out only on worker.fanOut: subagents, the Workflow tool without a prompt, in-process teammates, messages to its own (STEP-3367)", () => {
+    const never = ["ListAgents", "CronCreate", "ScheduleWakeup", "EnterWorktree", "ExitWorktree"]
+    const off = options()
+    expect(off.disallowedTools).toEqual(["WebFetch", "WebSearch", "Skill", ...never, "Agent", "Task", "Workflow", "SendMessage"])
+    expect(off).not.toHaveProperty("allowedTools")
+    expect(off.env).not.toHaveProperty("CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS")
+    expect(off.settings).not.toHaveProperty("teammateMode")
+    expect(off.hooks.PreToolUse.map((h: { matcher?: string }) => h.matcher)).toEqual(["Bash", undefined])
+    expect(off.hooks).not.toHaveProperty("PostToolUse")
+    const fanned = ConfigSchema.parse({ mini: "eve", repo: { path: "/Users/eve/polads" }, pluginRoot: "/Users/eve/dev-tasks/plugin", slack: { allowedUsers: ["UNATE"] }, worker: { fanOut: true } })
+    const on = sdkOptions({ config: fanned, cwd: WT, model: "sonnet", abortController: new AbortController(), rules: "R", pnpmStore: "/store", env: { PATH: "/bin" }, home: "/Users/eve" }) as any
+    // The web and skills stay off (/ship would push), and so do another session's names, a later prompt and another worktree.
+    expect(on.disallowedTools).toEqual(["WebFetch", "WebSearch", "Skill", ...never])
+    expect(on.allowedTools).toEqual(["Workflow"])
+    expect(on.env).toEqual({ PATH: "/bin", CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS: "1" })
+    expect(on.settings).toMatchObject({ teammateMode: "in-process", enableWorkflows: true, permissions: off.settings.permissions })
+    // SendMessage is limited to what this session started, which the subagent tool's hooks learn.
+    expect(on.hooks.PreToolUse.map((h: { matcher?: string }) => h.matcher)).toEqual(["Bash", undefined, "SendMessage"])
+    expect(on.hooks.PostToolUse.map((h: { matcher?: string }) => h.matcher)).toEqual(["Agent|Task"])
+    expect(on.sandbox).toEqual(off.sandbox)
+  })
+
+  it("refuses every other session's message, from this machine or another, fanOut or not (STEP-3367)", () => {
+    const fanned = ConfigSchema.parse({ mini: "eve", repo: { path: "/Users/eve/polads" }, pluginRoot: "/Users/eve/dev-tasks/plugin", slack: { allowedUsers: ["UNATE"] }, worker: { fanOut: true } })
+    const on = sdkOptions({ config: fanned, cwd: WT, model: "sonnet", abortController: new AbortController(), rules: "R", pnpmStore: "/store", env: {}, home: "/Users/eve" }) as any
+    for (const o of [options(), on]) expect(o.settings).toMatchObject({ crossSessionInbound: "refuse", isolatePeerMachines: true })
+  })
+
   it("wires the plugin, the project settings, the guard, the sandbox and the limits", async () => {
     const o = options()
     expect(o).toMatchObject({
       cwd: WT, model: "sonnet", maxTurns: 250, maxBudgetUsd: 15, permissionMode: "acceptEdits",
       settingSources: ["project"],
       plugins: [{ type: "local", path: "/Users/eve/dev-tasks/plugin", skipMcpDiscovery: true }],
-      disallowedTools: ["WebFetch", "WebSearch", "Agent", "Task", "Skill"],
+      disallowedTools: ["WebFetch", "WebSearch", "Skill", "ListAgents", "CronCreate", "ScheduleWakeup", "EnterWorktree", "ExitWorktree", "Agent", "Task", "Workflow", "SendMessage"],
       systemPrompt: { type: "preset", preset: "claude_code", append: "R" },
       outputFormat: { type: "json_schema" },
       env: { PATH: "/bin" },

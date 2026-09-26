@@ -1,4 +1,6 @@
 {
+  "crossSessionInbound": "refuse",
+  "isolatePeerMachines": true,
   "remoteControlAtStartup": true,
   "autoContinueAtUsageLimit": true,
   "statusLine": { "type": "command", "command": "__AGENTD_HOME__/bin/statusline" },

@@ -212,7 +212,7 @@ export function shellQuote(s: string): string {
  */
 export const CHANNEL_PLUGIN = "plugin:dev-tasks@dev-tasks-marketplace"
 
-export function claudeCommand(o: { claudePath: string; resumeId: string | null; model: string; settingsPath: string; channel?: boolean }): string {
+export function claudeCommand(o: { claudePath: string; resumeId: string | null; model: string; effort?: string; settingsPath: string; channel?: boolean }): string {
   return [
     o.claudePath,
     ...(o.resumeId ? ["--resume", o.resumeId] : []),
@@ -221,6 +221,7 @@ export function claudeCommand(o: { claudePath: string; resumeId: string | null; 
     o.settingsPath,
     "--model",
     o.model,
+    ...(o.effort ? ["--effort", o.effort] : []),
     "--permission-mode",
     "auto",
     "--permission-prompts",
@@ -335,6 +336,7 @@ export async function applyFrontDoor(deps: FrontDoorDeps, state: FrontDoorState,
     claudePath: deps.config.frontDoor.claudePath,
     resumeId,
     model: deps.config.frontDoor.model,
+    effort: deps.config.frontDoor.effort,
     settingsPath: frontDoorSettingsPath(deps.paths),
     channel,
   })

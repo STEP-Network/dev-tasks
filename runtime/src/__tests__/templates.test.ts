@@ -18,6 +18,12 @@ describe("templates/config.example.json", () => {
     expect(config.slack.otherAgentBots).toEqual([])
   })
 
+  it("runs Eve's model at xhigh, in the workers and at the front door (STEP-3367)", () => {
+    const config = ConfigSchema.parse(example)
+    expect(config.worker).toMatchObject({ defaultModel: "claude-opus-5-5", complexModel: "claude-opus-5-5", effort: "xhigh", fanOut: true })
+    expect(config.frontDoor).toMatchObject({ model: "claude-opus-5-5", effort: "xhigh" })
+  })
+
   it("leaves the binaries' paths to install.sh", () => {
     expect(example.frontDoor.claudePath).toBeUndefined()
     expect(example.frontDoor.tmuxPath).toBeUndefined()
@@ -103,6 +109,10 @@ describe("templates/claude-settings.json, the front door's settings", () => {
       network: { allowedDomains: [] },
       filesystem: { allowWrite: ["~/.front-door"] },
     })
+  })
+
+  it("refuses every other session's message, from this machine or another (STEP-3367)", () => {
+    expect(rendered).toMatchObject({ crossSessionInbound: "refuse", isolatePeerMachines: true })
   })
 
   it("turns on the status line and Remote Control, and the plugin", () => {

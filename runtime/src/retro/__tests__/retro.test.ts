@@ -28,13 +28,14 @@ const TREE = "d".repeat(40)
 const HEAD = "e".repeat(40)
 
 /** The people and ids a public line must never carry come from here: two people on the Monday board, and a Slack member id. */
-const config = (root: string, retro: Record<string, unknown> = {}) =>
+const config = (root: string, retro: Record<string, unknown> = {}, worker: Record<string, unknown> = {}) =>
   ConfigSchema.parse({
     mini: "eve",
     repo: { path: "/r" },
     pluginRoot: join(root, "dev-tasks", "plugin"),
     slack: { allowedUsers: ["UNATE"] },
     retro: { enabled: true, ...retro },
+    worker,
     bridges: { monday: { people: [{ id: "70001", name: "Nate Refslund" }, { id: "70002", name: "Kristoffer" }], defaultPerson: "70001" } },
   })
 const EVIDENCE = { id: "STEP-900", url: "https://linear.app/step/issue/STEP-900" }
@@ -84,11 +85,11 @@ const report = (over: Record<string, unknown> = {}): SdkMessage => ({
   },
 })
 
-function setup(opts: { exec?: Array<[RegExp, Partial<ExecResult>]>; result?: SdkMessage; init?: SdkMessage; retro?: Record<string, unknown>; linearDown?: boolean } = {}) {
+function setup(opts: { exec?: Array<[RegExp, Partial<ExecResult>]>; result?: SdkMessage; init?: SdkMessage; retro?: Record<string, unknown>; worker?: Record<string, unknown>; linearDown?: boolean } = {}) {
   const home = mkdtempSync(join(tmpdir(), "agentd-retro-"))
   const paths = agentPaths(home)
   seed(paths)
-  const cfg = config(home, opts.retro)
+  const cfg = config(home, opts.retro, opts.worker)
   const wt = join(paths.worktrees, "retro-2026-09-25")
   const f = fakeExec([
     ...(opts.exec ?? []),
@@ -202,6 +203,15 @@ describe("runRetro", () => {
     expect(outbox()).toEqual([])
     expect(existsSync(join(paths.state, "retros.jsonl"))).toBe(false)
     expect(readFileSync(join(paths.state, "lessons.jsonl"), "utf8")).toBe(before)
+  })
+
+  it("runs the session at worker.effort, and at the model's default when it is unset (STEP-3367)", async () => {
+    const on = setup({ worker: { effort: "xhigh" } })
+    await runRetro(on.deps, { slot: "2026-09-25", dryRun: false })
+    expect(on.seen[0].options.effort).toBe("xhigh")
+    const off = setup()
+    await runRetro(off.deps, { slot: "2026-09-25", dryRun: false })
+    expect(off.seen[0].options).not.toHaveProperty("effort")
   })
 
   it("opens one dev-tasks PR with the numbers, files the evidence in a private Linear issue, never arms the PR to merge, and says so plainly in Slack and to Monday", async () => {

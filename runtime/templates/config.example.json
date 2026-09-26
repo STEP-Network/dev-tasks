@@ -7,8 +7,8 @@
     "allowedUsers": ["U0EXAMPLE1"],
     "otherAgentBots": []
   },
-  "frontDoor": { "model": "sonnet", "tmuxSession": "frontdoor", "staleTickMinutes": 75 },
-  "worker": { "defaultModel": "sonnet", "complexModel": "opus", "maxTurns": 250, "maxBudgetUsd": 15, "wallClockMinutes": 90, "autoMerge": false },
+  "frontDoor": { "model": "claude-opus-5-5", "effort": "xhigh", "tmuxSession": "frontdoor", "staleTickMinutes": 75 },
+  "worker": { "defaultModel": "claude-opus-5-5", "complexModel": "claude-opus-5-5", "effort": "xhigh", "fanOut": true, "maxTurns": 250, "maxBudgetUsd": 15, "wallClockMinutes": 90, "autoMerge": false },
   "queue": { "mode": "allowlist", "allow": [], "refineWhenReadyBelow": 5, "lightModeWeeklyPct": 80, "fiveHourStopPct": 90, "timeZone": "Europe/Copenhagen" },
   "claims": { "heartbeatMinutes": 15, "ttlHours": 6 },
   "retro": { "enabled": false, "weekday": 5, "hour": 14 },
