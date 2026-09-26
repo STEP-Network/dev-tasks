@@ -1,7 +1,8 @@
 /**
  * An in-memory Monday account for the bridge's tests: boards with their
- * groups, items that move between them, connected items, and an activity log
- * of column changes. It records every call as the Monday API would take it.
+ * groups, items that move between them, connected items, subitems and item
+ * docs (Wave 3), and an activity log of column changes. It records every call
+ * as the Monday API would take it.
  * Made-up people and ids, except today's board and its column ids, which are
  * public since STEP-3289.
  */
@@ -32,6 +33,8 @@ export const GROUPS = [
   { id: "g_work", title: "Agents working on" }, { id: "g_done", title: "Done" },
 ]
 export const T0 = new Date("2026-09-25T09:00:00.000Z")
+/** The subitems board (Wave 3's checkpoints): Monday keeps an item's subitems on a board of their own. Made up. */
+export const SUBITEMS = "77"
 
 const pulse = (boardId: string, id: string) => `https://step.monday.com/boards/${boardId}/pulses/${id}`
 
@@ -46,6 +49,13 @@ export function fakeMonday(
   const boardOf = new Map<string, string>()
   const columns: Record<string, MondayColumn[]> = {}
   const logs: ColumnChange[] = []
+  /** Each item's subitems, the same objects as in `items`: a write to a subitem shows here. */
+  const subitems = new Map<string, MondayItem[]>()
+  /** The subitems board's activity log. */
+  const subitemLogs: ColumnChange[] = []
+  const docs = new Map<string, string>()
+  const docNames = new Map<string, string>()
+  let docCount = 0
   const calls: Array<{ method: string; args: unknown[] }> = []
   /** Items Monday cannot be reached for, as in an outage: their updates fail, and are not refused. */
   const down = new Set<string>()
@@ -76,6 +86,17 @@ export function fakeMonday(
       }
       item.columns[id] = { text: value.label ?? value.labels?.join(", ") ?? value.text ?? value.date ?? null, value: JSON.stringify(v) }
     }
+  }
+  /** A subitem under its item, on the subitems board, the same object in `items` and `subitems`. */
+  const addSubitem = (parentId: string, name: string, values: Record<string, unknown>, id: string) => {
+    find(parentId)
+    if (items.has(id)) throw new Error(`fake Monday: item ${id} exists already`)
+    const sub: MondayItem = { id, name, url: pulse(SUBITEMS, id), groupId: "topics", creatorId: me.id, createdAt: clock.toISOString(), columns: {}, updates: [] }
+    setValues(sub, values)
+    items.set(id, sub)
+    boardOf.set(id, SUBITEMS)
+    subitems.set(parentId, [...(subitems.get(parentId) ?? []), sub])
+    return id
   }
   const api: MondayApi = {
     async me() {
@@ -145,6 +166,50 @@ export function fakeMonday(
       item.url = pulse(boardId, itemId)
       boardOf.set(itemId, boardId)
     },
+    async readSubitems(parentItemId, columnIds) {
+      record("readSubitems", [parentItemId, columnIds])
+      find(parentItemId)
+      // As Monday answers: only the columns asked for.
+      return structuredClone(subitems.get(parentItemId) ?? []).map((s) => ({ ...s, columns: Object.fromEntries(Object.entries(s.columns).filter(([id]) => columnIds.includes(id))) }))
+    },
+    async columnChanges(boardId, columnIds, since) {
+      record("columnChanges", [boardId, columnIds, since.toISOString()])
+      const log = boardId === SUBITEMS ? subitemLogs : boards[boardId] ? logs.filter((l) => boardOf.get(l.itemId) === boardId) : null
+      // As the client says it: a board out of the token's reach, not a refusal.
+      if (!log) throw new Error(`Monday: no board ${boardId}, or the token's user cannot see it`)
+      return structuredClone(log.filter((l) => columnIds.includes(l.columnId) && l.at >= since.toISOString()).sort((a, b) => a.at.localeCompare(b.at)))
+    },
+    async createSubitem(parentItemId, name, values) {
+      record("createSubitem", [parentItemId, name, values])
+      if (broken.has("createSubitem")) throw new Error("Monday: gave up after 3 attempts (status 503)")
+      return addSubitem(parentItemId, name, values, String(next++))
+    },
+    async renameItem(boardId, itemId, name) {
+      record("renameItem", [boardId, itemId, name])
+      if (broken.has("renameItem")) throw new Error("Monday: gave up after 3 attempts (status 503)")
+      const item = find(itemId)
+      if (boardOf.get(itemId) !== boardId) throw new MondayRefused(`Monday: Item ${itemId} not found in board ${boardId}`)
+      item.name = name
+    },
+    async createItemDoc(itemId, columnId, title) {
+      record("createItemDoc", [itemId, columnId, title])
+      if (broken.has("createItemDoc")) throw new Error("Monday: gave up after 3 attempts (status 503)")
+      find(itemId)
+      // Past any doc a test seeded (doc()).
+      let id = `doc-${++docCount}`
+      while (docs.has(id)) id = `doc-${++docCount}`
+      docs.set(id, "")
+      docNames.set(id, title)
+      return id
+    },
+    async appendDoc(docId, markdown) {
+      record("appendDoc", [docId, markdown])
+      if (broken.has("appendDoc")) throw new Error("Monday: gave up after 3 attempts (status 503)")
+      const text = docs.get(docId)
+      if (text === undefined) throw new MondayRefused(`Monday: no doc ${docId}`)
+      const added = markdown.replace(/\r\n/g, "\n")
+      docs.set(docId, text ? `${text}\n${added}` : added)
+    },
   }
   return {
     api,
@@ -153,8 +218,12 @@ export function fakeMonday(
     down,
     broken,
     brokenColumns,
+    subitems,
+    subitemLogs,
+    docs,
+    docNames,
     called: (method: string) => calls.filter((c) => c.method === method).map((c) => c.args),
-    writes: () => calls.filter((c) => !["me", "readBoard", "dailyLimit", "boardColumns"].includes(c.method)),
+    writes: () => calls.filter((c) => !["me", "readBoard", "dailyLimit", "boardColumns", "readSubitems", "columnChanges"].includes(c.method)),
     at: (t: Date) => {
       clock = t
     },
@@ -180,6 +249,18 @@ export function fakeMonday(
       items.set(id, { id, name, url: pulse(boardId, id), groupId, creatorId: userId, createdAt: clock.toISOString(), columns: {}, updates: [] })
       boardOf.set(id, boardId)
       if (detail) this.says(id, userId, detail)
+      return id
+    },
+    /**
+     * A subitem already on the board (a checkpoint a run saved before a
+     * restart): under its item, on the subitems board, where writes reach it.
+     */
+    subitem(parentId: string, name: string, columns: Record<string, unknown> = {}, id = String(next++)) {
+      return addSubitem(parentId, name, columns, id)
+    },
+    /** A doc already on the board, with its text so far. */
+    doc(id: string, text = "") {
+      docs.set(id, text)
       return id
     },
     /** A person changing a column, the Answer column unless another is named, as the activity log records it. */
