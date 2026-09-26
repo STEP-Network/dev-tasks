@@ -313,6 +313,16 @@ describe("subitems, item names and item docs (Wave 3)", () => {
     await expect(api.appendDoc("3001", "x")).rejects.toThrow(new MondayRefused("Monday: the doc did not take the text (no reason given)"))
   })
 
+  it("reads a doc's refusal that names a limit or a timeout as Monday out of reach, to be tried again", async () => {
+    for (const error of ["Rate limit exceeded", "Request timeout", "Internal server error", "complexity budget exhausted"]) {
+      const { f } = fakeFetch([{ json: { data: { add_content_to_doc_from_markdown: { success: false, error } } } }])
+      const thrown = await createMondayApi(TOKEN, { fetch: f, sleep: noSleep }).appendDoc("3001", "x").catch((e: Error) => e)
+      expect(String(thrown)).toContain(error)
+      expect(thrown).toBeInstanceOf(Error)
+      expect(thrown).not.toBeInstanceOf(MondayRefused)
+    }
+  })
+
   it("refuses a doc Monday did not create, and checks the column id first", async () => {
     const { f, sent } = fakeFetch([{ json: { data: { create_doc: null } } }])
     const api = createMondayApi(TOKEN, { fetch: f, sleep: noSleep })

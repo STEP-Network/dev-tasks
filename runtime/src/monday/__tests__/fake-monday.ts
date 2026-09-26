@@ -169,7 +169,8 @@ export function fakeMonday(
     async readSubitems(parentItemId, columnIds) {
       record("readSubitems", [parentItemId, columnIds])
       find(parentItemId)
-      return structuredClone(subitems.get(parentItemId) ?? [])
+      // As Monday answers: only the columns asked for.
+      return structuredClone(subitems.get(parentItemId) ?? []).map((s) => ({ ...s, columns: Object.fromEntries(Object.entries(s.columns).filter(([id]) => columnIds.includes(id))) }))
     },
     async columnChanges(boardId, columnIds, since) {
       record("columnChanges", [boardId, columnIds, since.toISOString()])

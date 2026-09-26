@@ -118,7 +118,7 @@ export interface MondayApi {
    * still returned, since a retry would put a second doc on the item.
    */
   createItemDoc(itemId: string, columnId: string, title: string): Promise<string>
-  /** Markdown added at the end of a doc. Monday's `success: false` is a MondayRefused. */
+  /** Markdown added at the end of a doc. Monday's `success: false` is a MondayRefused, or a plain Error when its reason is a limit or a timeout. */
   appendDoc(docId: string, markdown: string): Promise<void>
 }
 
@@ -449,7 +449,10 @@ export function createMondayApi(token: string, opts: MondayApiOptions = {}): Mon
         { doc: docId, markdown: markdown.replace(/\r\n/g, "\n") },
       )
       const result = data.add_content_to_doc_from_markdown
-      if (!result?.success) throw new MondayRefused(`Monday: the doc did not take the text (${redact(result?.error ?? "no reason given")})`)
+      if (result?.success) return
+      const message = `Monday: the doc did not take the text (${redact(result?.error ?? "no reason given")})`
+      // A limit or a timeout is Monday out of reach for a while, as request() reads it: tried again, not given up.
+      throw LIMIT_RE.test(result?.error ?? "") ? new Error(message) : new MondayRefused(message)
     },
   }
 }
