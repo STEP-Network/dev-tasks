@@ -311,6 +311,11 @@ describe("/refine", () => {
     expect(source).not.toMatch(/--remove-label plan-to-approve|--add-label plan-approved/)
   })
 
+  it("never builds a plan asked about again on an earlier plan's OK: plan-approved counts only without plan-to-approve (review)", () => {
+    expect(source).toMatch(/and does not carry `plan-to-approve`: a plan\s+you asked about again waits for its own OK/)
+    expect(source).toMatch(/Only when the issue carries `plan-approved` and not `plan-to-approve` for\s+Try work/)
+  })
+
 
   it("re-reads the issue right before it writes, and keeps the answers people gave", () => {
     // The bridge appends answers to the description from another process: a

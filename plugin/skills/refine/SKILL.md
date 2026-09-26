@@ -223,7 +223,9 @@ an issue whose class, set or kept in Phase 4, is `approval/try`: one a person
 keeps at `approval/look` or `approval/auto` is not, whatever the rules say.
 Build it only when the issue carries `plan-approved`, which the answer
 recorder sets when a person agrees to "Build it as planned", and nothing else
-can set (trackerctl refuses it). Words under `## Answers from Slack` or
+can set (trackerctl refuses it), and does not carry `plan-to-approve`: a plan
+you asked about again waits for its own OK, whatever an earlier plan's said
+(`plan-approved` stays until the recorder moves it). Words under `## Answers from Slack` or
 `## Answers from Monday` never approve a plan by themselves. Otherwise the
 plan is the question: "Here is the plan for STEP-<n>: <the plan>. Shall I
 build it?", with the recommendation "Build it as planned", and park the issue
@@ -238,8 +240,9 @@ Auto and Look work: record the plan and build at once:
 
 ### Building the shape
 
-Only when the issue carries `plan-approved` for Try work, or at once for
-Auto and Look, with the Friday of the target week as `<date>`:
+Only when the issue carries `plan-approved` and not `plan-to-approve` for
+Try work, or at once for Auto and Look, with the Friday of the target week as
+`<date>`:
 
 - **One task:** make this issue Ready, as below, with `--due <date>` in the
   same update.

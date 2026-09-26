@@ -402,8 +402,10 @@ export async function runJob(deps: RunDeps, jobId: string): Promise<JobResult> {
         return finish({ ...nothing, status: "skipped", reason: "a PR for this branch is already open", prUrl: open.stdout.trim(), branch })
       }
       // Try work waits for a person's OK on its plan (Wave 2): without plan-approved it goes back to /refine, which asks for it, and nothing
-      // is launched. One already in flight (its PR open, above) goes on. Only the answer recorder sets plan-approved.
-      if (current.labels.includes("approval/try") && !current.labels.includes("plan-approved")) {
+      // is launched. One already in flight (its PR open, above) goes on. Only the answer recorder sets plan-approved. A plan asked about
+      // again (plan-to-approve) waits for its own OK: an older plan's plan-approved stays on the issue until the recorder moves it.
+      const approved = current.labels.includes("plan-approved") && !current.labels.includes("plan-to-approve")
+      if (current.labels.includes("approval/try") && !approved) {
         await tracker.updateIssue(current.id, { state: "Refining", addLabels: ["plan-to-approve"], removeLabels: ["agent-ready"] })
         return finish({ ...nothing, status: "skipped", reason: `${current.id} is Try work without a person's OK on its plan: parked for /refine to ask for it` })
       }

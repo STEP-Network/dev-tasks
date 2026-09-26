@@ -762,6 +762,15 @@ describe("runJob", () => {
     expect(fake.called("claimIssue")).toHaveLength(1)
   })
 
+  it("parks Try work re-planned after an OK: the new plan waits for its own, whatever the old one said (review)", async () => {
+    // /refine planned again and asks about it (plan-to-approve), and plan-approved from the first plan is still there: only the recorder takes it off.
+    const { deps, job, fake, q } = setup({ issueOver: { labels: ["polads", "agent-ready", "approval/try", "plan-approved", "plan-to-approve"] } })
+    expect(await runJob(deps, job.id)).toMatchObject({ status: "skipped", reason: "STEP-7 is Try work without a person's OK on its plan: parked for /refine to ask for it" })
+    expect(fake.issues.get("STEP-7")!.labels).not.toContain("agent-ready")
+    expect(fake.called("claimIssue")).toEqual([])
+    expect(q.seen).toHaveLength(0)
+  })
+
   it("lets Try work already in flight go on as before: its PR is open", async () => {
     const { deps, job, fake } = setup({ gh: `${PR}\n`, issueOver: { labels: ["polads", "agent-ready", "approval/try"] } })
     expect(await runJob(deps, job.id)).toMatchObject({ status: "skipped", prUrl: PR })
