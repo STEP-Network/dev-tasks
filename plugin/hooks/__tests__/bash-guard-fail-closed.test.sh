@@ -139,6 +139,13 @@ check 2 "cannot tell which branch" "echo main | xargs git push origin: xargs add
 check 2 "protected branch 'main'" "\$'git' push origin main" "$(payload "\$'git' push origin main")"
 check 2 "protected branch 'main'" "\$'\\x67it' push origin main" "$(payload "\$'\\x67it' push origin main")"
 check 0 "" "\$'git' push origin feat/x still goes" "$(payload "\$'git' push origin feat/x")"
+check 2 "protected branch 'main'" "\$'git\\0junk' push origin main: a NUL ends the word" "$(payload "\$'git\\0junk' push origin main")"
+check 2 "protected branch 'main'" "git push origin \$'main\\x00x'" "$(payload "git push origin \$'main\\x00x'")"
+check 2 "protected branch 'main'" "git push origin \$'main\\0'-x: zsh pushes main" "$(payload "git push origin \$'main\\0'-x")"
+check 2 "cannot tell which branch" "xargs sh -c 'git push origin \"\$0\"'" "$(payload "echo main | xargs sh -c 'git push origin \"\$0\"'")"
+check 2 "cannot tell which branch" "find main -exec git push origin {} \\;" "$(payload 'find main -maxdepth 0 -exec git push origin {} \;')"
+check 2 "cannot tell which branch" "B=main; git push origin \$B" "$(payload 'B=main; git push origin $B')"
+check 2 "cannot tell which branch" "git push origin \"\$(git branch --show-current)\"" "$(payload 'git push origin "$(git branch --show-current)"')"
 
 echo "--- gate (a): what the command runs, never its text (#151 review) ---"
 check 0 "" "grep -n \"rm -rf\"" "$(payload 'grep -n "rm -rf" app.ts')"

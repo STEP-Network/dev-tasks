@@ -372,8 +372,9 @@ fi
 # option's value can shift it (STEP-3354). @current <dir> is the branch
 # checked out in <dir> (no refspec, or HEAD); @all a push of every branch or of
 # the ones git's config picks (--all, --mirror, --branches, a ':' or glob
-# refspec, -c push.*, -c remote.<name>.push); @unknown a push from a
-# repository or directory it cannot name, or one xargs adds the branch to.
+# refspec, -c push.*, -c remote.<name>.push); @unknown a push whose branch it
+# cannot name: from a repository or directory it cannot name, under xargs, or
+# with a word bash or find computes as it runs ($B, $(...), a brace, {}).
 if [ -n "$PUSHES" ]; then
   # The list:
   #   no project config at all            → default list
@@ -404,8 +405,8 @@ if [ -n "$PUSHES" ]; then
           exit 2
           ;;
         @unknown)
-          echo "BLOCKED: bash-guard cannot tell which branch this push goes to: it runs in a repository or directory it cannot name (--git-dir, --work-tree, cd -), or xargs adds the branch to it."
-          echo "Push from the checkout itself, naming the branch: git push origin <branch>."
+          echo "BLOCKED: bash-guard cannot tell which branch this push goes to: a word in it is filled in as it runs (\$B, \$(...), a backtick, a brace or glob, xargs, find's {}), or it runs in a repository or directory it cannot name (--git-dir, --work-tree, cd -)."
+          echo "Push from the checkout itself, naming the branch as plain text: git push origin <branch>."
           exit 2
           ;;
         "@current "*)

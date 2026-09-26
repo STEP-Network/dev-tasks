@@ -118,6 +118,55 @@ describe("git_commands.py", () => {
     expect(analyse("git push origin $'\\UFFFFFFFF' $'\\uD800'")).toEqual(["PUSH origin", "PUSH \\UFFFFFFFF", "PUSH \\uD800"])
   })
 
+  it("ends a $'...' word at its first NUL, however it is written, as bash and as zsh cut it (#154 review)", () => {
+    for (const nul of ["\\0", "\\x00", "\\u0000", "\\U00000000", "\\c@"]) {
+      expect(analyse(`$'git${nul}junk' push origin main`), nul).toEqual(["PUSH origin", "PUSH main"])
+      expect(analyse(`git push origin $'main${nul}x'`), nul).toEqual(["PUSH origin", "PUSH main"])
+      expect(analyse(`$'rm${nul}x' -rf y`), nul).toEqual(["DESTRUCTIVE rm -rf"])
+    }
+    // bash cuts the $'...' and keeps the rest of the word; zsh cuts the word. Both are read.
+    expect(analyse("$'gi\\0x't push origin main")).toEqual(["PUSH origin", "PUSH main"])
+    expect(analyse("git push origin $'main\\0'-x")).toContain("PUSH main")
+    expect(analyse("git push origin $'ma\\0x'in")).toContain("PUSH main")
+    expect(analyse("cd a$'\\0'b && git push")).toEqual(["PUSH @unknown"])
+  })
+
+  it("names no branch for a push whose words are filled in as it runs (#154 review)", () => {
+    for (const command of [
+      // xargs adds words to sh -c, or the text itself; find puts each file in {}.
+      "xargs sh -c 'git push origin \"$0\"'",
+      "xargs -I{} sh -c 'git push origin {}'",
+      "xargs sh -c 'git push origin feat'",
+      "echo 'git push origin main' | xargs sh -c",
+      "echo 'push origin main' | xargs git",
+      "find main -maxdepth 0 -exec git push origin {} \\;",
+      "find . -execdir git push \\;",
+      // A word bash computes: an expansion, a substitution, a brace or a glob.
+      "B=main; git push origin $B",
+      "git push origin $(echo main)",
+      "git push origin `echo main`",
+      'git push origin "$(git branch --show-current)"',
+      "git push origin HEAD:$B",
+      "git push $R",
+      "git push --repo $R",
+      "git push origin feat-$(date +%s)",
+      "git push origin {main,feat}",
+      "git push origin ma?n",
+      'git -C "$D" push',
+      "git $(echo push) origin main",
+      "G=git; $G push origin main",
+    ]) {
+      const found = analyse(command) as string[]
+      expect(found, command).toContain("PUSH @unknown")
+      expect(found.filter((l) => /[\ud800-\udfff]/.test(l)), command).toEqual([])
+    }
+    for (const command of ["git push -u origin HEAD", "git push -u origin feat/x", "git push origin HEAD:refs/heads/feat/x", "find . -exec git push origin feat \\;"]) {
+      expect(analyse(command), command).not.toContain("PUSH @unknown")
+    }
+    expect(analyse('git commit -m "$(cat msg)"')).toEqual(["COMMIT ."])
+    expect(analyse('cd "$(git rev-parse --show-toplevel)" && git commit -m x')).toEqual(["COMMIT @unknown"])
+  })
+
   it("names each destructive command gate (a) refuses from what runs, never from text (#151 review)", () => {
     const destroys = (command: string) => (analyse(command) as string[]).filter((l) => l.startsWith("DESTRUCTIVE "))
     for (const command of [
