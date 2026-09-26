@@ -37,6 +37,9 @@ export function mentionedUsers(text: string): string[] {
   return Array.from(text.matchAll(MENTION_RE), (m) => m[1])
 }
 
+/** The words without Slack's mention markup (<@U1>, <@U1|name>): a command is the same whoever it is sent to. */
+export const withoutMentions = (text: string) => text.replace(/<@[A-Z0-9]+(\|[^>]*)?>/g, " ").trim()
+
 export function stripMention(text: string, botUserId: string): string {
   return text.replace(MENTION_RE, (whole, id: string) => (id === botUserId ? "" : whole)).replace(/[ \t]+/g, " ").trim()
 }

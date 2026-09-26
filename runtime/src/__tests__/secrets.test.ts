@@ -8,11 +8,13 @@ import {
   linearKeyPath,
   loadClaudeOauthToken,
   loadMondayToken,
+  loadRecorderKey,
   loadSentryCronUrl,
   loadSlackSecrets,
   loadUserTestSecrets,
   mondaySecretsPath,
   readSecretsFile,
+  recorderSecretsPath,
   slackSecretsPath,
   userTestSecretsPath,
 } from "../secrets.ts"
@@ -163,5 +165,30 @@ describe("loadUserTestSecrets (WS5)", () => {
     const h = home()
     write(userTestSecretsPath(h), "TEST_LOGIN_SECRET=login-example\n", 0o600)
     expect(loadUserTestSecrets(h)).toEqual({ testLoginSecret: "login-example", bypassSecret: null })
+  })
+})
+
+describe("loadRecorderKey (Wave 2, D1)", () => {
+  it("is null without the file: lowering then stays in Linear", () => {
+    const h = home()
+    expect(recorderSecretsPath(h)).toBe(join(h, ".config", "agentd", "recorder.env"))
+    expect(loadRecorderKey(h)).toBeNull()
+  })
+
+  it("reads the answer recorder's own Linear key, refused when other users can read it", () => {
+    const h = home()
+    write(recorderSecretsPath(h), "RECORDER_LINEAR_KEY=lin_api_recorder\n", 0o644)
+    expect(() => loadRecorderKey(h)).toThrow(/chmod 600/)
+    chmodSync(recorderSecretsPath(h), 0o600)
+    expect(loadRecorderKey(h)).toBe("lin_api_recorder")
+  })
+
+  it("refuses a file without the key, or with a value that is not a Linear API key, and never prints it", () => {
+    const h = home()
+    write(recorderSecretsPath(h), "LINEAR_API_KEY=lin_api_agent\n", 0o600)
+    expect(() => loadRecorderKey(h)).toThrow(/RECORDER_LINEAR_KEY is missing/)
+    write(recorderSecretsPath(h), "RECORDER_LINEAR_KEY=xoxb-not-linear\n", 0o600)
+    expect(() => loadRecorderKey(h)).toThrow(/RECORDER_LINEAR_KEY .* is not a lin_api_ token/)
+    expect(() => loadRecorderKey(h)).not.toThrow(/xoxb-not-linear/)
   })
 })

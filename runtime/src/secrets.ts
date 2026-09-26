@@ -8,6 +8,8 @@
  *   ~/.config/agentd/monday.env  MONDAY_API_TOKEN, the coordinator mini only   (agentd only)
  *   ~/.config/agentd/usertest.env  TEST_LOGIN_SECRET, VERCEL_AUTOMATION_BYPASS_SECRET, optional
  *                                (the browser test's own code, never the browser or the model)
+ *   ~/.config/agentd/recorder.env  RECORDER_LINEAR_KEY, optional, the coordinator mini only
+ *                                (agentd only, for a person's lowering: lower.ts)
  *
  * The Monday token is the agent's own Monday user's, with access to the one
  * board (STEP-3289). It is never the admin's: the bridge refuses one.
@@ -26,6 +28,7 @@ export const userTestSecretsPath = (home: string) => join(home, ".config", "agen
 export const agentdSecretsPath = (home: string) => join(home, ".config", "agentd", "agentd.env")
 export const claudeTokenPath = (home: string) => join(home, ".config", "agentd", "claude.env")
 export const mondaySecretsPath = (home: string) => join(home, ".config", "agentd", "monday.env")
+export const recorderSecretsPath = (home: string) => join(home, ".config", "agentd", "recorder.env")
 
 export function readSecretsFile(path: string): Record<string, string> {
   let mode: number
@@ -65,6 +68,22 @@ export function loadSlackSecrets(home: string): { botToken: string; appToken: st
 export function loadMondayToken(home: string): string {
   const path = mondaySecretsPath(home)
   return token(readSecretsFile(path), "MONDAY_API_TOKEN", "eyJ", path)
+}
+
+/**
+ * The answer recorder's personal Linear API key (Wave 2, D1): the account
+ * PolAds' Approval class check trusts with a lowering. Optional: no file, and
+ * a class is lowered only in Linear. agentd reads it when a person's lowering
+ * comes, and never hands it on.
+ */
+export function loadRecorderKey(home: string): string | null {
+  const path = recorderSecretsPath(home)
+  try {
+    statSync(path)
+  } catch {
+    return null
+  }
+  return token(readSecretsFile(path), "RECORDER_LINEAR_KEY", "lin_api_", path)
 }
 
 /** The dead-man switch is optional: no file means no check-ins. */

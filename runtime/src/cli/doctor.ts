@@ -14,7 +14,7 @@ import { frontDoorSettingsPath, frontDoorSettingsProblem } from "../agentd/front
 import { channelApproval, MANAGED_CHANNEL_JSON, MANAGED_SETTINGS } from "../channel/managed.ts"
 import { readHooksProbes, workerClaudePath, type HooksProbe } from "./hooks-probe.ts"
 import { readSandboxProbe } from "./sandbox-probe.ts"
-import { agentdSecretsPath, assertLinearKeyFile, claudeTokenPath, linearKeyPath, mondaySecretsPath, slackSecretsPath, userTestSecretsPath } from "../secrets.ts"
+import { agentdSecretsPath, assertLinearKeyFile, claudeTokenPath, linearKeyPath, loadRecorderKey, mondaySecretsPath, slackSecretsPath, userTestSecretsPath } from "../secrets.ts"
 import { chromeMajor } from "../usertest/chrome.ts"
 import { CHROME_DEVTOOLS_MCP_VERSION, chromeDevtoolsMcp } from "../usertest/mcp.ts"
 import type { Exec } from "../worker/git.ts"
@@ -102,6 +102,17 @@ function secretCheck(name: string, path: string, required: boolean): Check | nul
   if (mode === null) return required ? { level: "fail", name, detail: `${path} is missing (runbook, section 5)` } : null
   if (mode & 0o077) return { level: "fail", name, detail: `${path} must be chmod 600, it is ${mode.toString(8)}: chmod 600 ${path}` }
   return { level: "ok", name, detail: path }
+}
+
+/** The answer recorder's key (Wave 2, D1): optional either way. Its messages name the file, never the key. */
+function recorderCheck(home: string): Check {
+  try {
+    return loadRecorderKey(home)
+      ? { level: "ok", name: "recorder", detail: "key present (lowering from Monday and Slack is on)" }
+      : { level: "ok", name: "recorder", detail: "no key (lowering stays in Linear)" }
+  } catch (error) {
+    return { level: "fail", name: "recorder", detail: message(error).replace(/^secrets: /, "") }
+  }
 }
 
 async function gitIdentity(d: DoctorDeps): Promise<Check> {
@@ -377,6 +388,7 @@ export async function doctorChecks(d: DoctorDeps): Promise<Check[]> {
   add(secretCheck("claude token", claudeTokenPath(d.paths.home), false))
   // Only the coordinator mini holds one (STEP-3289), and there agentd will not start without it.
   add(secretCheck("monday token", mondaySecretsPath(d.paths.home), Boolean(config?.bridges.monday?.enabled)))
+  add(recorderCheck(d.paths.home))
   add(await gitIdentity(d))
   if (config) add(await github(d, config.repo.slug))
   const p = await d.exec("pnpm", ["--version"])

@@ -335,6 +335,30 @@ describe("replies in a thread the mini owns (STEP-3293)", () => {
   })
 
   for (const state of ["up", "down"] as const) {
+    it(`reads a whole "make it look" in the thread itself and sends it to agentd, with the front door ${state}, a question open or not (Wave 2, D1)`, async () => {
+      // Code reads a lowering, never a model: the front door sees it done (acted) and does nothing more.
+      const { deps, paths } = setup([PARKED])
+      if (state === "up") up(paths)
+      else down(paths)
+      saveThread(paths, { issue: "STEP-7", channelId: "CQ", ts: "1700.1", permalink: null, createdAt: "2026-09-24T07:00:00.000Z", lastQuestionAt: "2026-09-24T07:30:00.000Z", lastQuestion: "Q?", openQuestions: 1 })
+      await handleEnvelope(deps, reply("1700.5", "<@UBOT> make it look"))
+      await handleEnvelope(deps, reply("1700.6", "make it look nicer"))
+      await retryPending(deps)
+      expect(instructions(paths)).toEqual([["instr:bridge-class-look:CQ:1700.5", ["class-look"]]])
+      const [filed] = listNew<{ type: string; issue: string; permalink?: string }>(paths.inbox).map((e) => e.payload).filter((p) => p.type === "instruction")
+      expect(filed).toMatchObject({ issue: "STEP-7", permalink: "https://step.slack.com/archives/CQ/p17005" })
+      expect(replies(paths).map((p) => p.acted)).toEqual([["class-look"], undefined])
+    })
+  }
+
+  it("never reads a class verb in a mention outside a thread: it names no request", async () => {
+    const { deps, paths } = setup()
+    up(paths)
+    await handleEnvelope(deps, mention("app_mention", "<@UBOT> make it look", { channel: "CQ" }))
+    expect(listNew<{ type: string }>(paths.inbox).map((e) => e.payload.type)).not.toContain("instruction")
+  })
+
+  for (const state of ["up", "down"] as const) {
     it(`never pause or leave on words that are not a command, with the front door ${state} (STEP-3293 final pass)`, async () => {
       // The reviewer's proofs, turned round: an answer that says pause paused the whole mini while the front door was down,
       // and a one-word "Hold" or "stop" to "ship it now, or hold?" paused it while it was up.

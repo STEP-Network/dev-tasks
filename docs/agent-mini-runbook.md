@@ -238,7 +238,9 @@ No production secret ever goes on a mini: no `.env` file in the checkout, no
 read-only for agents, and on the agent profile the plugin offers no Monday
 tools at all). The one exception is the coordinator mini's board token,
 `~/.config/agentd/monday.env`, which only agentd reads ("The Monday board",
-near the end).
+near the end). The answer recorder's Linear key, `~/.config/agentd/recorder.env`,
+goes on the same mini only, and only agentd reads it ("A person lowers a
+class", near the end).
 
 ## 6. The configuration
 
@@ -636,7 +638,9 @@ answer.
 - The bridge acts itself only on a message that is nothing but a command:
   "pause", "pause everything", "stop everything" or "hold everything" pauses
   the mini at once, since that is safe and only a person lifts it. With the
-  front door down, "leave it" or "I'll take it" leaves the PR too. Anything
+  front door down, "leave it" or "I'll take it" leaves the PR too. In an
+  issue's thread, "make it look" or "make it auto" changes its class, front
+  door up or down ("A person lowers a class", near the end). Anything
   else is the front door's to read, the front door up or down: a sentence
   that says pause about something else ("pause the countdown", "should we
   pause the rollout?"), a bare "stop" or "hold", and a "pause" in a thread
@@ -1017,6 +1021,48 @@ Monday is out of reach, replies wait, in order, and agentd goes on.
 To turn it off: `"enabled": false`, and restart agentd. The items stay on
 the board as they are.
 
+### A person lowers a class (Wave 2, D1)
+
+Only a person lowers an approval class, and PolAds' `Approval class` check
+counts a lowering only from a Linear account listed in its
+`.github/approval-class.json`. So a lowering from Monday or Slack goes
+through the answer recorder's own Linear account ("PolAds answer recorder",
+a member seat), never an agent's. Code alone decides that a person asked,
+never a model:
+
+- **On the Requests board:** one of the people changes the Class column of
+  a request. Each change is acted on once, only the newest in a poll counts,
+  and never one older than the last acted on, so a change read again cannot
+  undo a raise made since. One Linear cannot take yet is kept until it can.
+- **In a request's or a plan's Slack thread, or on its Monday item:** their
+  whole message is "make it look" or "make it auto" ("lower it to look"
+  too, with an optional "please", a mention of the agent and a full stop).
+  "Make it look nicer" is not one. In a Slack thread that holds more than
+  one request, it changes none of them and points to the Requests board.
+
+agentd lowers the request's anchor and its open tasks with the recorder's
+key, comments on the anchor who asked and where, answers where they asked,
+and announces it in #polads-agents. A raise goes through the agent's own
+account, as any raise does, and is not announced. Without the key, a
+lowering is answered with how to do it in Linear, and the Class column goes
+back to what Linear has.
+
+The key (N4, Nate): signed in to Linear as the recorder, Settings, Security
+and access, Personal API keys. On the coordinator mini, as `<agent>`:
+
+```bash
+read -rs RECORDER_KEY
+(umask 077; printf 'RECORDER_LINEAR_KEY=%s\n' "$RECORDER_KEY" > ~/.config/agentd/recorder.env); unset RECORDER_KEY
+chmod 600 ~/.config/agentd/recorder.env
+```
+
+Only agentd reads it, when a person's lowering comes: never a worker, the
+front door or a log. `agentctl doctor` says `recorder: key present` or
+`recorder: no key`, and neither is a failure. The recorder account's email
+goes into PolAds' `.github/approval-class.json` too, or the check fails a PR
+whose issue it lowered. Turn it on only once the people-doors guard (below)
+runs on every machine that has a Monday, Slack or Linear connector.
+
 ### No agent session writes as a person (the people-doors guard, STEP-3330)
 
 The bridge takes a Monday user's update or Answer column as that person's
@@ -1166,8 +1212,9 @@ not see at all:
 Keep those off in sessions that work on PolAds, or watch them. The detection layer is
 #polads-agents: from Wave 2, every plan approval and every lowering of an
 approval class from Monday or Slack is announced there, with who approved or
-lowered it and where, so a forged one shows. Until then a class is lowered
-only in Linear, by the person's own account.
+lowered it and where, so a forged one shows. Until the answer recorder's key
+is on the coordinator mini ("A person lowers a class", above), a class is
+lowered only in Linear, by the person's own account.
 
 A hook change needs the plugin cache cleared and a reload before it runs
 (the plugin version goes up with it).
