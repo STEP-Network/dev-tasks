@@ -739,6 +739,29 @@ describe("runJob", () => {
     expect(fake.called("claimIssue")).toEqual([])
   })
 
+  it("parks Try work without a person's OK on its plan, for /refine to ask, and launches nothing (Wave 2)", async () => {
+    const { deps, job, fake, q } = setup({ issueOver: { labels: ["polads", "agent-ready", "approval/try"] } })
+    expect(await runJob(deps, job.id)).toMatchObject({ status: "skipped", reason: "STEP-7 is Try work without a person's OK on its plan: parked for /refine to ask for it" })
+    expect(fake.issues.get("STEP-7")).toMatchObject({ state: "Refining" })
+    expect(fake.issues.get("STEP-7")!.labels).toEqual(expect.arrayContaining(["plan-to-approve", "approval/try"]))
+    expect(fake.issues.get("STEP-7")!.labels).not.toContain("agent-ready")
+    expect(fake.called("claimIssue")).toEqual([])
+    expect(q.seen).toHaveLength(0)
+  })
+
+  it("launches Try work once its plan is approved", async () => {
+    const { deps, job, fake } = setup({ issueOver: { labels: ["polads", "agent-ready", "approval/try", "plan-approved"] } })
+    await runJob(deps, job.id)
+    expect(fake.called("claimIssue")).toHaveLength(1)
+  })
+
+  it("lets Try work already in flight go on as before: its PR is open", async () => {
+    const { deps, job, fake } = setup({ gh: `${PR}\n`, issueOver: { labels: ["polads", "agent-ready", "approval/try"] } })
+    expect(await runJob(deps, job.id)).toMatchObject({ status: "skipped", prUrl: PR })
+    expect(fake.issues.get("STEP-7")!.state).toBe("In Review")
+    expect(fake.issues.get("STEP-7")!.labels).not.toContain("plan-to-approve")
+  })
+
   it("skips and moves the issue to In Review when a PR for the branch is already open", async () => {
     const { deps, job, fake } = setup({ gh: `${PR}\n` })
     expect(await runJob(deps, job.id)).toMatchObject({ status: "skipped", prUrl: PR })
