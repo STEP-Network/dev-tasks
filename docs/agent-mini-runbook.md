@@ -1102,12 +1102,15 @@ it found it. Each item goes back to its group, then each column as it was, one a
 time. A connected item (the Request column) is written as item ids, and
 columns Monday computes (a formula, a mirror, a creation log) are left as
 they are. A run that stops half-way is finished by the next: it writes only
-what still differs. The labels come off, and the request items the bridge
+what still differs. The two columns the move carried (the Linear link, and
+the Person, which the Requests board calls Requester) go back to their
+snapshot values too: an edit made to either on the Requests board since the
+move is undone. The labels come off, and the request items the bridge
 made for them are archived. An item a person made that the bridge took over
 stays on the board. While a migration runs, `~/.agentd/state/monday/migrating`
 is there and the bridge does not poll or post. While the bridge polls or
 posts, `~/.agentd/state/monday/syncing` is there, with agentd's process id,
-and a migration does not start. If a migration stops half-way, check that
+and a migration waits up to two minutes for it to go, then refuses. If a migration stops half-way, check that
 none runs, remove `migrating`, and run it again. A `syncing` left by an
 agentd that has since stopped holds nothing up.
 
