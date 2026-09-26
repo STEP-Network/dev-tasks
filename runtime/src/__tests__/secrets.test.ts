@@ -9,12 +9,15 @@ import {
   loadClaudeOauthToken,
   loadMondayToken,
   loadRecorderKey,
+  loadResearchKeys,
   loadSentryCronUrl,
   loadSlackSecrets,
   loadUserTestSecrets,
   mondaySecretsPath,
   readSecretsFile,
   recorderSecretsPath,
+  researchSecretsPath,
+  stagingDbSecretsPath,
   slackSecretsPath,
   userTestSecretsPath,
 } from "../secrets.ts"
@@ -107,6 +110,17 @@ describe("the optional and the checked files", () => {
     expect(() => assertLinearKeyFile(h)).toThrow(/LINEAR_API_KEY is missing/)
     write(linearKeyPath(h), "# the agent's own key\nLINEAR_API_KEY=lin_api_test\n", 0o600)
     expect(() => assertLinearKeyFile(h)).not.toThrow()
+  })
+
+  it("reads the MCP servers' keys from research.env and neon-staging-ro.env, either optional, and refuses a readable one (STEP-3369)", () => {
+    const h = home()
+    expect(loadResearchKeys(h)).toEqual({})
+    write(researchSecretsPath(h), "BRAVE_API_KEY=brave-test\n", 0o600)
+    expect(loadResearchKeys(h)).toEqual({ BRAVE_API_KEY: "brave-test" })
+    write(stagingDbSecretsPath(h), "DATABASE_URL_STAGING_RO=postgres://reader:pw@staging/db\n", 0o600)
+    expect(loadResearchKeys(h)).toEqual({ BRAVE_API_KEY: "brave-test", DATABASE_URL_STAGING_RO: "postgres://reader:pw@staging/db" })
+    chmodSync(stagingDbSecretsPath(h), 0o644)
+    expect(() => loadResearchKeys(h)).toThrow(/neon-staging-ro\.env is readable by other users.*chmod 600/)
   })
 
   it("reads the worker's optional Claude token, and refuses it from a readable file", () => {

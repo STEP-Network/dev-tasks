@@ -7,8 +7,27 @@
     "allowedUsers": ["U0EXAMPLE1"],
     "otherAgentBots": []
   },
-  "frontDoor": { "model": "claude-opus-5-5", "effort": "xhigh", "tmuxSession": "frontdoor", "staleTickMinutes": 75 },
-  "worker": { "defaultModel": "claude-opus-5-5", "complexModel": "claude-opus-5-5", "effort": "xhigh", "fanOut": true, "maxTurns": 250, "maxBudgetUsd": 15, "wallClockMinutes": 90, "autoMerge": false },
+  "frontDoor": {
+    "model": "claude-opus-5-5", "effort": "xhigh", "tmuxSession": "frontdoor", "staleTickMinutes": 75,
+    "mcpServers": {
+      "exa": { "type": "http", "url": "https://mcp.exa.ai/mcp" },
+      "brave-search": { "type": "stdio", "command": "npx", "args": ["-y", "@brave/brave-search-mcp-server@2.1.4", "--transport", "stdio"], "keys": ["BRAVE_API_KEY"] },
+      "perplexity": { "type": "stdio", "command": "npx", "args": ["-y", "@perplexity-ai/mcp-server@1.3.0"], "keys": ["PERPLEXITY_API_KEY"] },
+      "context7": { "type": "http", "url": "https://mcp.context7.com/mcp" }
+    }
+  },
+  "worker": {
+    "defaultModel": "claude-opus-5-5", "complexModel": "claude-opus-5-5", "effort": "xhigh", "fanOut": true,
+    "maxTurns": 250, "maxBudgetUsd": 15, "wallClockMinutes": 90, "autoMerge": false,
+    "webTools": true, "skills": true,
+    "mcpServers": {
+      "exa": { "type": "http", "url": "https://mcp.exa.ai/mcp" },
+      "brave-search": { "type": "stdio", "command": "npx", "args": ["-y", "@brave/brave-search-mcp-server@2.1.4", "--transport", "stdio"], "keys": ["BRAVE_API_KEY"] },
+      "perplexity": { "type": "stdio", "command": "npx", "args": ["-y", "@perplexity-ai/mcp-server@1.3.0"], "keys": ["PERPLEXITY_API_KEY"] },
+      "context7": { "type": "http", "url": "https://mcp.context7.com/mcp" },
+      "staging-db": { "type": "stdio", "command": "npx", "args": ["-y", "@zeddotdev/postgres-context-server@0.1.7"], "keys": { "DATABASE_URL": "DATABASE_URL_STAGING_RO" } }
+    }
+  },
   "queue": { "mode": "allowlist", "allow": [], "refineWhenReadyBelow": 5, "lightModeWeeklyPct": 80, "fiveHourStopPct": 90, "timeZone": "Europe/Copenhagen" },
   "claims": { "heartbeatMinutes": 15, "ttlHours": 6 },
   "retro": { "enabled": false, "weekday": 5, "hour": 14 },

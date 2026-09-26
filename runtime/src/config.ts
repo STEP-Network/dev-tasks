@@ -270,6 +270,54 @@ const UserTestSchema = z
 /** Claude's reasoning effort: the Agent SDK's `effort`, the CLI's --effort. Left out, the model's own default. */
 const EffortSchema = z.enum(["low", "medium", "high", "xhigh", "max"])
 
+const KeyName = z.string().regex(/^[A-Z][A-Z0-9_]*$/)
+
+/**
+ * An MCP server a session may use (STEP-3369): a keyless http one, or a stdio
+ * command, pinned to a version, whose `keys` agentd reads from
+ * ~/.config/agentd/research.env or neon-staging-ro.env and hands to it alone:
+ * a list, each under its own name, or { NAME_IT_READS: "NAME_IN_THE_FILE" }.
+ * Strict: no env, header or other field where a key could be written into
+ * config.json.
+ */
+const McpServerSchema = z.discriminatedUnion("type", [
+  z.object({ type: z.literal("http"), url: z.string().url().startsWith("https://") }).strict(),
+  z
+    .object({
+      type: z.literal("stdio"),
+      command: z.string().min(1),
+      args: z.array(z.string()).default([]),
+      keys: z.union([z.array(KeyName), z.record(KeyName, KeyName)]).default([]),
+    })
+    .strict(),
+])
+/** By the name its tools carry: mcp__<name>__<tool>. */
+const McpServersSchema = z.record(z.string().regex(/^[a-z][a-z0-9-]*$/), McpServerSchema).default({})
+
+/**
+ * Hosts where this project's secrets are used: a worker's WebFetch, WebSearch
+ * or MCP tool never sends anything there (the exfil guard). `.x` is the
+ * domain and its subdomains, `x` that host alone. Their public documentation
+ * lives on other hosts.
+ */
+export const FETCH_DENY_HOSTS = [
+  ".aws.neon.tech",
+  "console.neon.tech",
+  "api.neon.tech",
+  "api.stack-auth.com",
+  "api.linear.app",
+  "api.monday.com",
+  "slack.com",
+  "hooks.slack.com",
+  ".ingest.sentry.io",
+  ".ingest.de.sentry.io",
+  "api.vercel.com",
+  "api.resend.com",
+  "api.paddle.com",
+  "sandbox-api.paddle.com",
+  "api.anthropic.com",
+]
+
 export const ConfigSchema = z.object({
   /** The mini's name: the claim comment, the Slack prefix, the profile's `mini`. */
   mini: z.string().regex(MINI_RE),
@@ -320,6 +368,8 @@ export const ConfigSchema = z.object({
        * not approved: Slack messages wait for its next wakeup.
        */
       channel: z.boolean().default(true),
+      /** MCP servers for the front door's claude (--mcp-config), keys from research.env (STEP-3369). */
+      mcpServers: McpServersSchema,
     })
     .prefault({}),
   worker: z
@@ -335,6 +385,14 @@ export const ConfigSchema = z.object({
        * proves it on the binary workers run). Off: no fan-out.
        */
       fanOut: z.boolean().default(false),
+      /** A develop or revise worker may search and fetch the web (STEP-3369), behind the exfil guard. */
+      webTools: z.boolean().default(false),
+      /** A develop or revise worker may run skills, but never one that pushes, opens a PR or merges (STEP-3369). */
+      skills: z.boolean().default(false),
+      /** MCP servers for develop and revise workers, keys from research.env (STEP-3369). strictMcpConfig stays on. */
+      mcpServers: McpServersSchema,
+      /** Hosts the exfil guard refuses every URL to. Replaces the default list when set. */
+      fetchDenyHosts: z.array(z.string().min(1)).default(FETCH_DENY_HOSTS),
       maxTurns: z.number().int().positive().default(250),
       maxBudgetUsd: z.number().positive().default(15),
       wallClockMinutes: z.number().int().positive().default(90),

@@ -24,6 +24,17 @@ describe("templates/config.example.json", () => {
     expect(config.frontDoor).toMatchObject({ model: "claude-opus-5-5", effort: "xhigh" })
   })
 
+  it("gives Eve's workers and front door the research tools, each server pinned to a version, and the workers the staging database (STEP-3369)", () => {
+    const config = ConfigSchema.parse(example)
+    expect(config.worker).toMatchObject({ webTools: true, skills: true })
+    expect(Object.keys(config.worker.mcpServers)).toEqual(["exa", "brave-search", "perplexity", "context7", "staging-db"])
+    expect(Object.keys(config.frontDoor.mcpServers)).toEqual(["exa", "brave-search", "perplexity", "context7"])
+    for (const server of [...Object.values(config.worker.mcpServers), ...Object.values(config.frontDoor.mcpServers)]) {
+      if (server.type === "stdio") expect(server.args.find((a) => a.startsWith("@")), JSON.stringify(server)).toMatch(/@\d+\.\d+\.\d+$/)
+    }
+    expect(config.worker.mcpServers["staging-db"]).toMatchObject({ keys: { DATABASE_URL: "DATABASE_URL_STAGING_RO" } })
+  })
+
   it("leaves the binaries' paths to install.sh", () => {
     expect(example.frontDoor.claudePath).toBeUndefined()
     expect(example.frontDoor.tmuxPath).toBeUndefined()

@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { describe, expect, it } from "vitest"
@@ -17,7 +17,10 @@ import {
   FRESH_FRONT_DOOR,
   frontDoorAlive,
   FrontDoorRefused,
+  frontDoorMcpPath,
   frontDoorSettingsPath,
+  mcpArgs,
+  writeFrontDoorMcp,
   readFrontDoorState,
   readRestartRequest,
   requestFrontDoorRestart,
@@ -207,6 +210,15 @@ describe("claudeCommand", () => {
     expect(claudeCommand(base)).not.toContain("--effort")
   })
 
+  it("gives the front door its MCP servers: --mcp-config, then --allowedTools, each list ended by the next option (STEP-3369)", () => {
+    const base = { claudePath: "claude", resumeId: null, model: "sonnet", settingsPath: "/s.json" }
+    expect(claudeCommand({ ...base, mcp: { path: "/Users/eve/.config/agentd/front-door-mcp.json", tools: ["mcp__exa", "mcp__brave-search"] } })).toBe(
+      "claude --mcp-config /Users/eve/.config/agentd/front-door-mcp.json --allowedTools mcp__exa,mcp__brave-search --settings /s.json --model sonnet --permission-mode auto --permission-prompts none '/loop /dev-tasks:front-door'",
+    )
+    expect(claudeCommand({ ...base, mcp: null })).not.toContain("--mcp-config")
+    expect(mcpArgs(null)).toEqual([])
+  })
+
   it("starts a new session without pinning an id", () => {
     expect(claudeCommand({ claudePath: "claude", resumeId: null, model: "sonnet", settingsPath: "/s.json" })).toBe(
       "claude --settings /s.json --model sonnet --permission-mode auto --permission-prompts none '/loop /dev-tasks:front-door'",
@@ -271,6 +283,17 @@ describe("applyFrontDoor", () => {
     const config = { ...deps.config, frontDoor: { ...deps.config.frontDoor, effort: "xhigh" as const } }
     await applyFrontDoor({ ...deps, config }, FRESH_FRONT_DOOR, { kind: "start", mode: "new", reason: "first start", fastExits: 0 })
     expect(f.lines()[0]).toContain(" --model sonnet --effort xhigh --permission-mode auto ")
+  })
+
+  it("starts the front door with its MCP servers, written afresh at each start, and with none when it has none (STEP-3369)", async () => {
+    const { f, deps, paths } = setup()
+    const config = { ...deps.config, frontDoor: { ...deps.config.frontDoor, mcpServers: { exa: { type: "http" as const, url: "https://mcp.exa.ai/mcp" } } } }
+    await applyFrontDoor({ ...deps, config }, FRESH_FRONT_DOOR, { kind: "start", mode: "new", reason: "first start", fastExits: 0 })
+    expect(f.lines()[0]).toContain(` --mcp-config ${frontDoorMcpPath(paths)} --allowedTools mcp__exa --settings `)
+    expect(existsSync(frontDoorMcpPath(paths))).toBe(true)
+    await applyFrontDoor(deps, FRESH_FRONT_DOOR, { kind: "start", mode: "new", reason: "first start", fastExits: 0 })
+    expect(f.lines().at(-1)).not.toContain("--mcp-config")
+    expect(existsSync(frontDoorMcpPath(paths))).toBe(false)
   })
 
   it("starts a new session in tmux in the PolAds checkout and records it", async () => {
@@ -403,5 +426,46 @@ describe("superviseFrontDoor", () => {
     const usage: UsageSnapshot = { at: later.toISOString(), sessionId: "s-9", fiveHourPct: null, fiveHourResetsAt: null, sevenDayPct: null, sevenDayResetsAt: null }
     expect(await superviseFrontDoor({ ...up.deps, paths: down.paths, now: () => later, usage: () => usage })).toEqual({ kind: "none" })
     expect(readFrontDoorState(down.paths).sessionId).toBe("s-9")
+  })
+})
+
+describe("writeFrontDoorMcp (STEP-3369)", () => {
+  const servers = {
+    exa: { type: "http", url: "https://mcp.exa.ai/mcp" },
+    "brave-search": { type: "stdio", command: "npx", args: ["-y", "@brave/brave-search-mcp-server@2.1.4"], keys: ["BRAVE_API_KEY"] },
+    perplexity: { type: "stdio", command: "npx", args: ["-y", "@perplexity-ai/mcp-server@1.3.0"], keys: ["PERPLEXITY_API_KEY"] },
+  }
+  const setup = (mcpServers: Record<string, unknown>) => {
+    const home = mkdtempSync(join(tmpdir(), "frontdoor-mcp-"))
+    const paths = agentPaths(home)
+    const config = ConfigSchema.parse({ mini: "eve", repo: { path: "/r" }, pluginRoot: "/p", slack: { allowedUsers: ["U1"] }, frontDoor: { mcpServers } })
+    return { home, paths, config }
+  }
+
+  it("writes the servers with their keys where only its claude reads them, owner-only, and names their allow rules", () => {
+    const { home, paths, config } = setup(servers)
+    mkdirSync(join(home, ".config", "agentd"), { recursive: true })
+    writeFileSync(join(home, ".config", "agentd", "research.env"), "BRAVE_API_KEY=brave-test\n", { mode: 0o600 })
+    const mcp = writeFrontDoorMcp(paths, config)
+    expect(mcp).toEqual({ path: frontDoorMcpPath(paths), tools: ["mcp__exa", "mcp__brave-search"] })
+    expect(frontDoorMcpPath(paths)).toBe(join(home, ".config", "agentd", "front-door-mcp.json"))
+    expect(statSync(mcp!.path).mode & 0o777).toBe(0o600)
+    expect(JSON.parse(readFileSync(mcp!.path, "utf8"))).toEqual({
+      mcpServers: { exa: { type: "http", url: "https://mcp.exa.ai/mcp" }, "brave-search": { type: "stdio", command: "npx", args: ["-y", "@brave/brave-search-mcp-server@2.1.4"], env: { BRAVE_API_KEY: "brave-test" } } },
+    })
+  })
+
+  it("removes the file when no server is left, and runs keyless servers alone when research.env is readable by others", () => {
+    const { home, paths, config } = setup(servers)
+    mkdirSync(join(home, ".config", "agentd"), { recursive: true })
+    writeFileSync(join(home, ".config", "agentd", "research.env"), "BRAVE_API_KEY=brave-test\n")
+    chmodSync(join(home, ".config", "agentd", "research.env"), 0o644)
+    expect(writeFrontDoorMcp(paths, config)?.tools).toEqual(["mcp__exa"])
+    const none = setup({})
+    // An earlier start's file, with the servers since taken out of config.json.
+    mkdirSync(join(none.home, ".config", "agentd"), { recursive: true })
+    writeFileSync(frontDoorMcpPath(none.paths), "{}")
+    expect(writeFrontDoorMcp(none.paths, none.config)).toBeNull()
+    expect(existsSync(frontDoorMcpPath(none.paths))).toBe(false)
   })
 })

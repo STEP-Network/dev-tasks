@@ -5,7 +5,7 @@ import { beforeEach, describe, expect, it } from "vitest"
 import { agentPaths, type AgentPaths } from "../../config.ts"
 import { fakeExec } from "../../__tests__/fakes.ts"
 import type { ExecResult } from "../../worker/git.ts"
-import { doctorChecks, formatDoctor, repoToolchain, slackChannelCheck, userTestChecks, type DoctorDeps } from "../doctor.ts"
+import { doctorChecks, formatDoctor, repoToolchain, researchCheck, slackChannelCheck, userTestChecks, type DoctorDeps } from "../doctor.ts"
 import { ConfigSchema } from "../../config.ts"
 import { recordHooksProbe, type HooksProbe } from "../hooks-probe.ts"
 import { recordSandboxProbe } from "../sandbox-probe.ts"
@@ -271,6 +271,13 @@ describe("doctorChecks", () => {
     expect(await failed(deps())).toEqual([])
   })
 
+  it("says which research server it skips for a missing key, and says nothing when none is configured (STEP-3369)", async () => {
+    expect((await doctorChecks(deps())).map((c) => c.name)).not.toContain("research tools")
+    const config = JSON.parse(readFileSync(paths.config, "utf8"))
+    writeFileSync(paths.config, JSON.stringify({ ...config, worker: { mcpServers: { "brave-search": { type: "stdio", command: "npx", args: ["x"], keys: ["BRAVE_API_KEY"] } } } }))
+    expect(await warned(deps())).toEqual([expect.stringMatching(/^research tools: skipped: worker brave-search \(BRAVE_API_KEY not in /)])
+  })
+
   it("says whether the answer recorder's key is there, fails neither way, and never prints it (Wave 2, D1)", async () => {
     const recorder = async () => (await doctorChecks(deps())).filter((c) => c.name === "recorder").map((c) => `${c.level} ${c.detail}`)
     expect(await recorder()).toEqual(["ok no key (lowering stays in Linear)"])
@@ -415,5 +422,37 @@ describe("userTestChecks (WS5)", () => {
     writeFileSync(paths.config, JSON.stringify({ ...JSON.parse(readFileSync(paths.config, "utf8")), usertest: on().usertest }))
     const names = (await doctorChecks(deps({}, [[CHROME_VERSION, { stdout: "Google Chrome 153.0.1.2\n" }]]))).map((c) => c.name)
     expect(names).toEqual(expect.arrayContaining(["browser test Chrome", "browser test tool", "browser test node", "browser test secrets"]))
+  })
+})
+
+describe("researchCheck (STEP-3369)", () => {
+  const BASE = { mini: "eve", repo: { path: "/r" }, pluginRoot: "/p", slack: { allowedUsers: ["U1"] } }
+  const brave = { type: "stdio", command: "npx", args: ["x"], keys: ["BRAVE_API_KEY"] }
+  const db = { type: "stdio", command: "npx", args: ["y"], keys: { DATABASE_URL: "DATABASE_URL_STAGING_RO" } }
+  const exa = { type: "http", url: "https://mcp.exa.ai/mcp" }
+
+  it("says nothing when no server is configured", () => {
+    expect(researchCheck(mkdtempSync(join(tmpdir(), "doctor-research-")), ConfigSchema.parse(BASE))).toBeNull()
+  })
+
+  it("names each server it skips and the file its key belongs in, never a value, and fails on a readable file", () => {
+    const home = mkdtempSync(join(tmpdir(), "doctor-research-"))
+    const config = ConfigSchema.parse({ ...BASE, worker: { mcpServers: { exa, "brave-search": brave, "staging-db": db } }, frontDoor: { mcpServers: { exa } } })
+    const skipped = researchCheck(home, config)!
+    expect(skipped.level).toBe("warn")
+    expect(skipped.detail).toContain("worker brave-search (BRAVE_API_KEY not in ")
+    expect(skipped.detail).toContain("worker staging-db (DATABASE_URL_STAGING_RO not in ")
+    expect(skipped.detail).toMatch(/research\.env or .*neon-staging-ro\.env/)
+    expect(skipped.detail).toContain("Running: worker: exa; front door: exa")
+    mkdirSync(join(home, ".config", "agentd"), { recursive: true })
+    writeFileSync(join(home, ".config", "agentd", "research.env"), "BRAVE_API_KEY=brave-test\n", { mode: 0o600 })
+    writeFileSync(join(home, ".config", "agentd", "neon-staging-ro.env"), "DATABASE_URL_STAGING_RO=postgres://ro\n", { mode: 0o600 })
+    const ok = researchCheck(home, config)!
+    expect(ok).toEqual({ level: "ok", name: "research tools", detail: "worker: exa, brave-search, staging-db; front door: exa" })
+    chmodSync(join(home, ".config", "agentd", "research.env"), 0o644)
+    const refused = researchCheck(home, config)!
+    expect(refused.level).toBe("fail")
+    expect(refused.detail).toMatch(/research\.env is readable by other users/)
+    expect(JSON.stringify([skipped, ok, refused])).not.toMatch(/brave-test|postgres:\/\/ro/)
   })
 })
