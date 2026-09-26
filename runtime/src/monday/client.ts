@@ -97,7 +97,11 @@ export interface MondayApi {
    * Monday wants every source column mapped: `target: null` drops one.
    */
   moveItemToBoard(boardId: string, groupId: string, itemId: string, mapping: Array<{ source: string; target: string | null }>): Promise<void>
-  /** An item's subitems (test day's checkpoints, Wave 3), with the columns asked for. An item Monday does not have is refused, not read as none. */
+  /**
+   * An item's active subitems (test day's checkpoints, Wave 3), with the
+   * columns asked for. An item Monday does not have, or has trashed or
+   * archived, is refused, not read as having none.
+   */
   readSubitems(parentItemId: string, columnIds: string[]): Promise<MondayItem[]>
   /**
    * Who changed any of `columnIds` on a board since `since`, from its activity
@@ -110,8 +114,8 @@ export interface MondayApi {
   renameItem(boardId: string, itemId: string, name: string): Promise<void>
   /**
    * A new doc in an item's doc column, named `title`: its id. A name Monday
-   * refuses leaves its default name, and the doc id is still returned, since a
-   * retry would put a second doc on the item.
+   * refuses leaves its default name, said through `warn`, and the doc id is
+   * still returned, since a retry would put a second doc on the item.
    */
   createItemDoc(itemId: string, columnId: string, title: string): Promise<string>
   /** Markdown added at the end of a doc. Monday's `success: false` is a MondayRefused. */
@@ -121,6 +125,8 @@ export interface MondayApi {
 export interface MondayApiOptions {
   fetch?: typeof fetch
   sleep?: (ms: number) => Promise<void>
+  /** Where a failure the client works around goes (a doc left with its default name): agentd's monday.log. */
+  warn?: (message: string) => void
 }
 
 const MAX_ATTEMPTS = 3
@@ -381,13 +387,15 @@ export function createMondayApi(token: string, opts: MondayApiOptions = {}): Mon
     },
 
     async readSubitems(parentItemId, columnIds) {
-      const data = await request<{ items: Array<{ subitems: RawItem[] | null }> }>(
-        `query($item: [ID!], $columns: [String!]) { items(ids: $item) { subitems { ${ITEM_FIELDS} } } }`,
+      // Only an active parent: a trashed or archived Test day item is refused, not read.
+      const data = await request<{ items: Array<{ subitems: Array<(RawItem & { state?: string | null }) | null> | null }> }>(
+        `query($item: [ID!], $columns: [String!]) { items(ids: $item, exclude_nonactive: true) { subitems { state ${ITEM_FIELDS} } } }`,
         { item: [checked(parentItemId, ID_RE, "Monday id")], columns: columnIds },
       )
       const parent = data.items[0]
       if (!parent) throw new MondayRefused(`Monday: no item ${parentItemId}, or the token's user cannot see it`)
-      return (parent.subitems ?? []).map(toItem)
+      // subitems takes no filter: an archived or deleted checkpoint is left out here.
+      return (parent.subitems ?? []).filter((s): s is RawItem & { state?: string | null } => Boolean(s) && s!.state !== "archived" && s!.state !== "deleted").map(toItem)
     },
 
     async columnChanges(boardId, columnIds, since) {
@@ -428,7 +436,10 @@ export function createMondayApi(token: string, opts: MondayApiOptions = {}): Mon
       const id = data.create_doc?.id
       if (!id) throw new MondayRefused(`Monday: no doc was created on item ${itemId}`)
       // create_doc takes no name. update_doc_name answers Monday's JSON scalar, which takes no selection.
-      await request(`mutation($doc: ID!, $name: String!) { update_doc_name(docId: $doc, name: $name) }`, { doc: String(id), name: title }).catch(() => {})
+      // A name Monday refuses is said, never thrown: the doc exists, and a retry would add a second one.
+      await request(`mutation($doc: ID!, $name: String!) { update_doc_name(docId: $doc, name: $name) }`, { doc: String(id), name: title }).catch((error: unknown) =>
+        opts.warn?.(`Monday: doc ${id} on item ${itemId} keeps its default name: ${redact(error instanceof Error ? error.message : String(error))}`),
+      )
       return String(id)
     },
 

@@ -102,7 +102,28 @@ describe("the in-memory Monday account", () => {
     )
     expect((await monday.api.columnChanges(SUBITEMS, ["col_verdict"], T0)).map((c) => c.id)).toEqual(["s2"])
     expect((await monday.api.columnChanges(BOARD, [NEEDS_COLUMNS.answer], T0)).map((c) => c.itemId)).toEqual([needs])
-    await expect(monday.api.columnChanges("123", ["col_verdict"], T0)).rejects.toBeInstanceOf(MondayRefused)
+    // As the client says it: out of the token's reach, not a refusal.
+    const unseen = await monday.api.columnChanges("123", ["col_verdict"], T0).catch((e: Error) => e)
+    expect(String(unseen)).toMatch(/no board 123/)
+    expect(unseen).not.toBeInstanceOf(MondayRefused)
+  })
+
+  it("seeds a subitem and a doc a run saved before a restart, and writes reach them", async () => {
+    const monday = two()
+    const parent = await monday.api.createItem(BOARD, "g_test", "Test day", {})
+    expect(monday.subitem(parent, "1. Public: the notice page", { col_verdict: { label: "To test" } }, "sub-1")).toBe("sub-1")
+    const made = monday.subitem(parent, "2. Admin: the queue")
+    expect(monday.boardOf("sub-1")).toBe(SUBITEMS)
+    await monday.api.setColumns(SUBITEMS, "sub-1", { col_verdict: { label: "PASS" } })
+    expect((await monday.api.readSubitems(parent, ["col_verdict"])).map((s) => [s.id, s.columns.col_verdict?.text ?? null])).toEqual([["sub-1", "PASS"], [made, null]])
+    expect(() => monday.subitem(parent, "again", {}, "sub-1")).toThrow(/exists already/)
+    expect(() => monday.subitem("404", "x")).toThrow(MondayRefused)
+    monday.doc("doc-1", "# Test day")
+    await monday.api.appendDoc("doc-1", "## Before you start")
+    expect(monday.docs.get("doc-1")).toBe("# Test day\n## Before you start")
+    // A new doc never takes a seeded one's id.
+    expect(await monday.api.createItemDoc(parent, "col_doc", "Test day")).toBe("doc-2")
+    expect(monday.docs.get("doc-1")).toBe("# Test day\n## Before you start")
   })
 
   it("renames an item only on its own board", async () => {

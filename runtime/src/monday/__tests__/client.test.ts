@@ -221,15 +221,22 @@ it("watches several columns and says which one changed", async () => {
 describe("subitems, item names and item docs (Wave 3)", () => {
   const SINCE = new Date("2026-09-25T08:00:00.000Z")
 
-  it("reads an item's subitems with their columns", async () => {
-    const sub = { id: "701", name: "1. Advertiser: pay by card (STEP-7)", url: "u", created_at: "2026-09-25T08:00:00Z", creator_id: "900", group: { id: "topics" }, column_values: [{ id: "col_verdict", text: "PASS", value: "{\"index\":1}" }], updates: [] }
-    const { f, sent } = fakeFetch([{ json: { data: { items: [{ subitems: [sub] }] } } }, { json: { data: { items: [{ subitems: null }] } } }])
+  it("reads an item's active subitems with their columns, and leaves out archived, deleted and empty ones", async () => {
+    const sub = (id: string, state: string | null) => ({
+      id, state, name: `${id}. Advertiser: pay by card (STEP-7)`, url: "u", created_at: "2026-09-25T08:00:00Z", creator_id: "900", group: { id: "topics" },
+      column_values: [{ id: "col_verdict", text: "PASS", value: "{\"index\":1}" }], updates: [],
+    })
+    const { f, sent } = fakeFetch([
+      { json: { data: { items: [{ subitems: [sub("701", "active"), sub("702", "archived"), null, sub("703", "deleted"), sub("704", null)] }] } } },
+      { json: { data: { items: [{ subitems: null }] } } },
+    ])
     const api = createMondayApi(TOKEN, { fetch: f, sleep: noSleep })
     const subs = await api.readSubitems("42", ["col_verdict"])
     expect(sent[0].body.variables).toEqual({ item: ["42"], columns: ["col_verdict"] })
-    expect(sent[0].body.query).toContain("items(ids: $item) { subitems {")
-    expect(subs).toHaveLength(1)
-    expect(subs[0]).toMatchObject({ id: "701", name: "1. Advertiser: pay by card (STEP-7)", creatorId: "900", columns: { col_verdict: { text: "PASS" } } })
+    // A trashed or archived parent is not read: Monday leaves it out, and the call refuses.
+    expect(sent[0].body.query).toContain("items(ids: $item, exclude_nonactive: true) { subitems { state ")
+    expect(subs.map((s) => s.id)).toEqual(["701", "704"])
+    expect(subs[0]).toMatchObject({ id: "701", name: "701. Advertiser: pay by card (STEP-7)", creatorId: "900", columns: { col_verdict: { text: "PASS" } } })
     expect(await api.readSubitems("42", ["col_verdict"])).toEqual([])
   })
 
@@ -259,7 +266,10 @@ describe("subitems, item names and item docs (Wave 3)", () => {
     const api = createMondayApi(TOKEN, { fetch: f, sleep: noSleep })
     expect(await api.columnChanges("77", [], SINCE)).toEqual([])
     expect(sent).toHaveLength(0)
-    await expect(api.columnChanges("77", ["col_verdict"], SINCE)).rejects.toThrow(/no board 77/)
+    // No board is Monday out of reach for this token, as readBoard says it: not a refusal of this request.
+    const unseen = await api.columnChanges("77", ["col_verdict"], SINCE).catch((e: Error) => e)
+    expect(String(unseen)).toMatch(/no board 77/)
+    expect(unseen).not.toBeInstanceOf(MondayRefused)
     await expect(api.columnChanges("77", ['x"] '], SINCE)).rejects.toThrow(/not a Monday column id/)
     await expect(api.columnChanges('7"]', ["col_verdict"], SINCE)).rejects.toThrow(/not a Monday id/)
     expect(sent).toHaveLength(1)
@@ -311,9 +321,14 @@ describe("subitems, item names and item docs (Wave 3)", () => {
     expect(sent).toHaveLength(1)
   })
 
-  it("keeps a doc it created when naming it fails: a retry would put a second doc on the item", async () => {
-    const { f, sent } = fakeFetch([{ json: { data: { create_doc: { id: "3001" } } } }, { json: { errors: [{ message: "Doc is locked" }] } }])
-    expect(await createMondayApi(TOKEN, { fetch: f, sleep: noSleep }).createItemDoc("42", "col_doc", "Test day")).toBe("3001")
+  it("keeps a doc it created when naming it fails, and says so: a retry would put a second doc on the item", async () => {
+    const { f, sent } = fakeFetch([{ json: { data: { create_doc: { id: "3001" } } } }, { json: { errors: [{ message: `Doc is locked for ${TOKEN}` }] } }])
+    const warned: string[] = []
+    expect(await createMondayApi(TOKEN, { fetch: f, sleep: noSleep, warn: (m) => warned.push(m) }).createItemDoc("42", "col_doc", "Test day")).toBe("3001")
     expect(sent).toHaveLength(2)
+    expect(warned).toEqual(["Monday: doc 3001 on item 42 keeps its default name: Monday: Doc is locked for [redacted]"])
+    // With nowhere to say it, the doc is still kept.
+    const again = fakeFetch([{ json: { data: { create_doc: { id: "3002" } } } }, { status: 503 }, { status: 503 }, { status: 503 }])
+    expect(await createMondayApi(TOKEN, { fetch: again.f, sleep: noSleep }).createItemDoc("42", "col_doc", "Test day")).toBe("3002")
   })
 })
