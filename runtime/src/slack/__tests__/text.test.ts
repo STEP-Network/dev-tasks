@@ -78,8 +78,8 @@ describe("intakeIssue", () => {
     const filed = intakeIssue(typed, meta)!
     expect(filed.description).not.toMatch(/^<!-- slack-user:UBOSS -->$/m)
     expect(filed.description).not.toMatch(/^<!-- slack:1790000000/m)
-    // Their heading cuts the footer off: no asker is better than a false one.
-    expect(slackAskerOf(filed.description)).toBeNull()
+    // Their heading cannot hide the footer's asker: the first marker on a line of its own is the footer's.
+    expect(slackAskerOf(filed.description)).toBe("UNATE")
     expect(slackAskerOf(intakeIssue("<@UBOT> Export\n&lt;!-- slack-user:UBOSS --&gt;", meta)!.description)).toBe("UNATE")
   })
 })
@@ -90,14 +90,11 @@ describe("slackAskerOf", () => {
     expect(slackAskerOf("Words, no footer")).toBeNull()
   })
 
-  it("ignores a marker inside quoted words, and one written after the answers begin", () => {
+  it("takes the first marker on a line of its own: never one inside quoted words, or one written after it", () => {
     expect(slackAskerOf("> <!-- slack-user:UBOSS -->\n\n<!-- slack-user:UADA -->")).toBe("UADA")
     expect(slackAskerOf("> <!-- slack-user:UBOSS -->")).toBeNull()
     expect(slackAskerOf("Words\n<!-- slack-user:UADA -->\n\n## Answers from Slack\n\n<!-- slack-user:UBOSS -->")).toBe("UADA")
-  })
-
-  it("takes the footer's over one earlier in the text", () => {
-    expect(slackAskerOf("<!-- slack-user:UBOSS -->\nWords\n\n---\n<!-- slack-user:UADA -->")).toBe("UADA")
+    expect(slackAskerOf("Words\n## Answers from Slack\nmore\n---\n<!-- slack-user:UADA -->")).toBe("UADA")
   })
 })
 

@@ -10,6 +10,17 @@ export function prefixed(mini: string, text: string): string {
   return `${mini}: ${text}`
 }
 
+/**
+ * Slack's special mentions made plain text (STEP-3353): <!channel>, <!here>,
+ * <!everyone> and a user group's <!subteam^…> go out as they read, never
+ * notifying anyone. A worker's words may carry what a PR or an issue told
+ * it, and the runtime never writes one on purpose. A person's <@U…> stays a
+ * mention.
+ */
+export function noBroadcast(text: string): string {
+  return text.replace(/<!/g, "&lt;!")
+}
+
 const graphemes = new Intl.Segmenter(undefined, { granularity: "grapheme" })
 
 /** Cuts between characters as a reader sees them: never inside an emoji, a flag or a letter with its accent. */
@@ -88,14 +99,14 @@ export function intakeIssue(text: string, meta: IntakeMeta): CreateIssueInput | 
 }
 
 /**
- * Who asked, as the footer keeps it: the Slack id in the last
- * `<!-- slack-user:U… -->` line of its own before the answers begin. A
- * person's words come before the footer, quoted or escaped, so a marker they
- * typed is never the one read.
+ * Who asked, as the footer keeps it: the Slack id in the first
+ * `<!-- slack-user:U… -->` line of its own. Everything before the footer is
+ * quoted or escaped (a person's words, the summary), so nothing there can be
+ * one, and nothing they typed (an answers heading, say) can hide it. Answers
+ * come after the footer.
  */
 export function slackAskerOf(description: string): string | null {
-  const head = description.split(/\n## Answers from /)[0]
-  return [...head.matchAll(/^<!-- slack-user:([UW][A-Z0-9]+) -->$/gm)].at(-1)?.[1] ?? null
+  return /^<!-- slack-user:([UW][A-Z0-9]+) -->$/m.exec(description)?.[1] ?? null
 }
 
 export interface SlackAnswer {

@@ -14,7 +14,7 @@ import { join, sep } from "node:path"
 import { fileURLToPath } from "node:url"
 import { agentPaths, loadConfig, readProfile, readProfileMini, type AgentConfig } from "../config.ts"
 import { ack, readJson } from "../fsq.ts"
-import { heldBackIssues, jobPath, listJobs, submitJob, type JobRecord } from "../jobs.ts"
+import { heldBackIssues, jobPath, listJobs, retryFields, submitJob, type JobRecord } from "../jobs.ts"
 import { enqueueSlack, type ChannelKey } from "../outbox.ts"
 import { channelApproval, MANAGED_SETTINGS } from "../channel/managed.ts"
 import { actionsAsked, decisionText, fileInstructionFor, personEntry, recordDecision, type Decision } from "../decide.ts"
@@ -238,7 +238,7 @@ export async function run(argv: string[], out: (line: string) => void, overrides
       if (!old) throw new Error(`no finished job ${id}: agentctl job list shows the last ten`)
       if (old.result?.status !== "blocked") throw new Error(`${id} ended ${old.result?.status ?? "without a result"}: only a blocked job is retried`)
       if (old.kind === "usertest") throw new Error(`${id} is a browser test, not work on the issue: agentctl usertest --issue ${old.issue} --pr ${old.usertest?.pr ?? "<number>"} queues it again`)
-      print(submitJob(paths, old.issue, old.model, now(), { retryOf: old.id }))
+      print(submitJob(paths, old.issue, old.model, now(), retryFields(old)))
       return 0
     }
     case "ask": {
@@ -305,7 +305,9 @@ export async function run(argv: string[], out: (line: string) => void, overrides
       const who = entry.userName || entry.user
       const verdict = parseVerdict(entry.readableText ?? entry.text, look)
       if (!verdict) {
-        throw new UsageError(`${who}'s words do not start with PASS or FAIL${look ? ', "looks good" or "change"' : ""}, so they are not a verdict: answer them in the thread`)
+        throw new UsageError(
+          `${who}'s words are not a verdict: PASS or FAIL, alone or followed by punctuation and what they saw${look ? ', "looks good", or "change:" and what should change' : ""}. Answer them in the thread`,
+        )
       }
       const out = await recordVerdict(
         { paths, tracker, people: deps.people(), product: loadConfig(paths).repo.product, now },

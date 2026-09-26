@@ -10,17 +10,60 @@ import { fakeTracker, issue } from "./fakes.ts"
 describe("parseVerdict", () => {
   it.each([
     ["PASS", false, { verdict: "pass", note: "" }],
+    ["pass.", false, { verdict: "pass", note: "" }],
+    ["Pass!", false, { verdict: "pass", note: "" }],
     ["pass: works on my phone", false, { verdict: "pass", note: "works on my phone" }],
-    ["FAIL the date is wrong", false, { verdict: "fail", note: "the date is wrong" }],
-    ["passing thoughts", false, null],
+    ["PASS, looks right on mobile too", false, { verdict: "pass", note: "looks right on mobile too" }],
+    ["PASS - works", false, { verdict: "pass", note: "works" }],
+    ["PASS — works", false, { verdict: "pass", note: "works" }],
+    ["PASS\nworks on mobile", false, { verdict: "pass", note: "works on mobile" }],
+    ["PASS 👍", false, { verdict: "pass", note: "" }],
+    ["PASS 👍🏽 works on mobile", false, { verdict: "pass", note: "works on mobile" }],
+    ["PASS ", false, { verdict: "pass", note: "" }],
+    ["PASS\u00a0", false, { verdict: "pass", note: "" }],
+    ["PASS\u00a0- works", false, { verdict: "pass", note: "works" }],
+    ["PASS—works", false, { verdict: "pass", note: "works" }],
+    ["FAIL", false, { verdict: "fail", note: "" }],
+    ["FAIL: the date is wrong", false, { verdict: "fail", note: "the date is wrong" }],
+    ["fail - the date is wrong", false, { verdict: "fail", note: "the date is wrong" }],
     ["yes", false, null],
     ["Looks good", true, { verdict: "pass", note: "" }],
+    ["looks good to me", true, { verdict: "pass", note: "" }],
+    ["Looks right.", true, { verdict: "pass", note: "" }],
+    ["Looks good 👍", true, { verdict: "pass", note: "" }],
+    ["looks good\u00a0✅", true, { verdict: "pass", note: "" }],
     ["change: the button should be blue", true, { verdict: "fail", note: "the button should be blue" }],
+    ["Change : the button should be blue", true, { verdict: "fail", note: "the button should be blue" }],
+    ["PASS", true, { verdict: "pass", note: "" }],
     ["yes", true, { verdict: "pass", note: "" }],
-    ["change: x", false, null],
-    ["it looks good to me", true, null],
-  ])("%s (Look: %s)", (text, look, expected) => {
+  ])("%s (Look: %s) is a verdict", (text, look, expected) => {
     expect(parseVerdict(text as string, look as boolean)).toEqual(expected)
+  })
+
+  // Review of #137: a question or a verb phrase is not a verdict, and a verdict word needs an end or a separator after it.
+  it.each([
+    ["pass me the link again?", false],
+    ["Pass me the link", true],
+    ["pass?", false],
+    ["PASS? it looked fine to me", false],
+    ["passing thoughts", false],
+    ["PASS\u00a0works", false],
+    ["Pass-through is fine", false],
+    ["FAIL-the date is wrong", false],
+    ["Fail-safe mode works", false],
+    ["pass-rate looks ok", false],
+    ["looks good-ish", true],
+    ["fail to see why this matters", false],
+    ["FAIL the date is wrong", false],
+    ["fail?", true],
+    ["change the button to blue", true],
+    ["change", true],
+    ["change: x", false],
+    ["looks good?", true],
+    ["it looks good to me", true],
+    ["looks goodish", true],
+  ])("%s (Look: %s) is not", (text, look) => {
+    expect(parseVerdict(text as string, look as boolean)).toBeNull()
   })
 })
 
