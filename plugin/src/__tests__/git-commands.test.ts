@@ -190,6 +190,11 @@ describe("git_commands.py", () => {
     ]) {
       expect(analyse(command), command).toContain("PUSH @all")
     }
+    // HOME= and XDG_CONFIG_HOME= point git at a gitconfig somewhere else (#159 review).
+    for (const command of ["HOME=/tmp/h git push origin feat", "XDG_CONFIG_HOME=/tmp/x git push origin feat", "export HOME=/tmp/h; git push origin feat", "arch -e GIT_CONFIG_COUNT=1 git push origin feat"]) {
+      expect(analyse(command), command).toContain("PUSH @all")
+    }
+    expect(analyse("ls HOME && git push origin feat")).toEqual(["PUSH origin", "PUSH feat"])
     // GIT_DIR and the like point git at another repository, as --git-dir does.
     expect(analyse("GIT_DIR=../main/.git git push origin HEAD")).toContain("PUSH @unknown")
     expect(analyse("GIT_DIR=../main/.git git commit -m x")).toEqual(["COMMIT @unknown"])
@@ -236,6 +241,41 @@ describe("git_commands.py", () => {
     for (const command of ["nice -n 5 git push origin main", "nice -n5 git push origin main", "env -u FOO git push origin main", "sudo -u root git push origin main", "sudo -Eu root git push origin main", "exec -a x git push origin main", "time -p git push origin main", "env -S 'git push origin main'", "env --split-string='git push origin' main"]) {
       expect(analyse(command), command).toEqual(["PUSH origin", "PUSH main"])
     }
+    // Wrappers by name or path, with their options and operands (#159 review).
+    for (const command of [
+      "timeout 30 git push origin main",
+      "timeout -s KILL -k 5 30 git push origin main",
+      "gtimeout 30 git push origin main",
+      "/usr/bin/env git push origin main",
+      "/usr/bin/nice git push origin main",
+      "/usr/bin/time git push origin main",
+      "stdbuf -oL git push origin main",
+      "stdbuf -o L git push origin main",
+      "caffeinate -i git push origin main",
+      "caffeinate -w 123 git push origin main",
+      "arch -arm64 git push origin main",
+      "arch -arch arm64 git push origin main",
+      "script -q /dev/null git push origin main",
+      "sandbox-exec -p '(version 1)(allow default)' git push origin main",
+      "sandbox-exec -f prof.sb git push origin main",
+      // macOS env -S reads \_ as a space.
+      "env -S 'git\\_push\\_origin\\_main'",
+    ]) {
+      expect(analyse(command), command).toEqual(["PUSH origin", "PUSH main"])
+    }
+    expect(analyse("timeout 30 git push --force origin feat")).toContain("DESTRUCTIVE git push --force")
+    expect(analyse("script -c 'git push origin' /dev/null")).toEqual(["PUSH @current .", "PUSH origin"])
+    // A command word it does not know: a git push or a destructive command later in its words.
+    expect(analyse("flock /tmp/l git push origin main")).toEqual(["PUSH @unknown"])
+    expect(analyse("ssh host git push origin main")).toEqual(["PUSH @unknown"])
+    expect(analyse("ionice -c 3 rm -rf build")).toEqual(["DESTRUCTIVE rm -rf"])
+    expect(analyse("flock /tmp/l git push --force origin feat")).toContain("DESTRUCTIVE git push --force")
+    expect(analyse("echo git push origin main")).toEqual([])
+    // A shell that reads its text from stdin runs what it cannot see.
+    expect(analyse("echo 'git push origin main' | sh")).toEqual(["PUSH @unknown"])
+    expect(analyse("cat x | bash -s")).toEqual(["PUSH @unknown"])
+    expect(analyse("cat x | bash -s arg")).toEqual(["PUSH @unknown"])
+    expect(analyse("bash -x deploy.sh")).toEqual([])
     expect(analyse("env -C ../main git push")).toEqual(["PUSH @unknown"])
     expect(analyse("sudo -D ../main git push")).toEqual(["PUSH @unknown"])
     // 2>&1 and 2>/dev/null are redirects: no "PUSH 2".

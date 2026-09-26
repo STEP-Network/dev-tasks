@@ -34,17 +34,25 @@ stdin and prints one line per finding, then END:
 What it reads: each command word in the text, split on ; && || | & ( ); the
 body of each $(...), `...`, <(...) and >(...), which bash runs, in double
 quotes and unquoted heredocs too; the text of sh -c and eval; the command
-after xargs and find -exec, and after a wrapper's options (nice -n 5,
-env -u X, sudo -u u; env -S's text; env -C runs it elsewhere); and a `cd`
-before a git command. A 2> or 2>&1 is a redirect, not a word. A $'...' word
+after xargs and find -exec, and after a wrapper, by its name or path
+(/usr/bin/env), and its options and operands (nice -n 5, env -u X, sudo -u
+u, timeout 30, script -q /dev/null; env -S's and script -c's text; env -C
+runs it elsewhere); and a `cd` before a git command. After a command word it
+does not know (flock f git push ...), a git push is PUSH @unknown and a
+destructive command DESTRUCTIVE; a shell that reads its text from stdin
+(echo ... | sh) is PUSH @unknown. A 2> or 2>&1 is a redirect, not a word. A $'...' word
 is its decoded text ($'git' is git), up to a NUL, where bash and zsh cut it
 differently: both readings are checked. An option after `--` is an argument
 (rm -r -- -f). Not what quotes or a heredoc hold as text: `git
 commit` with a message that says "push" is no push. A text it cannot read (an unclosed quote, parenthesis or heredoc)
 raises: no END, and the hooks refuse the command.
 
-Out of scope, left to the server's rulesets: git aliases already in git's
-config files (a command can no longer write one, or pass one with -c).
+Out of scope, left to the server's rulesets: what files hold, as it reads
+commands and not files. Git config a Write or Edit puts in .git/config or a
+gitconfig (an alias, push.default), and aliases already there; a script a
+command runs (sh deploy.sh). A command can no longer write that config
+(git config), pass it (-c, GIT_CONFIG*) or point git at it (HOME=,
+XDG_CONFIG_HOME=).
 """
 
 import os
@@ -56,9 +64,11 @@ HEREDOC_AT = re.compile(r"<<(-?)[ \t]*(\\?)([\"']?)([^\s\"'<>;&|()]+)\3")
 SEPARATOR = set(";&|()")
 REDIRECT = re.compile(r"^[0-9]*[<>]+&?$|^&>+$")
 ASSIGNMENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
-# Words bash runs another command after: wrappers, and the keywords a command follows.
+# Words bash runs another command after: wrappers, by their name or path (/usr/bin/env), and the
+# keywords a command follows. A wrapper not here is caught by run()'s fallback.
 WRAPPERS = {
-    "command", "builtin", "exec", "env", "time", "nohup", "nice", "sudo",
+    "command", "builtin", "exec", "env", "time", "nohup", "nice", "sudo", "xargs",
+    "timeout", "gtimeout", "stdbuf", "gstdbuf", "caffeinate", "sandbox-exec", "arch", "script",
     "!", "{", "(", "then", "do", "else", "elif", "if", "while", "until",
 }
 XARGS_VALUE_OPTIONS = {"-n", "-I", "-L", "-P", "-s", "-E", "-d", "-a", "-J", "-R", "-S"}
@@ -71,9 +81,21 @@ WRAPPER_VALUE_OPTIONS = {
              "-R", "--chroot", "-T", "--command-timeout", "-U", "--other-user", "-r", "--role", "-t", "--type"},
     "exec": {"-a"},
     "time": {"-f", "--format", "-o", "--output"},
+    "timeout": {"-s", "--signal", "-k", "--kill-after"},
+    "gtimeout": {"-s", "--signal", "-k", "--kill-after"},
+    "stdbuf": {"-i", "--input", "-o", "--output", "-e", "--error"},
+    "gstdbuf": {"-i", "--input", "-o", "--output", "-e", "--error"},
+    "caffeinate": {"-w", "-t"},
+    "sandbox-exec": {"-f", "-n", "-p", "-D"},
+    "arch": {"-arch", "-d", "-e"},
+    "script": {"-t", "-c", "--command", "-I", "--log-in", "-O", "--log-out", "-B", "--log-io", "-T", "--log-timing",
+               "-m", "--logging-format", "-E", "--echo", "-o", "--output-limit"},
 }
+# Words a wrapper takes before the command: timeout's duration, script's file.
+WRAPPER_OPERANDS = {"timeout": 1, "gtimeout": 1, "script": 1}
 WRAPPER_CHDIR = {("env", "-C"), ("env", "--chdir"), ("sudo", "-D"), ("sudo", "--chdir")}
-WRAPPER_SPLIT = {("env", "-S"), ("env", "--split-string")}
+# A wrapper option whose value is the command's text: env -S splits it, script -c runs it in a shell.
+WRAPPER_SPLIT = {("env", "-S"), ("env", "--split-string"), ("script", "-c"), ("script", "--command")}
 FD_REDIRECT = re.compile(r"[0-9]+(?=[<>])")
 SHELLS = {"sh", "bash", "zsh", "dash", "ksh"}
 FIND_EXEC = {"-exec", "-execdir", "-ok", "-okdir"}
@@ -82,6 +104,8 @@ OTHER_REPO = {"--git-dir", "--work-tree", "--namespace"}
 # The same, from the environment. GIT_CONFIG* (COUNT, KEY_n, VALUE_n, PARAMETERS, GLOBAL, SYSTEM)
 # carries config the command's words do not show.
 REPO_ENV = {"GIT_DIR", "GIT_WORK_TREE", "GIT_NAMESPACE"}
+# Where git finds its global config: HOME=x or XDG_CONFIG_HOME=x points it at one a file write made.
+CONFIG_HOME_ENV = {"HOME", "XDG_CONFIG_HOME"}
 # git config: its reads, the options that write, and the options whose value is the next word.
 CONFIG_READS = {"--get", "--get-all", "--get-regexp", "--get-urlmatch", "--get-color", "--get-colorbool", "-l", "--list"}
 CONFIG_WRITES = {"--add", "--replace-all", "--unset", "--unset-all"}
@@ -338,12 +362,13 @@ def computed(word):
 
 
 def git_env(words):
-    """What a command's words may set in git's environment: its config (GIT_CONFIG*), which can
-    pick a push's branches or make any word a push, or another repository (GIT_DIR and the like)."""
+    """What a command's words may set in git's environment: its config (GIT_CONFIG*, or a HOME= or
+    XDG_CONFIG_HOME= that moves its global config), which can pick a push's branches or make any
+    word a push; or another repository (GIT_DIR and the like)."""
     found = set()
     for word in words:
         name = word.split("=", 1)[0]
-        if name.startswith("GIT_CONFIG"):
+        if name.startswith("GIT_CONFIG") or (name in CONFIG_HOME_ENV and "=" in word):
             found.add("config")
         elif name in REPO_ENV:
             found.add("repo")
@@ -361,13 +386,14 @@ def readings(words):
 def command_word(words):
     """The index of the word bash runs, past VAR=value words and wrappers like env, sudo, time,
     xargs; whether xargs runs it, which adds words of its own to the command; whether a wrapper
-    runs it in another directory (env -C, sudo -D); and the text env -S splits into it, or None."""
+    runs it in another directory (env -C, sudo -D); and (the wrapper, the text it runs) for env -S
+    and script -c, or None."""
     i, via_xargs, moved, split = 0, False, False, None
     while i < len(words):
         if ASSIGNMENT.match(words[i]):
             i += 1
-        elif words[i] in WRAPPERS or words[i] == "xargs":
-            wrapper = words[i]
+        elif os.path.basename(words[i]) in WRAPPERS:
+            wrapper = os.path.basename(words[i])
             via_xargs = via_xargs or wrapper == "xargs"
             takes_values = WRAPPER_VALUE_OPTIONS.get(wrapper, set())
             i += 1
@@ -378,7 +404,9 @@ def command_word(words):
                     i += 1
                 i += 1
                 moved = moved or (wrapper, option) in WRAPPER_CHDIR
-                split = value if (wrapper, option) in WRAPPER_SPLIT else split
+                split = (wrapper, value) if (wrapper, option) in WRAPPER_SPLIT else split
+            if i + WRAPPER_OPERANDS.get(wrapper, 0) < len(words):
+                i += WRAPPER_OPERANDS.get(wrapper, 0)
         else:
             break
     return i, via_xargs, moved, split
@@ -568,8 +596,11 @@ def run(words, cwd, out, appended=False, env=frozenset()):
     appended = appended or via_xargs
     here = None if moved else cwd
     if split is not None:
-        # env -S 'git push …': its text, split into words, runs, with the words after it.
-        out.extend(analyse(" ".join([split] + [shlex.quote(a) for a in words[w:]]), here, appended, env))
+        wrapper, text = split
+        if wrapper == "env":
+            # env -S 'git push …': its text, split into words (\_ is a space too), runs with the words after it.
+            text = " ".join([text.replace("\\_", " ")] + [shlex.quote(a) for a in words[w:]])
+        out.extend(analyse(text, here, appended, env))
         return cwd
     if w >= len(words):
         return cwd
@@ -588,18 +619,27 @@ def run(words, cwd, out, appended=False, env=frozenset()):
         return os.path.normpath(os.path.join(cwd, os.path.expanduser(target)))
     if computed(argv[0]) and "push" in argv[1:]:
         out.append("PUSH @unknown")  # $G push …: git, maybe
+    if name not in ("git", "eval", "find", "echo", "printf"):
+        # A wrapper it does not know (flock f git push …): a git push, or a destructive command,
+        # later in its words.
+        if any(os.path.basename(a) == "git" and "push" in argv[k + 1 :] for k, a in enumerate(argv[1:], 1)):
+            out.append("PUSH @unknown")
+        later = next((d for d in (destructive(argv[k:]) for k in range(1, len(argv))) if d), None)
+        if later and not label:
+            out.append("DESTRUCTIVE " + later)
     if name == "git":
         git_command(argv[1:], cwd, out, appended, env)
     elif name in SHELLS:
         # sh -c '…' (or -lc, -ec) runs its text as a command: read it the same way.
-        def runs_text(a):
-            return a.startswith("-") and not a.startswith("--") and "c" in a
+        def runs_text(a, letter="c"):
+            return a.startswith("-") and not a.startswith("--") and letter in a
 
         flag = next((k for k, a in enumerate(argv[1:-1], 1) if runs_text(a)), None)
         if flag is not None:
             out.extend(analyse(argv[flag + 1], cwd, appended, env))
-        elif appended and runs_text(argv[-1]):
-            out.append("PUSH @unknown")  # xargs sh -c: xargs adds the text it runs
+        elif all(a.startswith("-") for a in argv[1:]) or any(runs_text(a, "s") for a in argv[1:]):
+            # No text and no file: it runs what it reads (echo … | sh, sh -s) or what xargs adds (xargs sh -c).
+            out.append("PUSH @unknown")
     elif name == "eval":
         out.extend(analyse(" ".join(argv[1:]), cwd, appended, env))
     elif name == "find":
