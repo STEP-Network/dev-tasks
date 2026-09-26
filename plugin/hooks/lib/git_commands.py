@@ -39,8 +39,9 @@ after xargs and find -exec, and after a wrapper, by its name or path
 u, timeout 30, script -q /dev/null; env -S's and script -c's text; env -C
 runs it elsewhere); and a `cd` before a git command. After a command word it
 does not know (flock f git push ...), a git push is PUSH @unknown and a
-destructive command DESTRUCTIVE; a shell that reads its text from stdin
-(echo ... | sh) is PUSH @unknown. A 2> or 2>&1 is a redirect, not a word. A $'...' word
+destructive command DESTRUCTIVE. A shell with no script runs its stdin: a
+heredoc or here-string it is given is read as its commands (bash <<'EOF'),
+and a pipe, a < file or -s is PUSH @unknown (echo ... | sh). A 2> or 2>&1 is a redirect, not a word. A $'...' word
 is its decoded text ($'git' is git), up to a NUL, where bash and zsh cut it
 differently: both readings are checked. An option after `--` is an argument
 (rm -r -- -f). Not what quotes or a heredoc hold as text: `git
@@ -117,15 +118,34 @@ PUSH_VALUE_OPTIONS = {"-o", "--push-option", "--repo", "--receive-pack", "--exec
 # and stdin's surrogateescape gives only U+DC80-U+DCFF.
 COMPUTED = "\ud800"  # a value bash computes as it runs: $(...), backticks, arithmetic
 CUT = "\ud801"  # where a $'...' held a NUL: see readings()
+HEREDOC = "\ud802"  # HEREDOC<n>: a command reads heredoc n on stdin, see segments()
+# A shell's options whose value is the next word: bash -o pipefail, -O extglob, --rcfile f.
+SHELL_VALUE_OPTIONS = {"--rcfile", "--init-file"}
 
 
 class Unreadable(Exception):
     pass
 
 
+class Texts(list):
+    """The command texts bash runs, and each heredoc's body by its number (a HEREDOC<n> word marks where)."""
+
+    def __init__(self):
+        super().__init__()
+        self.heredocs = []
+
+
+class Stdin:
+    """What a simple command reads on stdin: the heredoc bodies and here-strings it is given (texts),
+    and whether a pipe or a < file feeds it."""
+
+    def __init__(self, piped=False):
+        self.texts, self.piped, self.file = [], piped, False
+
+
 def command_texts(text):
     """Every command text bash runs from `text`: the text itself and each substitution's body, heredoc bodies out."""
-    texts = []
+    texts = Texts()
     end, outer = command(text, 0, None, texts)
     texts.append(outer)
     return texts
@@ -183,12 +203,18 @@ def command(t, i, closer, texts):
         elif c == "#" and word_start(out):
             end = t.find("\n", i)
             i = len(t) if end < 0 else end
-        elif t.startswith("<<", i) and not t.startswith("<<<", i):
+        elif t.startswith("<<<", i):
+            # A here-string: the word after it is the command's stdin (segments()).
+            out.append(" <<< ")
+            i += 3
+        elif t.startswith("<<", i):
             m = HEREDOC_AT.match(t, i)
             if not m:
                 raise Unreadable("a heredoc with no word")
-            pending.append((m.group(1) == "-", m.group(4), not (m.group(2) or m.group(3))))
-            out.append(t[i : m.end()])
+            # The body is the command's stdin: a word marks it, and segments() hands it to the command.
+            texts.heredocs.append("")
+            pending.append((m.group(1) == "-", m.group(4), not (m.group(2) or m.group(3)), len(texts.heredocs) - 1))
+            out.append(" %s%d " % (HEREDOC, len(texts.heredocs) - 1))
             i = m.end()
         elif c == "\n":
             # A newline ends a command, as `;` does (shlex reads it as a space).
@@ -278,8 +304,9 @@ def double_quoted(t, i, out, texts):
 
 
 def heredoc_bodies(t, i, pending, texts):
-    """Skips each pending heredoc's lines, its closing line included. An unquoted one's substitutions run."""
-    for strip_tabs, word, expands in pending:
+    """Reads each pending heredoc's lines, its closing line included, into texts.heredocs. An unquoted one's
+    substitutions run."""
+    for strip_tabs, word, expands, number in pending:
         lines = []
         while True:
             if i >= len(t):
@@ -291,6 +318,7 @@ def heredoc_bodies(t, i, pending, texts):
             if (line.lstrip("\t") if strip_tabs else line) == word:
                 break
             lines.append(line)
+        texts.heredocs[number] = "\n".join(lines)
         if expands:
             substitutions_in("\n".join(lines), texts)
     return min(i, len(t))
@@ -330,24 +358,30 @@ def arithmetic(t, i, texts):
     return j
 
 
-def segments(text):
+def segments(text, heredocs=()):
+    """Each simple command's words, and its Stdin: the heredocs and here-strings it reads, a pipe, a < file."""
     lexer = shlex.shlex(text, posix=True, punctuation_chars=True)
     lexer.whitespace_split = True
-    words, skip = [], False
+    words, stdin, skip = [], Stdin(), None
     try:
         for token in lexer:
             if skip:
-                skip = False
+                if skip == "<<<":
+                    stdin.texts.append(token)
+                skip = None
             elif set(token) <= SEPARATOR:
-                yield words
-                words = []
+                yield words, stdin
+                words, stdin = [], Stdin(piped=token in ("|", "|&"))
+            elif token.startswith(HEREDOC):
+                stdin.texts.append(heredocs[int(token[len(HEREDOC) :])])
             elif REDIRECT.match(token):
-                skip = True
+                skip = token
+                stdin.file = stdin.file or (token.startswith("<") and token != "<<<")
             else:
                 words.append(token)
     except ValueError as error:
         raise Unreadable(str(error))
-    yield words
+    yield words, stdin
 
 
 def computed(word):
@@ -588,10 +622,10 @@ def git_command(words, cwd, out, appended=False, env=frozenset()):
         out.append(current if dst in ("HEAD", "") else "PUSH " + dst)
 
 
-def run(words, cwd, out, appended=False, env=frozenset()):
+def run(words, cwd, out, appended=False, env=frozenset(), stdin=None):
     """One simple command's words: what it commits, pushes or destroys, and the directory after it.
     appended: xargs runs it, or the shell or eval that runs it, and adds words of its own.
-    env: what the command sets in git's environment (git_env)."""
+    env: what the command sets in git's environment (git_env). stdin: what it reads (Stdin)."""
     w, via_xargs, moved, split = command_word(words)
     appended = appended or via_xargs
     here = None if moved else cwd
@@ -605,7 +639,7 @@ def run(words, cwd, out, appended=False, env=frozenset()):
     if w >= len(words):
         return cwd
     if moved:
-        run(words[w:], None, out, appended, env)
+        run(words[w:], None, out, appended, env, stdin)
         return cwd
     argv = words[w:]
     name = os.path.basename(argv[0])
@@ -622,7 +656,7 @@ def run(words, cwd, out, appended=False, env=frozenset()):
     if name not in ("git", "eval", "find", "echo", "printf"):
         # A wrapper it does not know (flock f git push …): a git push, or a destructive command,
         # later in its words.
-        if any(os.path.basename(a) == "git" and "push" in argv[k + 1 :] for k, a in enumerate(argv[1:], 1)):
+        if any((os.path.basename(a) == "git" or computed(a)) and "push" in argv[k + 1 :] for k, a in enumerate(argv[1:], 1)):
             out.append("PUSH @unknown")
         later = next((d for d in (destructive(argv[k:]) for k in range(1, len(argv))) if d), None)
         if later and not label:
@@ -634,12 +668,23 @@ def run(words, cwd, out, appended=False, env=frozenset()):
         def runs_text(a, letter="c"):
             return a.startswith("-") and not a.startswith("--") and letter in a
 
+        options, operands = shell_words(argv[1:])
         flag = next((k for k, a in enumerate(argv[1:-1], 1) if runs_text(a)), None)
         if flag is not None:
             out.extend(analyse(argv[flag + 1], cwd, appended, env))
-        elif all(a.startswith("-") for a in argv[1:]) or any(runs_text(a, "s") for a in argv[1:]):
-            # No text and no file: it runs what it reads (echo … | sh, sh -s) or what xargs adds (xargs sh -c).
-            out.append("PUSH @unknown")
+        elif appended and runs_text(argv[-1]):
+            out.append("PUSH @unknown")  # xargs sh -c: xargs adds the text it runs
+        elif operands and COMPUTED in operands[0]:
+            out.append("PUSH @unknown")  # bash <(…): a script the command makes as it runs
+        elif not operands or any(runs_text(a, "s") for a in options):
+            # No script: it runs its stdin. A heredoc or here-string is text it reads; a pipe, a < file, or -s
+            # with neither, it cannot see. Flags alone (bash --version) read nothing.
+            given = stdin.texts if stdin else []
+            for text in given:
+                out.extend(analyse(text, cwd, appended, env))
+            fed = stdin is not None and (stdin.piped or stdin.file)
+            if not given and (fed or any(runs_text(a, "s") for a in options)):
+                out.append("PUSH @unknown")
     elif name == "eval":
         out.extend(analyse(" ".join(argv[1:]), cwd, appended, env))
     elif name == "find":
@@ -652,19 +697,36 @@ def run(words, cwd, out, appended=False, env=frozenset()):
     return cwd
 
 
+def shell_words(args):
+    """A shell's words after its name: (its options, its operands). The first operand is the script it runs;
+    -o and -O take a value (bash -euo pipefail), as --rcfile does."""
+    options, k = [], 0
+    while k < len(args):
+        a = args[k]
+        if a == "--":
+            return options, args[k + 1 :]
+        if a[:1] not in ("-", "+") or len(a) < 2:
+            return options, args[k:]
+        options.append(a)
+        takes_value = a in SHELL_VALUE_OPTIONS or (not a.startswith("--") and a[-1] in "oO")
+        k += 2 if takes_value else 1
+    return options, []
+
+
 def analyse(text, cwd=".", appended=False, env=frozenset()):
     out = []
-    parsed = [[readings(words) for words in segments(t)] for t in command_texts(text)]
+    texts = command_texts(text)
+    parsed = [[(readings(words), stdin) for words, stdin in segments(t, texts.heredocs)] for t in texts]
     # A GIT_CONFIG* or GIT_DIR word anywhere (VAR=x git, env, export) holds for every git the text runs.
-    env = env.union(*(git_env(r) for command_segments in parsed for rs in command_segments for r in rs))
+    env = env.union(*(git_env(r) for command_segments in parsed for rs, _ in command_segments for r in rs))
     for command_segments in parsed:
         here = cwd
-        for first, *others in command_segments:
+        for (first, *others), stdin in command_segments:
             found = []
-            after = run(first, here, found, appended, env)
+            after = run(first, here, found, appended, env, stdin)
             for other in others:
                 more = []
-                if run(other, here, more, appended, env) != after:
+                if run(other, here, more, appended, env, stdin) != after:
                     after = None
                 found.extend(line for line in more if line not in found)
             out.extend(found)

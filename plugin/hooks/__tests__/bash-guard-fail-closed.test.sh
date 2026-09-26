@@ -166,6 +166,16 @@ check 2 "protected branch 'main'" "env -S 'git\\_push\\_origin\\_main'" "$(paylo
 check 2 "cannot tell which branch" "echo 'git push origin main' | sh" "$(payload "echo 'git push origin main' | sh")"
 check 2 "every branch" "HOME=/tmp/h git push origin feat/x" "$(payload 'HOME=/tmp/h git push origin feat/x')"
 check 0 "" "timeout 30 git push origin feat/x still goes" "$(payload 'timeout 30 git push origin feat/x')"
+check 0 "" "bash <<'EOF' with safe commands goes" "$(payload "bash <<'EOF'
+git status
+ls
+EOF")"
+check 2 "protected branch 'main'" "bash <<'EOF' that pushes main" "$(payload "bash <<'EOF'
+git push origin main
+EOF")"
+check 2 "protected branch 'main'" "bash <<< 'git push origin main'" "$(payload "bash <<< 'git push origin main'")"
+check 0 "" "bash --version goes" "$(payload 'bash --version')"
+check 0 "" "a here-string, then a feature push, goes" "$(payload "cat <<< 'hello' && git push origin feat/x")"
 check 0 "" "git config --get alias.p, a read, goes" "$(payload 'git config --get alias.p')"
 check 0 "" "git config user.name eve goes" "$(payload 'git config user.name eve')"
 check 0 "" "git push origin feat/x 2>&1 still goes" "$(payload 'git push origin feat/x 2>&1')"

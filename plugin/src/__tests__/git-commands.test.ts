@@ -271,11 +271,42 @@ describe("git_commands.py", () => {
     expect(analyse("ionice -c 3 rm -rf build")).toEqual(["DESTRUCTIVE rm -rf"])
     expect(analyse("flock /tmp/l git push --force origin feat")).toContain("DESTRUCTIVE git push --force")
     expect(analyse("echo git push origin main")).toEqual([])
-    // A shell that reads its text from stdin runs what it cannot see.
+    expect(analyse('flock f "$G" push origin main')).toEqual(["PUSH @unknown"])
+    expect(analyse('docker push "$IMAGE"')).toEqual([])
+    // A shell with no script runs its stdin: a pipe, a < file or -s it cannot see.
     expect(analyse("echo 'git push origin main' | sh")).toEqual(["PUSH @unknown"])
     expect(analyse("cat x | bash -s")).toEqual(["PUSH @unknown"])
     expect(analyse("cat x | bash -s arg")).toEqual(["PUSH @unknown"])
-    expect(analyse("bash -x deploy.sh")).toEqual([])
+    expect(analyse("bash -s arg")).toEqual(["PUSH @unknown"])
+    expect(analyse("bash < script.sh")).toEqual(["PUSH @unknown"])
+    expect(analyse("cat <<'EOF' | bash\ngit push origin main\nEOF")).toEqual(["PUSH @unknown"])
+    expect(analyse("xargs -a list.txt sh -c")).toEqual(["PUSH @unknown"])
+    expect(analyse("bash <(echo git push origin main)")).toEqual(["PUSH @unknown"])
+    // A heredoc or here-string it reads is its command text, quoted or not (#159 review).
+    expect(analyse("bash <<'EOF'\ngit status\nls\nEOF")).toEqual([])
+    expect(analyse("bash -e <<'EOF'\nset -x\npnpm test\nEOF")).toEqual([])
+    for (const command of [
+      "bash <<'EOF'\ngit push origin main\nEOF",
+      "bash <<EOF\ngit push origin main\nEOF",
+      "sh -s <<'EOF'\ngit push origin main\nEOF",
+      "bash -o pipefail <<'EOF'\ngit push origin main\nEOF",
+      "bash -euo pipefail <<'EOF'\ngit push origin main\nEOF",
+      "sudo bash <<'EOF'\ngit push origin main\nEOF",
+      "bash <<< 'git push origin main'",
+      "bash <<'A'\necho a\nA\ngit push origin main",
+    ]) {
+      expect(analyse(command), command).toEqual(["PUSH origin", "PUSH main"])
+    }
+    expect(analyse("bash <<'EOF'\nrm -rf build\nEOF")).toEqual(["DESTRUCTIVE rm -rf"])
+    expect(analyse("bash <<'EOF'\ngit commit -m x\nEOF")).toEqual(["COMMIT ."])
+    // Another command's heredoc is its input, not a command; a here-string is no heredoc.
+    expect(analyse("python3 <<'EOF'\nprint('git push origin main')\nEOF")).toEqual([])
+    expect(analyse("bash script.sh <<'EOF'\ngit push origin main\nEOF")).toEqual([])
+    expect(analyse("cat <<< 'hello' && git push origin feat")).toEqual(["PUSH origin", "PUSH feat"])
+    // Flags alone read nothing.
+    for (const command of ["bash --version", "bash --help", "zsh -l", "bash -x deploy.sh"]) {
+      expect(analyse(command), command).toEqual([])
+    }
     expect(analyse("env -C ../main git push")).toEqual(["PUSH @unknown"])
     expect(analyse("sudo -D ../main git push")).toEqual(["PUSH @unknown"])
     // 2>&1 and 2>/dev/null are redirects: no "PUSH 2".
