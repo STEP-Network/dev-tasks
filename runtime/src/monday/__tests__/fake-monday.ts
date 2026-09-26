@@ -88,6 +88,17 @@ export function fakeMonday(
       item.columns[id] = { text: value.label ?? value.labels?.join(", ") ?? value.text ?? value.date ?? null, value: JSON.stringify(v) }
     }
   }
+  /** A subitem under its item, on the subitems board, the same object in `items` and `subitems`. */
+  const addSubitem = (parentId: string, name: string, values: Record<string, unknown>, id: string) => {
+    find(parentId)
+    if (items.has(id)) throw new Error(`fake Monday: item ${id} exists already`)
+    const sub: MondayItem = { id, name, url: pulse(SUBITEMS, id), groupId: "topics", creatorId: me.id, createdAt: clock.toISOString(), columns: {}, updates: [] }
+    setValues(sub, values)
+    items.set(id, sub)
+    boardOf.set(id, SUBITEMS)
+    subitems.set(parentId, [...(subitems.get(parentId) ?? []), sub])
+    return id
+  }
   const api: MondayApi = {
     async me() {
       record("me", [])
@@ -164,20 +175,14 @@ export function fakeMonday(
     async columnChanges(boardId, columnIds, since) {
       record("columnChanges", [boardId, columnIds, since.toISOString()])
       const log = boardId === SUBITEMS ? subitemLogs : boards[boardId] ? logs.filter((l) => boardOf.get(l.itemId) === boardId) : null
-      if (!log) throw new MondayRefused(`Monday: no board ${boardId}, or the token's user cannot see it`)
+      // As the client says it: a board out of the token's reach, not a refusal.
+      if (!log) throw new Error(`Monday: no board ${boardId}, or the token's user cannot see it`)
       return structuredClone(log.filter((l) => columnIds.includes(l.columnId) && l.at >= since.toISOString()).sort((a, b) => a.at.localeCompare(b.at)))
     },
     async createSubitem(parentItemId, name, values) {
       record("createSubitem", [parentItemId, name, values])
       if (broken.has("createSubitem")) throw new Error("Monday: gave up after 3 attempts (status 503)")
-      find(parentItemId)
-      const id = String(next++)
-      const sub: MondayItem = { id, name, url: pulse(SUBITEMS, id), groupId: "topics", creatorId: me.id, createdAt: clock.toISOString(), columns: {}, updates: [] }
-      setValues(sub, values)
-      items.set(id, sub)
-      boardOf.set(id, SUBITEMS)
-      subitems.set(parentItemId, [...(subitems.get(parentItemId) ?? []), sub])
-      return id
+      return addSubitem(parentItemId, name, values, String(next++))
     },
     async renameItem(boardId, itemId, name) {
       record("renameItem", [boardId, itemId, name])
@@ -190,7 +195,9 @@ export function fakeMonday(
       record("createItemDoc", [itemId, columnId, title])
       if (broken.has("createItemDoc")) throw new Error("Monday: gave up after 3 attempts (status 503)")
       find(itemId)
-      const id = `doc-${++docCount}`
+      // Past any doc a test seeded (doc()).
+      let id = `doc-${++docCount}`
+      while (docs.has(id)) id = `doc-${++docCount}`
       docs.set(id, "")
       docNames.set(id, title)
       return id
@@ -242,6 +249,18 @@ export function fakeMonday(
       items.set(id, { id, name, url: pulse(boardId, id), groupId, creatorId: userId, createdAt: clock.toISOString(), columns: {}, updates: [] })
       boardOf.set(id, boardId)
       if (detail) this.says(id, userId, detail)
+      return id
+    },
+    /**
+     * A subitem already on the board (a checkpoint a run saved before a
+     * restart): under its item, on the subitems board, where writes reach it.
+     */
+    subitem(parentId: string, name: string, columns: Record<string, unknown> = {}, id = String(next++)) {
+      return addSubitem(parentId, name, columns, id)
+    },
+    /** A doc already on the board, with its text so far. */
+    doc(id: string, text = "") {
+      docs.set(id, text)
       return id
     },
     /** A person changing a column, the Answer column unless another is named, as the activity log records it. */

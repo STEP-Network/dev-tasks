@@ -245,6 +245,8 @@ async function main(): Promise<void> {
     process.exit(0)
   }
   const { config, sentryUrl, mondayToken } = setup
+  // Its own log, monday.log: the board's traffic is not agentd's.
+  const mondayLog = createLogger(paths, "monday")
   const runtimeDir = join(dirname(fileURLToPath(import.meta.url)), "..", "..")
   const bootAt = new Date(Date.now() - uptime() * 1000)
   const tracker = createLinearTracker()
@@ -267,12 +269,11 @@ async function main(): Promise<void> {
     sentryUrl,
     checkIn: (url) => fetch(url, { signal: AbortSignal.timeout(10_000) }),
     lower: { tracker, people, recorder },
-    // Its own log, monday.log: the board's traffic is not agentd's.
     ...(mondayToken
       ? {
           monday: createMondayBridge({
-            paths, config, log: createLogger(paths, "monday"), now: () => new Date(),
-            api: createMondayApi(mondayToken), tracker, people, recorder,
+            paths, config, log: mondayLog, now: () => new Date(),
+            api: createMondayApi(mondayToken, { warn: (message) => mondayLog.warn(message) }), tracker, people, recorder,
           }),
         }
       : {}),
