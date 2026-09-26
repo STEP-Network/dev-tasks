@@ -12,7 +12,10 @@
  *   merge   `gh pr merge --auto --squash` where worker.autoMerge and the
  *           project's policy for the PR's base allow it, else why not
  *   leave   nothing: the PR is left to a person
- * Any of them answers the issue's open question (agentd/decisions.ts).
+ *   class-look, class-auto   the request's class (D1): a lowering through the
+ *           answer recorder's own Linear account (lower.ts), a raise through
+ *           the agent's own tracker
+ * Any of them but a class change answers the issue's open question (agentd/decisions.ts).
  *
  * The Monday bridge files the same instructions from a person's words on the
  * board (STEP-3289), and they are answered on the board's item, with a like
@@ -24,10 +27,15 @@ import type { AgentConfig, AgentPaths } from "../config.ts"
 import { ack, listNew } from "../fsq.ts"
 import { listJobs, readWatchedPrs, retryFields, submitJob, updateWatchedPr, type JobRecord, type WatchedPr } from "../jobs.ts"
 import { appendLedger, type Logger } from "../log.ts"
+import { changeClass, NeedsRecorder } from "../lower.ts"
+import type { LinearRequest, PeopleView } from "../monday/people.ts"
+import { say } from "../monday/render.ts"
 import { enqueueMonday } from "../monday/store.ts"
 import { enqueueSlack } from "../outbox.ts"
 import { NOTHING_NEEDED, plainLinks, plainReason, prLink } from "../plain.ts"
-import type { Action, AnyInstructionEntry, InstructionEntry } from "../slack/instruction.ts"
+import { isClassAction, type Action, type AnyInstructionEntry, type InstructionEntry } from "../slack/instruction.ts"
+import { threadFor } from "../threads.ts"
+import type { ApprovalClass, Tracker } from "../tracker.ts"
 import type { Exec } from "../worker/git.ts"
 import { mergeMode, readAutoMergePolicy } from "../worker/run.ts"
 import { closeDecision, openDecisions } from "./decisions.ts"
@@ -43,6 +51,8 @@ export interface InstructionDeps {
   config: AgentConfig
   now: () => Date
   log: Logger
+  /** A person's class change (D1): the agent's own tracker, the people view, and the answer recorder's transport, read when a lowering comes. */
+  lower?: { tracker: Tracker; people: Pick<PeopleView, "byIdentifiers" | "childrenOf">; recorder: () => LinearRequest | null }
 }
 
 const GH_TIMEOUT_MS = 2 * 60_000
@@ -105,9 +115,38 @@ const busyJob = (paths: AgentPaths, issue: string): JobRecord | null =>
 /** One closing line: the one thing a person must do, or that nothing is needed (../plain.ts). */
 const closed = (lines: string[]) => (lines.some((l) => /\bA person (needs|should)\b|\bPlease\b/.test(l)) ? lines : [...lines, NOTHING_NEEDED])
 
+/**
+ * A person's whole "make it look" (D1), on the issue its thread or item is
+ * for: a lowering through the answer recorder, announced in #polads-agents, a
+ * raise through the agent's own tracker. A Slack thread that holds more than
+ * one request (agentctl request) changes none of them.
+ */
+async function changeClassFor(deps: InstructionDeps, entry: AnyInstructionEntry, to: ApprovalClass): Promise<string[]> {
+  const issue = entry.issue
+  if (!issue) return [`I could not tell which request you mean, so I changed nothing. Please say it in the request's own thread or on its Monday item.`]
+  const thread = entry.monday ? null : threadFor(deps.paths, issue)
+  if (thread?.alsoFor?.length) return [say.classShared([issue, ...thread.alsoFor])]
+  if (!deps.lower) return [say.classNeedsLinear(issue, to)]
+  const who = entry.userName || entry.user
+  const via = entry.monday ? "on Monday" : "in Slack"
+  const where = entry.permalink ?? thread?.permalink ?? issue
+  try {
+    const out = await changeClass(deps.lower, { issue, to, who, where, via })
+    if (out.outcome === "same") return [say.classSame(issue, to)]
+    if (out.outcome === "lowered") enqueueSlack(deps.paths, { kind: "post", channel: "agents", text: say.lowered(issue, out.from, to, who, via, where) }, deps.now())
+    return [say.classChanged(issue, to, who)]
+  } catch (error) {
+    if (error instanceof NeedsRecorder) return [say.classNeedsLinear(issue, to)]
+    throw error
+  }
+}
+
 async function act(deps: InstructionDeps, entry: AnyInstructionEntry): Promise<string[]> {
   const { paths, config } = deps
   const now = deps.now()
+  // A class verb is the whole message (slack/instruction.ts), so it runs alone.
+  const verb = entry.actions.find(isClassAction)
+  if (verb) return changeClassFor(deps, entry, verb === "class-look" ? "look" : "auto")
   const who = entry.userName || entry.user
   const where = entry.monday ? "on the Monday board" : "in Slack"
   const { issue, pr } = findPr(paths, entry)

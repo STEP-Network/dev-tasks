@@ -9,6 +9,8 @@ import { join } from "node:path"
 import { describe, expect, it } from "vitest"
 import { answerText } from "../../answer.ts"
 import { agentPaths } from "../../config.ts"
+import { listNew } from "../../fsq.ts"
+import type { MondayInstructionEntry } from "../../slack/instruction.ts"
 import { enqueueSlack } from "../../outbox.ts"
 import { withRecommendation } from "../../plain.ts"
 import { saveThread, threadFor } from "../../threads.ts"
@@ -33,6 +35,29 @@ function setup(labels = ["agent-ready", "awaiting-answer", "polads"]) {
   }
   return { paths, fake, say }
 }
+
+describe("routeWords: a class verb (Wave 2, D1)", () => {
+  it("is an instruction for agentd on any item, even with no work of this mini's there and a question open, and records no answer", async () => {
+    const { paths, fake, say } = setup(["awaiting-answer", "plan-to-approve", "approval/try", "polads"])
+    expect(await say("Make it look.", "U9", NOW.toISOString(), { who: { id: "M2", name: "Ada" }, since: "2026-09-25T09:00:00.000Z" })).toEqual({ to: "agentd", actions: ["class-look"] })
+    const [entry] = listNew<MondayInstructionEntry>(paths.inbox).map((e) => e.payload)
+    expect(entry).toMatchObject({ key: "instr:monday:U9", issue: "STEP-7", userName: "Ada", actions: ["class-look"], monday: { itemId: "I1", updateId: "U9" } })
+    // Not an answer: the plan still waits, and a later answer is the first one.
+    expect(fake.issues.get("STEP-7")).toMatchObject({ description: "Brief", labels: ["awaiting-answer", "plan-to-approve", "approval/try", "polads"] })
+    expect(fake.called("readIssue")).toEqual([])
+  })
+
+  it("is one on a request item too, and names where it was said for the announcement", async () => {
+    const { paths, fake } = setup()
+    const words = { id: "U8", text: "make it auto", updateId: "U8", threadId: "U8", permalink: "https://step.monday.com/boards/777/pulses/5/posts/U8", at: NOW.toISOString() }
+    const routed = await routeWords(
+      { paths, tracker: fake.tracker, mini: "eve" },
+      { issue: "STEP-7", request: true, itemId: "5", who: { id: "M2", name: "Ada" }, words, now: NOW, since: null, by: "monday:M2", recommendation: null },
+    )
+    expect(routed).toEqual({ to: "agentd", actions: ["class-auto"] })
+    expect(listNew<MondayInstructionEntry>(paths.inbox)[0].payload.permalink).toBe(words.permalink)
+  })
+})
 
 describe("routeWords: the first answer counts (Wave 2)", () => {
   const ADA = { id: "M2", name: "Ada" }

@@ -79,6 +79,17 @@ describe("linearRequest", () => {
     expect(JSON.parse(init.body)).toEqual({ query: "{ ok }", variables: {} })
   })
 
+  it("sends another account's key for one request when given one, and the agent's own otherwise (the answer recorder, D1)", async () => {
+    const fetchMock = vi.fn().mockImplementation(async () => jsonResponse({ data: { ok: true } }))
+    vi.stubGlobal("fetch", fetchMock)
+
+    await linearRequest("{ ok }", {}, { key: "lin_api_recorder_key" })
+    await vi.advanceTimersByTimeAsync(1500)
+    await linearRequest("{ ok }")
+
+    expect(fetchMock.mock.calls.map(([, init]) => init.headers.Authorization)).toEqual(["lin_api_recorder_key", "lin_api_test_key"])
+  })
+
   it("retries a 429 and succeeds", async () => {
     const fetchMock = vi
       .fn()
