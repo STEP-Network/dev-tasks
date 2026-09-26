@@ -127,6 +127,37 @@ describe("buildDigest", () => {
     expect(short.fake.called("listByState").map((args) => args[0])).toEqual(["Triage", "Refining"])
   })
 
+  it("in allowlist mode lists the allow-listed issues themselves, so one ranked 25th in Refining is refined (STEP-3368)", async () => {
+    // Thirty in Refining, in rank order; the one on the allowlist is 25th, past the top 20 the tick asks for.
+    const seed = Array.from({ length: 30 }, (_, i) => issue({ id: `STEP-${101 + i}`, state: "Refining", labels: ["polads"] }))
+    const { paths, fake } = setup(seed)
+    const allowlist = ConfigSchema.parse({ ...config, queue: { ...config.queue, mode: "allowlist", allow: ["STEP-125"] } })
+    const digest = await buildDigest({ paths, config: allowlist, tracker: fake.tracker, now: () => NOW })
+    expect(digest.refine).toMatchObject({ id: "STEP-125" })
+    expect(fake.called("listByState")).toEqual([
+      ["Triage", 20, ["STEP-125"]],
+      ["Refining", 20, ["STEP-125"]],
+    ])
+  })
+
+  it("in allowlist mode develops an allow-listed Ready issue ranked past the top 250 too (STEP-3368)", async () => {
+    const seed = Array.from({ length: 260 }, (_, i) => issue({ id: `STEP-${1001 + i}`, labels: ["polads", "agent-ready"] }))
+    const { paths, fake } = setup(seed)
+    const allowlist = ConfigSchema.parse({ ...config, queue: { ...config.queue, mode: "allowlist", allow: ["STEP-1255"] } })
+    expect(await buildDigest({ paths, config: allowlist, tracker: fake.tracker, now: () => NOW })).toMatchObject({ develop: { id: "STEP-1255" }, readyEligible: 1 })
+    expect(fake.called("listReady")).toEqual([[250, ["STEP-1255"]]])
+  })
+
+  it("in open mode lists each state's top as before, with no filter", async () => {
+    const { fake, deps } = setup([issue({ id: "STEP-1", state: "Refining", labels: ["polads"] })])
+    await buildDigest(deps)
+    expect(fake.called("listReady")).toEqual([[250]])
+    expect(fake.called("listByState")).toEqual([
+      ["Triage", 20],
+      ["Refining", 20],
+    ])
+  })
+
   it("holds back an issue whose last two workers were lost early, and offers the next one", async () => {
     const { paths, deps } = setup([issue({ id: "STEP-1", labels: ["polads", "agent-ready"] }), issue({ id: "STEP-2", labels: ["polads", "agent-ready"] })])
     const lost = (at: string) => {

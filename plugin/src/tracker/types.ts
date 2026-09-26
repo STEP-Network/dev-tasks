@@ -185,9 +185,12 @@ export interface Tracker {
 
   /**
    * The first `limit` Ready issues in `byPriorityThenAge` order, ranked
-   * across the whole queue rather than one fetched page.
+   * across the whole queue rather than one fetched page. With `only` (issue
+   * identifiers, as a mini's queue.allow), those issues and no others, ranked
+   * among themselves: one far down the queue still comes (STEP-3368). An empty
+   * `only` lists nothing.
    */
-  listReady(limit?: number): Promise<TrackerIssue[]>
+  listReady(limit?: number, only?: readonly string[]): Promise<TrackerIssue[]>
 
   /** The user the API key belongs to. */
   whoami(): Promise<TrackerUser>
@@ -204,8 +207,8 @@ export interface Tracker {
   /** In Progress issues assigned to the key's owner, with their newest claim: what the 6-hour sweeper reads. */
   listClaims(): Promise<ClaimRecord[]>
 
-  /** Every issue in a state, sorted by byPriorityThenAge, cut to `limit`. An unknown state throws. */
-  listByState(state: string, limit?: number): Promise<TrackerIssue[]>
+  /** Every issue in a state, sorted by byPriorityThenAge, cut to `limit`, and only those in `only` when it is given, as listReady. An unknown state throws. */
+  listByState(state: string, limit?: number, only?: readonly string[]): Promise<TrackerIssue[]>
 }
 
 /**

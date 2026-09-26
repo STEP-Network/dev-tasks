@@ -425,8 +425,9 @@ export async function run(argv: string[], out: (line: string) => void, overrides
       let heldBack = [...heldBackIssues(paths)].sort()
       try {
         linear = { ok: true, email: (await tracker.whoami()).email }
-        // Held back means held back from the Ready queue: one a person moved on since is not.
-        const ready = new Set((await tracker.listReady(250)).map((i) => i.id))
+        // Held back means held back from the Ready queue: one a person moved on since is not. Asked by id,
+        // wherever each ranks in Ready: the first 250 missed any past them (STEP-3368).
+        const ready = new Set(heldBack.length ? (await tracker.listReady(heldBack.length, heldBack)).map((i) => i.id) : [])
         heldBack = heldBack.filter((id) => ready.has(id))
       } catch (error) {
         linear = { ok: false, error: message(error) }
