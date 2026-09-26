@@ -41,6 +41,8 @@ export interface RequestsDeps {
   once(key: string, fn: () => void): void
   /** The answer recorder's Linear transport, read when a person's lowering comes: null without its key (D1). */
   recorder?: () => LinearRequest | null
+  /** The bridge's own Monday user, once it has checked it: an item it did not make, adopt only takes over. */
+  self?: () => string | null
 }
 
 export interface RequestsPass {
@@ -196,11 +198,14 @@ export function createRequests(deps: RequestsDeps) {
         // The board is the record too: an item a crash left unrecorded is taken over, not made twice.
         const found = pass.board.items.find((i) => linkUrl(i.columns[c.linear]) === ask.url)
         const itemId = found?.id ?? (await api.createItem(rcfg.boardId, pass.groups.active, truncateChars(ask.title, 250), values))
+        // Someone else's item (a person linked it by hand) is only taken over: a migration's way back never archives it.
+        const takenOver = Boolean(found && found.creatorId !== deps.self?.())
         const rec: ItemRecord = {
           key: `request-${itemId}`, kind: "request", issue: ask.id, itemId, state: "Waiting on agent", bodyHash: null,
           createdAt: pass.now.toISOString(), doneAt: null, handled: [], linked: true, stage: "New", announced: false,
           ...(ask.slackThread ? { slack: { permalink: ask.slackThread } } : {}),
           ...(found ? {} : { written: Object.fromEntries(Object.entries(values).map(([col, v]) => [col, JSON.stringify(v)])) }),
+          ...(takenOver ? { takenOver } : {}),
         }
         save(rec)
         if (!found) {

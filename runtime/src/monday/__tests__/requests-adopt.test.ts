@@ -42,6 +42,8 @@ describe("a Slack ask gets its request item (spec 4 and 8)", () => {
     expect(monday.called("createItem").filter(([board]) => board === REQ)).toHaveLength(1)
     // Who asked is said once, on the item it made.
     expect(monday.called("postUpdate").filter(([, html]) => String(html).includes("asked for this in Slack"))).toHaveLength(1)
+    // Its own item: a migration's way back may archive it.
+    expect(readRecords(paths).find((r) => r.issue === "STEP-20")?.takenOver).toBeUndefined()
   })
 
   it("never adopts an issue filed from the board, a sub-issue, or a closed one", async () => {

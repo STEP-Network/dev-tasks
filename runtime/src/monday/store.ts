@@ -9,6 +9,8 @@
  *   outbox/            replies for the board, as fsq entries: agentd's answers
  *                      to an instruction (agentd/instructions.ts), and the
  *                      bridge's own. The bridge posts them.
+ *   migration-*.json   a migration's snapshots, chmod 600: the way back (migrate.ts)
+ *   migrating          there while agentctl monday migrate runs
  */
 
 import { existsSync, readdirSync, rmSync } from "node:fs"
@@ -74,6 +76,8 @@ export interface ItemRecord {
    * keeps the Answer column's: the log is read a few minutes back only.
    */
   classRetry?: { id: string; userId: string; text: string; at: string }
+  /** An item someone else made, which the bridge took over for a Slack ask (adopt): the way back of a migration never archives it. */
+  takenOver?: boolean
 }
 
 const root = (paths: AgentPaths) => join(paths.state, "monday")
@@ -122,6 +126,11 @@ export function writeCursor(paths: AgentPaths, at: Date): void {
 }
 
 export const mondayOutbox = (paths: AgentPaths) => join(root(paths), "outbox")
+
+/** Held while agentctl monday migrate runs (migrate.ts): the bridge does not poll or post while it is there. */
+export const migratingPath = (paths: AgentPaths) => join(root(paths), "migrating")
+/** Where a migration keeps its snapshots: the way back. */
+export const migrationsDir = root
 
 export interface MondayReply {
   itemId: string

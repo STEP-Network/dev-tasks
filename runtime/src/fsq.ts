@@ -18,10 +18,11 @@ export function safeKey(key: string): string {
   return key.replace(/[^A-Za-z0-9._-]/g, "_").slice(0, 180)
 }
 
-export function writeJsonAtomic(path: string, data: unknown): void {
+/** `mode`: the file's permissions from its first byte, for one only its owner may read (a migration's snapshot). */
+export function writeJsonAtomic(path: string, data: unknown, mode?: number): void {
   mkdirSync(dirname(path), { recursive: true })
   const tmp = `${path}.${process.pid}.${randomUUID()}.tmp`
-  writeFileSync(tmp, JSON.stringify(data, null, 1))
+  writeFileSync(tmp, JSON.stringify(data, null, 1), mode === undefined ? undefined : { mode })
   renameSync(tmp, path)
 }
 

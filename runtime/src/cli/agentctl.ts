@@ -26,7 +26,7 @@ import { readChannelState } from "../channel/state.ts"
 import { assertNoSecretText, createLinearTracker, readTextFile, type Tracker } from "../tracker.ts"
 import { createPeopleView, type PeopleView } from "../monday/people.ts"
 import { createMondayApi, type MondayApi } from "../monday/client.ts"
-import { applyMigration, planMigration, reverseMigration, type MigrateDeps, type MigrationSnapshot } from "../monday/migrate.ts"
+import { applyMigration, planMigration, readSnapshots, reverseMigration, type MigrateDeps, type MigrationSnapshot } from "../monday/migrate.ts"
 import { parseVerdict, recordVerdict, verdictReply } from "../verdict.ts"
 import { fileMentionRequest, REQUEST_TYPES, type RequestType } from "../request.ts"
 import { readUsage } from "../usage.ts"
@@ -369,16 +369,16 @@ export async function run(argv: string[], out: (line: string) => void, overrides
     }
     case "monday": {
       // Spec 8's move to two boards (Wave 2 Task 11): the plan, --apply to do it (--only <item id> for one item), or --reverse <snapshot>.
-      if (rest[0] !== "migrate" || rest.length > 1) throw new UsageError("usage: agentctl monday migrate [--apply [--only <item id>] | --reverse <snapshot>]")
+      if (rest[0] !== "migrate" || rest.length > 1) throw new UsageError("usage: agentctl monday migrate [--apply [--only <item id>] | --reverse <snapshot, or the directory of every run's>]")
       const reverse = typeof flags.reverse === "string" ? flags.reverse : undefined
       const only = typeof flags.only === "string" ? flags.only : undefined
-      if (flags.reverse === true) throw new UsageError("--reverse needs the snapshot file --apply printed")
+      if (flags.reverse === true) throw new UsageError("--reverse needs the snapshot file --apply printed, or its directory for every run")
       if (reverse && (flags.apply !== undefined || only)) throw new UsageError("--reverse undoes a migration: give it without --apply or --only")
       const m: MigrateDeps = { config: loadConfig(paths), paths, api: deps.mondayApi(), tracker: deps.tracker(), people: deps.people() }
       if (reverse) {
         let snapshot: MigrationSnapshot
         try {
-          snapshot = JSON.parse(readFileSync(reverse, "utf8")) as MigrationSnapshot
+          snapshot = readSnapshots(reverse)
         } catch (error) {
           throw new UsageError(`${reverse} is not a migration snapshot: ${message(error)}`)
         }

@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
-import { join } from "node:path"
+import { dirname, join } from "node:path"
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
 import { agentPaths } from "../../config.ts"
 import { listNew, putOnce, writeJsonAtomic } from "../../fsq.ts"
@@ -86,6 +86,16 @@ describe("agentctl monday migrate (Wave 2 Task 11)", () => {
     expect(await run(["monday", "migrate", "--reverse", snapshot], out, d)).toBe(0)
     expect(JSON.parse(printed.at(-1)!)).toMatchObject({ restored: [a], failed: [] })
     expect(monday.boardOf(a)).toBe(BOARD)
+  })
+
+  it("reverses every run from their directory, and refuses a path with no snapshot", async () => {
+    const { monday, d } = migrating()
+    const a = monday.request("111", "Export notices", undefined, "g_req")
+    await run(["monday", "migrate", "--apply"], out, d)
+    const dir = dirname(JSON.parse(printed.at(-1)!).snapshot)
+    expect(await run(["monday", "migrate", "--reverse", dir], out, d)).toBe(0)
+    expect(JSON.parse(printed.at(-1)!)).toMatchObject({ restored: [a], failed: [] })
+    await expect(run(["monday", "migrate", "--reverse", join(root, "nothing-here")], out, d)).rejects.toThrow(/is not a migration snapshot/)
   })
 
   it("refuses --apply with --reverse, and a subcommand it does not know", async () => {

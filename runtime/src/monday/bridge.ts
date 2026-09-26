@@ -39,6 +39,7 @@
  */
 
 import { createHash } from "node:crypto"
+import { existsSync } from "node:fs"
 import type { AgentConfig, AgentPaths } from "../config.ts"
 import { ack, fail, listNew } from "../fsq.ts"
 import { appendLedger, redact, type Logger } from "../log.ts"
@@ -59,7 +60,7 @@ import { routeWords, type Words } from "./route.ts"
 import { requestGroup } from "./stage.ts"
 import { slackMessage, threadTarget } from "./threads.ts"
 import { parseVerdict, recordVerdict, verdictReply } from "../verdict.ts"
-import { dropRecord, enqueueMonday, mondayOutbox, readCursor, readDigestDay, readRecords, saveRecord, writeCursor, writeDigestDay, type ItemRecord, type MondayReply, type MondayState } from "./store.ts"
+import { dropRecord, enqueueMonday, migratingPath, mondayOutbox, readCursor, readDigestDay, readRecords, saveRecord, writeCursor, writeDigestDay, type ItemRecord, type MondayReply, type MondayState } from "./store.ts"
 
 export interface MondayBridgeDeps {
   paths: AgentPaths
@@ -160,14 +161,25 @@ export function createMondayBridge(deps: MondayBridgeDeps): MondayBridge {
   }
   let checked = false
   let refused: string | null = null
+  /** The token's own Monday user, once checked: the items it made are the bridge's own. */
+  let self: string | null = null
   /** The account's API calls a day, and when they were last read: the plan decides them, so once a day is enough. */
   let limit: { calls: number; readAt: number } | null = null
 
-  /** The token's own user, once: an admin's token, or one of the people's, and the bridge does nothing at all. */
+  /**
+   * The token's own user, once: an admin's token, or one of the people's, and
+   * the bridge does nothing at all. While agentctl monday migrate runs, it
+   * waits: no poll and no post meets an item half moved.
+   */
   async function allowed(): Promise<boolean> {
+    if (existsSync(migratingPath(paths))) {
+      once("migrating", () => log.warn("monday: a migration is running (agentctl monday migrate), so the bridge waits"))
+      return false
+    }
     if (refused) return false
     if (checked) return true
     const me = await deps.api.me()
+    self = me.id
     refused = me.isAdmin
       ? "the token in ~/.config/agentd/monday.env belongs to a Monday admin. The bridge takes only the agent's own Monday user, with access to this board alone (runbook, The Monday board)"
       : person.has(me.id)
@@ -216,7 +228,7 @@ export function createMondayBridge(deps: MondayBridgeDeps): MondayBridge {
 
   const requestsBoard = cfg.requests
     ? createRequests({
-        paths, config: deps.config, log, api, tracker, people, once, reply: (itemId, text, now) => reply(itemId, null, text, now),
+        paths, config: deps.config, log, api, tracker, people, once, reply: (itemId, text, now) => reply(itemId, null, text, now), self: () => self,
         ...(deps.recorder ? { recorder: deps.recorder } : {}),
       })
     : null

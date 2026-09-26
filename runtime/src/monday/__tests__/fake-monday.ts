@@ -51,6 +51,8 @@ export function fakeMonday(
   const down = new Set<string>()
   /** Calls Monday cannot be reached for at all, by method. */
   const broken = new Set<string>()
+  /** Columns a write to fails, as an outage would, while the rest go through. */
+  const brokenColumns = new Set<string>()
   let next = 1000
   let clock = T0
   const record = (method: string, args: unknown[]) => calls.push({ method, args })
@@ -104,7 +106,7 @@ export function fakeMonday(
     },
     async setColumns(boardId, itemId, values) {
       record("setColumns", [boardId, itemId, values])
-      if (broken.has("setColumns")) throw new Error("Monday: gave up after 3 attempts (status 503)")
+      if (broken.has("setColumns") || Object.keys(values).some((id) => brokenColumns.has(id))) throw new Error("Monday: gave up after 3 attempts (status 503)")
       setValues(find(itemId), values)
     },
     async moveItem(itemId, groupId) {
@@ -131,7 +133,7 @@ export function fakeMonday(
     },
     async moveItemToBoard(boardId, groupId, itemId, mapping) {
       record("moveItemToBoard", [boardId, groupId, itemId, mapping])
-      if (broken.has("moveItemToBoard")) throw new Error("Monday: gave up after 3 attempts (status 503)")
+      if (broken.has("moveItemToBoard") || down.has(itemId)) throw new Error("Monday: gave up after 3 attempts (status 503)")
       const item = find(itemId)
       const moved: MondayItem["columns"] = {}
       for (const { source, target } of mapping) if (target && item.columns[source]) moved[target] = item.columns[source]
@@ -147,6 +149,7 @@ export function fakeMonday(
     calls,
     down,
     broken,
+    brokenColumns,
     called: (method: string) => calls.filter((c) => c.method === method).map((c) => c.args),
     writes: () => calls.filter((c) => !["me", "readBoard", "dailyLimit", "boardColumns"].includes(c.method)),
     at: (t: Date) => {
