@@ -80,10 +80,10 @@ describe("planRevision for a PR that clashes with its base (STEP-3340)", () => {
 
   it("at the review cap, asks about the feedback first, then merges without waiting for the answer", () => {
     // The last round was sent for the same failing Test: no progress, so it asks.
-    const capped = { ...pr, revise: { rounds: MAX_REVISE_ROUNDS, handled: [], blockers: ["check:Test"] } }
+    const capped = { ...pr, revise: { rounds: MAX_REVISE_ROUNDS, handled: [], blockerHistory: [["check:Test"]] } }
     expect(planRevision({ ...clashing, statusCheckRollup: redTest }, capped, ctx)).toEqual({ kind: "ask", handled: ["check:h1:Test"], reasons: ["Test failed"], why: "no-progress" })
     // Past the cap with blockers that changed (STEP-3366), the merge rides along as under it.
-    expect(planRevision({ ...clashing, statusCheckRollup: redTest }, { ...capped, revise: { ...capped.revise, blockers: ["check:Lint"] } }, ctx)).toEqual({
+    expect(planRevision({ ...clashing, statusCheckRollup: redTest }, { ...capped, revise: { ...capped.revise, blockerHistory: [["check:Lint"]] } }, ctx)).toEqual({
       kind: "revise", handled: ["check:h1:Test", "conflict:h1"], reasons: ["Test failed", CONFLICT], blockers: ["check:Test"],
     })
     const asked = { ...pr, revise: { rounds: MAX_REVISE_ROUNDS, handled: [], asked: true, askedHead: "h1" } }

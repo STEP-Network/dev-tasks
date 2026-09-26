@@ -557,13 +557,15 @@ Failing on the infrastructure again, it goes to the issue's thread for a
 person.
 
 After three rounds on one PR the agent goes on only while something still
-blocks it and the last round changed what (STEP-3366). What blocks is the
-Claude review's BLOCKER findings, by file and line (a line that moved by up
-to 15 counts as the same), and each required check the code failed.
-IMPROVEMENT and POLISH findings, or a comment, never take it past three. It
-asks in `#polads-questions` and stops revising, once per head commit, when
-the same blockers come back, after ten rounds in all, or while usage holds
-new work back; the question says which. It never dismisses a review, a
+blocks it and no earlier round had those blockers (STEP-3366). What blocks is
+the Claude review's BLOCKER findings, by file and line (a line that moved by
+up to 15 counts as the same) or, naming no file, by their first words, and
+each other required check the code failed. IMPROVEMENT and POLISH findings, a
+comment, or the review check failing with no verdict never take it past
+three. It asks in `#polads-questions` and stops revising, once per head
+commit, when blockers an earlier round had come back, when the review check
+fails with no verdict, after ten rounds in all, or while usage holds new work
+back; the question says which. It never dismisses a review, a
 person's or a bot's. To have it fix something, comment on the PR starting
 `@<agent>`.
 

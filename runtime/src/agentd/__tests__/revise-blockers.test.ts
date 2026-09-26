@@ -34,8 +34,11 @@ const IMPROVEMENTS_ONLY = "## Claude review\n\n**No BLOCKERs found.**\n\n### IMP
 const view = (over: Partial<OwnPrView> = {}): OwnPrView => ({
   url: URL, number: 9, state: "OPEN", headRefName: "STEP-9-x", headRefOid: "h4", author: { login: "eve-polads" }, statusCheckRollup: [REVIEW_CHECK], ...over,
 })
-/** At the cap: three rounds, the last sent for these blockers. */
-const capped = (blockers: string[], rounds = MAX_REVISE_ROUNDS): WatchedPr => ({ ...pr, revise: { rounds, handled: [], lastRoundAt: LAST_ROUND, blockers } })
+/** At the cap: three rounds, the last sent for these blockers, after any earlier rounds' blockers. */
+const capped = (blockers: string[] | undefined, rounds = MAX_REVISE_ROUNDS, earlier: string[][] = []): WatchedPr => ({
+  ...pr,
+  revise: { rounds, handled: [], lastRoundAt: LAST_ROUND, ...(blockers ? { blockerHistory: [...earlier, blockers] } : {}) },
+})
 
 afterEach(() => {
   delete process.env.AGENTD_HOME
@@ -60,6 +63,9 @@ describe("reviewBlockers: the latest Claude review's BLOCKER findings", () => {
   it("reads a BLOCKER that names no file by its first words", () => {
     const body = "## Claude review\n\n### BLOCKER\n\n- The migration drops a column the release still reads.\n\n### POLISH\n\n- wording"
     expect(reviewBlockers(view({ comments: [claude("c1", "2026-09-26T04:00:00Z", body)] }), LAST_ROUND)).toEqual(["text:the migration drops a column the release still reads."])
+    // Beside a finding that names a file, it still counts; a bold label ("**Why**:") inside a finding is not one.
+    const both = "## Claude review\n\n### BLOCKER\n\n- `lib/a.ts:10` — first.\n\n**Why**: it breaks the build.\n\n- The migration drops a column the release still reads.\n\n### POLISH\n\n- wording"
+    expect(reviewBlockers(view({ comments: [claude("c1", "2026-09-26T04:00:00Z", both)] }), LAST_ROUND)).toEqual(["lib/a.ts:10", "text:the migration drops a column the release still reads."])
   })
 
   it("reads only the latest review since the last round, and only the reviewer's", () => {
@@ -80,10 +86,11 @@ describe("reviewBlockers: the latest Claude review's BLOCKER findings", () => {
 })
 
 describe("blockerFingerprint and sameBlockers", () => {
-  it("is the review's blockers and each other check the code failed; the review's own check only when no verdict came", () => {
+  it("is the review's blockers and each other check the code failed; never the review's own check, verdict or not", () => {
     const failing = view({ statusCheckRollup: [REVIEW_CHECK, { __typename: "CheckRun", name: "Test", conclusion: "FAILURE" }], comments: [claude("c1", "2026-09-26T04:00:00Z", BLOCKER_A)] })
     expect(blockerFingerprint(failing, ["Claude review", "Test"], LAST_ROUND)).toEqual(["lib/services/partner.ts:70", "check:Test"])
-    expect(blockerFingerprint(view(), ["Claude review"], LAST_ROUND)).toEqual(["check:Claude review"])
+    // Red with no verdict says nothing about what blocks: planRevision asks about it past the cap.
+    expect(blockerFingerprint(view(), ["Claude review"], LAST_ROUND)).toEqual([])
     expect(blockerFingerprint(view({ comments: [claude("c1", "2026-09-26T04:00:00Z", IMPROVEMENTS_ONLY)] }), [], LAST_ROUND)).toEqual([])
     // Shards are one check: which shard failed moves between runs.
     expect(blockerFingerprint(view(), ["Test (1/4)", "Test (3/4)"], LAST_ROUND)).toEqual(["check:Test"])
@@ -96,9 +103,13 @@ describe("blockerFingerprint and sameBlockers", () => {
     expect(sameBlockers(["lib/services/partner.ts:70"], ["lib/services/other.ts:70"])).toBe(false)
     expect(sameBlockers(["lib/services/partner.ts:70"], ["lib/services/partner.ts:70", "check:Test"])).toBe(false)
     expect(sameBlockers(["check:Test"], ["check:Lint"])).toBe(false)
+    expect(sameBlockers(["check:Test"], ["check:Test", "lib/a.ts:1"])).toBe(false)
     expect(sameBlockers([], [])).toBe(false)
     // One to one: two blockers near one line are not the same as that one and another.
     expect(sameBlockers(["lib/a.ts:70", "lib/a.ts:72"], ["lib/a.ts:71", "lib/b.ts:1"])).toBe(false)
+    // Paired by line within each file, in order: 60↔70 and 80↔90, not 70↔80 then 90↔60.
+    expect(sameBlockers(["lib/a.ts:70", "lib/a.ts:90"], ["lib/a.ts:80", "lib/a.ts:60"])).toBe(true)
+    expect(sameBlockers(["text:the migration drops a column", "lib/a.ts:70"], ["lib/a.ts:71", "text:the migration drops a column"])).toBe(true)
   })
 })
 
@@ -119,9 +130,27 @@ describe("planRevision past the round cap (Nate, 2026-09-26)", () => {
     })
   })
 
+  it("asks when blockers an earlier round had come back, so A, B, A never runs on to the 10-round guard", () => {
+    // Round 2 was sent for partner.ts:70, round 3 for messages.ts:146, and partner.ts:69 is back.
+    expect(planRevision(withReview(BLOCKER_A_MOVED), capped(["lib/ai/messages.ts:146"], 3, [["lib/services/partner.ts:70"]]), ctx)).toMatchObject({ kind: "ask", why: "no-progress" })
+  })
+
+  it("asks when the review check is red with no verdict (missing, not posted yet, or the no-verdict failure): only real findings and other checks go past the cap", () => {
+    const noVerdict = view({ comments: [] })
+    expect(planRevision(noVerdict, capped(["lib/services/partner.ts:70"]), ctx)).toEqual({
+      kind: "ask", handled: ["check:h4:Claude review"], reasons: ["Claude review failed"], why: "no-verdict",
+    })
+    // Another check the code failed still counts, as it changed: Test is red now, and the review has no verdict yet.
+    const testToo = view({ comments: [], statusCheckRollup: [REVIEW_CHECK, { __typename: "CheckRun", name: "Test", conclusion: "FAILURE" }] })
+    expect(planRevision(testToo, capped(["lib/services/partner.ts:70"]), ctx)).toMatchObject({ kind: "revise", blockers: ["check:Test"] })
+  })
+
   it("never goes past the cap for IMPROVEMENT and POLISH findings alone", () => {
     const passing = view({ statusCheckRollup: [], comments: [claude("c9", "2026-09-26T04:00:00Z", IMPROVEMENTS_ONLY), { id: "c10", author: { login: "ada" }, authorAssociation: "MEMBER", body: "@eve please take the improvements too", createdAt: "2026-09-26T04:05:00Z" }] })
     expect(planRevision(passing, capped(["lib/ai/messages.ts:146"]), ctx)).toMatchObject({ kind: "ask", why: "cap" })
+    // A person's comment with no review at all, and its check not red: the cap, not "no verdict".
+    const commentOnly = view({ statusCheckRollup: [], comments: [{ id: "c11", author: { login: "ada" }, authorAssociation: "MEMBER", body: "@eve one more thing", createdAt: "2026-09-26T04:05:00Z" }] })
+    expect(planRevision(commentOnly, capped(["lib/ai/messages.ts:146"]), ctx)).toMatchObject({ kind: "ask", why: "cap" })
   })
 
   it("stops at 10 rounds whatever the blockers do, and while usage is high", () => {
@@ -131,10 +160,10 @@ describe("planRevision past the round cap (Nate, 2026-09-26)", () => {
     expect(planRevision(withReview(BLOCKER_A), capped(["lib/ai/messages.ts:146"]), { ...ctx, usageBlocked: "weekly usage at 85 percent (light mode)" })).toMatchObject({ kind: "ask", why: "usage" })
   })
 
-  it("never takes the last head's verdict for this one's: a failed review check with no verdict yet is not 'the same blockers'", () => {
+  it("never takes the last head's verdict for this one's: this head's red review check with no verdict since asks", () => {
     // The review the last round was sent for, from before it; this head's check failed with no verdict posted.
     const stale = view({ comments: [claude("c8", "2026-09-26T02:00:00Z", BLOCKER_A)] })
-    expect(planRevision(stale, capped(["lib/services/partner.ts:70"]), ctx)).toMatchObject({ kind: "revise", blockers: ["check:Claude review"] })
+    expect(planRevision(stale, capped(["lib/services/partner.ts:70"]), ctx)).toMatchObject({ kind: "ask", why: "no-verdict" })
   })
 
   it("keeps each round's blockers under the cap too, so the round past it can compare", () => {
@@ -165,7 +194,7 @@ describe("reviseOwnPr past the round cap", () => {
     const { paths, deps } = setup(capped(["lib/ai/messages.ts:146"]))
     await reviseOwnPr(deps, readWatchedPrs(paths)[0], view({ comments: [claude("c9", "2026-09-26T04:00:00Z", BLOCKER_A)] }), ["Claude review"])
     expect(listJobs(paths, "pending")[0]).toMatchObject({ kind: "revise", revise: { round: 4 } })
-    expect(readWatchedPrs(paths)[0].revise).toMatchObject({ rounds: 4, blockers: ["lib/services/partner.ts:70"] })
+    expect(readWatchedPrs(paths)[0].revise).toMatchObject({ rounds: 4, blockerHistory: [["lib/ai/messages.ts:146"], ["lib/services/partner.ts:70"]] })
     const ledger = readFileSync(join(paths.logs, "ledger.jsonl"), "utf8")
     expect(ledger).toContain('"pastCap":"blockers changed: 1 left"')
     expect(listNew<{ text: string }>(paths.outbox).map((e) => e.payload.text)).toEqual([
@@ -177,7 +206,7 @@ describe("reviseOwnPr past the round cap", () => {
     const { paths, deps } = setup(capped(["lib/services/partner.ts:70"]))
     await reviseOwnPr(deps, readWatchedPrs(paths)[0], view({ comments: [claude("c9", "2026-09-26T04:00:00Z", BLOCKER_A_MOVED)] }), ["Claude review"])
     expect(listJobs(paths, "pending")).toEqual([])
-    expect(JSON.stringify(openDecisions(paths))).toContain("still has the same blockers after I worked on it 3 times: the last round did not change them")
+    expect(JSON.stringify(openDecisions(paths))).toContain("has the same blockers as after an earlier round, and I have worked on it 3 times: my rounds are not making progress")
     expect(readWatchedPrs(paths)[0].revise).toMatchObject({ asked: true, askedHead: "h4" })
   })
 
@@ -185,6 +214,13 @@ describe("reviseOwnPr past the round cap", () => {
     const { paths, deps } = setup(capped(["lib/ai/messages.ts:146"], 10))
     await reviseOwnPr(deps, readWatchedPrs(paths)[0], view({ comments: [claude("c9", "2026-09-26T04:00:00Z", BLOCKER_A)] }), ["Claude review"])
     expect(JSON.stringify(openDecisions(paths))).toContain("has had 10 rounds and still has blockers: I stop at 10 rounds by myself")
+  })
+
+  it("asks when the review check is red with no verdict, and says so", async () => {
+    const { paths, deps } = setup(capped(["lib/services/partner.ts:70"]))
+    await reviseOwnPr(deps, readWatchedPrs(paths)[0], view({ comments: [] }), ["Claude review"])
+    expect(listJobs(paths, "pending")).toEqual([])
+    expect(JSON.stringify(openDecisions(paths))).toContain("the review posted no verdict, so I cannot tell what still blocks it")
   })
 
   it("asks instead of going on while usage is high, and names it", async () => {

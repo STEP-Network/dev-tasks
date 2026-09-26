@@ -19,12 +19,13 @@
  * goes to a person, as every red check did before.
  *
  * MAX_REVISE_ROUNDS rounds per PR. Past them (STEP-3366), another round
- * goes only while something still blocks (the Claude review's BLOCKERs, or a
- * required check the code failed; never IMPROVEMENT or POLISH alone) and the
- * last round changed what blocks, up to MAX_TOTAL_REVISE_ROUNDS in all, and
- * not while usage holds new work back. Otherwise it asks in
- * #polads-questions, once per head, saying which stopped it. Nothing here,
- * and nothing the worker may run, dismisses a person's or a bot's review.
+ * goes only while something still blocks (the Claude review's BLOCKERs, or
+ * another required check the code failed; never IMPROVEMENT or POLISH alone,
+ * nor the review check red with no verdict) and no earlier round had those
+ * blockers, up to MAX_TOTAL_REVISE_ROUNDS in all, and not while usage holds
+ * new work back. Otherwise it asks in #polads-questions, once per head,
+ * saying which stopped it. Nothing here, and nothing the worker may run,
+ * dismisses a person's or a bot's review.
  *
  * A PR git cannot merge into its base (STEP-3340) comes back too, once per
  * head: its worker merges the base in (never a rebase, never forced) and
@@ -189,13 +190,15 @@ const BLOCKER_START_RE = /^(#{1,6}\s*[^\w\s]*\s*BLOCKERS?\b|\*\*BLOCKERS?\*\*:?\
 const SECTION_END_RE = /^(#{1,6}\s|([-*]\s|\d+\.\s)?(\*\*)?(IMPROVEMENTS?|POLISH|NITS?)\b)/
 /** A finding: a top-level list item, or a paragraph that opens in bold. */
 const FINDING_RE = /^([-*]\s|\d+\.\s|\*\*)/
+/** A bold label inside a finding ("**Suggested fix**:", "**Why:**"), not a finding of its own. */
+const LABEL_RE = /^\*\*[^*]{1,40}(:\*\*|\*\*:)/
 /** A backticked file, and the first line of its range: `lib/x.ts:146-163`. */
 const FILE_RE = /`([^`\s:]+\.[A-Za-z0-9]{1,5})(?::(\d+)(?:[-–]\d+)?)?`/
 
 /**
  * The BLOCKER findings of the Claude review's latest verdict posted after
  * `since` (the last round's start: a verdict before it is the previous
- * head's), each by its file and first line, or, when none names a file, by
+ * head's), each by its file and first line, or, one that names no file, by
  * its first words. [] for a verdict without BLOCKERs, null when there is none
  * since. Pure.
  */
@@ -206,8 +209,7 @@ export function reviewBlockers(view: Pick<OwnPrView, "comments">, since: string 
     .sort((a, b) => Date.parse(a.createdAt ?? "") - Date.parse(b.createdAt ?? ""))
     .at(-1)
   if (!verdict) return null
-  const files: string[] = []
-  const texts: string[] = []
+  const found: string[] = []
   let inBlockers = false
   let inCode = false
   for (const line of (verdict.body ?? "").split("\n")) {
@@ -220,45 +222,58 @@ export function reviewBlockers(view: Pick<OwnPrView, "comments">, since: string 
     else if (SECTION_END_RE.test(line)) inBlockers = false
     if (!inBlockers || !(start || FINDING_RE.test(line))) continue
     const file = FILE_RE.exec(line)
-    if (file) files.push(file[2] ? `${file[1]}:${file[2]}` : file[1])
-    else if (!start) texts.push(`text:${line.replace(/^([-*]\s|\d+\.\s)/, "").replace(/[*`_]/g, "").replace(/\s+/g, " ").trim().toLowerCase().slice(0, 60)}`)
+    if (file) found.push(file[2] ? `${file[1]}:${file[2]}` : file[1])
+    else if (!start && !LABEL_RE.test(line)) found.push(`text:${line.replace(/^([-*]\s|\d+\.\s)/, "").replace(/[*`_]/g, "").replace(/\s+/g, " ").trim().toLowerCase().slice(0, 60)}`)
   }
-  return files.length ? files : texts
+  return found
 }
 
 /**
  * What still blocks the PR at its head: the review's BLOCKERs since `since`,
  * and `check:<name>` for each other required check the code failed
- * (`failed`, by name, shards as one). The review's own check stands for its
- * verdict until one comes. Pure.
+ * (`failed`, by name, shards as one). Never the review's own check: red
+ * without a verdict says nothing about what blocks. Pure.
  */
 export function blockerFingerprint(view: Pick<OwnPrView, "comments">, failed: readonly string[], since: string | null): string[] {
-  const review = reviewBlockers(view, since)
   const checks = [...new Set(failed.map((name) => name.replace(/\s*\(\s*\d+\s*\/\s*\d+\s*\)\s*$/, "")))]
-  return [...(review ?? []), ...checks.filter((name) => review === null || name !== REVIEW_CHECK).map((name) => `check:${name}`)]
+  return [...(reviewBlockers(view, since) ?? []), ...checks.filter((name) => name !== REVIEW_CHECK).map((name) => `check:${name}`)]
 }
 
-const blockerAt = (b: string) => /^(.+):(\d+)$/.exec(b)
-function sameBlocker(a: string, b: string): boolean {
-  if (a === b) return true
-  const [x, y] = [blockerAt(a), blockerAt(b)]
-  return Boolean(x && y && x[1] === y[1] && Math.abs(Number(x[2]) - Number(y[2])) <= LINE_DRIFT)
+/** Checks and file-less findings, to match exactly, and each file's lines, in order. */
+function byFile(list: readonly string[]): { exact: string[]; lines: Map<string, number[]> } {
+  const exact: string[] = []
+  const lines = new Map<string, number[]>()
+  for (const b of list) {
+    const at = /^(check|text):/.test(b) ? null : /^(.+):(\d+)$/.exec(b)
+    if (at) lines.set(at[1], [...(lines.get(at[1]) ?? []), Number(at[2])])
+    else exact.push(b)
+  }
+  for (const ns of lines.values()) ns.sort((x, y) => x - y)
+  return { exact: exact.sort(), lines }
 }
 
-/** The same blockers: as many, each matched to one of the others. None is never the same: nothing blocks. Pure. */
+/**
+ * The same blockers: as many, the same checks and file-less findings, and in
+ * each file as many lines, paired in order, each within LINE_DRIFT. None is
+ * never the same: nothing blocks. Pure.
+ */
 export function sameBlockers(a: readonly string[], b: readonly string[]): boolean {
   if (!a.length || a.length !== b.length) return false
-  const left = [...b]
-  for (const x of a) {
-    const i = left.findIndex((y) => sameBlocker(x, y))
-    if (i < 0) return false
-    left.splice(i, 1)
+  const [x, y] = [byFile(a), byFile(b)]
+  // As many in all and the same exact ones: files matched line for line leave none over.
+  if (x.exact.join("\n") !== y.exact.join("\n")) return false
+  for (const [file, xs] of x.lines) {
+    const ys = y.lines.get(file)
+    if (!ys || ys.length !== xs.length || xs.some((n, i) => Math.abs(n - ys[i]) > LINE_DRIFT)) return false
   }
   return true
 }
 
-/** Why a round past the cap is not sent: nothing blocks, 10 rounds, usage, or the last round changed nothing. */
-export type CapStop = "cap" | "runaway" | "usage" | "no-progress"
+/**
+ * Why a round past the cap is not sent: nothing blocks, the review check is
+ * red with no verdict, 10 rounds, usage, or blockers an earlier round had.
+ */
+export type CapStop = "cap" | "no-verdict" | "runaway" | "usage" | "no-progress"
 
 export type RevisePlan =
   | { kind: "none" }
@@ -321,8 +336,10 @@ export function planRevision(
     const rounds = pr.revise?.rounds ?? 0
     // Asked once per head: feedback on a head nobody was asked about asks again.
     const askedHere = pr.revise?.asked && (pr.revise.askedHead === undefined || pr.revise.askedHead === view.headRefOid)
-    // Each round keeps what blocked it, so the next one past the cap can tell whether it changed anything.
-    const blockers = blockerFingerprint(view, failing.filter((f) => !ctx.infra[f.name]).map((f) => f.name), pr.revise?.lastRoundAt ?? null)
+    // Each round keeps what blocked it, so a round past the cap can tell whether the rounds get anywhere.
+    const since = pr.revise?.lastRoundAt ?? null
+    const codeFailed = failing.filter((f) => !ctx.infra[f.name]).map((f) => f.name)
+    const blockers = blockerFingerprint(view, codeFailed, since)
     const revise: RevisePlan = {
       kind: "revise",
       ...(conflict ? { handled: [...ids, conflictId], reasons: [...reasons, conflict] } : { handled: ids, reasons }),
@@ -331,7 +348,8 @@ export function planRevision(
     if (rounds < MAX_REVISE_ROUNDS) return revise
     // The feedback waits for a person's answer. The conflict need not.
     if (askedHere) return conflict ? conflictPlan(conflict) : { kind: "none" }
-    const why = pastCapStop(rounds, blockers, pr.revise?.blockers, ctx.usageBlocked)
+    const noVerdict = codeFailed.includes(REVIEW_CHECK) && reviewBlockers(view, since) === null
+    const why = pastCapStop(rounds, blockers, pr.revise?.blockerHistory ?? [], ctx.usageBlocked, noVerdict)
     return why ? { kind: "ask", handled: ids, reasons, why } : revise
   }
   if (conflict) return conflictPlan(conflict)
@@ -348,16 +366,17 @@ export function planRevision(
 
 /**
  * Why no round goes past the cap, or null: one goes while something still
- * blocks (IMPROVEMENT and POLISH do not, nor a person's comment alone), under
- * MAX_TOTAL_REVISE_ROUNDS, while usage allows new work, and only when the last
- * round changed what blocks. A record from before blockers were kept has none
- * to compare, so its first round past the cap goes.
+ * blocks (IMPROVEMENT and POLISH do not, nor a person's comment alone, nor the
+ * review check red with no verdict), under MAX_TOTAL_REVISE_ROUNDS, while
+ * usage allows new work, and only for blockers no earlier round had, so rounds
+ * going in circles (A, B, A) stop too. A record from before blockers were
+ * kept has none to compare, so its first round past the cap goes.
  */
-function pastCapStop(rounds: number, blockers: readonly string[], last: readonly string[] | undefined, usage: string | null | undefined): CapStop | null {
-  if (!blockers.length) return "cap"
+function pastCapStop(rounds: number, blockers: readonly string[], history: readonly string[][], usage: string | null | undefined, noVerdict: boolean): CapStop | null {
+  if (!blockers.length) return noVerdict ? "no-verdict" : "cap"
   if (rounds >= MAX_TOTAL_REVISE_ROUNDS) return "runaway"
   if (usage) return "usage"
-  if (last && sameBlockers(blockers, last)) return "no-progress"
+  if (history.some((earlier) => sameBlockers(blockers, earlier))) return "no-progress"
   return null
 }
 
@@ -531,7 +550,9 @@ export async function classifyFailures(deps: ReviseDeps, view: OwnPrView, pr: Wa
 function capQuestion(link: string, rounds: number, reasons: string, why: CapStop | undefined, usage: string | null): string {
   switch (why) {
     case "no-progress":
-      return `${link} still has the same blockers after I worked on it ${rounds} times: the last round did not change them (${reasons}).`
+      return `${link} has the same blockers as after an earlier round, and I have worked on it ${rounds} times: my rounds are not making progress (${reasons}).`
+    case "no-verdict":
+      return `${link} still fails its review check after I worked on it ${rounds} times, and the review posted no verdict, so I cannot tell what still blocks it (${reasons}).`
     case "runaway":
       return `${link} has had ${rounds} rounds and still has blockers: I stop at ${MAX_TOTAL_REVISE_ROUNDS} rounds by myself (${reasons}).`
     case "usage":
@@ -666,6 +687,8 @@ export async function reviseOwnPr(deps: ReviseDeps, pr: WatchedPr, view: OwnPrVi
         break
       }
       const round = (pr.revise?.rounds ?? 0) + 1
+      // Every round's blockers, oldest first: past the cap, blockers any of them had stop the rounds.
+      const history = [...(pr.revise?.blockerHistory ?? []), ...(plan.blockers ? [plan.blockers] : [])]
       submitJob(deps.paths, pr.issue, null, now, {
         kind: "revise",
         revise: {
@@ -685,7 +708,7 @@ export async function reviseOwnPr(deps: ReviseDeps, pr: WatchedPr, view: OwnPrVi
           handled,
           lastRoundAt: now.toISOString(),
           ...(pr.revise?.conflictRounds ? { conflictRounds: pr.revise.conflictRounds } : {}),
-          ...(plan.blockers ? { blockers: plan.blockers } : {}),
+          ...(history.length ? { blockerHistory: history } : {}),
         },
       }
       // Only past the cap because the blockers still change: planRevision sends no other round there.
