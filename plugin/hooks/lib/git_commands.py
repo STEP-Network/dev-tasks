@@ -16,14 +16,16 @@ stdin and prints one line per finding, then END:
   PUSH @all             every branch, or the ones git's config picks: --all,
                         --mirror, --branches, a ':' or glob refspec,
                         -c push.* or -c remote.<name>.push
-  PUSH @unknown         a push from a repository or directory it cannot name
+  PUSH @unknown         a push from a repository or directory it cannot name,
+                        or one xargs adds words to (the branch, a refspec)
 
 What it reads: each command word in the text, split on ; && || | & ( ); the
 body of each $(...), `...`, <(...) and >(...), which bash runs, in double
 quotes and unquoted heredocs too; the text of sh -c and eval; the command
-after xargs and find -exec; and a `cd` before a git command. Not what quotes
-or a heredoc hold as text: `git commit` with a message that says "push" is
-no push. A text it cannot read (an unclosed quote, parenthesis or heredoc)
+after xargs and find -exec; and a `cd` before a git command. A $'...' word
+is its decoded text ($'git' is git), and an option after `--` is an
+argument (rm -r -- -f). Not what quotes or a heredoc hold as text: `git
+commit` with a message that says "push" is no push. A text it cannot read (an unclosed quote, parenthesis or heredoc)
 raises: no END, and the hooks refuse the command.
 
 Out of scope, left to the server's rulesets: git aliases, and config from the
@@ -81,13 +83,14 @@ def command(t, i, closer, texts):
             out.append(t[i : i + 2])
             i += 2
         elif t.startswith("$'", i):
-            # ANSI-C quoting: \' inside does not close it. A word, never a command.
+            # ANSI-C quoting: \' inside does not close it. Its literal word, as
+            # bash decodes it: $'git' push is git push.
             j = i + 2
             while j < len(t) and t[j] != "'":
                 j += 2 if t[j] == "\\" else 1
             if j >= len(t):
                 raise Unreadable("an unclosed $'...'")
-            out.append(" _ ")
+            out.append(shlex.quote(ansi_c(t[i + 2 : j])))
             i = j + 1
         elif t.startswith(("$((", "(("), i):
             # Arithmetic: its << is a shift, not a heredoc. A substitution inside it still runs.
@@ -136,6 +139,42 @@ def command(t, i, closer, texts):
     if closer or pending:
         raise Unreadable("an unclosed " + ("substitution" if closer else "heredoc"))
     return i, "".join(out)
+
+
+ANSI_C = {"n": "\n", "t": "\t", "r": "\r", "a": "\a", "b": "\b", "f": "\f", "v": "\v", "e": "\x1b", "E": "\x1b", "\\": "\\", "'": "'", '"': '"', "?": "?"}
+
+
+def ansi_c(body):
+    """The literal text of a $'...' body: \\n, \\xHH, \\NNN (octal), \\uHHHH, \\UHHHHHHHH, \\cX and the rest, as bash reads them."""
+    out, i = [], 0
+    while i < len(body):
+        c = body[i]
+        if c != "\\" or i + 1 >= len(body):
+            out.append(c)
+            i += 1
+            continue
+        e = body[i + 1]
+        if e in ANSI_C:
+            out.append(ANSI_C[e])
+            i += 2
+        elif e in "xuU":
+            digits = re.match(r"[0-9A-Fa-f]{1,%d}" % {"x": 2, "u": 4, "U": 8}[e], body[i + 2 :])
+            code = int(digits.group(), 16) if digits else -1
+            # No character (none, a surrogate, past U+10FFFF): kept as written.
+            valid = 0 <= code <= 0x10FFFF and not 0xD800 <= code <= 0xDFFF
+            out.append(chr(code) if valid else "\\" + e + (digits.group() if digits else ""))
+            i += 2 + (len(digits.group()) if digits else 0)
+        elif e in "01234567":
+            digits = re.match(r"[0-7]{1,3}", body[i + 1 :]).group()
+            out.append(chr(int(digits, 8)))
+            i += 1 + len(digits)
+        elif e == "c" and i + 2 < len(body):
+            out.append(chr(ord(body[i + 2]) & 0x1F))
+            i += 3
+        else:
+            out.append("\\" + e)
+            i += 2
+    return "".join(out)
 
 
 def double_quoted(t, i, out, texts):
@@ -237,19 +276,21 @@ def segments(text):
 
 
 def command_word(words):
-    """The index of the word bash runs: past VAR=value words and wrappers like env, sudo, time, xargs."""
-    i = 0
+    """The index of the word bash runs, past VAR=value words and wrappers like env, sudo, time,
+    xargs; and whether xargs runs it, which adds words of its own to the command."""
+    i, via_xargs = 0, False
     while i < len(words):
         if ASSIGNMENT.match(words[i]):
             i += 1
         elif words[i] in WRAPPERS or words[i] == "xargs":
+            via_xargs = via_xargs or words[i] == "xargs"
             takes_values = XARGS_VALUE_OPTIONS if words[i] == "xargs" else set()
             i += 1
             while i < len(words) and words[i].startswith("-"):
                 i += 2 if words[i] in takes_values else 1
         else:
             break
-    return i
+    return i, via_xargs
 
 
 def git_subcommand(args):
@@ -265,29 +306,36 @@ def destructive(argv):
     Flags are read as git and rm read them, not as text: a message or a path that holds the words is none of these."""
     name, args = os.path.basename(argv[0]), argv[1:]
 
+    def flags(words):
+        """The options: the words before `--`, after which each is an argument (rm -r -- -f removes a file named -f)."""
+        return words[: words.index("--")] if "--" in words else words
+
     def shorts(words):
-        return "".join(a[1:] for a in words if a.startswith("-") and not a.startswith("--"))
+        return "".join(a[1:] for a in flags(words) if a.startswith("-") and not a.startswith("--"))
+
+    def has(words, option):
+        return option in flags(words)
 
     if name == "rm":
-        recursive = any(c in shorts(args) for c in "rR") or "--recursive" in args
-        force = "f" in shorts(args) or "--force" in args
+        recursive = any(c in shorts(args) for c in "rR") or has(args, "--recursive")
+        force = "f" in shorts(args) or has(args, "--force")
         return "rm -rf" if recursive and force else None
     if name != "git":
         return None
     sub, rest = git_subcommand(args)
     if sub == "push":
-        if any(a.startswith("--force") for a in rest):
+        if any(a.startswith("--force") for a in flags(rest)):
             return "git push --force"
         return "git push -f" if "f" in shorts(rest) else None
-    if sub == "reset" and "--hard" in rest:
+    if sub == "reset" and has(rest, "--hard"):
         return "git reset --hard"
     if sub == "checkout" and "." in rest:
         return "git checkout \\."
-    if sub == "clean" and ("f" in shorts(rest) or "--force" in rest):
+    if sub == "clean" and ("f" in shorts(rest) or has(rest, "--force")):
         return "git clean -f"
     if sub == "branch":
-        delete = "d" in shorts(rest) or "--delete" in rest
-        force = "f" in shorts(rest) or "--force" in rest
+        delete = "d" in shorts(rest) or has(rest, "--delete")
+        force = "f" in shorts(rest) or has(rest, "--force")
         if "D" in shorts(rest) or (delete and force):
             return "git branch -D"
     return None
@@ -298,8 +346,9 @@ def config_pushes(key):
     return key.startswith("push.") or re.fullmatch(r"remote\..+\.push", key) is not None
 
 
-def git_command(words, cwd, out):
-    """One git invocation (the words after `git`): what it commits or pushes."""
+def git_command(words, cwd, out, appended=False):
+    """One git invocation (the words after `git`): what it commits or pushes. appended: xargs adds
+    words of its own (a branch, a refspec), so a push can go anywhere."""
     i, directory, other_repo, by_config = 0, cwd, False, False
     while i < len(words) and words[i].startswith("-"):
         option, value = words[i], None
@@ -326,6 +375,8 @@ def git_command(words, cwd, out):
     current = "PUSH @unknown" if unknown else "PUSH @current " + directory
     if by_config:
         out.append("PUSH @all")
+    if appended:
+        out.append("PUSH @unknown")
     args, skip = [], False
     for word in rest:
         if skip:
@@ -350,7 +401,7 @@ def git_command(words, cwd, out):
 
 def run(words, cwd, out):
     """One simple command's words: what it commits, pushes or destroys, and the directory after it."""
-    w = command_word(words)
+    w, via_xargs = command_word(words)
     if w >= len(words):
         return cwd
     argv = words[w:]
@@ -364,7 +415,7 @@ def run(words, cwd, out):
             return None
         return os.path.normpath(os.path.join(cwd, os.path.expanduser(target)))
     if name == "git":
-        git_command(argv[1:], cwd, out)
+        git_command(argv[1:], cwd, out, appended=via_xargs)
     elif name in SHELLS:
         # sh -c '…' (or -lc, -ec) runs its text as a command: read it the same way.
         flag = next((k for k, a in enumerate(argv[1:-1], 1) if a.startswith("-") and not a.startswith("--") and "c" in a), None)

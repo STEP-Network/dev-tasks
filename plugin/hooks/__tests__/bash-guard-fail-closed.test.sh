@@ -135,6 +135,10 @@ check 2 "protected branch 'main'" "git -C <a checkout on main> push origin HEAD:
 check 2 "protected branch 'main'" "cd <a checkout on main> && git push" "$(payload "cd $MAIN_WT && git push")"
 check 0 "" "git -C <this checkout> push origin HEAD still goes" "$(payload "git -C $TEST_DIR push origin HEAD")"
 check 2 "cannot tell which branch" "a push from --git-dir" "$(payload "git --git-dir=$MAIN_WT/.git push origin HEAD")"
+check 2 "cannot tell which branch" "echo main | xargs git push origin: xargs adds the branch" "$(payload 'echo main | xargs git push origin')"
+check 2 "protected branch 'main'" "\$'git' push origin main" "$(payload "\$'git' push origin main")"
+check 2 "protected branch 'main'" "\$'\\x67it' push origin main" "$(payload "\$'\\x67it' push origin main")"
+check 0 "" "\$'git' push origin feat/x still goes" "$(payload "\$'git' push origin feat/x")"
 
 echo "--- gate (a): what the command runs, never its text (#151 review) ---"
 check 0 "" "grep -n \"rm -rf\"" "$(payload 'grep -n "rm -rf" app.ts')"
@@ -145,6 +149,9 @@ check 0 "" "a heredoc message that names git reset --hard" "$(payload "git commi
 docs: never run git reset --hard or rm -rf here
 EOF")"
 check 0 "" "git branch -d (a merged branch)" "$(payload 'git branch -d merged')"
+check 0 "" "rm -r -- -f: after --, -f is a file" "$(payload 'rm -r -- -f')"
+check 2 "Destructive command detected: 'rm -rf'" "rm -rf -- build" "$(payload 'rm -rf -- build')"
+check 2 "Destructive command detected: 'rm -rf'" "\$'rm' -rf x" "$(payload "\$'rm' -rf x")"
 check 2 "Destructive command detected: 'rm -rf'" "rm -rf /" "$(payload 'rm -rf /')"
 check 2 "Destructive command detected: 'rm -rf'" "rm -r -f build" "$(payload 'rm -r -f build')"
 check 2 "Destructive command detected: 'git reset --hard'" "git reset --hard" "$(payload 'git reset --hard HEAD')"

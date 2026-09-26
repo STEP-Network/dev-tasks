@@ -69,6 +69,11 @@ describe("git_commands.py", () => {
     expect(analyse("cd ../other && git push")).toEqual(["PUSH @current ../other"])
     expect(analyse("cd - && git push")).toEqual(["PUSH @unknown"])
     expect(analyse("git --git-dir=/x/.git push origin HEAD")).toEqual(["PUSH origin", "PUSH @unknown"])
+    // xargs adds words of its own, the branch or a refspec: a push under it can go anywhere.
+    for (const command of ["echo main | xargs git push origin", "echo main | xargs -n 1 git push origin", "xargs -I{} git push origin {}", "echo main | xargs git push"]) {
+      expect(analyse(command), command).toContain("PUSH @unknown")
+    }
+    expect(analyse("echo x | xargs git commit -m y")).toEqual(["COMMIT ."])
     expect(analyse("git -C sub -c user.name=x commit -m y")).toEqual(["COMMIT sub"])
     expect(analyse("cd a && git -C b commit -m y")).toEqual(["COMMIT a/b"])
   })
@@ -99,6 +104,20 @@ describe("git_commands.py", () => {
     expect(analyse("((git push origin main))")).toEqual(["PUSH origin", "PUSH main"])
   })
 
+  it("reads a $'...' word as the text bash decodes it to", () => {
+    for (const command of ["$'git' push origin main", "$'\\x67it' push origin main", "$'\\147it' push origin main", "$'\\u0067it' push origin main", "g$'it' push origin main", "git $'push' origin $'main'"]) {
+      expect(analyse(command), command).toEqual(["PUSH origin", "PUSH main"])
+    }
+    expect(analyse("$'rm' -rf x")).toEqual(["DESTRUCTIVE rm -rf"])
+    expect(analyse("rm $'-rf' x")).toEqual(["DESTRUCTIVE rm -rf"])
+    expect(analyse("git commit -m $'line one\\nline two'")).toEqual(["COMMIT ."])
+    // The decoded text is a word, never a command: its $( ) and ; are not run.
+    expect(analyse("echo $'$(git push origin main); git push origin main'")).toEqual([])
+    expect(analyse("echo $'\\z \\x \\cA'")).toEqual([])
+    // A code with no character is kept as written, and the push still read.
+    expect(analyse("git push origin $'\\UFFFFFFFF' $'\\uD800'")).toEqual(["PUSH origin", "PUSH \\UFFFFFFFF", "PUSH \\uD800"])
+  })
+
   it("names each destructive command gate (a) refuses from what runs, never from text (#151 review)", () => {
     const destroys = (command: string) => (analyse(command) as string[]).filter((l) => l.startsWith("DESTRUCTIVE "))
     for (const command of [
@@ -112,6 +131,12 @@ describe("git_commands.py", () => {
       "git branch -d merged",
       "git clean -n",
       "git push -u origin feat",
+      // After --, a word is an argument, not an option: a file or branch named -f.
+      "rm -r -- -f",
+      "rm -- -rf",
+      "git clean -n -- -f",
+      "git reset -- --hard",
+      "git branch -d -- -f",
     ]) {
       expect(destroys(command), command).toEqual([])
     }
@@ -120,6 +145,7 @@ describe("git_commands.py", () => {
       ["rm -fr build", "rm -rf"],
       ["rm -r -f build", "rm -rf"],
       ["rm --recursive --force build", "rm -rf"],
+      ["rm -rf -- build", "rm -rf"],
       ["git reset --hard HEAD", "git reset --hard"],
       ["git push --force origin feat", "git push --force"],
       ["git push --force-with-lease origin feat", "git push --force"],

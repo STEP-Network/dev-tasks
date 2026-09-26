@@ -373,7 +373,7 @@ fi
 # checked out in <dir> (no refspec, or HEAD); @all a push of every branch or of
 # the ones git's config picks (--all, --mirror, --branches, a ':' or glob
 # refspec, -c push.*, -c remote.<name>.push); @unknown a push from a
-# repository or directory it cannot name.
+# repository or directory it cannot name, or one xargs adds the branch to.
 if [ -n "$PUSHES" ]; then
   # The list:
   #   no project config at all            → default list
@@ -404,7 +404,7 @@ if [ -n "$PUSHES" ]; then
           exit 2
           ;;
         @unknown)
-          echo "BLOCKED: bash-guard cannot tell which branch this push goes to: it runs in a repository or directory it cannot name (--git-dir, --work-tree, cd -)."
+          echo "BLOCKED: bash-guard cannot tell which branch this push goes to: it runs in a repository or directory it cannot name (--git-dir, --work-tree, cd -), or xargs adds the branch to it."
           echo "Push from the checkout itself, naming the branch: git push origin <branch>."
           exit 2
           ;;
