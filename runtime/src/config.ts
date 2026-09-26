@@ -329,10 +329,10 @@ export const ConfigSchema = z.object({
       /** Every SDK session this mini runs: develop, revise and merge rounds, the browser test, the retro. */
       effort: EffortSchema.optional(),
       /**
-       * A develop or revise worker may split its work over subagents, a
-       * dynamic workflow and named teammates, on any model it picks. They run
-       * in its process under its own hooks and sandbox (sessions.test.ts
-       * proves it on the binary workers run). Off: no fan-out.
+       * A develop or revise worker may split its work over subagents, on any
+       * model it picks. They run in its process under its own hooks and
+       * sandbox (sessions.test.ts proves it on the binary workers run). Off:
+       * no subagents.
        */
       fanOut: z.boolean().default(false),
       maxTurns: z.number().int().positive().default(250),

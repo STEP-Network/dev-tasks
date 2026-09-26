@@ -43,7 +43,7 @@ export interface BriefInput {
   limits: WorkerLimits
   /** A retry (agentctl retry): why the earlier job on this branch ended. */
   earlier?: string
-  /** worker.fanOut: the worker may split its work over subagents, a workflow and teammates. */
+  /** worker.fanOut: the worker may split its work over subagents. */
   fanOut?: boolean
 }
 
@@ -107,12 +107,11 @@ export const SELF_CHECK_RULES = [
 ]
 
 /**
- * worker.fanOut (Nate, 2026-09-26): subagents, dynamic workflows and teammates,
- * on whichever model the worker picks. The Workflow tool runs only when it is
- * asked for outright: this is that request.
+ * worker.fanOut (Nate, 2026-09-26): subagents, on whichever model the worker
+ * picks. No Workflow tool and no agent teams: an SDK session gets neither.
  */
 export const FAN_OUT_RULES = [
-  "You may split the work, and you choose when it helps: subagents (the Agent tool), a dynamic workflow (the Workflow tool: this is the explicit request it needs), and named teammates you message with SendMessage.",
+  "You may split the work over subagents (the Agent tool), and you choose when it helps: in the background while you go on, or in the foreground when your next step needs the answer.",
   "Give each the model the job needs: fable, opus, sonnet or haiku.",
   "They work in this worktree under your rules, hooks and sandbox: they never push or open a PR, and they read no secret. Their work is yours to check, commit and report.",
 ]

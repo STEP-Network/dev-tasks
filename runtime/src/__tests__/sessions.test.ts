@@ -24,7 +24,7 @@
  */
 
 import type { Options } from "@anthropic-ai/claude-agent-sdk"
-import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs"
+import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs"
 import { createRequire } from "node:module"
 import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
@@ -244,16 +244,17 @@ describe.skipIf(!binaryAvailable())("sessions, as the Claude Code binary runs th
     expect(probeVerdict(s.messages)).toMatchObject({ pluginHookFired: true, loadedPlugins: expect.arrayContaining(["dev-tasks"]) })
   }, 120_000)
 
-  describe("worker.fanOut (STEP-3367): what a subagent, a teammate and a workflow's agent may do", () => {
+  describe("worker.fanOut (STEP-3367): what a subagent may do", () => {
     const MARK = "FANOUT_PROBE_7c1e"
     /**
-     * A worker whose main loop hands MARK to one of the three, then waits
-     * for it. What it tries: a write inside the
-     * worktree, a write outside it (the sandbox), ~/.config (the worker's own
-     * guard, an in-process SDK hook), git reset --hard (the plugin's guard)
-     * and gh pr create (the worker's guard).
+     * A worker whose main loop hands MARK to a subagent, then waits for it.
+     * What the subagent tries: a write inside the worktree, a write outside
+     * it and a read of ~/.config no guard recognises (the sandbox),
+     * ~/.config (the worker's own guard, an in-process SDK hook), git reset
+     * --hard and a push to main (the plugin's guard), and gh pr create (the
+     * worker's guard).
      */
-    async function fannedOut(start: (mark: string) => ToolCall, env2: Record<string, string> = {}) {
+    async function fannedOut(start: (mark: string) => ToolCall) {
       const home = miniHome("fanout")
       const repo = gitRepo(join(home, "polads"))
       const worktree = gitRepo(join(home, "worktree"))
@@ -261,11 +262,11 @@ describe.skipIf(!binaryAvailable())("sessions, as the Claude Code binary runs th
       const bash = (command: string): ToolCall => ({ name: "Bash", input: { command, description: "probe" } })
       const asked: string[] = []
       const s = await session(
-        // The main loop waits for a background agent: a plain sleep, which the sandbox allows without a prompt.
+        // The main loop waits for a background subagent: a plain sleep, which the sandbox allows without a prompt.
         [start(MARK), bash("sleep 10")],
         (api) => {
           const o = sdkOptions({ config, cwd: worktree, model: "sonnet", abortController: new AbortController(), rules: "test", pnpmStore: null, env: {}, home })
-          o.env = { ...o.env, ...env(home, api), DEV_TASKS_PROFILE: "agent", ...env2 }
+          o.env = { ...o.env, ...env(home, api), DEV_TASKS_PROFILE: "agent" }
           delete o.outputFormat
           const inner = o.canUseTool!
           o.canUseTool = async (name, input, opts) => {
@@ -278,59 +279,49 @@ describe.skipIf(!binaryAvailable())("sessions, as the Claude Code binary runs th
           [MARK]: [
             bash(`touch ${worktree}/inside.txt && echo WROTE_INSIDE`),
             bash(`touch ${home}/escaped.txt; echo AFTER_ESCAPE`),
+            // A read no guard can see: the path is base64 in a script the subagent writes, and runs as a plain
+            // command the sandbox allows. Only the sandbox's denyRead of ~/.config stands in the way.
+            {
+              name: "Write",
+              input: {
+                file_path: join(worktree, "read.py"),
+                content: "import base64, os\nprint(open(os.path.expanduser('~') + base64.b64decode('Ly5jb25maWcvbGluZWFyLy5lbnY=').decode()).read())\n",
+              },
+            },
+            bash("python3 read.py; echo AFTER_READ"),
             bash("cat ~/.config/linear/.env"),
             bash("git reset --hard HEAD"),
+            bash("git push origin main"),
             bash("gh pr create --fill"),
           ],
         },
       )
-      // A workflow's agents stream nothing to the SDK: their results are in the transcript its launch names.
-      const transcript = s.results.join("\n").match(/Transcript dir: (\S+)/)?.[1]
-      const results = transcript ? transcriptResults(transcript) : s.subagentResults
-      return { results, asked, inside: existsSync(join(worktree, "inside.txt")), escaped: existsSync(join(home, "escaped.txt")), all: s.results }
-    }
-
-    function transcriptResults(dir: string): string[] {
-      const files = readdirSync(dir, { recursive: true, encoding: "utf8" }).filter((f) => f.endsWith(".jsonl")).map((f) => join(dir, f))
-      return files.flatMap((f) =>
-        readFileSync(f, "utf8")
-          .split("\n")
-          .filter(Boolean)
-          .flatMap((line) => {
-            const m = JSON.parse(line) as { message?: { content?: unknown } }
-            const content = Array.isArray(m.message?.content) ? (m.message!.content as Array<{ type?: string; content?: unknown }>) : []
-            return content.filter((c) => c.type === "tool_result").map((c) => (typeof c.content === "string" ? c.content : JSON.stringify(c.content)))
-          }),
-      )
+      return { results: s.subagentResults, asked, inside: existsSync(join(worktree, "inside.txt")), escaped: existsSync(join(home, "escaped.txt")), all: s.results }
     }
 
     function held(r: Awaited<ReturnType<typeof fannedOut>>) {
       expect(r.results[0]).toContain("WROTE_INSIDE")
       expect(r.results[1]).toContain("Operation not permitted")
-      expect(r.results[2]).toContain("Workers never read or write ~/.config")
-      expect(r.results[3]).toContain("Destructive command detected: 'git reset --hard'")
-      expect(r.results[4]).toContain("Workers never open or merge PRs")
+      expect(r.results[3]).toMatch(/Operation not permitted|PermissionError/)
+      expect(r.results[3]).toContain("AFTER_READ")
+      expect(r.results[4]).toContain("Workers never read or write ~/.config")
+      expect(r.results[5]).toContain("Destructive command detected: 'git reset --hard'")
+      expect(r.results[6]).toContain("hooks/bash-guard.sh]: BLOCKED: ")
+      expect(r.results[7]).toContain("Workers never open or merge PRs")
       expect([r.inside, r.escaped]).toEqual([true, false])
-      // No prompt was needed or asked: the Workflow tool is allowed, the rest is the sandbox's.
       expect(r.asked).toEqual([])
       expect(r.all.join("\n")).not.toContain("lin_api_SESSIONTEST")
     }
 
-    it("holds a subagent, in the foreground and in the background", async () => {
+    it("holds a subagent in the foreground by the worker's own hooks and sandbox", async () => {
       held(await fannedOut((m) => ({ name: "Agent", input: { description: "probe", prompt: m, subagent_type: "general-purpose", run_in_background: false } })))
+    }, 120_000)
+
+    it("holds a subagent in the background by the worker's own hooks and sandbox", async () => {
       held(await fannedOut((m) => ({ name: "Agent", input: { description: "probe", prompt: m, subagent_type: "general-purpose" } })))
-    }, 180_000)
-
-    it("holds a named teammate: agent teams run in this process", async () => {
-      held(await fannedOut((m) => ({ name: "Agent", input: { description: "probe", prompt: m, subagent_type: "general-purpose", name: "mate" } })))
     }, 120_000)
 
-    it("holds a dynamic workflow's agents, and runs the Workflow tool without a prompt", async () => {
-      const script = `export const meta = { name: "probe", description: "probe", phases: [] }\nawait agent(${JSON.stringify(MARK)})\n`
-      held(await fannedOut(() => ({ name: "Workflow", input: { script } })))
-    }, 120_000)
-
-    it("offers a worker no fan-out unless worker.fanOut is on, and never the web or skills", async () => {
+    it("offers a worker subagents only on worker.fanOut, and never the Workflow tool, the web or skills", async () => {
       const home = miniHome("tools")
       const repo = gitRepo(join(home, "polads"))
       const worktree = gitRepo(join(home, "worktree"))
@@ -347,8 +338,8 @@ describe.skipIf(!binaryAvailable())("sessions, as the Claude Code binary runs th
       const off = await tools(false)
       for (const tool of ["Task", "Agent", "Workflow"]) expect(off, tool).not.toContain(tool)
       const on = await tools(true)
-      for (const tool of ["Task", "Workflow"]) expect(on, tool).toContain(tool)
-      for (const tool of ["WebFetch", "WebSearch", "Skill"]) expect(on, tool).not.toContain(tool)
+      expect(on).toContain("Task")
+      for (const tool of ["Workflow", "WebFetch", "WebSearch", "Skill"]) expect(on, tool).not.toContain(tool)
     }, 120_000)
   })
 
