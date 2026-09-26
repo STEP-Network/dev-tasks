@@ -216,3 +216,104 @@ it("watches several columns and says which one changed", async () => {
     expect(sent[0].body.variables).toEqual({ item: ["42"] })
   })
 })
+
+/** Wave 3 Task 11: test day's checkpoints are subitems, and its guide is a doc on the Test day item. */
+describe("subitems, item names and item docs (Wave 3)", () => {
+  const SINCE = new Date("2026-09-25T08:00:00.000Z")
+
+  it("reads an item's subitems with their columns", async () => {
+    const sub = { id: "701", name: "1. Advertiser: pay by card (STEP-7)", url: "u", created_at: "2026-09-25T08:00:00Z", creator_id: "900", group: { id: "topics" }, column_values: [{ id: "col_verdict", text: "PASS", value: "{\"index\":1}" }], updates: [] }
+    const { f, sent } = fakeFetch([{ json: { data: { items: [{ subitems: [sub] }] } } }, { json: { data: { items: [{ subitems: null }] } } }])
+    const api = createMondayApi(TOKEN, { fetch: f, sleep: noSleep })
+    const subs = await api.readSubitems("42", ["col_verdict"])
+    expect(sent[0].body.variables).toEqual({ item: ["42"], columns: ["col_verdict"] })
+    expect(sent[0].body.query).toContain("items(ids: $item) { subitems {")
+    expect(subs).toHaveLength(1)
+    expect(subs[0]).toMatchObject({ id: "701", name: "1. Advertiser: pay by card (STEP-7)", creatorId: "900", columns: { col_verdict: { text: "PASS" } } })
+    expect(await api.readSubitems("42", ["col_verdict"])).toEqual([])
+  })
+
+  it("refuses to read the subitems of an item Monday does not have, rather than read them as none", async () => {
+    const { f } = fakeFetch([{ json: { data: { items: [] } } }])
+    const api = createMondayApi(TOKEN, { fetch: f, sleep: noSleep })
+    await expect(api.readSubitems("42", ["col_verdict"])).rejects.toThrow(new MondayRefused("Monday: no item 42, or the token's user cannot see it"))
+    await expect(api.readSubitems("4x", [])).rejects.toThrow(/not a Monday id/)
+  })
+
+  it("reads who changed a column on another board (the subitems board), oldest first", async () => {
+    const entry = (id: string, user: string, at: string, column: string, text: string) => ({ id, event: "update_column_value", user_id: user, created_at: at, data: JSON.stringify({ column_id: column, pulse_id: 701, textual_value: text }) })
+    const { f, sent } = fakeFetch([{
+      json: { data: { boards: [{ activity_logs: [entry("10", "111", "2026-09-25T09:30:00.000Z", "col_verdict", "PASS"), entry("9", "222", "2026-09-25T09:00:00.000Z", "col_verdict", "FAIL"), entry("11", "222", "2026-09-25T09:40:00.000Z", "col_note", "x")] }] } },
+    }])
+    const changes = await createMondayApi(TOKEN, { fetch: f, sleep: noSleep }).columnChanges("77", ["col_verdict"], SINCE)
+    expect(sent[0].body.variables).toEqual({ board: ["77"] })
+    expect(sent[0].body.query).toContain(`activity_logs(column_ids: ["col_verdict"], from: "${SINCE.toISOString()}"`)
+    expect(changes).toEqual([
+      { id: "9", itemId: "701", userId: "222", text: "FAIL", at: "2026-09-25T09:00:00.000Z", columnId: "col_verdict" },
+      { id: "10", itemId: "701", userId: "111", text: "PASS", at: "2026-09-25T09:30:00.000Z", columnId: "col_verdict" },
+    ])
+  })
+
+  it("reads no log when no column is asked for, refuses a board it cannot see, and checks what goes into the query", async () => {
+    const { f, sent } = fakeFetch([{ json: { data: { boards: [] } } }])
+    const api = createMondayApi(TOKEN, { fetch: f, sleep: noSleep })
+    expect(await api.columnChanges("77", [], SINCE)).toEqual([])
+    expect(sent).toHaveLength(0)
+    await expect(api.columnChanges("77", ["col_verdict"], SINCE)).rejects.toThrow(/no board 77/)
+    await expect(api.columnChanges("77", ['x"] '], SINCE)).rejects.toThrow(/not a Monday column id/)
+    await expect(api.columnChanges('7"]', ["col_verdict"], SINCE)).rejects.toThrow(/not a Monday id/)
+    expect(sent).toHaveLength(1)
+  })
+
+  it("creates a subitem, renames an item, and never lets Monday invent a label", async () => {
+    const { f, sent } = fakeFetch([{ json: { data: { create_subitem: { id: "702" } } } }, { json: { data: { change_simple_column_value: { id: "42" } } } }])
+    const api = createMondayApi(TOKEN, { fetch: f, sleep: noSleep })
+    expect(await api.createSubitem("42", "2. Publisher: approve", { col_verdict: { label: "To test" } })).toBe("702")
+    await api.renameItem("5", "42", "Test day 2026-10-02")
+    expect(sent[0].body.query).toContain("create_subitem(parent_item_id: $parent, item_name: $name, column_values: $values, create_labels_if_missing: false)")
+    expect(sent[0].body.variables).toEqual({ parent: "42", name: "2. Publisher: approve", values: JSON.stringify({ col_verdict: { label: "To test" } }) })
+    expect(sent[1].body.query).toContain('change_simple_column_value(board_id: $board, item_id: $item, column_id: "name", value: $name)')
+    expect(sent[1].body.variables).toEqual({ board: "5", item: "42", name: "Test day 2026-10-02" })
+  })
+
+  it("refuses a subitem Monday did not create, rather than hand back no id", async () => {
+    const { f } = fakeFetch([{ json: { data: { create_subitem: null } } }])
+    await expect(createMondayApi(TOKEN, { fetch: f, sleep: noSleep }).createSubitem("42", "1. x", {})).rejects.toThrow(new MondayRefused("Monday: no subitem was created under item 42"))
+  })
+
+  it("creates a doc in an item's doc column, names it, and fills it from markdown", async () => {
+    const { f, sent } = fakeFetch([
+      { json: { data: { create_doc: { id: "3001" } } } },
+      { json: { data: { update_doc_name: null } } },
+      { json: { data: { add_content_to_doc_from_markdown: { success: true, error: null } } } },
+      { json: { data: { add_content_to_doc_from_markdown: { success: false, error: "too long" } } } },
+      { json: { data: { add_content_to_doc_from_markdown: null } } },
+    ])
+    const api = createMondayApi(TOKEN, { fetch: f, sleep: noSleep })
+    expect(await api.createItemDoc("42", "col_doc", "Test day 2026-10-02")).toBe("3001")
+    expect(sent[0].body.query).toContain("create_doc(location: { board: { item_id: $item, column_id: $column } }) { id }")
+    expect(sent[0].body.variables).toEqual({ item: "42", column: "col_doc" })
+    // update_doc_name answers Monday's JSON scalar, which takes no selection: `{ id }` after it is refused.
+    expect(sent[1].body.query).toMatch(/update_doc_name\(docId: \$doc, name: \$name\) \}$/)
+    expect(sent[1].body.variables).toEqual({ doc: "3001", name: "Test day 2026-10-02" })
+    await api.appendDoc("3001", "# Test day\r\n\n1. Open the page")
+    expect(sent[2].body.query).toContain("add_content_to_doc_from_markdown(docId: $doc, markdown: $markdown) { success error }")
+    expect(sent[2].body.variables).toEqual({ doc: "3001", markdown: "# Test day\n\n1. Open the page" })
+    await expect(api.appendDoc("3001", "x")).rejects.toThrow(new MondayRefused("Monday: the doc did not take the text (too long)"))
+    await expect(api.appendDoc("3001", "x")).rejects.toThrow(new MondayRefused("Monday: the doc did not take the text (no reason given)"))
+  })
+
+  it("refuses a doc Monday did not create, and checks the column id first", async () => {
+    const { f, sent } = fakeFetch([{ json: { data: { create_doc: null } } }])
+    const api = createMondayApi(TOKEN, { fetch: f, sleep: noSleep })
+    await expect(api.createItemDoc("42", "col_doc", "Test day")).rejects.toThrow(new MondayRefused("Monday: no doc was created on item 42"))
+    await expect(api.createItemDoc("42", "col-doc", "Test day")).rejects.toThrow(/not a Monday column id/)
+    expect(sent).toHaveLength(1)
+  })
+
+  it("keeps a doc it created when naming it fails: a retry would put a second doc on the item", async () => {
+    const { f, sent } = fakeFetch([{ json: { data: { create_doc: { id: "3001" } } } }, { json: { errors: [{ message: "Doc is locked" }] } }])
+    expect(await createMondayApi(TOKEN, { fetch: f, sleep: noSleep }).createItemDoc("42", "col_doc", "Test day")).toBe("3001")
+    expect(sent).toHaveLength(2)
+  })
+})

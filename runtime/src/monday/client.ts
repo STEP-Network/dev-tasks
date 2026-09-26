@@ -2,7 +2,8 @@
  * The Monday API, as the Monday bridge uses it (STEP-3289) and no more: read
  * a board and who changed the columns it watches (one call), list a board's
  * columns, read the account's daily call limit, and write items, updates and
- * column values, and move an item to another board (Wave 2). The token is the agent's own Monday user's, from
+ * column values, and move an item to another board (Wave 2), and read and
+ * create subitems, rename items and write item docs (Wave 3's test day). The token is the agent's own Monday user's, from
  * ~/.config/agentd/monday.env. It travels only in the Authorization header:
  * never in a query, a log line, an error or an argv, and a redirect is
  * refused rather than followed with it.
@@ -96,6 +97,25 @@ export interface MondayApi {
    * Monday wants every source column mapped: `target: null` drops one.
    */
   moveItemToBoard(boardId: string, groupId: string, itemId: string, mapping: Array<{ source: string; target: string | null }>): Promise<void>
+  /** An item's subitems (test day's checkpoints, Wave 3), with the columns asked for. An item Monday does not have is refused, not read as none. */
+  readSubitems(parentItemId: string, columnIds: string[]): Promise<MondayItem[]>
+  /**
+   * Who changed any of `columnIds` on a board since `since`, from its activity
+   * log, oldest first. The subitems board is a board of its own: this is how a
+   * checkpoint's verdict gets its author. No column asked for, no call.
+   */
+  columnChanges(boardId: string, columnIds: string[], since: Date): Promise<ColumnChange[]>
+  createSubitem(parentItemId: string, name: string, values: Record<string, unknown>): Promise<string>
+  /** `boardId` is the item's own board: a subitem's is the subitems board. */
+  renameItem(boardId: string, itemId: string, name: string): Promise<void>
+  /**
+   * A new doc in an item's doc column, named `title`: its id. A name Monday
+   * refuses leaves its default name, and the doc id is still returned, since a
+   * retry would put a second doc on the item.
+   */
+  createItemDoc(itemId: string, columnId: string, title: string): Promise<string>
+  /** Markdown added at the end of a doc. Monday's `success: false` is a MondayRefused. */
+  appendDoc(docId: string, markdown: string): Promise<void>
 }
 
 export interface MondayApiOptions {
@@ -358,6 +378,67 @@ export function createMondayApi(token: string, opts: MondayApiOptions = {}): Mon
          }`,
         { board: checked(boardId, ID_RE, "Monday id"), group: groupId, item: checked(itemId, ID_RE, "Monday id"), mapping },
       )
+    },
+
+    async readSubitems(parentItemId, columnIds) {
+      const data = await request<{ items: Array<{ subitems: RawItem[] | null }> }>(
+        `query($item: [ID!], $columns: [String!]) { items(ids: $item) { subitems { ${ITEM_FIELDS} } } }`,
+        { item: [checked(parentItemId, ID_RE, "Monday id")], columns: columnIds },
+      )
+      const parent = data.items[0]
+      if (!parent) throw new MondayRefused(`Monday: no item ${parentItemId}, or the token's user cannot see it`)
+      return (parent.subitems ?? []).map(toItem)
+    },
+
+    async columnChanges(boardId, columnIds, since) {
+      if (!columnIds.length) return []
+      const data = await request<{ boards: Array<{ activity_logs: RawLog[] | null }> }>(
+        `query($board: [ID!]) { boards(ids: $board) { activity_logs(column_ids: ${columnList(columnIds)}, from: "${since.toISOString()}", limit: 500) { id event data user_id created_at } } }`,
+        { board: [checked(boardId, ID_RE, "Monday id")] },
+      )
+      const board = data.boards[0]
+      if (!board) throw new Error(`Monday: no board ${boardId}, or the token's user cannot see it`)
+      return columnLogs(board.activity_logs, columnIds)
+    },
+
+    async createSubitem(parentItemId, name, values) {
+      const data = await request<{ create_subitem: { id: string } | null }>(
+        `mutation($parent: ID!, $name: String!, $values: JSON!) {
+           create_subitem(parent_item_id: $parent, item_name: $name, column_values: $values, create_labels_if_missing: false) { id }
+         }`,
+        { parent: parentItemId, name, values: JSON.stringify(values) },
+      )
+      const id = data.create_subitem?.id
+      if (!id) throw new MondayRefused(`Monday: no subitem was created under item ${parentItemId}`)
+      return String(id)
+    },
+
+    async renameItem(boardId, itemId, name) {
+      await request(
+        `mutation($board: ID!, $item: ID!, $name: String!) { change_simple_column_value(board_id: $board, item_id: $item, column_id: "name", value: $name) { id } }`,
+        { board: boardId, item: itemId, name },
+      )
+    },
+
+    async createItemDoc(itemId, columnId, title) {
+      const data = await request<{ create_doc: { id: string } | null }>(
+        `mutation($item: ID!, $column: String!) { create_doc(location: { board: { item_id: $item, column_id: $column } }) { id } }`,
+        { item: itemId, column: checked(columnId, COLUMN_RE, "Monday column id") },
+      )
+      const id = data.create_doc?.id
+      if (!id) throw new MondayRefused(`Monday: no doc was created on item ${itemId}`)
+      // create_doc takes no name. update_doc_name answers Monday's JSON scalar, which takes no selection.
+      await request(`mutation($doc: ID!, $name: String!) { update_doc_name(docId: $doc, name: $name) }`, { doc: String(id), name: title }).catch(() => {})
+      return String(id)
+    },
+
+    async appendDoc(docId, markdown) {
+      const data = await request<{ add_content_to_doc_from_markdown: { success: boolean; error: string | null } | null }>(
+        `mutation($doc: ID!, $markdown: String!) { add_content_to_doc_from_markdown(docId: $doc, markdown: $markdown) { success error } }`,
+        { doc: docId, markdown: markdown.replace(/\r\n/g, "\n") },
+      )
+      const result = data.add_content_to_doc_from_markdown
+      if (!result?.success) throw new MondayRefused(`Monday: the doc did not take the text (${redact(result?.error ?? "no reason given")})`)
     },
   }
 }
