@@ -141,7 +141,10 @@ export function planTransition(issue: Pick<TrackerIssue, "labels">, a: { decided
   // A yes to it, or the person's own words saying it: never how the front door worded their decision.
   const said = a.decided?.agreed ? a.decided.recommendation : (a.words ?? "")
   const approved = answerCore(said) === answerCore(PLAN_RECOMMENDATION)
-  return approved ? { removeLabels: ["plan-to-approve"], addLabels: ["plan-approved"] } : { removeLabels: ["plan-to-approve"] }
+  // Anything else sends the plan back: an earlier plan's OK, on a plan asked about again, goes with the question (review).
+  return approved
+    ? { removeLabels: ["plan-to-approve"], addLabels: ["plan-approved"] }
+    : { removeLabels: ["plan-to-approve", ...(issue.labels.includes("plan-approved") ? ["plan-approved"] : [])] }
 }
 
 /** The notice of a plan approval in #polads-agents: the detection layer for a session the people-doors guard did not stop. */

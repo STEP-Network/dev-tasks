@@ -4,6 +4,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { describe, expect, it } from "vitest"
+import { planTransition } from "../../answer.ts"
 import { agentPaths, ConfigSchema } from "../../config.ts"
 import { listNew } from "../../fsq.ts"
 import { listJobs, moveJob, submitJob } from "../../jobs.ts"
@@ -760,6 +761,15 @@ describe("runJob", () => {
     const { deps, job, fake } = setup({ issueOver: { labels: ["polads", "agent-ready", "approval/try", "plan-approved"] } })
     await runJob(deps, job.id)
     expect(fake.called("claimIssue")).toHaveLength(1)
+  })
+
+  it("parks a re-asked Try plan once a person answered it with anything but a yes: the recorder took both plan labels off (review)", async () => {
+    const asked = ["polads", "agent-ready", "approval/try", "plan-approved", "plan-to-approve"]
+    const { removeLabels = [] } = planTransition({ labels: asked }, { words: "make it two tasks" })
+    const { deps, job, fake, q } = setup({ issueOver: { labels: asked.filter((l) => !removeLabels.includes(l)) } })
+    expect(await runJob(deps, job.id)).toMatchObject({ status: "skipped", reason: "STEP-7 is Try work without a person's OK on its plan: parked for /refine to ask for it" })
+    expect(fake.called("claimIssue")).toEqual([])
+    expect(q.seen).toHaveLength(0)
   })
 
   it("parks Try work re-planned after an OK: the new plan waits for its own, whatever the old one said (review)", async () => {
