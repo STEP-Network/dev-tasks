@@ -40,6 +40,24 @@ describe("the Requests board's config (Wave 2)", () => {
   })
 })
 
+describe("effort (STEP-3367)", () => {
+  it("is unset unless configured, so each session keeps its model's default", () => {
+    const c = ConfigSchema.parse(MINIMAL)
+    expect(c.worker.effort).toBeUndefined()
+    expect(c.frontDoor.effort).toBeUndefined()
+  })
+
+  it("takes one of Claude's five levels, for the workers and the front door apart", () => {
+    const c = ConfigSchema.parse({ ...MINIMAL, worker: { effort: "xhigh" }, frontDoor: { effort: "max" } })
+    expect(c.worker.effort).toBe("xhigh")
+    expect(c.frontDoor.effort).toBe("max")
+    for (const effort of ["extreme", "XHIGH", 3]) {
+      expect(() => ConfigSchema.parse({ ...MINIMAL, worker: { effort } }), String(effort)).toThrow()
+      expect(() => ConfigSchema.parse({ ...MINIMAL, frontDoor: { effort } }), String(effort)).toThrow()
+    }
+  })
+})
+
 describe("agentPaths", () => {
   it("puts everything under ~/.agentd", () => {
     const paths = agentPaths("/Users/eve")

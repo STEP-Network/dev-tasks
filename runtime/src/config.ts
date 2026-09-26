@@ -267,6 +267,9 @@ const UserTestSchema = z
     }
   })
 
+/** Claude's reasoning effort: the Agent SDK's `effort`, the CLI's --effort. Left out, the model's own default. */
+const EffortSchema = z.enum(["low", "medium", "high", "xhigh", "max"])
+
 export const ConfigSchema = z.object({
   /** The mini's name: the claim comment, the Slack prefix, the profile's `mini`. */
   mini: z.string().regex(MINI_RE),
@@ -301,6 +304,8 @@ export const ConfigSchema = z.object({
   frontDoor: z
     .object({
       model: z.string().default("sonnet"),
+      /** The front door's claude runs with --effort <this>. */
+      effort: EffortSchema.optional(),
       tmuxSession: z.string().default("frontdoor"),
       /** Longer than /loop's longest self-paced wait (60 minutes), so a quiet night is not a hang. */
       staleTickMinutes: z.number().int().positive().default(75),
@@ -321,6 +326,8 @@ export const ConfigSchema = z.object({
     .object({
       defaultModel: z.string().default("sonnet"),
       complexModel: z.string().default("opus"),
+      /** Every SDK session this mini runs: develop, revise and merge rounds, the browser test, the retro. */
+      effort: EffortSchema.optional(),
       maxTurns: z.number().int().positive().default(250),
       maxBudgetUsd: z.number().positive().default(15),
       wallClockMinutes: z.number().int().positive().default(90),

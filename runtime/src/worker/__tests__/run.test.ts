@@ -109,6 +109,15 @@ describe("runJob", () => {
     expect(q.seen).toHaveLength(0)
   })
 
+  it("runs the session at worker.effort, and at the model's default when it is unset (STEP-3367)", async () => {
+    const on = setup({ worker: { effort: "xhigh" } })
+    await runJob(on.deps, on.job.id)
+    expect(on.q.seen[0].options.effort).toBe("xhigh")
+    const off = setup()
+    await runJob(off.deps, off.job.id)
+    expect(off.q.seen[0].options).not.toHaveProperty("effort")
+  })
+
   it("claims, prepares the worktree, runs the session and opens the PR", async () => {
     const { deps, job, fake, f, q, paths, outbox } = setup()
     expect(await runJob(deps, job.id)).toMatchObject({ status: "done", prUrl: PR, branch: "STEP-7-fix-the-date", costUsd: 2.4, turns: 31 })

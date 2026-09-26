@@ -75,6 +75,12 @@ describe("userTestSdkOptions", () => {
     expect(CHROME_TOOLS).not.toContain("upload_file")
   })
 
+  it("runs at worker.effort, and at the model's default when it is unset (STEP-3367)", () => {
+    expect(o).not.toHaveProperty("effort")
+    const xhigh = ConfigSchema.parse({ mini: "eve", repo: { path: "/r" }, pluginRoot: "/p", slack: { allowedUsers: ["U0EXAMPLE"] }, worker: { effort: "xhigh" } })
+    expect(userTestSdkOptions({ config: xhigh, cwd: "/run", mcpBin: "/mcp.js", port: 9333, patterns: [], origins: ORIGINS, shotsDir: "/shots", env: {}, abortController: new AbortController() }).effort).toBe("xhigh")
+  })
+
   it("takes away the shell, files, the web, agents and skills, and loads no settings or other MCP", () => {
     for (const tool of ["Bash", "Read", "Write", "Edit", "WebFetch", "WebSearch", "Agent", "Task", "Skill"]) expect(o.disallowedTools).toContain(tool)
     expect(o.settingSources).toEqual([])

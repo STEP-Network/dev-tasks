@@ -18,6 +18,12 @@ describe("templates/config.example.json", () => {
     expect(config.slack.otherAgentBots).toEqual([])
   })
 
+  it("runs Eve's model at xhigh, in the workers and at the front door (STEP-3367)", () => {
+    const config = ConfigSchema.parse(example)
+    expect(config.worker).toMatchObject({ defaultModel: "claude-opus-5-5", complexModel: "claude-opus-5-5", effort: "xhigh" })
+    expect(config.frontDoor).toMatchObject({ model: "claude-opus-5-5", effort: "xhigh" })
+  })
+
   it("leaves the binaries' paths to install.sh", () => {
     expect(example.frontDoor.claudePath).toBeUndefined()
     expect(example.frontDoor.tmuxPath).toBeUndefined()

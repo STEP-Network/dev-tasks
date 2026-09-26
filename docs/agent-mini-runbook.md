@@ -268,6 +268,14 @@ auto-merge is armed whenever the project's policy for the base branch is
 `auto-after-checks-and-review`. The worker reads it at the start of each
 job, so a change needs no restart.
 
+`worker.effort` and `frontDoor.effort` set Claude's reasoning effort: `low`,
+`medium`, `high`, `xhigh` or `max`. `worker.effort` goes to every SDK session
+the mini runs (develop, revise and merge rounds, the browser test, the
+retro); `frontDoor.effort` starts the front door's `claude` with `--effort`.
+Left out, each runs at its model's default. The template's models and effort
+are Eve's: `claude-opus-5-5` at `xhigh`. A change to `worker.effort` counts
+from the next job; the front door takes its own at its next start.
+
 `retro.enabled` turns on the weekly retro (section 11, The weekly retro) on
 this mini. Only one mini, the coordinator, has it on. It is off by default,
 as in the example. The retro pushes a branch to STEP-Network/dev-tasks with

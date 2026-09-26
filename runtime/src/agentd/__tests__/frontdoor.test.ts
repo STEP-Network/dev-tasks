@@ -108,6 +108,14 @@ describe("claudeCommand", () => {
     )
   })
 
+  it("runs at --effort when frontDoor.effort is set, and passes none when it is not (STEP-3367)", () => {
+    const base = { claudePath: "claude", resumeId: null, model: "claude-opus-5-5", settingsPath: "/s.json" }
+    expect(claudeCommand({ ...base, effort: "xhigh" })).toBe(
+      "claude --settings /s.json --model claude-opus-5-5 --effort xhigh --permission-mode auto --permission-prompts none '/loop /dev-tasks:front-door'",
+    )
+    expect(claudeCommand(base)).not.toContain("--effort")
+  })
+
   it("starts a new session without pinning an id", () => {
     expect(claudeCommand({ claudePath: "claude", resumeId: null, model: "sonnet", settingsPath: "/s.json" })).toBe(
       "claude --settings /s.json --model sonnet --permission-mode auto --permission-prompts none '/loop /dev-tasks:front-door'",
@@ -167,6 +175,13 @@ describe("frontDoorAlive", () => {
 })
 
 describe("applyFrontDoor", () => {
+  it("starts the front door at frontDoor.effort (STEP-3367)", async () => {
+    const { f, deps } = setup()
+    const config = { ...deps.config, frontDoor: { ...deps.config.frontDoor, effort: "xhigh" as const } }
+    await applyFrontDoor({ ...deps, config }, FRESH_FRONT_DOOR, { kind: "start", mode: "new", reason: "first start", fastExits: 0 })
+    expect(f.lines()[0]).toContain(" --model sonnet --effort xhigh --permission-mode auto ")
+  })
+
   it("starts a new session in tmux in the PolAds checkout and records it", async () => {
     const { f, deps, paths } = setup()
     const next = await applyFrontDoor(deps, FRESH_FRONT_DOOR, { kind: "start", mode: "new", reason: "first start", fastExits: 0 })

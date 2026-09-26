@@ -88,6 +88,7 @@ export function sdkOptions(o: SdkOptionsInput): Options {
   return {
     cwd: o.cwd,
     model: o.model,
+    ...(o.config.worker.effort ? { effort: o.config.worker.effort } : {}),
     maxTurns: o.config.worker.maxTurns,
     maxBudgetUsd: o.config.worker.maxBudgetUsd,
     abortController: o.abortController,
