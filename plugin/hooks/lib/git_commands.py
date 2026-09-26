@@ -6,35 +6,45 @@ stdin and prints one line per finding, then END:
   DESTRUCTIVE <label>   what gate (a) refuses: rm -rf, git push --force
                         (--force-with-lease too), git push -f, git reset --hard,
                         git checkout \. (the argument "." only), git clean -f,
-                        git branch -D. Read from the command's words, so
-                        grep "rm -rf" or a message that names one is none.
+                        git branch -D; a git config write to alias.*,
+                        include.*, push.* or remote.<name>.push, .url,
+                        .pushurl or .mirror (--global, --system, --file
+                        too), git config --edit, git remote set-url. Read
+                        from the command's words, so grep "rm -rf" or a
+                        message that names one is none.
   COMMIT <dir>          a git commit, run in <dir> (relative to the hook's root)
-  COMMIT @unknown       a git commit in a repository or directory it cannot name
+  COMMIT @unknown       a git commit in a repository or directory it cannot
+                        name (--git-dir, GIT_DIR=, cd -)
   PUSH <branch>         a branch a git push names
   PUSH @current <dir>   the branch checked out in <dir>: a push that names
                         only a remote, or HEAD
   PUSH @all             every branch, or the ones git's config picks: --all,
                         --mirror, --branches, a ':' or glob refspec,
-                        -c push.* or -c remote.<name>.push
+                        -c push.* or -c remote.<name>.push or .mirror; and
+                        any git that runs with GIT_CONFIG* in the command,
+                        whose config it cannot see
   PUSH @unknown         a push whose branch it cannot name: from a repository
                         or directory it cannot name; under xargs, which adds
                         words (the subcommand, a branch); or with a word bash
                         or find computes as it runs ($B, $(...), a backtick,
                         a brace or glob, find's {}), the git word or
-                        subcommand too
+                        subcommand too; and any git with -c alias.* or
+                        include.*, where any word can be a push
 
 What it reads: each command word in the text, split on ; && || | & ( ); the
 body of each $(...), `...`, <(...) and >(...), which bash runs, in double
 quotes and unquoted heredocs too; the text of sh -c and eval; the command
-after xargs and find -exec; and a `cd` before a git command. A $'...' word
+after xargs and find -exec, and after a wrapper's options (nice -n 5,
+env -u X, sudo -u u; env -S's text; env -C runs it elsewhere); and a `cd`
+before a git command. A 2> or 2>&1 is a redirect, not a word. A $'...' word
 is its decoded text ($'git' is git), up to a NUL, where bash and zsh cut it
 differently: both readings are checked. An option after `--` is an argument
 (rm -r -- -f). Not what quotes or a heredoc hold as text: `git
 commit` with a message that says "push" is no push. A text it cannot read (an unclosed quote, parenthesis or heredoc)
 raises: no END, and the hooks refuse the command.
 
-Out of scope, left to the server's rulesets: git aliases, and config from the
-environment (GIT_CONFIG_*).
+Out of scope, left to the server's rulesets: git aliases already in git's
+config files (a command can no longer write one, or pass one with -c).
 """
 
 import os
@@ -52,10 +62,32 @@ WRAPPERS = {
     "!", "{", "(", "then", "do", "else", "elif", "if", "while", "until",
 }
 XARGS_VALUE_OPTIONS = {"-n", "-I", "-L", "-P", "-s", "-E", "-d", "-a", "-J", "-R", "-S"}
+# A wrapper's options that take a value: the word after one is not the command (nice -n 5 git).
+WRAPPER_VALUE_OPTIONS = {
+    "xargs": XARGS_VALUE_OPTIONS,
+    "env": {"-u", "--unset", "-C", "--chdir", "-S", "--split-string", "-P"},
+    "nice": {"-n", "--adjustment"},
+    "sudo": {"-u", "--user", "-g", "--group", "-h", "--host", "-p", "--prompt", "-C", "--close-from", "-D", "--chdir",
+             "-R", "--chroot", "-T", "--command-timeout", "-U", "--other-user", "-r", "--role", "-t", "--type"},
+    "exec": {"-a"},
+    "time": {"-f", "--format", "-o", "--output"},
+}
+WRAPPER_CHDIR = {("env", "-C"), ("env", "--chdir"), ("sudo", "-D"), ("sudo", "--chdir")}
+WRAPPER_SPLIT = {("env", "-S"), ("env", "--split-string")}
+FD_REDIRECT = re.compile(r"[0-9]+(?=[<>])")
 SHELLS = {"sh", "bash", "zsh", "dash", "ksh"}
 FIND_EXEC = {"-exec", "-execdir", "-ok", "-okdir"}
 GLOBAL_VALUE_OPTIONS = {"-C", "-c", "--git-dir", "--work-tree", "--namespace", "--config-env", "--super-prefix"}
 OTHER_REPO = {"--git-dir", "--work-tree", "--namespace"}
+# The same, from the environment. GIT_CONFIG* (COUNT, KEY_n, VALUE_n, PARAMETERS, GLOBAL, SYSTEM)
+# carries config the command's words do not show.
+REPO_ENV = {"GIT_DIR", "GIT_WORK_TREE", "GIT_NAMESPACE"}
+# git config: its reads, the options that write, and the options whose value is the next word.
+CONFIG_READS = {"--get", "--get-all", "--get-regexp", "--get-urlmatch", "--get-color", "--get-colorbool", "-l", "--list"}
+CONFIG_WRITES = {"--add", "--replace-all", "--unset", "--unset-all"}
+CONFIG_SECTION_WRITES = {"--rename-section", "--remove-section"}
+CONFIG_VALUE_OPTIONS = {"-f", "--file", "--blob", "--type", "--default", "--comment", "--value", "--url"}
+CONFIG_VERBS = {"get", "list", "set", "unset", "rename-section", "remove-section", "edit"}
 PUSH_VALUE_OPTIONS = {"-o", "--push-option", "--repo", "--receive-pack", "--exec"}
 # Stand-ins no shell word can hold: lone surrogates. A decoded $'...' keeps none,
 # and stdin's surrogateescape gives only U+DC80-U+DCFF.
@@ -121,7 +153,10 @@ def command(t, i, closer, texts):
             i, body = command(t, i + 1, "`", texts)
             texts.append(body)
             out.append(COMPUTED)
-        elif c == "#" and (not out or out[-1][-1:] in ("", " ", "\t", "\n", ";", "&", "|", "(")):
+        elif c in "0123456789" and word_start(out) and FD_REDIRECT.match(t, i):
+            # The fd of a redirect (2>&1, 2>/dev/null) is part of it, not a word of the command.
+            i = FD_REDIRECT.match(t, i).end()
+        elif c == "#" and word_start(out):
             end = t.find("\n", i)
             i = len(t) if end < 0 else end
         elif t.startswith("<<", i) and not t.startswith("<<<", i):
@@ -148,6 +183,11 @@ def command(t, i, closer, texts):
     if closer or pending:
         raise Unreadable("an unclosed " + ("substitution" if closer else "heredoc"))
     return i, "".join(out)
+
+
+def word_start(out):
+    """Whether the next character of the text read so far starts a word."""
+    return not out or out[-1][-1:] in ("", " ", "\t", "\n", ";", "&", "|", "(")
 
 
 ANSI_C = {"n": "\n", "t": "\t", "r": "\r", "a": "\a", "b": "\b", "f": "\f", "v": "\v", "e": "\x1b", "E": "\x1b", "\\": "\\", "'": "'", '"': '"', "?": "?"}
@@ -297,6 +337,19 @@ def computed(word):
     )
 
 
+def git_env(words):
+    """What a command's words may set in git's environment: its config (GIT_CONFIG*), which can
+    pick a push's branches or make any word a push, or another repository (GIT_DIR and the like)."""
+    found = set()
+    for word in words:
+        name = word.split("=", 1)[0]
+        if name.startswith("GIT_CONFIG"):
+            found.add("config")
+        elif name in REPO_ENV:
+            found.add("repo")
+    return found
+
+
 def readings(words):
     """The words as each shell runs them. Where a $'...' held a NUL, bash drops the rest of
     the $'...' ($'gi\\0x't is git) and zsh the rest of the word ($'main\\0'-x is main)."""
@@ -307,20 +360,40 @@ def readings(words):
 
 def command_word(words):
     """The index of the word bash runs, past VAR=value words and wrappers like env, sudo, time,
-    xargs; and whether xargs runs it, which adds words of its own to the command."""
-    i, via_xargs = 0, False
+    xargs; whether xargs runs it, which adds words of its own to the command; whether a wrapper
+    runs it in another directory (env -C, sudo -D); and the text env -S splits into it, or None."""
+    i, via_xargs, moved, split = 0, False, False, None
     while i < len(words):
         if ASSIGNMENT.match(words[i]):
             i += 1
         elif words[i] in WRAPPERS or words[i] == "xargs":
-            via_xargs = via_xargs or words[i] == "xargs"
-            takes_values = XARGS_VALUE_OPTIONS if words[i] == "xargs" else set()
+            wrapper = words[i]
+            via_xargs = via_xargs or wrapper == "xargs"
+            takes_values = WRAPPER_VALUE_OPTIONS.get(wrapper, set())
             i += 1
             while i < len(words) and words[i].startswith("-"):
-                i += 2 if words[i] in takes_values else 1
+                option, value = wrapper_option(words[i], takes_values)
+                if option in takes_values and value is None:
+                    value = words[i + 1] if i + 1 < len(words) else ""
+                    i += 1
+                i += 1
+                moved = moved or (wrapper, option) in WRAPPER_CHDIR
+                split = value if (wrapper, option) in WRAPPER_SPLIT else split
         else:
             break
-    return i, via_xargs
+    return i, via_xargs, moved, split
+
+
+def wrapper_option(word, takes_values):
+    """One option word of a wrapper: (the option, its value in the same word or None). A short option
+    that takes a value ends a bundle: sudo -Eu root, nice -n5."""
+    if word.startswith("--"):
+        option, equals, value = word.partition("=")
+        return option, value if equals else None
+    for k, c in enumerate(word[1:], 1):
+        if "-" + c in takes_values:
+            return "-" + c, word[k + 1 :] or None
+    return word, None
 
 
 def git_subcommand(args):
@@ -363,6 +436,10 @@ def destructive(argv):
         return "git checkout \\."
     if sub == "clean" and ("f" in shorts(rest) or has(rest, "--force")):
         return "git clean -f"
+    if sub == "config":
+        return config_write(rest)
+    if sub == "remote" and rest[:1] == ["set-url"]:
+        return "git remote set-url"
     if sub == "branch":
         delete = "d" in shorts(rest) or has(rest, "--delete")
         force = "f" in shorts(rest) or has(rest, "--force")
@@ -372,14 +449,54 @@ def destructive(argv):
 
 
 def config_pushes(key):
+    """A config key that picks the branches a push takes: push.*, remote.<name>.push or .mirror."""
     key = key.lower()
-    return key.startswith("push.") or re.fullmatch(r"remote\..+\.push", key) is not None
+    return key.startswith("push.") or re.fullmatch(r"remote\..+\.(push|mirror)", key) is not None
 
 
-def git_command(words, cwd, out, appended=False):
+def config_commands(key):
+    """A config key that can make a git word run something else: an alias, or a file of config it includes."""
+    return key.lower().startswith(("alias.", "include.", "includeif."))
+
+
+def config_write(args):
+    """A git config write to a key that can hide a push, as gate (a)'s label; None for a read or another key.
+    The keys: alias.*, include.* and includeIf.* (a file of config), push.*, remote.<name>.push, .url,
+    .pushurl and .mirror, in any config file (--global, --system, --file too); and --edit, which writes any."""
+    names, flags, skip = [], set(), False
+    for a in args:
+        if skip:
+            skip = False
+        elif a in CONFIG_VALUE_OPTIONS:
+            skip = True
+        elif a.startswith("-"):
+            flags.add(a.split("=", 1)[0])
+        else:
+            names.append(a)
+    verb = names.pop(0) if names and names[0] in CONFIG_VERBS else None
+    if flags & CONFIG_READS or verb in ("get", "list"):
+        return None
+    if flags & {"-e", "--edit"} or verb == "edit":
+        return "git config --edit"
+    sections = bool(flags & CONFIG_SECTION_WRITES) or verb in ("rename-section", "remove-section")
+    if not (sections or verb in ("set", "unset") or flags & CONFIG_WRITES or len(names) >= 2):
+        return None  # git config <key>: a read
+    for name in names[:2] if sections else names[:1]:
+        if computed(name):
+            return "git config (a key filled in as it runs)"
+        section, _, rest = name.lower().partition(".")
+        if section in ("alias", "push", "include", "includeif"):
+            return "git config " + section + ".*"
+        if section == "remote" and (sections or rest.rpartition(".")[2] in ("push", "url", "pushurl", "mirror")):
+            return "git config remote.*"
+    return None
+
+
+def git_command(words, cwd, out, appended=False, env=frozenset()):
     """One git invocation (the words after `git`): what it commits or pushes. appended: xargs adds
-    words of its own (the subcommand, a branch, a refspec), so a push can go anywhere."""
-    i, directory, other_repo, by_config = 0, cwd, False, False
+    words of its own (the subcommand, a branch, a refspec), so a push can go anywhere. env: what
+    the command sets in git's environment (git_env)."""
+    i, directory, other_repo, by_config, aliased = 0, cwd, "repo" in env, False, False
     while i < len(words) and words[i].startswith("-"):
         option, value = words[i], None
         if option.startswith("--") and "=" in option:
@@ -390,10 +507,16 @@ def git_command(words, cwd, out, appended=False):
         if option == "-C" and value is not None and directory is not None:
             directory = None if computed(value) else os.path.normpath(os.path.join(directory, os.path.expanduser(value)))
         elif option in ("-c", "--config-env") and value is not None:
-            by_config = by_config or computed(value) or config_pushes(value.split("=", 1)[0])
+            key = value.split("=", 1)[0]
+            by_config = by_config or computed(value) or config_pushes(key)
+            aliased = aliased or computed(value) or config_commands(key)
         elif option in OTHER_REPO:
             other_repo = True
         i += 1
+    if "config" in env:
+        out.append("PUSH @all")  # GIT_CONFIG*: config out of sight can pick any branch, or alias a push
+    if aliased:
+        out.append("PUSH @unknown")  # -c alias.*: any word can be a push
     if i >= len(words):
         if appended:
             out.append("PUSH @unknown")  # xargs adds the subcommand: push, maybe
@@ -437,12 +560,21 @@ def git_command(words, cwd, out, appended=False):
         out.append(current if dst in ("HEAD", "") else "PUSH " + dst)
 
 
-def run(words, cwd, out, appended=False):
+def run(words, cwd, out, appended=False, env=frozenset()):
     """One simple command's words: what it commits, pushes or destroys, and the directory after it.
-    appended: xargs runs it, or the shell or eval that runs it, and adds words of its own."""
-    w, via_xargs = command_word(words)
+    appended: xargs runs it, or the shell or eval that runs it, and adds words of its own.
+    env: what the command sets in git's environment (git_env)."""
+    w, via_xargs, moved, split = command_word(words)
     appended = appended or via_xargs
+    here = None if moved else cwd
+    if split is not None:
+        # env -S 'git push …': its text, split into words, runs, with the words after it.
+        out.extend(analyse(" ".join([split] + [shlex.quote(a) for a in words[w:]]), here, appended, env))
+        return cwd
     if w >= len(words):
+        return cwd
+    if moved:
+        run(words[w:], None, out, appended, env)
         return cwd
     argv = words[w:]
     name = os.path.basename(argv[0])
@@ -457,7 +589,7 @@ def run(words, cwd, out, appended=False):
     if computed(argv[0]) and "push" in argv[1:]:
         out.append("PUSH @unknown")  # $G push …: git, maybe
     if name == "git":
-        git_command(argv[1:], cwd, out, appended)
+        git_command(argv[1:], cwd, out, appended, env)
     elif name in SHELLS:
         # sh -c '…' (or -lc, -ec) runs its text as a command: read it the same way.
         def runs_text(a):
@@ -465,32 +597,34 @@ def run(words, cwd, out, appended=False):
 
         flag = next((k for k, a in enumerate(argv[1:-1], 1) if runs_text(a)), None)
         if flag is not None:
-            out.extend(analyse(argv[flag + 1], cwd, appended))
+            out.extend(analyse(argv[flag + 1], cwd, appended, env))
         elif appended and runs_text(argv[-1]):
             out.append("PUSH @unknown")  # xargs sh -c: xargs adds the text it runs
     elif name == "eval":
-        out.extend(analyse(" ".join(argv[1:]), cwd, appended))
+        out.extend(analyse(" ".join(argv[1:]), cwd, appended, env))
     elif name == "find":
         # find -exec … ; runs the words after it for each file ({} is the file); -execdir in the file's directory.
         for k, word in enumerate(argv):
             if word in FIND_EXEC:
                 command = argv[k + 1 :]
                 end = next((j for j, x in enumerate(command) if x in (";", "+")), len(command))
-                run(command[:end], None if word.endswith("dir") else cwd, out, appended)
+                run(command[:end], None if word.endswith("dir") else cwd, out, appended, env)
     return cwd
 
 
-def analyse(text, cwd=".", appended=False):
+def analyse(text, cwd=".", appended=False, env=frozenset()):
     out = []
-    for command_text in command_texts(text):
+    parsed = [[readings(words) for words in segments(t)] for t in command_texts(text)]
+    # A GIT_CONFIG* or GIT_DIR word anywhere (VAR=x git, env, export) holds for every git the text runs.
+    env = env.union(*(git_env(r) for command_segments in parsed for rs in command_segments for r in rs))
+    for command_segments in parsed:
         here = cwd
-        for words in segments(command_text):
-            first, *others = readings(words)
+        for first, *others in command_segments:
             found = []
-            after = run(first, here, found, appended)
+            after = run(first, here, found, appended, env)
             for other in others:
                 more = []
-                if run(other, here, more, appended) != after:
+                if run(other, here, more, appended, env) != after:
                     after = None
                 found.extend(line for line in more if line not in found)
             out.extend(found)
