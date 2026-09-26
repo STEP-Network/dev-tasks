@@ -100,7 +100,10 @@ PUSHES=$(printf '%s\n' "$GIT_COMMANDS" | sed -n 's/^PUSH //p')
 
 # (a) Block destructive commands: rm -rf, git push --force (or -f),
 # git reset --hard, git checkout . (the argument "." only),
-# git clean -f, git branch -D. Read from what the command runs, not its text
+# git clean -f, git branch -D; a git config write to alias.*, include.*,
+# push.* or remote.<name>.push/.url/.pushurl/.mirror (they can hide a push
+# from gate (f)), git config --edit, git remote set-url (STEP-3364).
+# Read from what the command runs, not its text
 # (STEP-3354): the hook runs on every Bash command, and grep "rm -rf", a
 # path like .github, or a PR body that names one of these runs none of them.
 DESTRUCTIVE=$(printf '%s\n' "$GIT_COMMANDS" | sed -n 's/^DESTRUCTIVE //p' | head -n 1)
@@ -400,7 +403,7 @@ if [ -n "$PUSHES" ]; then
         "") continue ;;
         @all)
           echo "BLOCKED: This push can reach every branch, the protected ones included ($PROTECTED_BRANCHES):"
-          echo "--all, --mirror, --branches, a ':' or glob refspec, or git config that picks the branches."
+          echo "--all, --mirror, --branches, a ':' or glob refspec, git config that picks the branches, or GIT_CONFIG* in the command."
           echo "Push the one feature branch by name, and open a PR for it."
           exit 2
           ;;

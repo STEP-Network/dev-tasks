@@ -165,6 +165,166 @@ describe("git_commands.py", () => {
     }
     expect(analyse('git commit -m "$(cat msg)"')).toEqual(["COMMIT ."])
     expect(analyse('cd "$(git rev-parse --show-toplevel)" && git commit -m x')).toEqual(["COMMIT @unknown"])
+    // No branch or path holds a control character, and a newline would split a finding in two.
+    expect(analyse("git push origin $'main\\nPUSH x'")).toEqual(["PUSH @unknown", "PUSH origin"])
+    expect(analyse("git push origin $'ma\\nin'")).toEqual(["PUSH @unknown", "PUSH origin"])
+    expect(analyse("cd $'a\\nb' && git commit -m x")).toEqual(["COMMIT @unknown"])
+  })
+
+  it("reads the config a push runs under: -c, git config and GIT_CONFIG* cannot hide it (STEP-3364)", () => {
+    // (a) -c alias.* or include.*: any word can be a push.
+    for (const command of ["git -c alias.p=push p origin main", "git --config-env=alias.p=P p origin main", "git -c include.path=/tmp/x.cfg status", "git -c \"$C\" p origin main"]) {
+      expect(analyse(command), command).toContain("PUSH @unknown")
+    }
+    // (b) -c that picks the branches.
+    for (const command of ["git -c push.default=matching push", "git -c remote.origin.push=refs/heads/*:refs/heads/main push", "git -c remote.origin.mirror=true push origin"]) {
+      expect(analyse(command), command).toContain("PUSH @all")
+    }
+    // (c) GIT_CONFIG* anywhere in the command: before git, through env, or exported first.
+    for (const command of [
+      "GIT_CONFIG_KEY_0=push.default GIT_CONFIG_VALUE_0=matching git push",
+      "GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=push.default GIT_CONFIG_VALUE_0=matching git push",
+      "env GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=alias.p GIT_CONFIG_VALUE_0=push git p origin main",
+      "export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=push.default GIT_CONFIG_VALUE_0=matching; git push",
+      "GIT_CONFIG_PARAMETERS=\"'push.default'='matching'\" git push",
+    ]) {
+      expect(analyse(command), command).toContain("PUSH @all")
+    }
+    // HOME= and XDG_CONFIG_HOME= point git at a gitconfig somewhere else (#159 review).
+    for (const command of ["HOME=/tmp/h git push origin feat", "XDG_CONFIG_HOME=/tmp/x git push origin feat", "export HOME=/tmp/h; git push origin feat", "arch -e GIT_CONFIG_COUNT=1 git push origin feat"]) {
+      expect(analyse(command), command).toContain("PUSH @all")
+    }
+    expect(analyse("ls HOME && git push origin feat")).toEqual(["PUSH origin", "PUSH feat"])
+    // GIT_DIR and the like point git at another repository, as --git-dir does.
+    expect(analyse("GIT_DIR=../main/.git git push origin HEAD")).toContain("PUSH @unknown")
+    expect(analyse("GIT_DIR=../main/.git git commit -m x")).toEqual(["COMMIT @unknown"])
+    // (d) a git config write that can hide a push, in any file; git remote set-url writes remote.*.url.
+    const destroys = (command: string) => (analyse(command) as string[]).filter((l) => l.startsWith("DESTRUCTIVE "))
+    for (const [command, label] of [
+      ["git config alias.p push", "git config alias.*"],
+      ["git config --global alias.p push", "git config alias.*"],
+      ["git config --file ~/.gitconfig alias.p push", "git config alias.*"],
+      ["git config --system push.default matching", "git config push.*"],
+      ["git config push.default matching && git push", "git config push.*"],
+      ["git config -f x.cfg remote.origin.push refs/heads/*", "git config remote.*"],
+      ["git config --add remote.origin.push HEAD:main", "git config remote.*"],
+      ["git config remote.origin.url https://x/y.git", "git config remote.*"],
+      ["git config --unset alias.p", "git config alias.*"],
+      ["git config set alias.p push", "git config alias.*"],
+      ["git config include.path /tmp/x", "git config include.*"],
+      ["git config --rename-section foo alias", "git config alias.*"],
+      ["git config --edit", "git config --edit"],
+      ['git config "$K" push', "git config (a key filled in as it runs)"],
+      ["git remote set-url origin https://x/y.git", "git remote set-url"],
+    ]) {
+      expect(destroys(command), command).toEqual([`DESTRUCTIVE ${label}`])
+    }
+    // Reads, and writes to other keys, pass.
+    for (const command of [
+      "git config --get alias.p",
+      "git config alias.p",
+      "git config -l",
+      "git config --list --show-origin",
+      "git config get push.default",
+      "git config --get-regexp alias",
+      "git config --get-regexp alias push",
+      "git config --get remote.origin.push refs",
+      "git config user.name eve",
+      "git config --global user.email eve@polads.eu",
+      "git -c core.pager=cat log",
+    ]) {
+      expect(analyse(command), command).toEqual([])
+    }
+  })
+
+  it("reads the command after a wrapper's options, and a redirect's fd as part of it (STEP-3364)", () => {
+    for (const command of ["nice -n 5 git push origin main", "nice -n5 git push origin main", "env -u FOO git push origin main", "sudo -u root git push origin main", "sudo -Eu root git push origin main", "exec -a x git push origin main", "time -p git push origin main", "env -S 'git push origin main'", "env --split-string='git push origin' main"]) {
+      expect(analyse(command), command).toEqual(["PUSH origin", "PUSH main"])
+    }
+    // Wrappers by name or path, with their options and operands (#159 review).
+    for (const command of [
+      "timeout 30 git push origin main",
+      "timeout -s KILL -k 5 30 git push origin main",
+      "gtimeout 30 git push origin main",
+      "/usr/bin/env git push origin main",
+      "/usr/bin/nice git push origin main",
+      "/usr/bin/time git push origin main",
+      "stdbuf -oL git push origin main",
+      "stdbuf -o L git push origin main",
+      "caffeinate -i git push origin main",
+      "caffeinate -w 123 git push origin main",
+      "arch -arm64 git push origin main",
+      "arch -arch arm64 git push origin main",
+      "script -q /dev/null git push origin main",
+      "sandbox-exec -p '(version 1)(allow default)' git push origin main",
+      "sandbox-exec -f prof.sb git push origin main",
+      // macOS env -S reads \_ as a space.
+      "env -S 'git\\_push\\_origin\\_main'",
+    ]) {
+      expect(analyse(command), command).toEqual(["PUSH origin", "PUSH main"])
+    }
+    expect(analyse("timeout 30 git push --force origin feat")).toContain("DESTRUCTIVE git push --force")
+    expect(analyse("script -c 'git push origin' /dev/null")).toEqual(["PUSH @current .", "PUSH origin"])
+    // A command word it does not know: a git push or a destructive command later in its words.
+    expect(analyse("flock /tmp/l git push origin main")).toEqual(["PUSH @unknown"])
+    expect(analyse("ssh host git push origin main")).toEqual(["PUSH @unknown"])
+    expect(analyse("ionice -c 3 rm -rf build")).toEqual(["DESTRUCTIVE rm -rf"])
+    expect(analyse("flock /tmp/l git push --force origin feat")).toContain("DESTRUCTIVE git push --force")
+    expect(analyse("echo git push origin main")).toEqual([])
+    expect(analyse('flock f "$G" push origin main')).toEqual(["PUSH @unknown"])
+    expect(analyse('docker push "$IMAGE"')).toEqual([])
+    // A shell with no script runs its stdin: a pipe, a < file or -s it cannot see.
+    expect(analyse("echo 'git push origin main' | sh")).toEqual(["PUSH @unknown"])
+    expect(analyse("cat x | bash -s")).toEqual(["PUSH @unknown"])
+    expect(analyse("cat x | bash -s arg")).toEqual(["PUSH @unknown"])
+    expect(analyse("bash -s arg")).toEqual(["PUSH @unknown"])
+    expect(analyse("bash < script.sh")).toEqual(["PUSH @unknown"])
+    expect(analyse("cat <<'EOF' | bash\ngit push origin main\nEOF")).toEqual(["PUSH @unknown"])
+    expect(analyse("xargs -a list.txt sh -c")).toEqual(["PUSH @unknown"])
+    expect(analyse("bash <(echo git push origin main)")).toEqual(["PUSH @unknown"])
+    // A heredoc or here-string it reads is its command text, quoted or not (#159 review).
+    expect(analyse("bash <<'EOF'\ngit status\nls\nEOF")).toEqual([])
+    expect(analyse("bash -e <<'EOF'\nset -x\npnpm test\nEOF")).toEqual([])
+    for (const command of [
+      "bash <<'EOF'\ngit push origin main\nEOF",
+      "bash <<EOF\ngit push origin main\nEOF",
+      "sh -s <<'EOF'\ngit push origin main\nEOF",
+      "bash -o pipefail <<'EOF'\ngit push origin main\nEOF",
+      "bash -euo pipefail <<'EOF'\ngit push origin main\nEOF",
+      "sudo bash <<'EOF'\ngit push origin main\nEOF",
+      "bash <<< 'git push origin main'",
+      "bash <<'A'\necho a\nA\ngit push origin main",
+    ]) {
+      expect(analyse(command), command).toEqual(["PUSH origin", "PUSH main"])
+    }
+    expect(analyse("bash <<'EOF'\nrm -rf build\nEOF")).toEqual(["DESTRUCTIVE rm -rf"])
+    expect(analyse("bash <<'EOF'\ngit commit -m x\nEOF")).toEqual(["COMMIT ."])
+    // Another command's heredoc is its input, not a command; a here-string is no heredoc.
+    expect(analyse("python3 <<'EOF'\nprint('git push origin main')\nEOF")).toEqual([])
+    expect(analyse("bash script.sh <<'EOF'\ngit push origin main\nEOF")).toEqual([])
+    expect(analyse("cat <<< 'hello' && git push origin feat")).toEqual(["PUSH origin", "PUSH feat"])
+    // Flags alone read nothing.
+    for (const command of ["bash --version", "bash --help", "zsh -l", "bash -x deploy.sh"]) {
+      expect(analyse(command), command).toEqual([])
+    }
+    expect(analyse("env -C ../main git push")).toEqual(["PUSH @unknown"])
+    expect(analyse("sudo -D ../main git push")).toEqual(["PUSH @unknown"])
+    // 2>&1 and 2>/dev/null are redirects: no "PUSH 2".
+    expect(analyse("git push origin feat 2>&1")).toEqual(["PUSH origin", "PUSH feat"])
+    expect(analyse("git push origin feat 2>/dev/null")).toEqual(["PUSH origin", "PUSH feat"])
+    expect(analyse("git push 2>&1")).toEqual(["PUSH @current ."])
+  })
+
+  it("never prints a finding that could split a line: it stops instead", () => {
+    const code = "import sys; sys.path.insert(0, sys.argv[1]); import git_commands as g; g.analyse = lambda text: ['PUSH feat\\nEND']; g.main()"
+    const r = spawnSync("python3", ["-c", code, dirname(LIB)], { input: "", encoding: "utf8" })
+    expect(r.status).not.toBe(0)
+    expect(r.stdout).not.toContain("END")
+    expect(r.stderr).toContain("a word it cannot print")
+  })
+
+  it("reads an octal escape as one byte, as bash and zsh do: $'\\547it' is git", () => {
+    expect(analyse("$'\\547it' push origin main")).toEqual(["PUSH origin", "PUSH main"])
   })
 
   it("names each destructive command gate (a) refuses from what runs, never from text (#151 review)", () => {
