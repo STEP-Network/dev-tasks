@@ -99,6 +99,51 @@ describe("git_commands.py", () => {
     expect(analyse("((git push origin main))")).toEqual(["PUSH origin", "PUSH main"])
   })
 
+  it("names each destructive command gate (a) refuses from what runs, never from text (#151 review)", () => {
+    const destroys = (command: string) => (analyse(command) as string[]).filter((l) => l.startsWith("DESTRUCTIVE "))
+    for (const command of [
+      'grep -n "rm -rf" app.ts',
+      'grep -rn "git reset --hard" docs/',
+      "git checkout .github/workflows/ci.yml",
+      "git checkout ./app.ts",
+      'gh pr create --body "Never run git push --force on main"',
+      "git commit -F - <<'EOF'\nnever git clean -fd\nEOF",
+      "rm -r build",
+      "git branch -d merged",
+      "git clean -n",
+      "git push -u origin feat",
+    ]) {
+      expect(destroys(command), command).toEqual([])
+    }
+    for (const [command, label] of [
+      ["rm -rf /", "rm -rf"],
+      ["rm -fr build", "rm -rf"],
+      ["rm -r -f build", "rm -rf"],
+      ["rm --recursive --force build", "rm -rf"],
+      ["git reset --hard HEAD", "git reset --hard"],
+      ["git push --force origin feat", "git push --force"],
+      ["git push --force-with-lease origin feat", "git push --force"],
+      ["git push -f origin feat", "git push -f"],
+      ["git push -uf origin feat", "git push -f"],
+      ["git checkout .", "git checkout \\."],
+      ["git checkout -- .", "git checkout \\."],
+      ["git clean -fd", "git clean -f"],
+      ["git clean -df", "git clean -f"],
+      ["git branch -D old", "git branch -D"],
+      ["git branch --delete --force old", "git branch -D"],
+      ["git -C sub reset --hard", "git reset --hard"],
+      ["find . -name x -exec rm -rf {} \\;", "rm -rf"],
+      ["ls | xargs -n 1 rm -rf", "rm -rf"],
+      ["sudo rm -rf /x", "rm -rf"],
+      ["bash -lc 'rm -rf /'", "rm -rf"],
+      ["eval git reset --hard", "git reset --hard"],
+      ["echo ok\ngit reset --hard", "git reset --hard"],
+    ]) {
+      expect(destroys(command), command).toEqual([`DESTRUCTIVE ${label}`])
+    }
+    expect(analyse('sh -c "git push origin main"')).toEqual(["PUSH origin", "PUSH main"])
+  })
+
   it("stops on a command it cannot read, so the hooks refuse it", () => {
     for (const command of ['git push origin "main', "git push origin 'main", "echo $(git push", "cat <<EOF\nno end", "echo `git push"]) {
       expect(analyse(command), command).toHaveProperty("error")

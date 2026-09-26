@@ -1,8 +1,13 @@
 """
-The git commits and pushes a Bash command runs, for bash-guard and the
-secrets scan (STEP-3354). Reads the command on stdin and prints one line per
-finding, then END:
+The git commits and pushes, and the destructive commands, a Bash command
+runs, for bash-guard and the secrets scan (STEP-3354). Reads the command on
+stdin and prints one line per finding, then END:
 
+  DESTRUCTIVE <label>   what gate (a) refuses: rm -rf, git push --force
+                        (--force-with-lease too), git push -f, git reset --hard,
+                        git checkout \. (the argument "." only), git clean -f,
+                        git branch -D. Read from the command's words, so
+                        grep "rm -rf" or a message that names one is none.
   COMMIT <dir>          a git commit, run in <dir> (relative to the hook's root)
   COMMIT @unknown       a git commit in a repository or directory it cannot name
   PUSH <branch>         a branch a git push names
@@ -15,13 +20,14 @@ finding, then END:
 
 What it reads: each command word in the text, split on ; && || | & ( ); the
 body of each $(...), `...`, <(...) and >(...), which bash runs, in double
-quotes and unquoted heredocs too; and a `cd` before a git command. Not what
-quotes or a heredoc hold as text: `git commit` with a message that says
-"push" is no push. A text it cannot read (an unclosed quote, parenthesis or
-heredoc) raises: no END, and the hooks refuse the command.
+quotes and unquoted heredocs too; the text of sh -c and eval; the command
+after xargs and find -exec; and a `cd` before a git command. Not what quotes
+or a heredoc hold as text: `git commit` with a message that says "push" is
+no push. A text it cannot read (an unclosed quote, parenthesis or heredoc)
+raises: no END, and the hooks refuse the command.
 
-Out of scope, left to the server's rulesets: git aliases, sh -c, xargs,
-eval, and config from the environment (GIT_CONFIG_*).
+Out of scope, left to the server's rulesets: git aliases, and config from the
+environment (GIT_CONFIG_*).
 """
 
 import os
@@ -38,6 +44,9 @@ WRAPPERS = {
     "command", "builtin", "exec", "env", "time", "nohup", "nice", "sudo",
     "!", "{", "(", "then", "do", "else", "elif", "if", "while", "until",
 }
+XARGS_VALUE_OPTIONS = {"-n", "-I", "-L", "-P", "-s", "-E", "-d", "-a", "-J", "-R", "-S"}
+SHELLS = {"sh", "bash", "zsh", "dash", "ksh"}
+FIND_EXEC = {"-exec", "-execdir", "-ok", "-okdir"}
 GLOBAL_VALUE_OPTIONS = {"-C", "-c", "--git-dir", "--work-tree", "--namespace", "--config-env", "--super-prefix"}
 OTHER_REPO = {"--git-dir", "--work-tree", "--namespace"}
 PUSH_VALUE_OPTIONS = {"-o", "--push-option", "--repo", "--receive-pack", "--exec"}
@@ -228,18 +237,60 @@ def segments(text):
 
 
 def command_word(words):
-    """The index of the word bash runs: past VAR=value words and wrappers like env, sudo, time."""
+    """The index of the word bash runs: past VAR=value words and wrappers like env, sudo, time, xargs."""
     i = 0
     while i < len(words):
         if ASSIGNMENT.match(words[i]):
             i += 1
-        elif words[i] in WRAPPERS:
+        elif words[i] in WRAPPERS or words[i] == "xargs":
+            takes_values = XARGS_VALUE_OPTIONS if words[i] == "xargs" else set()
             i += 1
             while i < len(words) and words[i].startswith("-"):
-                i += 1
+                i += 2 if words[i] in takes_values else 1
         else:
             break
     return i
+
+
+def git_subcommand(args):
+    """A git invocation's subcommand and its words, past git's own options."""
+    i = 0
+    while i < len(args) and args[i].startswith("-"):
+        i += 2 if args[i] in GLOBAL_VALUE_OPTIONS else 1
+    return (args[i], args[i + 1 :]) if i < len(args) else (None, [])
+
+
+def destructive(argv):
+    """What gate (a) refuses, by the label it has always named, for a command's words from its command word on; or None.
+    Flags are read as git and rm read them, not as text: a message or a path that holds the words is none of these."""
+    name, args = os.path.basename(argv[0]), argv[1:]
+
+    def shorts(words):
+        return "".join(a[1:] for a in words if a.startswith("-") and not a.startswith("--"))
+
+    if name == "rm":
+        recursive = any(c in shorts(args) for c in "rR") or "--recursive" in args
+        force = "f" in shorts(args) or "--force" in args
+        return "rm -rf" if recursive and force else None
+    if name != "git":
+        return None
+    sub, rest = git_subcommand(args)
+    if sub == "push":
+        if any(a.startswith("--force") for a in rest):
+            return "git push --force"
+        return "git push -f" if "f" in shorts(rest) else None
+    if sub == "reset" and "--hard" in rest:
+        return "git reset --hard"
+    if sub == "checkout" and "." in rest:
+        return "git checkout \\."
+    if sub == "clean" and ("f" in shorts(rest) or "--force" in rest):
+        return "git clean -f"
+    if sub == "branch":
+        delete = "d" in shorts(rest) or "--delete" in rest
+        force = "f" in shorts(rest) or "--force" in rest
+        if "D" in shorts(rest) or (delete and force):
+            return "git branch -D"
+    return None
 
 
 def config_pushes(key):
@@ -297,22 +348,46 @@ def git_command(words, cwd, out):
         out.append(current if dst in ("HEAD", "") else "PUSH " + dst)
 
 
-def analyse(text):
+def run(words, cwd, out):
+    """One simple command's words: what it commits, pushes or destroys, and the directory after it."""
+    w = command_word(words)
+    if w >= len(words):
+        return cwd
+    argv = words[w:]
+    name = os.path.basename(argv[0])
+    label = destructive(argv)
+    if label:
+        out.append("DESTRUCTIVE " + label)
+    if name in ("cd", "pushd"):
+        target = argv[1] if len(argv) > 1 else "~"
+        if target == "-" or cwd is None:
+            return None
+        return os.path.normpath(os.path.join(cwd, os.path.expanduser(target)))
+    if name == "git":
+        git_command(argv[1:], cwd, out)
+    elif name in SHELLS:
+        # sh -c '…' (or -lc, -ec) runs its text as a command: read it the same way.
+        flag = next((k for k, a in enumerate(argv[1:-1], 1) if a.startswith("-") and not a.startswith("--") and "c" in a), None)
+        if flag is not None:
+            out.extend(analyse(argv[flag + 1], cwd))
+    elif name == "eval":
+        out.extend(analyse(" ".join(argv[1:]), cwd))
+    elif name == "find":
+        # find -exec … ; runs the words after it for each file.
+        for k, word in enumerate(argv):
+            if word in FIND_EXEC:
+                command = argv[k + 1 :]
+                end = next((j for j, x in enumerate(command) if x in (";", "+")), len(command))
+                run(command[:end], cwd, out)
+    return cwd
+
+
+def analyse(text, cwd="."):
     out = []
     for command_text in command_texts(text):
-        cwd = "."
+        here = cwd
         for words in segments(command_text):
-            w = command_word(words)
-            if w >= len(words):
-                continue
-            if words[w] in ("cd", "pushd"):
-                target = words[w + 1] if w + 1 < len(words) else "~"
-                if target == "-" or cwd is None:
-                    cwd = None
-                else:
-                    cwd = os.path.normpath(os.path.join(cwd, os.path.expanduser(target)))
-            elif os.path.basename(words[w]) == "git":
-                git_command(words[w + 1 :], cwd, out)
+            here = run(words, here, out)
     return out
 
 

@@ -81,42 +81,34 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 AGENT_CWD=$(resolve_agent_cwd "$INPUT")
 PROJECT_ROOT="${AGENT_CWD:-${CLAUDE_PROJECT_DIR:-$PWD}}"
 
-# The git commits and pushes the command runs (lib/git_commands.py): each
-# command word, the bodies of $(...) and backticks included, and never what a
-# quote or a heredoc holds as text, so a commit message that says "push" is no
-# push. A command it cannot read blocks. COMMIT and PUSH lines, relative to
-# PROJECT_ROOT. Only a command with no "git" in it, quotes and backslashes
-# aside (gi''t and \git are git), is left unread: it runs no git.
-GIT_COMMANDS="END"
-if printf '%s' "$ACTUAL_CMD" | tr -d "'\"\\\\" | grep -q git; then
-  GIT_COMMANDS=$(printf '%s' "$ACTUAL_CMD" | python3 "$SCRIPT_DIR/lib/git_commands.py" 2>&1)
-  [ "$(printf '%s\n' "$GIT_COMMANDS" | tail -n 1)" = "END" ] \
-    || fail_closed "it cannot read the command's git commands: $(printf '%s\n' "$GIT_COMMANDS" | tail -n 1)"
+# What the command runs (lib/git_commands.py): each command word, the bodies
+# of $(...) and backticks, the text of sh -c and eval, and what xargs and
+# find -exec run, and never what a quote or a heredoc holds as text. So a
+# commit message that says "push", or grep "rm -rf", runs neither. DESTRUCTIVE,
+# COMMIT and PUSH lines, relative to PROJECT_ROOT. A command it cannot read
+# blocks when it may run git or rm, quotes and backslashes aside (gi''t and
+# \git are git); any other is bash's to reject, as bash cannot read it either.
+GIT_COMMANDS=$(printf '%s' "$ACTUAL_CMD" | python3 "$SCRIPT_DIR/lib/git_commands.py" 2>&1)
+if [ "$(printf '%s\n' "$GIT_COMMANDS" | tail -n 1)" != "END" ]; then
+  if printf '%s' "$ACTUAL_CMD" | tr -d "'\"\\\\" | grep -qE 'git|rm'; then
+    fail_closed "it cannot read the command: $(printf '%s\n' "$GIT_COMMANDS" | tail -n 1)"
+  fi
+  GIT_COMMANDS="END"
 fi
 COMMIT_DIRS=$(printf '%s\n' "$GIT_COMMANDS" | sed -n 's/^COMMIT //p')
 PUSHES=$(printf '%s\n' "$GIT_COMMANDS" | sed -n 's/^PUSH //p')
 
-# (a) Block destructive commands
-DESTRUCTIVE_PATTERNS=(
-  "rm -rf"
-  "git push --force"
-  "git push -f"
-  "git reset --hard"
-  "git checkout \."
-  "git clean -f"
-  "git branch -D"
-)
-# Note: SQL DDL keywords (DROP TABLE, TRUNCATE, DROP DATABASE) removed —
-# SQL operations run through Neon MCP tools, not bash. Matching against
-# the full command string caused false positives on gh pr comment bodies.
-
-for pattern in "${DESTRUCTIVE_PATTERNS[@]}"; do
-  if echo "$ACTUAL_CMD" | grep -qi "$pattern"; then
-    echo "BLOCKED: Destructive command detected: '$pattern'"
-    echo "If this is intentional, ask the user for explicit confirmation first."
-    exit 2
-  fi
-done
+# (a) Block destructive commands: rm -rf, git push --force (or -f),
+# git reset --hard, git checkout . (the argument "." only),
+# git clean -f, git branch -D. Read from what the command runs, not its text
+# (STEP-3354): the hook runs on every Bash command, and grep "rm -rf", a
+# path like .github, or a PR body that names one of these runs none of them.
+DESTRUCTIVE=$(printf '%s\n' "$GIT_COMMANDS" | sed -n 's/^DESTRUCTIVE //p' | head -n 1)
+if [ -n "$DESTRUCTIVE" ]; then
+  echo "BLOCKED: Destructive command detected: '$DESTRUCTIVE'"
+  echo "If this is intentional, ask the user for explicit confirmation first."
+  exit 2
+fi
 
 # Gates (d) and (e) are agent-only (spec section 4). A human's parity miss is
 # caught by the CI `i18n` job within a minute of the push; an agent has no

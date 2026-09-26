@@ -136,6 +136,32 @@ check 2 "protected branch 'main'" "cd <a checkout on main> && git push" "$(paylo
 check 0 "" "git -C <this checkout> push origin HEAD still goes" "$(payload "git -C $TEST_DIR push origin HEAD")"
 check 2 "cannot tell which branch" "a push from --git-dir" "$(payload "git --git-dir=$MAIN_WT/.git push origin HEAD")"
 
+echo "--- gate (a): what the command runs, never its text (#151 review) ---"
+check 0 "" "grep -n \"rm -rf\"" "$(payload 'grep -n "rm -rf" app.ts')"
+check 0 "" "grep -rn \"git reset --hard\" docs/" "$(payload 'grep -rn "git reset --hard" docs/')"
+check 0 "" "git checkout .github/workflows/ci.yml" "$(payload 'git checkout .github/workflows/ci.yml')"
+check 0 "" "gh pr create --body \"Never run git push --force…\"" "$(payload 'gh pr create --body "Never run git push --force on main"')"
+check 0 "" "a heredoc message that names git reset --hard" "$(payload "git commit --allow-empty -F - <<'EOF'
+docs: never run git reset --hard or rm -rf here
+EOF")"
+check 0 "" "git branch -d (a merged branch)" "$(payload 'git branch -d merged')"
+check 2 "Destructive command detected: 'rm -rf'" "rm -rf /" "$(payload 'rm -rf /')"
+check 2 "Destructive command detected: 'rm -rf'" "rm -r -f build" "$(payload 'rm -r -f build')"
+check 2 "Destructive command detected: 'git reset --hard'" "git reset --hard" "$(payload 'git reset --hard HEAD')"
+check 2 "Destructive command detected: 'git push --force'" "git push --force" "$(payload 'git push --force origin feat/x')"
+check 2 "Destructive command detected: 'git push -f'" "git push -f" "$(payload 'git push -f origin feat/x')"
+check 2 "Destructive command detected: 'git checkout" "git checkout ." "$(payload 'git checkout .')"
+check 2 "Destructive command detected: 'git checkout" "git checkout -- ." "$(payload 'git checkout -- .')"
+check 2 "Destructive command detected: 'git clean -f'" "git clean -fd" "$(payload 'git clean -fd')"
+check 2 "Destructive command detected: 'git clean -f'" "git clean -df" "$(payload 'git clean -df')"
+check 2 "Destructive command detected: 'git branch -D'" "git branch -D" "$(payload 'git branch -D old')"
+check 2 "Destructive command detected: 'rm -rf'" "find -exec rm -rf" "$(payload 'find . -name x -exec rm -rf {} \;')"
+check 2 "Destructive command detected: 'rm -rf'" "xargs rm -rf" "$(payload 'ls | xargs rm -rf')"
+check 2 "Destructive command detected: 'rm -rf'" "bash -c 'rm -rf /'" "$(payload "bash -c 'rm -rf /'")"
+check 2 "protected branch 'main'" "sh -c \"git push origin main\"" "$(payload 'sh -c "git push origin main"')"
+check 2 "could not check" "an rm it cannot read: rm -rf \"build" "$(payload 'rm -rf "build')"
+check 0 "" "a command with neither git nor rm that it cannot read is bash's to reject" "$(payload 'echo "unclosed')"
+
 echo "--- gates (d) and (e): i18n, agent profile ---"
 printf '{ "profile": "agent" }' > "$TEST_HOME/.claude/dev-tasks-profile.json"
 config '{ "version": "1", "git": { "defaultBase": "main" }, "i18n": { "enabled": true, "defaultLocale": "en", "locales": ["en", "da"], "messagesGlob": "messages/*.json", "parityHookMode": "block" }, "hooks": { "enabled": [] } }'
