@@ -20,6 +20,7 @@ import { fakeTracker } from "../../__tests__/fakes.ts"
 import { createMondayBridge } from "../bridge.ts"
 import { MondayRefused, type ColumnChange, type MondayApi, type MondayColumn, type MondayItem } from "../client.ts"
 import type { LinearRequest, PeopleIssue, PeopleView } from "../people.ts"
+import { saveRecord } from "../store.ts"
 
 export const BOARD = "5104953028"
 export const AGENT = "900"
@@ -324,6 +325,12 @@ export const REQUEST_COLUMNS = {
   requester: "r_person", type: "r_type", class: "r_class", size: "r_size", stage: "r_stage", progress: "r_progress", targetWeek: "r_week", linear: "r_linear", slackThread: "r_thread",
 }
 
+/** Wave 3's test day config, made up: the Test day item's status and doc columns, and the subitems board's. */
+export const TESTDAY = {
+  statusColumn: "col_status", docColumn: "col_doc", subitemBoardId: SUBITEMS,
+  subitemColumns: { verdict: "col_verdict", note: "col_note", linear: "col_link" }, roles: [{ name: "Public" as const, persona: null }],
+}
+
 /**
  * A bridge on the Wave 2 layout (made-up people Ada and Ben), or on today's
  * with newLayout false: the new groups and columns switch on only with their
@@ -348,6 +355,8 @@ export function doorsSetup(
     testDayLine?: () => string | null
     /** The answer recorder's Linear transport (Task 12), or null for none. */
     recorder?: LinearRequest | null
+    /** Wave 3's test day, configured and on (or configured and off). */
+    testDay?: boolean | "off"
   } = {},
 ) {
   const newLayout = opts.newLayout ?? true
@@ -366,6 +375,7 @@ export function doorsSetup(
         ...(opts.digest ? { digest: { enabled: true } } : {}),
       },
     },
+    ...(opts.testDay ? { testDay: { ...TESTDAY, enabled: opts.testDay === true } } : {}),
   })
   const fake = fakeTracker(seed)
   const needsBoard = opts.requests && !opts.keepOldGroups ? LAYOUT.filter((g) => g.id !== "g_req" && g.id !== "g_work") : LAYOUT
@@ -389,7 +399,14 @@ export function doorsSetup(
   }
   const slack = () => listNew<OutboxMessage & { queuedAt: string }>(paths.outbox).map((e) => e.payload)
   const texts = (itemId: string) => monday.items.get(itemId)?.updates.map((u) => u.text) ?? []
-  return { paths, config, fake, monday, people, bridge, later, slack, texts, warned }
+  /** The Test day item (Wave 3), as the controller makes it: in the Test day group, and recorded. */
+  const testDayItem = async (kind: "testday" | "testday-decision" = "testday", issue = "testday") => {
+    const itemId = await monday.api.createItem(BOARD, kind === "testday" ? "g_test" : "g_needs", kind === "testday" ? "Test day 2026-10-02" : "Checkpoint 4 failed", {})
+    const key = kind === "testday" ? "testday-item" : `testday-decision-2026-10-02-4`
+    saveRecord(paths, { key, kind, issue, itemId, state: "Needs you", bodyHash: null, createdAt: now.toISOString(), doneAt: null, handled: [] })
+    return itemId
+  }
+  return { paths, config, fake, monday, people, bridge, later, slack, texts, warned, testDayItem }
 }
 
 /** The issue's own Slack thread on this mini, as send.ts saves it. */

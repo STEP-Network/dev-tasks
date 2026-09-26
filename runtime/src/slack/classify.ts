@@ -22,6 +22,9 @@
  *  3. People not on the allowlist are ignored. A Slack message can never
  *     grant a permission (spec 11); here it cannot even start work.
  *  4. A reply in a thread that belongs to one of this mini's issues is an answer.
+ *  4a. "begin testday" and nothing else (Wave 3) is a command for agentd: in
+ *     a mention of this bot, or top level in #polads-questions on the mini
+ *     that runs test day.
  *  5. A top-level message in #polads-intake that names this bot before any
  *     other agent is intake. Named after another agent, it is a mention
  *     that agent files.
@@ -31,6 +34,7 @@
  * msg:<channel>:<ts>, so the queue keeps one.
  */
 
+import { testDayVerb } from "../answer.ts"
 import { mentionedUsers } from "./text.ts"
 
 export interface SlackEvent {
@@ -65,6 +69,8 @@ export interface ClassifyContext {
   allowedUsers: readonly string[]
   channels: { agents: string; questions: string; intake: string; releases: string }
   issueForThread: (channelId: string, threadTs: string) => string | null
+  /** This mini runs test day (config testDay.enabled): a top-level "begin testday" in #polads-questions is its to hear. */
+  testDay?: boolean
 }
 
 export type Classified =
@@ -83,6 +89,8 @@ export type Classified =
       filedBy?: string
     }
   | { type: "reaction"; key: string; channel: string; itemTs: string; user: string; reaction: string }
+  /** "begin testday" (Wave 3): a command for agentd, never the front door's, answered in threadTs. */
+  | { type: "command"; key: string; channel: string; ts: string; threadTs: string; user: string; text: string }
   | { type: "ignore"; reason: string }
 
 const PASS_SUBTYPES = new Set<string | undefined>([undefined, "thread_broadcast", "file_share"])
@@ -114,7 +122,16 @@ export function classify(envelope: SlackEnvelope, ctx: ClassifyContext): Classif
     const issue = ctx.issueForThread(e.channel, threadTs)
     if (issue) return { type: "reply", key, issue, channel: e.channel, ts: e.ts, threadTs, user: e.user, text }
   }
-  if (!mentioned.includes(ctx.botUserId)) return { type: "ignore", reason: "not addressed to the bot" }
+  // "begin testday" (Wave 3, spec 7): top level in #polads-questions on the mini
+  // that runs test day, unless it names another agent (which answers it), or
+  // in a mention of this bot anywhere. Only the whole phrase: a sentence about
+  // test day stays the front door's.
+  const addressed = mentioned.includes(ctx.botUserId)
+  const toAnother = mentioned.some((id) => ctx.otherAgentBots.includes(id))
+  if (testDayVerb(text)?.verb === "start" && (addressed || (ctx.testDay && !threadTs && !toAnother && e.channel === ctx.channels.questions))) {
+    return { type: "command", key, channel: e.channel, ts: e.ts, threadTs: threadTs ?? e.ts, user: e.user, text }
+  }
+  if (!addressed) return { type: "ignore", reason: "not addressed to the bot" }
   const firstAgent = mentioned.find((id) => id === ctx.botUserId || ctx.otherAgentBots.includes(id))
   const isRequest = e.channel === ctx.channels.intake && !threadTs
   if (isRequest && firstAgent === ctx.botUserId) {

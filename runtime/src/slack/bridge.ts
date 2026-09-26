@@ -35,7 +35,9 @@ import { isSlackTrouble, slackErrorCode, startOutbox, type SendContext, type Sla
 import { fromSlack, intakeIssue, mentionedUsers, withoutMentions } from "./text.ts"
 import { frontDoorUp, lastTickAt } from "../agentd/frontdoor.ts"
 import { NOTHING_NEEDED } from "../plain.ts"
-import { noteCorrection } from "../answer.ts"
+import { noteCorrection, personKey, testDayVerb, type TestDayVerb } from "../answer.ts"
+import { fileTestDayCommand, heardOnce, TESTDAY_HELP } from "../testday/commands.ts"
+import { isTestDayKey, openDecisionFor } from "../testday/store.ts"
 
 export interface BridgeWeb extends SlackWeb {
   userName(userId: string): Promise<string>
@@ -77,6 +79,25 @@ type PersonEntry = Extract<Classified, { type: "reply" | "mention" }> & {
 export async function handleEnvelope(deps: BridgeDeps, envelope: SlackEnvelope): Promise<Classified["type"]> {
   const c = classify(envelope, deps.classifyContext)
   if (c.type === "ignore") return c.type
+  // Test day's fixed verbs (Wave 3) go to agentd, never the front door.
+  if (c.type === "command") {
+    await testDayCommand(deps, { key: c.key, channel: c.channel, ts: c.ts, threadTs: c.threadTs, user: c.user, said: { verb: "start" } })
+    return c.type
+  }
+  if (c.type === "reply") {
+    const said = testDayVerb(c.text)
+    const inTestDayThread = isTestDayKey(c.issue)
+    const deciding = said?.verb === "decide" && openDecisionFor(deps.paths, c.issue) !== null
+    if (said && (said.verb === "start" || (said.verb === "verdict" && inTestDayThread) || deciding)) {
+      await testDayCommand(deps, { key: c.key, channel: c.channel, ts: c.ts, threadTs: c.threadTs, user: c.user, said, issue: c.issue })
+      return c.type
+    }
+    // The test day thread reads its verbs and nothing else: the change's own thread is where words go.
+    if (inTestDayThread) {
+      if (heardOnce(deps.paths, c.key)) enqueueSlack(deps.paths, { kind: "reply", channelId: c.channel, threadTs: c.threadTs, text: TESTDAY_HELP }, deps.now())
+      return c.type
+    }
+  }
   const receivedAt = deps.now().toISOString()
   if (c.type === "reaction") {
     // Kept for the record. Phase 3's release train is the first reader.
@@ -114,6 +135,29 @@ export async function handleEnvelope(deps: BridgeDeps, envelope: SlackEnvelope):
   if (person) learnCorrection(deps, { issue: c.type === "reply" ? c.issue : null, channel: c.channel, ts: c.ts, who: userName, text: c.text })
   if (person) actForFrontDoor(deps, c.key)
   return c.type
+}
+
+/**
+ * A test-day verb (Wave 3): filed once for agentd, which answers in the
+ * thread (Task 13). On a mini without test day, said once, in words. Either
+ * copy of a mention Slack sends is heard once.
+ */
+async function testDayCommand(
+  deps: BridgeDeps,
+  m: { key: string; channel: string; ts: string; threadTs: string; user: string; said: TestDayVerb; issue?: string },
+): Promise<void> {
+  if (!heardOnce(deps.paths, m.key)) return
+  if (!deps.config.testDay?.enabled) {
+    enqueueSlack(deps.paths, { kind: "reply", channelId: m.channel, threadTs: m.threadTs, text: `Test day is not set up on ${deps.config.mini} yet. ${NOTHING_NEEDED}` }, deps.now())
+    return
+  }
+  const who = await deps.web.userName(m.user).catch(() => m.user)
+  const door = { kind: "slack" as const, channel: m.channel, threadTs: m.threadTs, ts: m.ts }
+  const base = { key: `testday:${m.key}`, who, whoId: m.user, whoKey: personKey(deps.config, { slack: m.user }), via: "slack" as const, door }
+  const s = m.said
+  if (s.verb === "start") fileTestDayCommand(deps.paths, { ...base, verb: "start" }, deps.now())
+  else if (s.verb === "verdict") fileTestDayCommand(deps.paths, { ...base, verb: "verdict", n: s.n, verdict: s.verdict, note: s.note }, deps.now())
+  else if (m.issue) fileTestDayCommand(deps.paths, { ...base, verb: "decide", issue: m.issue, answer: s.answer }, deps.now())
 }
 
 /**
@@ -442,6 +486,19 @@ export function wireSocket(socket: { on(event: string, listener: (...args: any[]
   for (const state of ["connected", "reconnecting", "disconnected"]) socket.on(state, () => hooks.connected(state === "connected"))
 }
 
+/** What classify knows of this mini: its Slack app, its people, its channels and threads, and whether it runs test day. */
+export function classifyContextFor(paths: AgentPaths, config: AgentConfig, slack: { teamId: string; botUserId: string; channelIds: ClassifyContext["channels"] }): ClassifyContext {
+  return {
+    teamId: slack.teamId,
+    botUserId: slack.botUserId,
+    otherAgentBots: config.slack.otherAgentBots,
+    allowedUsers: config.slack.allowedUsers,
+    channels: slack.channelIds,
+    issueForThread: (channel, ts) => issueForThread(paths, channel, ts),
+    testDay: Boolean(config.testDay?.enabled),
+  }
+}
+
 async function setup(paths: AgentPaths) {
   const { config, botToken, appToken } = checkLocal(paths, readProfileMini())
   const client = new WebClient(botToken)
@@ -552,14 +609,7 @@ async function main(): Promise<void> {
     log,
     now: () => new Date(),
     busy: new Set(),
-    classifyContext: {
-      teamId: s.teamId,
-      botUserId: s.botUserId,
-      otherAgentBots: s.config.slack.otherAgentBots,
-      allowedUsers: s.config.slack.allowedUsers,
-      channels: s.channelIds,
-      issueForThread: (channel, ts) => issueForThread(paths, channel, ts),
-    },
+    classifyContext: classifyContextFor(paths, s.config, s),
   }
   const sendContext: SendContext = {
     paths,

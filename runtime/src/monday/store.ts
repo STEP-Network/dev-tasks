@@ -26,9 +26,14 @@ import type { Stage } from "./stage.ts"
 export type MondayState = "Needs you" | "Waiting on agent" | "Done" | "Blocked"
 
 export interface ItemRecord {
-  /** needs-STEP-7, uat-STEP-7, or request-<item id>: one item per Linear id and purpose. */
+  /**
+   * needs-STEP-7, uat-STEP-7, or request-<item id>: one item per Linear id and
+   * purpose. Test day's (Wave 3): testday-item, the week's Test day item, and
+   * testday-decision-<run>-<n>, a failed checkpoint's decision.
+   */
   key: string
-  kind: "needs" | "uat" | "request"
+  /** testday and testday-decision items are the test-day controller's: the needs pass never touches them. */
+  kind: "needs" | "uat" | "request" | "testday" | "testday-decision"
   issue: string
   itemId: string
   /** The State this bridge last wrote. It writes again only when that changes, so a person's own edit stands. */
