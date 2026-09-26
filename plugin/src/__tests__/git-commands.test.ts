@@ -73,6 +73,32 @@ describe("git_commands.py", () => {
     expect(analyse("cd a && git -C b commit -m y")).toEqual(["COMMIT a/b"])
   })
 
+  it("reads each line as a command, and a command after a shell keyword (#151 review)", () => {
+    expect(analyse("git status\ngit push origin main")).toEqual(["PUSH origin", "PUSH main"])
+    expect(analyse("cat <<'EOF'\ntext\nEOF\ngit push origin staging")).toEqual(["PUSH origin", "PUSH staging"])
+    expect(analyse("git add app.ts\ngit commit -m x")).toEqual(["COMMIT ."])
+    expect(analyse("if true; then git push origin main; fi")).toEqual(["PUSH origin", "PUSH main"])
+    expect(analyse("for b in a; do git push origin main; done")).toEqual(["PUSH origin", "PUSH main"])
+    expect(analyse("if false; then :; else git push origin main; fi")).toEqual(["PUSH origin", "PUSH main"])
+    expect(analyse("if false; then :; elif git push origin main; then :; fi")).toEqual(["PUSH origin", "PUSH main"])
+    expect(analyse("while git push origin main; do :; done")).toEqual(["PUSH origin", "PUSH main"])
+    expect(analyse("{ git push origin main; }")).toEqual(["PUSH origin", "PUSH main"])
+    expect(analyse("! git push origin main")).toEqual(["PUSH origin", "PUSH main"])
+    expect(analyse("git push \\\n  origin main")).toEqual(["PUSH origin", "PUSH main"])
+    for (const command of ["\tgit push origin main", "\\git push origin main", "/usr/bin/git push origin main", "git --no-pager push origin main", "GIT_EXEC_PATH=/x git push origin main", "gi''t push origin main", "true || git push origin main", "sleep 1 & git push origin main", "case x in x) git push origin main;; esac"]) {
+      expect(analyse(command), command).toEqual(["PUSH origin", "PUSH main"])
+    }
+  })
+
+  it("reads arithmetic and ANSI-C quoting, and a substitution inside arithmetic", () => {
+    expect(analyse("echo $((1<<2))")).toEqual([])
+    expect(analyse("(( x = 1 << 2 ))")).toEqual([])
+    expect(analyse("git commit -m $'it\\'s done'")).toEqual(["COMMIT ."])
+    // Read as a substitution and as the text bash may run as a subshell: found either way, maybe twice.
+    expect(new Set(analyse("echo $(( $(git push origin main) + 1 ))") as string[])).toEqual(new Set(["PUSH origin", "PUSH main"]))
+    expect(analyse("((git push origin main))")).toEqual(["PUSH origin", "PUSH main"])
+  })
+
   it("stops on a command it cannot read, so the hooks refuse it", () => {
     for (const command of ['git push origin "main', "git push origin 'main", "echo $(git push", "cat <<EOF\nno end", "echo `git push"]) {
       expect(analyse(command), command).toHaveProperty("error")

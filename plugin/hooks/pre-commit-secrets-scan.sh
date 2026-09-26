@@ -49,8 +49,11 @@ INPUT=$(cat)
 # matches the convention in bash-guard and protect-sensitive-files.sh.
 COMMAND=$(echo "$INPUT" | python3 -c "import sys,json; print(json.load(sys.stdin).get('tool_input',{}).get('command',''))" 2>/dev/null)
 
-# Only a command with the words git and commit may commit.
-printf '%s' "$COMMAND" | grep -qw git && printf '%s' "$COMMAND" | grep -qw commit || exit 0
+# Only a command with "git" and "commit" in it, quotes and backslashes aside
+# (gi''t and \git are git), may commit. The hook runs on every Bash command.
+BARE=$(printf '%s' "$COMMAND" | tr -d "'\"\\\\")
+case "$BARE" in *git*) ;; *) exit 0 ;; esac
+case "$BARE" in *commit*) ;; *) exit 0 ;; esac
 
 # Each commit the command runs, and where (lib/git_commands.py, STEP-3354):
 # `git -C dir commit` and `cd dir && git commit` too, and never the words in a

@@ -33,7 +33,11 @@ HEREDOC_AT = re.compile(r"<<(-?)[ \t]*(\\?)([\"']?)([^\s\"'<>;&|()]+)\3")
 SEPARATOR = set(";&|()")
 REDIRECT = re.compile(r"^[0-9]*[<>]+&?$|^&>+$")
 ASSIGNMENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
-WRAPPERS = {"command", "builtin", "exec", "env", "time", "nohup", "nice", "sudo", "!", "{"}
+# Words bash runs another command after: wrappers, and the keywords a command follows.
+WRAPPERS = {
+    "command", "builtin", "exec", "env", "time", "nohup", "nice", "sudo",
+    "!", "{", "(", "then", "do", "else", "elif", "if", "while", "until",
+}
 GLOBAL_VALUE_OPTIONS = {"-C", "-c", "--git-dir", "--work-tree", "--namespace", "--config-env", "--super-prefix"}
 OTHER_REPO = {"--git-dir", "--work-tree", "--namespace"}
 PUSH_VALUE_OPTIONS = {"-o", "--push-option", "--repo", "--receive-pack", "--exec"}
@@ -60,9 +64,26 @@ def command(t, i, closer, texts):
             if pending:
                 raise Unreadable("a heredoc with no body")
             return i + 1, "".join(out)
-        if c == "\\":
+        if t.startswith("\\\n", i):
+            # A line continued: one command, as bash reads it.
+            out.append(" ")
+            i += 2
+        elif c == "\\":
             out.append(t[i : i + 2])
             i += 2
+        elif t.startswith("$'", i):
+            # ANSI-C quoting: \' inside does not close it. A word, never a command.
+            j = i + 2
+            while j < len(t) and t[j] != "'":
+                j += 2 if t[j] == "\\" else 1
+            if j >= len(t):
+                raise Unreadable("an unclosed $'...'")
+            out.append(" _ ")
+            i = j + 1
+        elif t.startswith(("$((", "(("), i):
+            # Arithmetic: its << is a shift, not a heredoc. A substitution inside it still runs.
+            i = arithmetic(t, i + (3 if c == "$" else 2), texts)
+            out.append(" _ ")
         elif c == "'":
             end = t.find("'", i + 1)
             if end < 0:
@@ -89,10 +110,13 @@ def command(t, i, closer, texts):
             pending.append((m.group(1) == "-", m.group(4), not (m.group(2) or m.group(3))))
             out.append(t[i : m.end()])
             i = m.end()
-        elif c == "\n" and pending:
-            out.append(c)
-            i = heredoc_bodies(t, i + 1, pending, texts)
-            pending = []
+        elif c == "\n":
+            # A newline ends a command, as `;` does (shlex reads it as a space).
+            out.append(" ; ")
+            i += 1
+            if pending:
+                i = heredoc_bodies(t, i, pending, texts)
+                pending = []
         else:
             if c == "(":
                 depth += 1
@@ -145,20 +169,42 @@ def heredoc_bodies(t, i, pending, texts):
                 break
             lines.append(line)
         if expands:
-            body = "\n".join(lines)
-            j = 0
-            while j < len(body):
-                if body[j] == "\\":
-                    j += 2
-                elif body.startswith("$(", j) and not body.startswith("$((", j):
-                    j, sub = command(body, j + 2, ")", texts)
-                    texts.append(sub)
-                elif body[j] == "`":
-                    j, sub = command(body, j + 1, "`", texts)
-                    texts.append(sub)
-                else:
-                    j += 1
+            substitutions_in("\n".join(lines), texts)
     return min(i, len(t))
+
+
+def substitutions_in(body, texts):
+    """The substitutions in text bash expands but does not run as a command: each one's body runs."""
+    j = 0
+    while j < len(body):
+        if body[j] == "\\":
+            j += 2
+        elif body.startswith("$(", j) and not body.startswith("$((", j):
+            j, sub = command(body, j + 2, ")", texts)
+            texts.append(sub)
+        elif body[j] == "`":
+            j, sub = command(body, j + 1, "`", texts)
+            texts.append(sub)
+        else:
+            j += 1
+
+
+def arithmetic(t, i, texts):
+    """Skips an arithmetic expression from just inside its (( to past its )). Returns the index after it.
+    Bash reads a (( that does not parse as arithmetic as nested subshells: the text is read as a command too."""
+    j, depth = i, 2
+    while j < len(t) and depth:
+        if t[j] == "(":
+            depth += 1
+        elif t[j] == ")":
+            depth -= 1
+        j += 1
+    if depth:
+        raise Unreadable("an unclosed arithmetic expression")
+    inner = t[i : j - 2]
+    substitutions_in(inner, texts)
+    texts.append(inner)
+    return j
 
 
 def segments(text):

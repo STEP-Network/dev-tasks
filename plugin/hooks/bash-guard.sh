@@ -85,9 +85,10 @@ PROJECT_ROOT="${AGENT_CWD:-${CLAUDE_PROJECT_DIR:-$PWD}}"
 # command word, the bodies of $(...) and backticks included, and never what a
 # quote or a heredoc holds as text, so a commit message that says "push" is no
 # push. A command it cannot read blocks. COMMIT and PUSH lines, relative to
-# PROJECT_ROOT.
+# PROJECT_ROOT. Only a command with no "git" in it, quotes and backslashes
+# aside (gi''t and \git are git), is left unread: it runs no git.
 GIT_COMMANDS="END"
-if printf '%s' "$ACTUAL_CMD" | grep -qw git; then
+if printf '%s' "$ACTUAL_CMD" | tr -d "'\"\\\\" | grep -q git; then
   GIT_COMMANDS=$(printf '%s' "$ACTUAL_CMD" | python3 "$SCRIPT_DIR/lib/git_commands.py" 2>&1)
   [ "$(printf '%s\n' "$GIT_COMMANDS" | tail -n 1)" = "END" ] \
     || fail_closed "it cannot read the command's git commands: $(printf '%s\n' "$GIT_COMMANDS" | tail -n 1)"
@@ -121,9 +122,10 @@ done
 # caught by the CI `i18n` job within a minute of the push; an agent has no
 # equivalent feedback inside its own session, so the commit-time gate stays.
 # Resolving the profile BEFORE reading the i18n config also means a human
-# laptop pays no jq calls for a feature that cannot fire.
+# laptop pays no jq calls for a feature that cannot fire. The hook runs on
+# every Bash command, so neither happens for a command that commits nothing.
 source "$(dirname "${BASH_SOURCE[0]}")/lib/profile.sh"
-if profile_is agent; then
+if [ -n "$COMMIT_DIRS" ] && profile_is agent; then
 
 # Resolve i18n config once for sections (d) and (e). Both are dormant unless
 # project-config.i18n.enabled = true.

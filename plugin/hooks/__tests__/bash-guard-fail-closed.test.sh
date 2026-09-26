@@ -116,6 +116,18 @@ check 2 "every branch" "git push origin : (matching branches)" "$(payload 'git p
 check 2 "every branch" "a glob refspec" "$(payload "git push origin 'refs/heads/*:refs/heads/*'")"
 check 2 "every branch" "git -c push.default=matching push origin" "$(payload 'git -c push.default=matching push origin')"
 check 2 "every branch" "git -c remote.origin.push=refs/heads/main push origin" "$(payload 'git -c remote.origin.push=refs/heads/main push origin')"
+check 2 "protected branch 'main'" "a push on the second line" "$(payload 'git status
+git push origin main')"
+check 2 "protected branch 'staging'" "a push on the line after a heredoc" "$(payload "cat <<'EOF'
+text
+EOF
+git push origin staging")"
+check 2 "protected branch 'main'" "if …; then git push origin main; fi" "$(payload 'if true; then git push origin main; fi')"
+check 2 "protected branch 'main'" "for …; do git push origin main; done" "$(payload 'for b in a; do git push origin main; done')"
+check 2 "protected branch 'main'" "gi''t push origin main" "$(payload "gi''t push origin main")"
+check 2 "protected branch 'main'" "a tab before git" "$(payload "$(printf '\tgit push origin main')")"
+check 2 "protected branch 'main'" "\\git push origin main" "$(payload '\git push origin main')"
+check 0 "" "arithmetic and \$'…' read, and the commit goes" "$(payload "x=\$((1<<2)); git commit --allow-empty -m \$'it\\'s done'")"
 # A second checkout on main, while the session's own is on feat/x.
 MAIN_WT="$NOT_GIT/main-wt"
 git worktree add --quiet "$MAIN_WT" main
@@ -142,6 +154,8 @@ printf '{"hello":"Hej"}\n' > "$MAIN_WT/messages/da.json"
 git -C "$MAIN_WT" add messages
 check 2 "locale parity" "(d): git -C <dir> commit is checked in <dir>" "$(payload "git -C $MAIN_WT commit -m x")"
 check 2 "locale parity" "(d): cd <dir> && git commit is checked in <dir>" "$(payload "cd $MAIN_WT && git commit -m x")"
+check 2 "locale parity" "(d): git add on one line, git commit on the next" "$(payload "git -C $MAIN_WT add messages
+git -C $MAIN_WT commit -m x")"
 git -C "$MAIN_WT" reset --quiet
 config '{ "version": "1", "git": { "defaultBase": "no-such-base" }, "i18n": { "enabled": true, "defaultLocale": "en", "locales": ["en", "da"], "messagesGlob": "messages/*.json", "parityHookMode": "block" }, "hooks": { "enabled": [] } }'
 check 2 "completeness check did not finish" "(e): a base it cannot find blocks" "$(payload 'git commit -m both')"

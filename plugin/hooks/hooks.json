@@ -135,62 +135,6 @@
         "hooks": [
           {
             "type": "command",
-            "if": "Bash(* --no-verify *)",
-            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/bash-guard.sh"
-          },
-          {
-            "type": "command",
-            "if": "Bash(*--force*)",
-            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/bash-guard.sh"
-          },
-          {
-            "type": "command",
-            "if": "Bash(rm -rf *)",
-            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/bash-guard.sh"
-          },
-          {
-            "type": "command",
-            "if": "Bash(git reset --hard *)",
-            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/bash-guard.sh"
-          },
-          {
-            "type": "command",
-            "if": "Bash(git checkout .)",
-            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/bash-guard.sh"
-          },
-          {
-            "type": "command",
-            "if": "Bash(git checkout -- *)",
-            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/bash-guard.sh"
-          },
-          {
-            "type": "command",
-            "if": "Bash(git clean -f*)",
-            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/bash-guard.sh"
-          },
-          {
-            "type": "command",
-            "if": "Bash(git branch -D*)",
-            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/bash-guard.sh"
-          },
-          {
-            "type": "command",
-            "if": "Bash(git commit *)",
-            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/bash-guard.sh"
-          },
-          {
-            "type": "command",
-            "if": "Bash(git push *)",
-            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/bash-guard.sh"
-          },
-          {
-            "type": "command",
-            "if": "Bash(git -C *)",
-            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/bash-guard.sh"
-          },
-          {
-            "type": "command",
-            "if": "Bash(git -c *)",
             "command": "${CLAUDE_PLUGIN_ROOT}/hooks/bash-guard.sh"
           },
           {
@@ -205,17 +149,6 @@
           },
           {
             "type": "command",
-            "if": "Bash(git commit *)",
-            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/pre-commit-secrets-scan.sh"
-          },
-          {
-            "type": "command",
-            "if": "Bash(git -C *)",
-            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/pre-commit-secrets-scan.sh"
-          },
-          {
-            "type": "command",
-            "if": "Bash(git -c *)",
             "command": "${CLAUDE_PLUGIN_ROOT}/hooks/pre-commit-secrets-scan.sh"
           },
           {

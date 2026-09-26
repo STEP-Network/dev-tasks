@@ -32,26 +32,14 @@ describe("hooks.json conditions", () => {
     }
   })
 
-  it("runs bash-guard on every command form its gates cover", () => {
-    expect(conditionsFor("bash-guard.sh")).toEqual([
-      "Bash(* --no-verify *)",
-      "Bash(*--force*)",
-      "Bash(rm -rf *)",
-      "Bash(git reset --hard *)",
-      "Bash(git checkout .)",
-      "Bash(git checkout -- *)",
-      "Bash(git clean -f*)",
-      "Bash(git branch -D*)",
-      "Bash(git commit *)",
-      "Bash(git push *)",
-      // A push behind a global option, `git -C dir push origin main`, is still gate (f)'s (STEP-3354).
-      "Bash(git -C *)",
-      "Bash(git -c *)",
-    ])
-  })
-
-  it("runs the secrets scan on a commit behind a global option too (STEP-3354)", () => {
-    expect(conditionsFor("pre-commit-secrets-scan.sh")).toEqual(["Bash(git commit *)", "Bash(git -C *)", "Bash(git -c *)"])
+  it("runs bash-guard and the secrets scan on every Bash command, once, with no `if` to miss a form (STEP-3354)", () => {
+    // A tab, \git, /usr/bin/git, --no-pager, VAR=x git, a second line: no `if` rule matches them all, and the hooks' own parse reads each.
+    for (const script of ["bash-guard.sh", "pre-commit-secrets-scan.sh"]) {
+      const registered = handlers.filter((h) => h.command.endsWith(`/hooks/${script}`))
+      expect(registered, script).toHaveLength(1)
+      expect(registered[0], script).toMatchObject({ event: "PreToolUse", matcher: "Bash" })
+      expect(registered[0].if, script).toBeUndefined()
+    }
   })
 
   it("guards every sensitive file for both Edit and Write", () => {

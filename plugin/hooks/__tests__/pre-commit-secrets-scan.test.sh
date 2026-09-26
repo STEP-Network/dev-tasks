@@ -68,6 +68,9 @@ check "a commit adding a key → block" 2 "$(run)"
 ELSEWHERE="$(mktemp -d)"
 check "git -C <repo> commit, from elsewhere → block" 2 "$(run_from "$ELSEWHERE" "git -C $REPO commit -m x")"
 check "cd <repo> && git commit, from elsewhere → block" 2 "$(run_from "$ELSEWHERE" "cd $REPO && git commit -m x")"
+check "git add on one line, git commit on the next → block" 2 "$(run_from "$REPO" "git add own.ts
+git commit -m x")"
+check "gi''t commit → block" 2 "$(run_from "$REPO" "gi''t commit -m x")"
 check "a heredoc message that mentions a commit is no commit → allow" 0 "$(run_from "$ELSEWHERE" "cat <<'EOF'
 git commit -m x
 EOF")"
