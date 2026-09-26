@@ -18,9 +18,13 @@
  * first run tore down. Once per run and head commit. Failing again there, it
  * goes to a person, as every red check did before.
  *
- * At most MAX_REVISE_ROUNDS rounds per PR. After that it asks in
- * #polads-questions, once, and stops. Nothing here, and nothing the worker
- * may run, dismisses a person's or a bot's review.
+ * MAX_REVISE_ROUNDS rounds per PR. Past them (STEP-3366), another round
+ * goes only while something still blocks (the Claude review's BLOCKERs, or a
+ * required check the code failed; never IMPROVEMENT or POLISH alone) and the
+ * last round changed what blocks, up to MAX_TOTAL_REVISE_ROUNDS in all, and
+ * not while usage holds new work back. Otherwise it asks in
+ * #polads-questions, once per head, saying which stopped it. Nothing here,
+ * and nothing the worker may run, dismisses a person's or a bot's review.
  *
  * A PR git cannot merge into its base (STEP-3340) comes back too, once per
  * head: its worker merges the base in (never a rebase, never forced) and
@@ -43,10 +47,13 @@ import { enqueueSlack } from "../outbox.ts"
 import { feedbackFor, NOTHING_NEEDED, prLink } from "../plain.ts"
 import { approvalLabel, approvalPatch, classOfLabels, classRank, type ApprovalClass, type Tracker } from "../tracker.ts"
 import type { Exec } from "../worker/git.ts"
+import { developBlockedByUsage, readUsage } from "../usage.ts"
 import { BROWSER_TEST_REASON, readUserTestState, type UserTestState } from "../usertest/state.ts"
 
 export const MAX_REVISE_ROUNDS = 3
 export const MAX_CONFLICT_ROUNDS = 3
+/** Past MAX_REVISE_ROUNDS, rounds go on only while the blockers change, and never past this many in all. */
+export const MAX_TOTAL_REVISE_ROUNDS = 10
 
 export interface PrActor {
   login?: string
@@ -165,12 +172,100 @@ export function failingRequired(view: OwnPrView, required: readonly string[]): F
   return [...out.values()].sort((a, b) => a.name.localeCompare(b.name))
 }
 
+/** The check the Claude review runs as. Its verdict is a PR comment, whose BLOCKERs say more than the check's red. */
+export const REVIEW_CHECK = "Claude review"
+/** Two blockers in one file within this many lines are one: the fix moves the code a little (a blocker at :70 comes back at :69). */
+const LINE_DRIFT = 15
+
+const REVIEWER_RE = /^claude(\[bot\])?$/i
+const REVIEW_RE = /^\s*##\s*Claude review\b/
+/** Where a BLOCKER section starts: a heading, or a line that is only the bold word. "**No BLOCKERs found.**" is neither. */
+const BLOCKER_START_RE = /^(#{1,6}\s*[^\w\s]*\s*BLOCKERS?\b|\*\*BLOCKERS?\*\*:?\s*$)/
+/**
+ * Where it ends: the next heading, or IMPROVEMENT, POLISH or NIT opening a
+ * line, bold or not, or a list item. A finding may be a whole bold line, so
+ * bold alone ends nothing.
+ */
+const SECTION_END_RE = /^(#{1,6}\s|([-*]\s|\d+\.\s)?(\*\*)?(IMPROVEMENTS?|POLISH|NITS?)\b)/
+/** A finding: a top-level list item, or a paragraph that opens in bold. */
+const FINDING_RE = /^([-*]\s|\d+\.\s|\*\*)/
+/** A backticked file, and the first line of its range: `lib/x.ts:146-163`. */
+const FILE_RE = /`([^`\s:]+\.[A-Za-z0-9]{1,5})(?::(\d+)(?:[-–]\d+)?)?`/
+
+/**
+ * The BLOCKER findings of the Claude review's latest verdict posted after
+ * `since` (the last round's start: a verdict before it is the previous
+ * head's), each by its file and first line, or, when none names a file, by
+ * its first words. [] for a verdict without BLOCKERs, null when there is none
+ * since. Pure.
+ */
+export function reviewBlockers(view: Pick<OwnPrView, "comments">, since: string | null): string[] | null {
+  const after = since ? Date.parse(since) : Number.NEGATIVE_INFINITY
+  const verdict = (view.comments ?? [])
+    .filter((c) => REVIEWER_RE.test(c.author?.login ?? "") && REVIEW_RE.test(c.body ?? "") && Date.parse(c.createdAt ?? "") > after)
+    .sort((a, b) => Date.parse(a.createdAt ?? "") - Date.parse(b.createdAt ?? ""))
+    .at(-1)
+  if (!verdict) return null
+  const files: string[] = []
+  const texts: string[] = []
+  let inBlockers = false
+  let inCode = false
+  for (const line of (verdict.body ?? "").split("\n")) {
+    // A code block's lines are code, whatever they look like.
+    const fence = /^\s*```/.test(line)
+    if (fence) inCode = !inCode
+    if (inCode || fence) continue
+    const start = BLOCKER_START_RE.test(line)
+    if (start) inBlockers = true
+    else if (SECTION_END_RE.test(line)) inBlockers = false
+    if (!inBlockers || !(start || FINDING_RE.test(line))) continue
+    const file = FILE_RE.exec(line)
+    if (file) files.push(file[2] ? `${file[1]}:${file[2]}` : file[1])
+    else if (!start) texts.push(`text:${line.replace(/^([-*]\s|\d+\.\s)/, "").replace(/[*`_]/g, "").replace(/\s+/g, " ").trim().toLowerCase().slice(0, 60)}`)
+  }
+  return files.length ? files : texts
+}
+
+/**
+ * What still blocks the PR at its head: the review's BLOCKERs since `since`,
+ * and `check:<name>` for each other required check the code failed
+ * (`failed`, by name, shards as one). The review's own check stands for its
+ * verdict until one comes. Pure.
+ */
+export function blockerFingerprint(view: Pick<OwnPrView, "comments">, failed: readonly string[], since: string | null): string[] {
+  const review = reviewBlockers(view, since)
+  const checks = [...new Set(failed.map((name) => name.replace(/\s*\(\s*\d+\s*\/\s*\d+\s*\)\s*$/, "")))]
+  return [...(review ?? []), ...checks.filter((name) => review === null || name !== REVIEW_CHECK).map((name) => `check:${name}`)]
+}
+
+const blockerAt = (b: string) => /^(.+):(\d+)$/.exec(b)
+function sameBlocker(a: string, b: string): boolean {
+  if (a === b) return true
+  const [x, y] = [blockerAt(a), blockerAt(b)]
+  return Boolean(x && y && x[1] === y[1] && Math.abs(Number(x[2]) - Number(y[2])) <= LINE_DRIFT)
+}
+
+/** The same blockers: as many, each matched to one of the others. None is never the same: nothing blocks. Pure. */
+export function sameBlockers(a: readonly string[], b: readonly string[]): boolean {
+  if (!a.length || a.length !== b.length) return false
+  const left = [...b]
+  for (const x of a) {
+    const i = left.findIndex((y) => sameBlocker(x, y))
+    if (i < 0) return false
+    left.splice(i, 1)
+  }
+  return true
+}
+
+/** Why a round past the cap is not sent: nothing blocks, 10 rounds, usage, or the last round changed nothing. */
+export type CapStop = "cap" | "runaway" | "usage" | "no-progress"
+
 export type RevisePlan =
   | { kind: "none" }
   | { kind: "rerun"; runs: string[] }
   | { kind: "notify"; failing: string[]; runs: string[] }
-  | { kind: "revise"; handled: string[]; reasons: string[] }
-  | { kind: "ask"; handled: string[]; reasons: string[] }
+  | { kind: "revise"; handled: string[]; reasons: string[]; blockers?: string[] }
+  | { kind: "ask"; handled: string[]; reasons: string[]; why?: CapStop }
 
 /**
  * What one open PR needs, from its view, the watcher's record and which
@@ -179,7 +274,7 @@ export type RevisePlan =
 export function planRevision(
   view: OwnPrView,
   pr: WatchedPr,
-  ctx: { mini: string; required: readonly string[]; infra: Record<string, boolean>; usertest?: UserTestState | null; base?: string },
+  ctx: { mini: string; required: readonly string[]; infra: Record<string, boolean>; usertest?: UserTestState | null; base?: string; usageBlocked?: string | null },
 ): RevisePlan {
   const handled = new Set(pr.revise?.handled ?? [])
   const author = view.author?.login ?? ""
@@ -226,10 +321,18 @@ export function planRevision(
     const rounds = pr.revise?.rounds ?? 0
     // Asked once per head: feedback on a head nobody was asked about asks again.
     const askedHere = pr.revise?.asked && (pr.revise.askedHead === undefined || pr.revise.askedHead === view.headRefOid)
-    if (rounds < MAX_REVISE_ROUNDS) return conflict ? { kind: "revise", handled: [...ids, conflictId], reasons: [...reasons, conflict] } : { kind: "revise", handled: ids, reasons }
-    if (!askedHere) return { kind: "ask", handled: ids, reasons }
+    // Each round keeps what blocked it, so the next one past the cap can tell whether it changed anything.
+    const blockers = blockerFingerprint(view, failing.filter((f) => !ctx.infra[f.name]).map((f) => f.name), pr.revise?.lastRoundAt ?? null)
+    const revise: RevisePlan = {
+      kind: "revise",
+      ...(conflict ? { handled: [...ids, conflictId], reasons: [...reasons, conflict] } : { handled: ids, reasons }),
+      ...(blockers.length ? { blockers } : {}),
+    }
+    if (rounds < MAX_REVISE_ROUNDS) return revise
     // The feedback waits for a person's answer. The conflict need not.
-    return conflict ? conflictPlan(conflict) : { kind: "none" }
+    if (askedHere) return conflict ? conflictPlan(conflict) : { kind: "none" }
+    const why = pastCapStop(rounds, blockers, pr.revise?.blockers, ctx.usageBlocked)
+    return why ? { kind: "ask", handled: ids, reasons, why } : revise
   }
   if (conflict) return conflictPlan(conflict)
   if (infraOnly.length) {
@@ -241,6 +344,21 @@ export function planRevision(
     return { kind: "notify", failing: infraOnly.map((f) => f.name), runs }
   }
   return { kind: "none" }
+}
+
+/**
+ * Why no round goes past the cap, or null: one goes while something still
+ * blocks (IMPROVEMENT and POLISH do not, nor a person's comment alone), under
+ * MAX_TOTAL_REVISE_ROUNDS, while usage allows new work, and only when the last
+ * round changed what blocks. A record from before blockers were kept has none
+ * to compare, so its first round past the cap goes.
+ */
+function pastCapStop(rounds: number, blockers: readonly string[], last: readonly string[] | undefined, usage: string | null | undefined): CapStop | null {
+  if (!blockers.length) return "cap"
+  if (rounds >= MAX_TOTAL_REVISE_ROUNDS) return "runaway"
+  if (usage) return "usage"
+  if (last && sameBlockers(blockers, last)) return "no-progress"
+  return null
 }
 
 export interface ReviseDeps {
@@ -409,14 +527,29 @@ export async function classifyFailures(deps: ReviseDeps, view: OwnPrView, pr: Wa
   return verdicts
 }
 
+/** The question when no round goes past the cap: why it stopped, in the mini's words. */
+function capQuestion(link: string, rounds: number, reasons: string, why: CapStop | undefined, usage: string | null): string {
+  switch (why) {
+    case "no-progress":
+      return `${link} still has the same blockers after I worked on it ${rounds} times: the last round did not change them (${reasons}).`
+    case "runaway":
+      return `${link} has had ${rounds} rounds and still has blockers: I stop at ${MAX_TOTAL_REVISE_ROUNDS} rounds by myself (${reasons}).`
+    case "usage":
+      return `${link} still has blockers after I worked on it ${rounds} times (${reasons}), and usage is too high for me to go on by myself: ${usage}.`
+    default:
+      return `${link} still has review feedback after I worked on it ${rounds} times (${reasons}).`
+  }
+}
+
 /** One open PR of this mini's: plan, then act, and keep what it did on the record. */
 export async function reviseOwnPr(deps: ReviseDeps, pr: WatchedPr, view: OwnPrView, required: readonly string[]): Promise<void> {
   const verdicts = await classifyFailures(deps, view, pr, required)
   const infra = Object.fromEntries(Object.entries(verdicts).map(([name, v]) => [`${view.headRefOid}:${name}`, v]))
   let record: WatchedPr = { ...(await raiseClass(deps, pr, view)), infra }
   const usertest = readUserTestState(deps.paths, pr.url)
-  const plan = planRevision(view, pr, { mini: deps.config.mini, required, infra: verdicts, usertest, base: deps.config.repo.base })
   const now = deps.now()
+  const usageBlocked = developBlockedByUsage(readUsage(deps.paths), deps.config.queue, now)
+  const plan = planRevision(view, pr, { mini: deps.config.mini, required, infra: verdicts, usertest, base: deps.config.repo.base, usageBlocked })
   switch (plan.kind) {
     case "none":
       break
@@ -494,7 +627,7 @@ export async function reviseOwnPr(deps: ReviseDeps, pr: WatchedPr, view: OwnPrVi
           id: `cap-${pr.issue}-${view.number}`,
           issue: pr.issue,
           url: pr.url,
-          question: `${prLink(pr.url)} still has review feedback after I worked on it ${MAX_REVISE_ROUNDS} times (${plan.reasons.join(", ")}).${plan.reasons.includes(BROWSER_TEST_REASON) ? " It does not go in by itself until then." : ""}`,
+          question: `${capQuestion(prLink(pr.url), pr.revise?.rounds ?? MAX_REVISE_ROUNDS, plan.reasons.join(", "), plan.why, usageBlocked)}${plan.reasons.includes(BROWSER_TEST_REASON) ? " It does not go in by itself until then." : ""}`,
           options: [
             { reply: "fix it", does: "have me try once more" },
             { reply: "leave it", does: "leave it to a person" },
@@ -505,7 +638,7 @@ export async function reviseOwnPr(deps: ReviseDeps, pr: WatchedPr, view: OwnPrVi
         now,
       )
       record = { ...record, revise: { ...(pr.revise ?? { rounds: MAX_REVISE_ROUNDS, handled: [] }), handled: [...(pr.revise?.handled ?? []), ...plan.handled], asked: true, askedHead: view.headRefOid } }
-      appendLedger(deps.paths, { type: "pr.reviseCapped", issue: pr.issue, url: pr.url }, now)
+      appendLedger(deps.paths, { type: "pr.reviseCapped", issue: pr.issue, url: pr.url, ...(plan.why ? { why: plan.why } : {}) }, now)
       break
     }
     case "revise": {
@@ -547,16 +680,29 @@ export async function reviseOwnPr(deps: ReviseDeps, pr: WatchedPr, view: OwnPrVi
       })
       record = {
         ...record,
-        revise: { rounds: round, handled, lastRoundAt: now.toISOString(), ...(pr.revise?.conflictRounds ? { conflictRounds: pr.revise.conflictRounds } : {}) },
+        revise: {
+          rounds: round,
+          handled,
+          lastRoundAt: now.toISOString(),
+          ...(pr.revise?.conflictRounds ? { conflictRounds: pr.revise.conflictRounds } : {}),
+          ...(plan.blockers ? { blockers: plan.blockers } : {}),
+        },
       }
-      appendLedger(deps.paths, { type: "pr.revise", issue: pr.issue, url: pr.url, round, reasons: plan.reasons }, now)
+      // Only past the cap because the blockers still change: planRevision sends no other round there.
+      const left = plan.blockers?.length ?? 0
+      const pastCap = round > MAX_REVISE_ROUNDS
+      appendLedger(deps.paths, { type: "pr.revise", issue: pr.issue, url: pr.url, round, reasons: plan.reasons, ...(pastCap ? { pastCap: `blockers changed: ${left} left` } : {}) }, now)
       enqueueSlack(
         deps.paths,
         {
           kind: "post",
           channel: "agents",
           // The browser test's reason and the conflict's say nothing feedbackFor has not said already.
-          text: `${pr.issue}: I am fixing ${feedbackFor(plan.reasons)} on ${prLink(pr.url)}${((rest) => (rest.length ? ` (${rest.join(", ")})` : ""))(plan.reasons.filter((r) => r !== BROWSER_TEST_REASON && !isConflictReason(r)))}, try ${round} of ${MAX_REVISE_ROUNDS}. ${NOTHING_NEEDED}`,
+          text: `${pr.issue}: I am fixing ${feedbackFor(plan.reasons)} on ${prLink(pr.url)}${((rest) => (rest.length ? ` (${rest.join(", ")})` : ""))(plan.reasons.filter((r) => r !== BROWSER_TEST_REASON && !isConflictReason(r)))}, ${
+            pastCap
+              ? `try ${round}, past my usual ${MAX_REVISE_ROUNDS}: ${left} ${left === 1 ? "blocker is" : "blockers are"} still open, and the last round changed them.`
+              : `try ${round} of ${MAX_REVISE_ROUNDS}.`
+          } ${NOTHING_NEEDED}`,
         },
         now,
       )

@@ -99,9 +99,17 @@ export async function gatherFeedback(exec: Exec, slug: string, revise: ReviseReq
 /** How many of the browser test's findings a revise brief quotes: the rest are on the PR. */
 const MAX_FINDINGS = 20
 
-/** "round 2 of 3", or for a round that only merges the base in, under its own cap, "merge round 1 of 3". */
+/**
+ * "round 2 of 3", or for a round that only merges the base in, under its own
+ * cap, "merge round 1 of 3". Past the cap, why: a person asked, or agentd's
+ * blockers still change.
+ */
 export const roundLabel = (revise: ReviseRequest) =>
-  isConflictOnly(revise.reasons) ? `merge round ${revise.round} of ${MAX_CONFLICT_ROUNDS}` : `round ${revise.round} of ${MAX_REVISE_ROUNDS}`
+  isConflictOnly(revise.reasons)
+    ? `merge round ${revise.round} of ${MAX_CONFLICT_ROUNDS}`
+    : revise.round > MAX_REVISE_ROUNDS
+      ? `round ${revise.round}, past the usual ${MAX_REVISE_ROUNDS}${revise.instruction ? ", as a person asked" : " while blockers remain"}`
+      : `round ${revise.round} of ${MAX_REVISE_ROUNDS}`
 
 /** How many conflicted files a revise brief names: git lists the rest (`git diff --name-only --diff-filter=U`). */
 const MAX_CONFLICTS = 50

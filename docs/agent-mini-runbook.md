@@ -556,9 +556,16 @@ share a database branch the first run tore down), once per head commit.
 Failing on the infrastructure again, it goes to the issue's thread for a
 person.
 
-After three rounds on one PR the agent asks in `#polads-questions` and stops
-revising it. It never dismisses a review, a person's or a bot's. To have it
-fix something, comment on the PR starting `@<agent>`.
+After three rounds on one PR the agent goes on only while something still
+blocks it and the last round changed what (STEP-3366). What blocks is the
+Claude review's BLOCKER findings, by file and line (a line that moved by up
+to 15 counts as the same), and each required check the code failed.
+IMPROVEMENT and POLISH findings, or a comment, never take it past three. It
+asks in `#polads-questions` and stops revising, once per head commit, when
+the same blockers come back, after ten rounds in all, or while usage holds
+new work back; the question says which. It never dismisses a review, a
+person's or a bot's. To have it fix something, comment on the PR starting
+`@<agent>`.
 
 A PR that GitHub cannot merge into its base (`mergeable: CONFLICTING`,
 `mergeStateStatus: DIRTY`) comes back too, once per head commit (STEP-3340).
