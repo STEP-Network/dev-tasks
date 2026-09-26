@@ -993,7 +993,7 @@ later (`requests.releasedDays`).
 | Building | a task is being refined, built or reviewed |
 | Checking | the agents are testing it |
 | Ready to test | a Look or Try change waits for a person's test, or is approved and waits for the release |
-| Released | every task that is not canceled is released (a Question: answered) |
+| Released | every task that is not canceled or a duplicate is released (a Question: answered) |
 | Declined | the anchor was canceled or is a duplicate |
 | On hold | every open task is On hold |
 
