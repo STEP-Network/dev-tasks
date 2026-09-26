@@ -8,7 +8,7 @@ const MINIMAL = {
   mini: "eve",
   repo: { path: "/Users/eve/polads" },
   pluginRoot: "/Users/eve/dev-tasks/plugin",
-  slack: { allowedUsers: ["U06LHEHFD3P"] },
+  slack: { allowedUsers: ["U0EXAMPLE1"] },
 }
 
 function withConfig(value: unknown) {

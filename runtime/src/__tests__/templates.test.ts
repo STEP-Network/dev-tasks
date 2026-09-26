@@ -22,6 +22,16 @@ describe("templates/config.example.json", () => {
     expect(example.frontDoor.claudePath).toBeUndefined()
     expect(example.frontDoor.tmuxPath).toBeUndefined()
   })
+
+  it("shows the Monday bridge's Wave 2 keys, off, with made-up ids (runbook, Two boards and two doors)", () => {
+    const monday = ConfigSchema.parse(example).bridges.monday!
+    expect([monday.enabled, monday.digest.enabled]).toEqual([false, false])
+    expect(Object.keys(monday.requests!.columns).sort()).toEqual(["class", "linear", "progress", "requester", "size", "slackThread", "stage", "targetWeek", "type"])
+    expect(monday.columns).toMatchObject({ recommendation: expect.any(String), request: expect.any(String), slackThread: expect.any(String) })
+    expect(monday.groups).toMatchObject({ needsYou: "Decide", approvePlan: "Approve plan", looks: "Looks good?", fyi: "FYI" })
+    expect(monday.people.every((p) => p.slackId && /EXAMPLE/.test(p.slackId))).toBe(true)
+    expect(example.slack.allowedUsers.every((u: string) => /EXAMPLE/.test(u))).toBe(true)
+  })
 })
 
 describe("templates/claude-settings.json, the front door's settings", () => {
