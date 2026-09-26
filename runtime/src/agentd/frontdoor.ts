@@ -321,6 +321,10 @@ export async function applyFrontDoor(deps: FrontDoorDeps, state: FrontDoorState,
     deps.log.warn("front door kicked", { reason: action.reason })
     return { ...state, kickedAt: now.toISOString() }
   }
+  // The request is spent on the start it asked for before anything can throw: a start that fails
+  // must not come back uncounted at every tick; the next attempt is an ordinary one, and counts.
+  const intentional = action.kind === "start" && action.intentional === true
+  if (intentional) rmSync(restartRequestPath(deps.paths), { force: true })
   // Checked before a restart kills anything: a refused start leaves the session as it is.
   const refusal = await frontDoorRefusal(deps)
   if (refusal) throw new FrontDoorRefused(refusal)
@@ -343,9 +347,6 @@ export async function applyFrontDoor(deps: FrontDoorDeps, state: FrontDoorState,
   appendLedger(deps.paths, { type: "frontdoor.start", mode, reason: action.reason }, now)
   deps.log.info("front door started", { mode, reason: action.reason, sessionId: resumeId })
   const hourAgo = now.getTime() - 3_600_000
-  const intentional = action.kind === "start" && action.intentional === true
-  // The request is spent on the start it asked for.
-  if (intentional) rmSync(restartRequestPath(deps.paths), { force: true })
   return {
     ...state,
     sessionId: resumeId,

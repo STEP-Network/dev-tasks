@@ -138,6 +138,20 @@ describe("requestFrontDoorRestart and superviseFrontDoor (STEP-3370)", () => {
     expect(readRestartRequest(paths)).toBeNull()
   })
 
+  it("spends the request even when the start throws, so it never re-fires uncounted at every tick", async () => {
+    for (const failing of [
+      { responses: [[/new-session/, { code: 1, stderr: "no server" }]] as Array<[RegExp, Partial<ExecResult>]>, error: /tmux new-session failed/ },
+      { responses: [[/ --version$/, { code: 1, stderr: "gone" }]] as Array<[RegExp, Partial<ExecResult>]>, error: FrontDoorRefused },
+    ]) {
+      const { deps, paths } = setup(failing.responses)
+      writeFileSync(join(paths.state, "frontdoor-restart.json"), JSON.stringify({ at: minutesAgo(1), reason: "a deploy" }))
+      const action = decideFrontDoor(input({ alive: false, state: state({ lastStartAt: minutesAgo(20) }), restartRequest: readRestartRequest(paths) }))
+      expect(action).toMatchObject({ kind: "start", intentional: true })
+      await expect(applyFrontDoor(deps, state({ lastStartAt: minutesAgo(20) }), action)).rejects.toThrow(failing.error)
+      expect(readRestartRequest(paths)).toBeNull()
+    }
+  })
+
   it("starts it again on the request, counts no exit, and spends the request", async () => {
     const { deps, paths } = setup([[/has-session/, { code: 1 }]])
     writeFileSync(join(paths.state, "frontdoor.json"), JSON.stringify(state({ starts: [minutesAgo(20)], lastStartAt: minutesAgo(20) })))
