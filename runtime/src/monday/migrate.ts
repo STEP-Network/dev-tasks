@@ -20,13 +20,13 @@ import { closeSync, mkdirSync, openSync, readdirSync, readFileSync, rmSync, stat
 import { randomUUID } from "node:crypto"
 import { dirname, join } from "node:path"
 import type { AgentConfig, AgentPaths } from "../config.ts"
-import { writeJsonAtomic } from "../fsq.ts"
+import { readJson, writeJsonAtomic } from "../fsq.ts"
 import { appendLedger } from "../log.ts"
 import { INTAKE_SLACK } from "../slack/text.ts"
 import type { Tracker } from "../tracker.ts"
 import type { MondayApi, MondayColumn } from "./client.ts"
 import type { PeopleView } from "./people.ts"
-import { dropRecord, migratingPath, migrationsDir, readCursor, readRecords } from "./store.ts"
+import { dropRecord, migratingPath, migrationsDir, readCursor, readRecords, syncingPath } from "./store.ts"
 
 export interface MigrateDeps {
   config: AgentConfig
@@ -51,8 +51,10 @@ export interface MigrationSnapshot {
   /** Every column's value as Monday gave it, and the group: what the way back restores. */
   items: Array<{ itemId: string; name: string; groupId: string; columns: Record<string, string | null> }>
   labelled: string[]
-  /** The items this run moved, written once its moves are done: absent when it stopped before, so any of them may have moved. */
+  /** The items this run has moved, written before each move: absent in a snapshot older than that, so any of them may have moved. */
   moved?: string[]
+  /** The item it was moving when it last wrote: a run cut short then may have moved it. */
+  moving?: string
 }
 
 type Failed = Array<{ what: string; error: string }>
@@ -100,21 +102,30 @@ export async function planMigration(deps: MigrateDeps, only?: string): Promise<M
 
 const OFF_FIRST = "turn the Monday bridge off first (bridges.monday.enabled false, then restart agentd): it must not poll while its items move"
 
+/** Whether a process runs with this pid: a mark left by one that died holds nothing up. */
+function alive(pid: unknown): boolean {
+  if (typeof pid !== "number") return false
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "EPERM"
+  }
+}
+
 /**
  * Runs fn with the migration's lock (state/monday/migrating), which the
- * bridge honours: it does not poll or post while it is there. Refused while
- * the config has the bridge on, while agentd still polls (its last read is
- * within pollMinutes: it runs with the config it started with), and while
- * another run holds the lock.
+ * bridge honours: it does not poll or post while it is there. The lock is
+ * taken first and the bridge's own mark (state/monday/syncing) checked after,
+ * as the bridge marks first and checks the lock after, so the two never run
+ * together. Refused while the config has the bridge on, while another run
+ * holds the lock, while the bridge is in a poll, and while agentd still polls
+ * (its last read is within pollMinutes: it runs with the config it started
+ * with).
  */
 async function alone<T>(deps: MigrateDeps, fn: () => Promise<T>): Promise<T> {
   const cfg = deps.config.bridges.monday!
   if (cfg.enabled) throw new Error(OFF_FIRST)
-  const polled = readCursor(deps.paths)
-  const ago = polled ? Date.now() - polled.getTime() : Infinity
-  if (ago < cfg.pollMinutes * MINUTE) {
-    throw new Error(`the Monday bridge read the board ${Math.max(0, Math.round(ago / 1000))} seconds ago: restart agentd with the bridge off, wait ${cfg.pollMinutes} minutes, and run this again`)
-  }
   const lock = migratingPath(deps.paths)
   mkdirSync(dirname(lock), { recursive: true })
   let fd: number
@@ -127,6 +138,14 @@ async function alone<T>(deps: MigrateDeps, fn: () => Promise<T>): Promise<T> {
   writeSync(fd, JSON.stringify({ pid: process.pid, at: new Date().toISOString() }))
   closeSync(fd)
   try {
+    if (alive(readJson<{ pid?: unknown }>(syncingPath(deps.paths))?.pid)) {
+      throw new Error("the Monday bridge is reading the board right now: restart agentd with the bridge off, and run this again")
+    }
+    const polled = readCursor(deps.paths)
+    const ago = polled ? Date.now() - polled.getTime() : Infinity
+    if (ago < cfg.pollMinutes * MINUTE) {
+      throw new Error(`the Monday bridge read the board ${Math.max(0, Math.round(ago / 1000))} seconds ago: restart agentd with the bridge off, wait ${cfg.pollMinutes} minutes, and run this again`)
+    }
     return await fn()
   } finally {
     rmSync(lock, { force: true })
@@ -147,7 +166,7 @@ export async function applyMigration(deps: MigrateDeps, plan: MigrationPlan): Pr
     // Every column's value is in it: only this user reads it. One per run, named by its time, so a directory of them sorts in order.
     const snapshotFile = join(migrationsDir(deps.paths), `migration-${snapshot.at.replace(/[:.]/g, "-")}-${randomUUID().slice(0, 8)}.json`)
     const save = (data: MigrationSnapshot) => writeJsonAtomic(snapshotFile, data, 0o600)
-    save(snapshot)
+    save({ ...snapshot, moved: [] })
     const target = await deps.api.readBoard(cfg.requests!.boardId, [], { columnIds: [], since: new Date() })
     const groupId = (title: string) => {
       const id = target.groups.find((g) => g.title.trim().toLowerCase() === title.trim().toLowerCase())?.id
@@ -155,7 +174,9 @@ export async function applyMigration(deps: MigrateDeps, plan: MigrationPlan): Pr
       return id
     }
     const result = { moved: [] as string[], labelled: [] as string[], failed: plan.refused.map((r) => ({ what: `item ${r.itemId} (${r.name})`, error: r.why })) as Failed }
+    // Written down before each move: one it could not move never left, and the way back leaves it alone (readSnapshots).
     for (const m of plan.moves) {
+      save({ ...snapshot, moved: result.moved, moving: m.itemId })
       try {
         await deps.api.moveItemToBoard(cfg.requests!.boardId, groupId(m.to === "released" ? cfg.requests!.groups.released : cfg.requests!.groups.active), m.itemId, plan.mapping)
         result.moved.push(m.itemId)
@@ -163,7 +184,6 @@ export async function applyMigration(deps: MigrateDeps, plan: MigrationPlan): Pr
         result.failed.push({ what: `item ${m.itemId} (${m.name})`, error: String(error) })
       }
     }
-    // Which it moved: one it could not move never left, and the way back leaves it alone (readSnapshots).
     save({ ...snapshot, moved: result.moved })
     for (const l of plan.label) {
       try {
@@ -183,8 +203,8 @@ export async function applyMigration(deps: MigrateDeps, plan: MigrationPlan): Pr
  * item a run moved, as the latest run that moved it found it, and every
  * issue any run labelled. An item no run moved never left the Needs-you
  * board, so the way back leaves it, and what was changed on it since, alone.
- * A run that stopped before it wrote what it moved counts as having moved
- * them all.
+ * The item a run cut short was moving may have moved, and counts as moved,
+ * as every item of a snapshot that does not say.
  */
 export function readSnapshots(path: string): MigrationSnapshot {
   const files = statSync(path).isDirectory()
@@ -198,7 +218,7 @@ export function readSnapshots(path: string): MigrationSnapshot {
   const [first] = snaps
   if (snaps.some((s) => s.needsBoard !== first.needsBoard || s.requestsBoard !== first.requestsBoard)) throw new Error(`${path} holds snapshots of different boards: give one file`)
   const items = new Map<string, MigrationSnapshot["items"][number]>()
-  for (const s of snaps) for (const item of s.items) if (!s.moved || s.moved.includes(item.itemId)) items.set(item.itemId, item)
+  for (const s of snaps) for (const item of s.items) if (!s.moved || s.moved.includes(item.itemId) || s.moving === item.itemId) items.set(item.itemId, item)
   return { at: first.at, needsBoard: first.needsBoard, requestsBoard: first.requestsBoard, items: [...items.values()], labelled: [...new Set(snaps.flatMap((s) => s.labelled))] }
 }
 
@@ -228,18 +248,29 @@ export async function reverseMigration(
 ): Promise<{ restored: string[]; unlabelled: string[]; archived: string[]; kept: string[]; failed: Failed }> {
   const cfg = deps.config.bridges.monday!
   return alone(deps, async () => {
-    const onRequests = await deps.api.readBoard(snap.requestsBoard, [], { columnIds: [], since: new Date() })
-    const there = new Set(onRequests.items.map((i) => i.id))
+    const requestColumns = (await deps.api.boardColumns(snap.requestsBoard)).filter((c) => c.id !== "name")
+    // Read with what the move back would lose: subitems or files an item got on the Requests board.
+    const lossy = requestColumns.filter((c) => LOST_ON_MOVE[c.type]).map((c) => c.id)
+    const onRequests = await deps.api.readBoard(snap.requestsBoard, lossy, { columnIds: [], since: new Date() })
+    const there = new Map(onRequests.items.map((i) => [i.id, i]))
     // Every Requests board column is mapped: the two the move carried go back, the rest are dropped, and the snapshot restores all.
     const carried: Record<string, string> = { [cfg.requests!.columns.linear]: cfg.columns.linear, [cfg.requests!.columns.requester]: cfg.columns.person }
-    const mapping = (await deps.api.boardColumns(snap.requestsBoard)).filter((c) => c.id !== "name").map((c) => ({ source: c.id, target: carried[c.id] ?? null }))
+    const mapping = requestColumns.map((c) => ({ source: c.id, target: carried[c.id] ?? null }))
     const result = { restored: [] as string[], unlabelled: [] as string[], archived: [] as string[], kept: [] as string[], failed: [] as Failed }
     const failedItems = new Set<string>()
     const fail = (itemId: string, what: string, error: unknown) => {
       failedItems.add(itemId)
       result.failed.push({ what, error: String(error) })
     }
-    for (const item of snap.items.filter((i) => there.has(i.itemId))) {
+    for (const item of snap.items) {
+      const now = there.get(item.itemId)
+      if (!now) continue
+      // Subitems or files it got on the Requests board: the move back would lose them, so it stays until a person has dealt with them.
+      const why = lostOnMove(requestColumns, now.columns)
+      if (why) {
+        fail(item.itemId, `item ${item.itemId} (${item.name})`, why)
+        continue
+      }
       try {
         await deps.api.moveItemToBoard(snap.needsBoard, item.groupId, item.itemId, mapping)
       } catch (error) {
@@ -263,10 +294,11 @@ export async function reverseMigration(
       for (const [id, value] of Object.entries(item.columns)) {
         const type = types.get(id)
         if (value === null || !type || READ_ONLY.has(type)) continue
-        const want = writable(type, value)
-        const has = now.columns[id]?.value
-        if (has && JSON.stringify(writable(type, has)) === JSON.stringify(want)) continue
+        // A value it cannot read holds back only its own column.
         try {
+          const want = writable(type, value)
+          const has = now.columns[id]?.value
+          if (has && JSON.stringify(writable(type, has)) === JSON.stringify(want)) continue
           await deps.api.setColumns(snap.needsBoard, item.itemId, { [id]: want })
         } catch (error) {
           fail(item.itemId, `item ${item.itemId} (${item.name}), column ${id}`, error)

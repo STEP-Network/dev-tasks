@@ -14,7 +14,7 @@ import { fakeTracker, issue } from "../../__tests__/fakes.ts"
 import { createMondayBridge } from "../bridge.ts"
 import { applyMigration, planMigration, readSnapshots, reverseMigration, type MigrateDeps } from "../migrate.ts"
 import type { PeopleIssue } from "../people.ts"
-import { migratingPath, readRecords, saveRecord, writeCursor } from "../store.ts"
+import { migratingPath, readRecords, saveRecord, syncingPath, writeCursor } from "../store.ts"
 import { BOARD, fakeMonday, fakePeople, GROUPS, NEEDS_COLUMNS as COL, REQ, REQUEST_COLUMNS, REQUEST_GROUPS, T0 } from "./fake-monday.ts"
 
 const quiet: Logger = { info: () => {}, warn: () => {}, error: () => {} }
@@ -315,6 +315,82 @@ describe("agentctl monday migrate: the review's FIX FIRST list", () => {
     expect(snap.items.map((i) => [i.itemId, i.columns[COL.kind]])).toEqual([[a, JSON.stringify({ label: "Check" })]])
     await reverseMigration(deps, snap)
     expect([monday.items.get(a)!.columns[COL.kind]?.text, monday.items.get(b)!.columns[COL.kind]?.text]).toEqual(["Check", "Approval"])
+  })
+
+  it("never moves back an item that got subitems or files on the Requests board: the move would lose them", async () => {
+    const { deps, monday } = setup({ enabled: false })
+    const a = monday.request("111", "Export notices", undefined, "g_req")
+    const snap = readSnapshots((await applyMigration(deps, await planMigration(deps))).snapshot)
+    monday.columnsOf(REQ, [{ id: "name", title: "name", type: "text" }, ...Object.values(REQUEST_COLUMNS).map((id) => ({ id, title: id, type: "text" })), { id: "r_sub", title: "Subitems", type: "subtasks" }])
+    monday.items.get(a)!.columns.r_sub = { text: "Step one", value: JSON.stringify({ linkedPulseIds: [{ linkedPulseId: 7 }] }) }
+    const back = await reverseMigration(deps, snap)
+    expect(back.failed).toEqual([{ what: `item ${a} (Export notices)`, error: "it has subitems, which the move would lose: move them off or remove them by hand, then run again" }])
+    expect(back.restored).toEqual([])
+    expect(monday.boardOf(a)).toBe(REQ)
+  })
+
+  it("writes down each item before it moves it, so a run cut short leaves a way back for what it moved", async () => {
+    const { deps, monday } = setup({ enabled: false })
+    const a = monday.request("111", "One", undefined, "g_req")
+    const b = monday.request("111", "Two", undefined, "g_req")
+    const seen: unknown[] = []
+    let file = ""
+    const api = {
+      ...monday.api,
+      moveItemToBoard: async (...args: Parameters<typeof monday.api.moveItemToBoard>) => {
+        file ||= readdirSync(join(deps.paths.state, "monday")).find((f) => f.startsWith("migration-"))!
+        const snap = JSON.parse(readFileSync(join(deps.paths.state, "monday", file), "utf8"))
+        seen.push({ moved: snap.moved, moving: snap.moving })
+        return monday.api.moveItemToBoard(...args)
+      },
+    }
+    await applyMigration({ ...deps, api }, await planMigration(deps))
+    expect(seen).toEqual([{ moved: [], moving: a }, { moved: [a], moving: b }])
+    // Cut short while b moved: b counts as moved, as the run may have moved it.
+    const snap = JSON.parse(readFileSync(join(deps.paths.state, "monday", file), "utf8"))
+    writeFileSync(join(deps.paths.state, "monday", file), JSON.stringify({ ...snap, moved: [a], moving: b }))
+    expect(readSnapshots(join(deps.paths.state, "monday", file)).items.map((i) => i.itemId)).toEqual([a, b])
+  })
+
+  it("never starts while the bridge works, and a bridge that stopped mid-poll holds nothing up", async () => {
+    const { deps, monday, paths } = setup({ enabled: false })
+    monday.request("111", "Export notices", undefined, "g_req")
+    mkdirSync(join(paths.state, "monday"), { recursive: true })
+    writeFileSync(syncingPath(paths), JSON.stringify({ pid: process.pid, at: new Date().toISOString() }))
+    await expect(applyMigration(deps, await planMigration(deps))).rejects.toThrow(/the Monday bridge is reading the board right now/)
+    expect(existsSync(migratingPath(paths))).toBe(false)
+    expect(monday.called("moveItemToBoard")).toEqual([])
+    // Its process is gone: the mark is stale.
+    writeFileSync(syncingPath(paths), JSON.stringify({ pid: 2 ** 22 + 12345, at: new Date().toISOString() }))
+    expect((await applyMigration(deps, await planMigration(deps))).moved).toHaveLength(1)
+  })
+
+  it("marks each poll while it works, and leaves no mark behind, polling or waiting for a migration", async () => {
+    const { monday, paths, bridgeOnce } = setup({ enabled: false })
+    let marked = false
+    const reads = monday.api.readBoard
+    monday.api.readBoard = async (...args) => {
+      marked ||= existsSync(syncingPath(paths))
+      return reads(...args)
+    }
+    await bridgeOnce()
+    expect(marked).toBe(true)
+    expect(existsSync(syncingPath(paths))).toBe(false)
+    mkdirSync(join(paths.state, "monday"), { recursive: true })
+    writeFileSync(migratingPath(paths), "a run")
+    await bridgeOnce()
+    expect(existsSync(syncingPath(paths))).toBe(false)
+  })
+
+  it("fails only the column whose kept value it cannot read, and restores the rest", async () => {
+    const { deps, monday } = setup({ enabled: false })
+    const a = monday.request("111", "Export notices", undefined, "g_req")
+    await monday.api.setColumns(BOARD, a, { [COL.kind]: { label: "Request" }, [COL.state]: { label: "Waiting on agent" } })
+    const snap = readSnapshots((await applyMigration(deps, await planMigration(deps))).snapshot)
+    snap.items[0].columns[COL.kind] = "{not json"
+    const back = await reverseMigration(deps, snap)
+    expect(back.failed).toEqual([expect.objectContaining({ what: `item ${a} (Export notices), column ${COL.kind}` })])
+    expect(monday.items.get(a)!.columns[COL.state]?.text).toBe("Waiting on agent")
   })
 
   it("reverses every run in a directory, each item as the run that moved it found it", async () => {

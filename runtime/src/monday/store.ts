@@ -11,6 +11,7 @@
  *                      bridge's own. The bridge posts them.
  *   migration-*.json   a migration's snapshots, chmod 600: the way back (migrate.ts)
  *   migrating          there while agentctl monday migrate runs
+ *   syncing            there while the bridge polls or posts
  */
 
 import { existsSync, readdirSync, rmSync } from "node:fs"
@@ -129,6 +130,8 @@ export const mondayOutbox = (paths: AgentPaths) => join(root(paths), "outbox")
 
 /** Held while agentctl monday migrate runs (migrate.ts): the bridge does not poll or post while it is there. */
 export const migratingPath = (paths: AgentPaths) => join(root(paths), "migrating")
+/** There while the bridge polls or posts, with agentd's pid: a migration does not start under it. */
+export const syncingPath = (paths: AgentPaths) => join(root(paths), "syncing")
 /** Where a migration keeps its snapshots: the way back. */
 export const migrationsDir = root
 

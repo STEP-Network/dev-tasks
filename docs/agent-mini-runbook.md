@@ -1088,10 +1088,13 @@ What the move keeps, and what it does not:
   other column is dropped, and kept in the snapshot.
 - An item with subitems or files is not moved: the move would lose them, and
   the API cannot put them back. The plan names it. Move them off or remove
-  them by hand, then run `--apply` again.
+  them by hand, then run `--apply` again. The way back does the same for an
+  item that got subitems or files on the Requests board.
 - Before the first move, each run writes a snapshot of every item it will
   move, with every column and its group, to
   `~/.agentd/state/monday/migration-<time>.json`, readable by this user alone.
+  Before each move it writes down which item it is moving, so a run cut short
+  still leaves the way back for what it moved.
 
 The way back: `--reverse <snapshot>` for one run, or `--reverse
 ~/.agentd/state/monday` for every run there, each item as the run that moved
@@ -1102,8 +1105,11 @@ they are. A run that stops half-way is finished by the next: it writes only
 what still differs. The labels come off, and the request items the bridge
 made for them are archived. An item a person made that the bridge took over
 stays on the board. While a migration runs, `~/.agentd/state/monday/migrating`
-is there and the bridge does not poll or post. If one stops half-way, check
-that none runs, remove that file, and run it again.
+is there and the bridge does not poll or post. While the bridge polls or
+posts, `~/.agentd/state/monday/syncing` is there, with agentd's process id,
+and a migration does not start. If a migration stops half-way, check that
+none runs, remove `migrating`, and run it again. A `syncing` left by an
+agentd that has since stopped holds nothing up.
 
 ### No agent session writes as a person (the people-doors guard, STEP-3330)
 

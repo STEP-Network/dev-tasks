@@ -39,7 +39,8 @@
  */
 
 import { createHash } from "node:crypto"
-import { existsSync } from "node:fs"
+import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs"
+import { dirname } from "node:path"
 import type { AgentConfig, AgentPaths } from "../config.ts"
 import { ack, fail, listNew } from "../fsq.ts"
 import { appendLedger, redact, type Logger } from "../log.ts"
@@ -60,7 +61,7 @@ import { routeWords, type Words } from "./route.ts"
 import { requestGroup } from "./stage.ts"
 import { slackMessage, threadTarget } from "./threads.ts"
 import { parseVerdict, recordVerdict, verdictReply } from "../verdict.ts"
-import { dropRecord, enqueueMonday, migratingPath, mondayOutbox, readCursor, readDigestDay, readRecords, saveRecord, writeCursor, writeDigestDay, type ItemRecord, type MondayReply, type MondayState } from "./store.ts"
+import { dropRecord, enqueueMonday, migratingPath, mondayOutbox, readCursor, syncingPath, readDigestDay, readRecords, saveRecord, writeCursor, writeDigestDay, type ItemRecord, type MondayReply, type MondayState } from "./store.ts"
 
 export interface MondayBridgeDeps {
   paths: AgentPaths
@@ -167,15 +168,29 @@ export function createMondayBridge(deps: MondayBridgeDeps): MondayBridge {
   let limit: { calls: number; readAt: number } | null = null
 
   /**
-   * The token's own user, once: an admin's token, or one of the people's, and
-   * the bridge does nothing at all. While agentctl monday migrate runs, it
-   * waits: no poll and no post meets an item half moved.
+   * A poll or a post, marked (state/monday/syncing, with agentd's pid) while
+   * it runs. While agentctl monday migrate runs, the bridge waits: no poll and
+   * no post meets an item half moved. The mark is written first and the
+   * migration's lock checked after; the migration takes its lock first and
+   * checks the mark after, so the two never run together.
    */
-  async function allowed(): Promise<boolean> {
-    if (existsSync(migratingPath(paths))) {
-      once("migrating", () => log.warn("monday: a migration is running (agentctl monday migrate), so the bridge waits"))
-      return false
+  async function working(fn: () => Promise<void>): Promise<void> {
+    const mark = syncingPath(paths)
+    mkdirSync(dirname(mark), { recursive: true })
+    writeFileSync(mark, JSON.stringify({ pid: process.pid, at: new Date().toISOString() }))
+    try {
+      if (existsSync(migratingPath(paths))) {
+        once("migrating", () => log.warn("monday: a migration is running (agentctl monday migrate), so the bridge waits"))
+        return
+      }
+      await fn()
+    } finally {
+      rmSync(mark, { force: true })
     }
+  }
+
+  /** The token's own user, once: an admin's token, or one of the people's, and the bridge does nothing at all. */
+  async function allowed(): Promise<boolean> {
     if (refused) return false
     if (checked) return true
     const me = await deps.api.me()
@@ -857,46 +872,46 @@ export function createMondayBridge(deps: MondayBridgeDeps): MondayBridge {
     return { board, groups: { active: find(r.groups.active), released: find(r.groups.released), closed: find(r.groups.closed) }, byId: new Map(board.items.map((i) => [i.id, i])), now }
   }
 
-  return {
-    async sync() {
-      if (!(await allowed())) return
-      const now = deps.now()
-      await readLimit(now)
-      const since = readCursor(paths) ?? new Date(now.getTime() - 2 * OVERLAP_MS)
-      const board = await api.readBoard(cfg.boardId, Object.values(cfg.columns).filter((c): c is string => Boolean(c)), { columnIds: [cfg.columns.answer], since: new Date(since.getTime() - OVERLAP_MS) })
-      const pass: Pass = { board, groups: groupIds(board.groups), byId: new Map(board.items.map((i) => [i.id, i])), now }
-      // Each part on its own: Linear down stops the needs, not the replies.
-      const part = async <T>(name: string, fn: () => Promise<T>): Promise<T | null> => {
-        try {
-          return await fn()
-        } catch (error) {
-          log.error(`monday ${name} failed`, { error: message(error) })
-          return null
-        }
+  /** One poll: words, requests, needs, threads, the digest, archive, replies. */
+  async function poll(): Promise<void> {
+    if (!(await allowed())) return
+    const now = deps.now()
+    await readLimit(now)
+    const since = readCursor(paths) ?? new Date(now.getTime() - 2 * OVERLAP_MS)
+    const board = await api.readBoard(cfg!.boardId, Object.values(cfg!.columns).filter((c): c is string => Boolean(c)), { columnIds: [cfg!.columns.answer], since: new Date(since.getTime() - OVERLAP_MS) })
+    const pass: Pass = { board, groups: groupIds(board.groups), byId: new Map(board.items.map((i) => [i.id, i])), now }
+    // Each part on its own: Linear down stops the needs, not the replies.
+    const part = async <T>(name: string, fn: () => Promise<T>): Promise<T | null> => {
+      try {
+        return await fn()
+      } catch (error) {
+        log.error(`monday ${name} failed`, { error: message(error) })
+        return null
       }
-      // The Requests board on its own read: a problem there stops only the requests.
-      const asked = requestsBoard ? await part("requests board", () => readRequests(now, since)) : null
-      await part("words", () => hearWords(pass))
-      if (asked) await part("request words", () => hearWords({ board: asked.board, groups: {}, byId: asked.byId, now }))
-      if (!requestsBoard) await part("requests", () => requests(pass))
-      else {
-        // New asks come to the Requests board. Those still on this one stay in step until the migration moves them.
-        if (asked) await part("requests", () => requestsBoard.fromBoard(asked))
-        if (asked) await part("slack requests", () => requestsBoard.adopt(asked))
-        await part("old requests", () => updateRequests(pass))
-      }
-      const linked = await part("needs", () => needs(pass))
-      // Not without the needs: an item whose issue has a thread on another mini would get a second one.
-      if (doors && linked) await part("threads", () => threads(pass, linked))
-      // A person's Class change first, so this poll's columns show what Linear has after it.
-      if (requestsBoard && asked) await part("request class", () => requestsBoard.hearClass(asked))
-      if (requestsBoard && asked) await part("request stages", () => requestsBoard.update(asked))
-      await part("digest", () => digest(pass, asked))
-      await part("archive", () => archive(pass))
-      if (requestsBoard && asked) await part("request archive", () => requestsBoard.archive(asked))
-      await part("replies", drain)
-    },
-    drain,
-    pollEveryMs,
+    }
+    // The Requests board on its own read: a problem there stops only the requests.
+    const asked = requestsBoard ? await part("requests board", () => readRequests(now, since)) : null
+    await part("words", () => hearWords(pass))
+    if (asked) await part("request words", () => hearWords({ board: asked.board, groups: {}, byId: asked.byId, now }))
+    if (!requestsBoard) await part("requests", () => requests(pass))
+    else {
+      // New asks come to the Requests board. Those still on this one stay in step until the migration moves them.
+      if (asked) await part("requests", () => requestsBoard.fromBoard(asked))
+      if (asked) await part("slack requests", () => requestsBoard.adopt(asked))
+      await part("old requests", () => updateRequests(pass))
+    }
+    const linked = await part("needs", () => needs(pass))
+    // Not without the needs: an item whose issue has a thread on another mini would get a second one.
+    if (doors && linked) await part("threads", () => threads(pass, linked))
+    // A person's Class change first, so this poll's columns show what Linear has after it.
+    if (requestsBoard && asked) await part("request class", () => requestsBoard.hearClass(asked))
+    if (requestsBoard && asked) await part("request stages", () => requestsBoard.update(asked))
+    await part("digest", () => digest(pass, asked))
+    await part("archive", () => archive(pass))
+    if (requestsBoard && asked) await part("request archive", () => requestsBoard.archive(asked))
+    await part("replies", drain)
   }
+
+  // The poll and the replies between polls, each marked while it runs (working).
+  return { sync: () => working(poll), drain: () => working(drain), pollEveryMs }
 }
