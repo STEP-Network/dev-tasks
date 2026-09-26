@@ -50,6 +50,13 @@ run() {
   echo $?
 }
 
+# run_from <dir> <command>: the hook for that command, its session sitting in <dir>.
+run_from() {
+  python3 -c 'import json, sys; print(json.dumps({"tool_name": "Bash", "tool_input": {"command": sys.argv[1]}}))' "$2" |
+    (cd "$1" && CLAUDE_PROJECT_DIR="$REPO" bash "$HOOK" >/dev/null 2>&1)
+  echo $?
+}
+
 echo "pre-commit-secrets-scan"
 
 # 1. A plain commit that adds the key: blocked.
@@ -57,6 +64,17 @@ cp "$REPO/a.ts" "$REPO/a.bak"
 printf 'const KEY = "sk-abcdefghijklmnopqrstuvwxyz"\n' > "$REPO/own.ts"
 g add own.ts
 check "a commit adding a key → block" 2 "$(run)"
+# The same commit behind -C, or a cd, from a session sitting elsewhere, is scanned in the repository it runs in (STEP-3354).
+ELSEWHERE="$(mktemp -d)"
+check "git -C <repo> commit, from elsewhere → block" 2 "$(run_from "$ELSEWHERE" "git -C $REPO commit -m x")"
+check "cd <repo> && git commit, from elsewhere → block" 2 "$(run_from "$ELSEWHERE" "cd $REPO && git commit -m x")"
+check "git add on one line, git commit on the next → block" 2 "$(run_from "$REPO" "git add own.ts
+git commit -m x")"
+check "gi''t commit → block" 2 "$(run_from "$REPO" "gi''t commit -m x")"
+check "a heredoc message that mentions a commit is no commit → allow" 0 "$(run_from "$ELSEWHERE" "cat <<'EOF'
+git commit -m x
+EOF")"
+rm -rf "$ELSEWHERE"
 g rm -q --cached own.ts
 rm -f "$REPO/own.ts" "$REPO/a.bak"
 

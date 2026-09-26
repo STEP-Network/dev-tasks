@@ -251,6 +251,8 @@ describe.skipIf(!binaryAvailable())("sessions, as the Claude Code binary runs th
 
   it("fails agentctl probe-hooks --scripted on the hooks.json Eve's mini had, whose guard never fired", async () => {
     // The plugin as it was before 1.2.1: bash-guard's rules joined with `|` in one `if`.
+    // (Since 1.3.9 it runs on every Bash command, with no `if`: the rules are the ones it had then.)
+    const OLD_RULES = ["* --no-verify *", "*--force*", "rm -rf *", "git reset --hard *", "git checkout .", "git checkout -- *", "git clean -f*", "git branch -D*", "git commit *", "git push *"]
     const old = realpathSync(mkdtempSync(join(tmpdir(), "old-plugin-")))
     for (const part of [".claude-plugin", "hooks"]) cpSync(join(PLUGIN, part), join(old, part), { recursive: true })
     const hooksJson = join(old, "hooks", "hooks.json")
@@ -258,7 +260,7 @@ describe.skipIf(!binaryAvailable())("sessions, as the Claude Code binary runs th
     for (const group of hooks.hooks.PreToolUse) {
       const guard = group.hooks.filter((h) => h.command.endsWith("/bash-guard.sh"))
       if (!guard.length) continue
-      group.hooks = [...group.hooks.filter((h) => !guard.includes(h)), { ...guard[0], if: `Bash(${guard.map((h) => h.if!.slice(5, -1)).join("|")})` }]
+      group.hooks = [...group.hooks.filter((h) => !guard.includes(h)), { ...guard[0], if: `Bash(${OLD_RULES.join("|")})` }]
     }
     writeFileSync(hooksJson, JSON.stringify(hooks))
     const { query } = await import("@anthropic-ai/claude-agent-sdk")

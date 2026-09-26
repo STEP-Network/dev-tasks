@@ -49,11 +49,25 @@ INPUT=$(cat)
 # matches the convention in bash-guard and protect-sensitive-files.sh.
 COMMAND=$(echo "$INPUT" | python3 -c "import sys,json; print(json.load(sys.stdin).get('tool_input',{}).get('command',''))" 2>/dev/null)
 
-# Only inspect actual commit invocations.
-case "$COMMAND" in
-  *"git commit "*) ;;
-  *) exit 0 ;;
-esac
+# Only a command with "git" and "commit" in it, quotes and backslashes aside
+# (gi''t and \git are git), may commit. The hook runs on every Bash command.
+BARE=$(printf '%s' "$COMMAND" | tr -d "'\"\\\\")
+case "$BARE" in *git*) ;; *) exit 0 ;; esac
+case "$BARE" in *commit*) ;; *) exit 0 ;; esac
+
+# Each commit the command runs, and where (lib/git_commands.py, STEP-3354):
+# `git -C dir commit` and `cd dir && git commit` too, and never the words in a
+# message. A command it cannot read is refused, as bash-guard refuses it.
+source "$(dirname "${BASH_SOURCE[0]}")/lib/resolve-agent-cwd.sh"
+AGENT_CWD=$(resolve_agent_cwd "$INPUT")
+ROOT="${AGENT_CWD:-$PWD}"
+GIT_COMMANDS=$(printf '%s' "$COMMAND" | python3 "$(dirname "${BASH_SOURCE[0]}")/lib/git_commands.py" 2>&1)
+if [ "$(printf '%s\n' "$GIT_COMMANDS" | tail -n 1)" != "END" ]; then
+  echo "🚫 Secrets scan could not read this command's git commands ($(printf '%s\n' "$GIT_COMMANDS" | tail -n 1)), so it refused it." >&2
+  exit 2
+fi
+COMMIT_DIRS=$(printf '%s\n' "$GIT_COMMANDS" | sed -n 's/^COMMIT //p')
+[ -n "$COMMIT_DIRS" ] || exit 0
 
 # Bypass token: the commit message author can override with [allow-secret].
 # Logged to stderr so Claude Code surfaces it (stdout is sometimes suppressed by
@@ -78,16 +92,31 @@ fi
 # commit merged in, and only a commit id (sha1 or sha256) counts: any other
 # line is no merge, as one that starts with a dash would reach git diff as an
 # option (--output= writes a file). The strict scan, against HEAD, then runs.
-MERGE_HEAD_FILE=$(git rev-parse --git-path MERGE_HEAD 2>/dev/null)
-MERGED_IN=""
-if [ -n "$MERGE_HEAD_FILE" ] && [ -f "$MERGE_HEAD_FILE" ]; then
-  MERGED_IN=$(head -n 1 "$MERGE_HEAD_FILE" | grep -E '^[0-9a-f]{40}([0-9a-f]{24})?$')
-fi
-if [ -n "$MERGED_IN" ]; then
-  DIFF=$(git diff --cached --no-color --end-of-options "$MERGED_IN" 2>/dev/null | grep -E '^\+' | grep -vE '^\+\+\+')
-else
-  DIFF=$(git diff --cached --no-color 2>/dev/null | grep -E '^\+' | grep -vE '^\+\+\+')
-fi
+#
+# Each commit is scanned in its own directory, and their lines are read together.
+DIFF=""
+while IFS= read -r COMMIT_DIR; do
+  [ -n "$COMMIT_DIR" ] || continue
+  if [ "$COMMIT_DIR" = "@unknown" ] || ! cd "$ROOT" 2>/dev/null || ! cd "$COMMIT_DIR" 2>/dev/null; then
+    echo "🚫 Secrets scan cannot tell which repository or directory this commit runs in ($COMMIT_DIR), so it refused it." >&2
+    exit 2
+  fi
+  MERGE_HEAD_FILE=$(git rev-parse --git-path MERGE_HEAD 2>/dev/null)
+  MERGED_IN=""
+  if [ -n "$MERGE_HEAD_FILE" ] && [ -f "$MERGE_HEAD_FILE" ]; then
+    MERGED_IN=$(head -n 1 "$MERGE_HEAD_FILE" | grep -E '^[0-9a-f]{40}([0-9a-f]{24})?$')
+  fi
+  if [ -n "$MERGED_IN" ]; then
+    DIFF="$DIFF
+$(git diff --cached --no-color --end-of-options "$MERGED_IN" 2>/dev/null)"
+  else
+    DIFF="$DIFF
+$(git diff --cached --no-color 2>/dev/null)"
+  fi
+done <<COMMITS
+$COMMIT_DIRS
+COMMITS
+DIFF=$(printf '%s\n' "$DIFF" | grep -E '^\+' | grep -vE '^\+\+\+')
 
 if [ -z "$DIFF" ]; then
   exit 0
