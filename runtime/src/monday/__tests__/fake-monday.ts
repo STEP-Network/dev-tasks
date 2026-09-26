@@ -135,6 +135,9 @@ export function fakeMonday(
       record("moveItemToBoard", [boardId, groupId, itemId, mapping])
       if (broken.has("moveItemToBoard") || down.has(itemId)) throw new Error("Monday: gave up after 3 attempts (status 503)")
       const item = find(itemId)
+      // Monday refuses a mapping that leaves out a column of the item's board: a move never drops one unasked.
+      const missing = (columns[boardOf.get(itemId)!] ?? []).filter((c) => c.id !== "name" && !mapping.some((m) => m.source === c.id)).map((c) => c.id)
+      if (missing.length) throw new MondayRefused(`Monday: the column mapping leaves out ${missing.join(", ")}`)
       const moved: MondayItem["columns"] = {}
       for (const { source, target } of mapping) if (target && item.columns[source]) moved[target] = item.columns[source]
       item.columns = moved
@@ -180,9 +183,9 @@ export function fakeMonday(
       return id
     },
     /** A person changing a column, the Answer column unless another is named, as the activity log records it. */
-    answers(itemId: string, userId: string, text: string, columnId: string = NEEDS_COLUMNS.answer) {
+    answers(itemId: string, userId: string, text: string, columnId: string = NEEDS_COLUMNS.answer, at: string = clock.toISOString()) {
       const id = `log${next++}`
-      logs.push({ id, itemId, userId, text, at: clock.toISOString(), columnId })
+      logs.push({ id, itemId, userId, text, at, columnId })
       return id
     },
     item: (name: RegExp) => [...items.values()].find((i) => name.test(i.name)),

@@ -95,6 +95,21 @@ describe("ping", () => {
     ])
   })
 
+  it("keeps each held ping to one line in the morning's call, however many lines it has (review)", () => {
+    const p = paths()
+    ping(p, config, { key: "one", issue: "STEP-1", reason: "blocked", text: "STEP-1 is blocked: the checks failed.\nThe log says:\n\n  error: timeout" }, new Date("2026-09-24T20:00:00.000Z"))
+    ping(p, config, { key: "two", issue: "STEP-2", reason: "blocked", text: `STEP-2 is blocked: ${"x".repeat(400)}` }, new Date("2026-09-24T21:00:00.000Z"))
+    flushPings(p, config, new Date("2026-09-25T06:00:00.000Z"))
+    const call = listNew<OutboxMessage & { text: string }>(p.outbox).map((e) => e.payload).find((m) => m.kind === "post")!
+    const [, ...lines] = call.text.split("\n")
+    expect(lines).toHaveLength(2)
+    expect(lines[0]).toBe("- STEP-1 is blocked: the checks failed. The log says: error: timeout")
+    expect(lines[1]).toMatch(/^- STEP-2 is blocked: x+\.\.\.$/)
+    expect(Array.from(lines[1]).length).toBeLessThanOrEqual(202)
+    // Each thread still gets the whole text.
+    expect(listNew<OutboxMessage & { text: string }>(p.outbox).map((e) => e.payload).filter((m) => m.kind === "issue").map((m) => m.text)[0]).toContain("\n\n  error: timeout")
+  })
+
   it("calls only the one person a night of pings was for", () => {
     const p = paths()
     ping(p, config, { key: "one", issue: "STEP-1", reason: "blocked", text: "first", person: "UBEN" }, new Date("2026-09-24T20:00:00.000Z"))

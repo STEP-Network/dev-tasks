@@ -135,7 +135,8 @@ export function flushPings(paths: AgentPaths, config: AgentConfig, now: Date): n
     for (const { record } of live) enqueueSlack(paths, messageFor(record.issue, record.waiting.thread, record.waiting.text), now)
     const people = new Set(live.map((e) => e.record.waiting.person))
     const mentions = mentionsFor(config, people.size === 1 ? [...people][0] : null)
-    const list = live.map((e) => `- ${e.record.waiting.text}`).join("\n")
+    // One line each: the whole text is in its thread.
+    const list = live.map((e) => `- ${truncateChars(e.record.waiting.text.replace(/\s+/g, " ").trim(), 200)}`).join("\n")
     enqueueSlack(paths, { kind: "post", channel: "questions", text: `${mentions} ${live.length} things needed you while it was quiet, each in its own thread:\n${list}` }, now)
   }
   for (const { record } of live) appendLedger(paths, { type: "ping", issue: record.issue, reason: record.reason, waited: true }, now)
