@@ -19,6 +19,7 @@ import { releasePidLock, takePidLock } from "../pidlock.ts"
 import { createMondayBridge, type MondayBridge } from "../monday/bridge.ts"
 import { createMondayApi } from "../monday/client.ts"
 import { createPeopleView } from "../monday/people.ts"
+import { recorderFor } from "../lower.ts"
 import { assertLinearKeyFile, loadMondayToken, loadSentryCronUrl } from "../secrets.ts"
 import { createLinearTracker, type Tracker } from "../tracker.ts"
 import { readUsage } from "../usage.ts"
@@ -27,9 +28,10 @@ import { heartbeatAndSweep } from "./claims.ts"
 import { frontDoorAlive, FrontDoorRefused, lastTickAt, readFrontDoorState, superviseFrontDoor } from "./frontdoor.ts"
 import { takeDefaults } from "./decisions.ts"
 import { cleanup, Every, healthStatus, inboxStuck, inboxUnhandled, linearDownNotice, refreshCheckout, sentryCheckInUrl, watchPrs, type BridgeHeartbeat } from "./health.ts"
-import { actOnInstructions } from "./instructions.ts"
+import { actOnInstructions, type InstructionDeps } from "./instructions.ts"
 import { spawnRetroProcess, spawnWorkerProcess, superviseJobs, workerLiveness, type Liveness } from "./jobrunner.ts"
 import { dueSlot, readRetroState, writeRetroState } from "../retro/retro.ts"
+import { flushPings } from "../notify.ts"
 
 const TICK_MS = 15_000
 
@@ -76,6 +78,8 @@ export interface DutyDeps {
   checkIn: (url: string) => Promise<{ ok: boolean; status: number }>
   /** The Monday bridge, on the coordinator mini only (bridges.monday.enabled, STEP-3289). */
   monday?: Pick<MondayBridge, "sync" | "drain" | "pollEveryMs">
+  /** A person's class change (D1): what agentd's instructions need to make one. */
+  lower?: InstructionDeps["lower"]
 }
 
 /** What agentd carries from one loop to the next. */
@@ -123,7 +127,7 @@ export async function runDuties(d: DutyDeps, memo: DutyMemo): Promise<void> {
     }
   })
   // A person's Slack reply is acted on at once, before the job it may queue is started (STEP-3285).
-  await step("instructions", () => actOnInstructions({ exec: d.exec, paths, config, now, log }))
+  await step("instructions", () => actOnInstructions({ exec: d.exec, paths, config, now, log, ...(d.lower ? { lower: d.lower } : {}) }))
   // The board every poll (pollMinutes, or longer to stay within the account's
   // daily API calls), and between polls only the replies just queued (STEP-3289).
   const monday = config.bridges.monday
@@ -132,6 +136,8 @@ export async function runDuties(d: DutyDeps, memo: DutyMemo): Promise<void> {
     if (d.every.due("monday", bridge.pollEveryMs())) await step("monday", () => bridge.sync())
     else await step("monday replies", () => bridge.drain())
   }
+  // The pings that waited for the night to pass (spec 6), once working hours begin.
+  if (d.every.due("pings", 60_000)) await step("pings", async () => void flushPings(paths, config, now()))
   await step("jobs", () => superviseJobs({ paths, config, now, log, bootAt: d.bootAt, liveness: d.liveness, kill: d.kill, spawnWorker: d.spawnWorker }))
   if (d.every.due("decisions", 60_000)) {
     await step("decisions", () => takeDefaults({ exec: d.exec, paths, config, now, log, comment: (issue, body) => d.tracker.comment(issue, body) }))
@@ -242,6 +248,9 @@ async function main(): Promise<void> {
   const runtimeDir = join(dirname(fileURLToPath(import.meta.url)), "..", "..")
   const bootAt = new Date(Date.now() - uptime() * 1000)
   const tracker = createLinearTracker()
+  const people = createPeopleView()
+  // The answer recorder's key is read only when a person's lowering comes, and stays in this process (D1).
+  const recorder = () => recorderFor(paths.home)
   const deps: DutyDeps = {
     paths,
     config,
@@ -257,12 +266,13 @@ async function main(): Promise<void> {
     spawnRetro: spawnRetroProcess(paths, runtimeDir),
     sentryUrl,
     checkIn: (url) => fetch(url, { signal: AbortSignal.timeout(10_000) }),
+    lower: { tracker, people, recorder },
     // Its own log, monday.log: the board's traffic is not agentd's.
     ...(mondayToken
       ? {
           monday: createMondayBridge({
             paths, config, log: createLogger(paths, "monday"), now: () => new Date(),
-            api: createMondayApi(mondayToken), tracker, people: createPeopleView(),
+            api: createMondayApi(mondayToken), tracker, people, recorder,
           }),
         }
       : {}),

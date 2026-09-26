@@ -20,6 +20,7 @@ import type { BriefInput } from "./brief.ts"
 import { selfCheckSections, type FinalizeResult } from "./finalize.ts"
 import { commitsAhead, conflictMarkers, isDirty, leftoverMarkers, must, pushBranch, removeWorktree, type Exec } from "./git.ts"
 import { clause, type Outcome } from "./outcome.ts"
+import { blockedPing, ping } from "../notify.ts"
 
 const GH_TIMEOUT_MS = 2 * 60_000
 /** Enough of each piece of feedback to act on, and a brief that stays readable. */
@@ -209,6 +210,8 @@ export interface ReviseFinalizeContext {
   /** null when the worktree was never prepared. */
   worktree: string | null
   now: () => Date
+  /** The job: a round that stops asking calls the people, once (spec 6). */
+  jobId?: string
 }
 
 /**
@@ -308,6 +311,14 @@ export async function finalizeRevise(ctx: ReviseFinalizeContext, givenOutcome: O
   }
   await reply([`${config.mini} could not finish this revision (${round}): ${clause(outcome.reason)}.`, "", commits].join("\n"))
   inThread(`I could not finish the fixes for ${what} on ${pr}: ${why}. ${kept} Reply "fix it" and I will try again, or "leave it" and I will leave the PR to a person.`, true)
+  // The people are called to it, once per job (spec 6). A ping that cannot be written never stops the ending.
+  if (ctx.jobId) {
+    try {
+      ping(ctx.paths, ctx.config, blockedPing(ctx.jobId, issue.id, null), ctx.now())
+    } catch {
+      // The question stands in the thread without it.
+    }
+  }
   post(`I could not finish the fixes for ${what} on ${pr}: ${why}. I asked in the issue's thread what to do.`)
   return { status: "blocked", reason: outcome.reason, prUrl: revise.url, pushed }
 }

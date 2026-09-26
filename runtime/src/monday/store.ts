@@ -67,11 +67,29 @@ export interface ItemRecord {
   slack?: { permalink: string }
   /** A Slack request's item, not yet linked from Linear and told to its thread: false until the poll after it is made. */
   announced?: boolean
+  /** When the last Class change settled was made (D1): one made at or before it, read again, is never acted on. */
+  classAt?: string
+  /**
+   * A person's Class change Linear could not take yet, kept whole, as `retry`
+   * keeps the Answer column's: the log is read a few minutes back only.
+   */
+  classRetry?: { id: string; userId: string; text: string; at: string }
 }
 
 const root = (paths: AgentPaths) => join(paths.state, "monday")
 const itemsDir = (paths: AgentPaths) => join(root(paths), "items")
 const itemFile = (paths: AgentPaths, key: string) => join(itemsDir(paths), `${safeKey(key)}.json`)
+
+const digestFile = (paths: AgentPaths) => join(root(paths), "digest.json")
+
+/** The local day the last morning digest was posted for. */
+export function readDigestDay(paths: AgentPaths): string | null {
+  return readJson<{ day: string }>(digestFile(paths))?.day ?? null
+}
+
+export function writeDigestDay(paths: AgentPaths, day: string): void {
+  writeJsonAtomic(digestFile(paths), { day })
+}
 
 export function readRecords(paths: AgentPaths): ItemRecord[] {
   if (!existsSync(itemsDir(paths))) return []

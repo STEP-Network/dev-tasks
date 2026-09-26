@@ -6,7 +6,9 @@
  * Slack thread columns, and its group. A column is written again only when
  * Linear changes it, so a person's own edit stands. Each stage change is said
  * once, on the item and in the request's Slack thread. A released or
- * declined request is archived releasedDays later.
+ * declined request is archived releasedDays later. A person's own change of
+ * the Class column changes the request's class in Linear, a lowering through
+ * the answer recorder's account (D1, hearClass).
  *
  * Every Slack ask gets its item here too (spec 4, Task 8): each open,
  * parentless intake/slack issue, whichever mini filed it. The poll after its
@@ -14,11 +16,12 @@
  */
 
 import type { AgentConfig, AgentPaths } from "../config.ts"
+import { changeClass, NeedsRecorder } from "../lower.ts"
 import { appendLedger, type Logger } from "../log.ts"
 import { enqueueSlack } from "../outbox.ts"
-import type { Tracker } from "../tracker.ts"
-import type { MondayApi, MondayBoard, MondayItem } from "./client.ts"
-import type { PeopleIssue, PeopleView } from "./people.ts"
+import { isIssueGone, type ApprovalClass, type Tracker } from "../tracker.ts"
+import type { ColumnChange, MondayApi, MondayBoard, MondayItem } from "./client.ts"
+import type { LinearRequest, PeopleIssue, PeopleView } from "./people.ts"
 import { INTAKE_SLACK, slackAskerOf, truncateChars } from "../slack/text.ts"
 import { aboutText, requestIssue, say } from "./render.ts"
 import { classOf, progressText, requestGroup, requestStage, typeOf, weekOf, workDone, type RequestWork, type Stage } from "./stage.ts"
@@ -36,6 +39,8 @@ export interface RequestsDeps {
   reply(itemId: string, text: string, now: Date): void
   /** Runs fn once while agentd runs: a note that would repeat every poll. */
   once(key: string, fn: () => void): void
+  /** The answer recorder's Linear transport, read when a person's lowering comes: null without its key (D1). */
+  recorder?: () => LinearRequest | null
 }
 
 export interface RequestsPass {
@@ -48,6 +53,8 @@ export interface RequestsPass {
 type Person = { id: string; name: string }
 
 const DAY = 86_400_000
+/** The Class column's labels. */
+const CLASSES = new Map<string, ApprovalClass>([["auto", "auto"], ["look", "look"], ["try", "try"]])
 const message = (error: unknown) => (error instanceof Error ? error.message : String(error))
 const byCreated = <T extends { createdAt: string }>(a: T, b: T) => a.createdAt.localeCompare(b.createdAt)
 
@@ -258,6 +265,56 @@ export function createRequests(deps: RequestsDeps) {
     }
   }
 
+  /**
+   * A person's Class change on their request (D1). The log is read a few
+   * minutes back every poll, so only the newest change in a read counts, and
+   * never one made at or before the last one settled (classAt): a change read
+   * again is acted on once, and a replayed lowering cannot undo a raise made
+   * since (review, 2026-09-25). One Linear cannot take yet is kept until it
+   * can, or until a newer change takes its place.
+   */
+  async function hearClass(pass: RequestsPass): Promise<void> {
+    const recs = new Map(readRecords(paths).filter((r) => r.kind === "request" && pass.byId.has(r.itemId)).map((r) => [r.itemId, r]))
+    const byItem = new Map<string, Array<Pick<ColumnChange, "id" | "userId" | "text" | "at">>>()
+    const add = (itemId: string, change: Pick<ColumnChange, "id" | "userId" | "text" | "at">) => byItem.set(itemId, [...(byItem.get(itemId) ?? []), change])
+    for (const rec of recs.values()) if (rec.classRetry) add(rec.itemId, rec.classRetry)
+    // The agent's own writes, and anyone not on the list: never a person's.
+    for (const change of pass.board.changes) if (change.columnId === c.class && person.has(change.userId) && recs.has(change.itemId)) add(change.itemId, change)
+    for (const [itemId, changes] of byItem) {
+      const rec = recs.get(itemId)!
+      const newest = changes.sort((a, b) => a.at.localeCompare(b.at)).at(-1)!
+      if (rec.classAt && newest.at <= rec.classAt) continue
+      // A column a person cleared, or a label that is no class, changes nothing, and still takes a kept change's place.
+      const to = CLASSES.get(newest.text.trim().toLowerCase())
+      if (to) {
+        const who = person.get(newest.userId)!.name
+        const where = pass.byId.get(itemId)!.url
+        try {
+          const out = await changeClass({ tracker, people, recorder: () => deps.recorder?.() ?? null }, { issue: rec.issue, to, who, where, via: "on Monday" })
+          if (out.outcome !== "same") deps.reply(itemId, say.classChanged(rec.issue, to, who), pass.now)
+          if (out.outcome === "lowered") enqueueSlack(paths, { kind: "post", channel: "agents", text: say.lowered(rec.issue, out.from, to, who, "on Monday", where) }, pass.now)
+        } catch (error) {
+          if (error instanceof NeedsRecorder) {
+            deps.reply(itemId, say.classNeedsLinear(rec.issue, to), pass.now)
+            // The column goes back to the class Linear has, at this poll's write.
+            const { [c.class]: _, ...written } = rec.written ?? {}
+            rec.written = written
+          } else if (isIssueGone(error)) {
+            deps.reply(itemId, say.gone(rec.issue), pass.now)
+          } else {
+            rec.classRetry = { id: newest.id, userId: newest.userId, text: newest.text, at: newest.at }
+            save(rec)
+            log.warn("monday class change not made yet", { item: itemId, issue: rec.issue, error: message(error) })
+            continue
+          }
+        }
+      }
+      rec.classAt = newest.at
+      delete rec.classRetry
+      save(rec)
+    }
+  }
+
   /** A released or declined request stays releasedDays, then its item is archived. */
   async function archive(pass: RequestsPass): Promise<void> {
     const cutoff = pass.now.getTime() - rcfg.releasedDays * DAY
@@ -268,5 +325,5 @@ export function createRequests(deps: RequestsDeps) {
     }
   }
 
-  return { fromBoard, adopt, update, archive }
+  return { fromBoard, adopt, hearClass, update, archive }
 }

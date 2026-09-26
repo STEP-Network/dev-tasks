@@ -43,20 +43,23 @@ import type { AgentConfig, AgentPaths } from "../config.ts"
 import { ack, fail, listNew } from "../fsq.ts"
 import { appendLedger, redact, type Logger } from "../log.ts"
 import { answeredSince, answerSaid, personKey, recordedAnswers, secondAnswerText } from "../answer.ts"
+import { digestDue, digestText, dueSoon, ping, workingHours, type DigestGroup } from "../notify.ts"
 import { enqueueSlack, lastQuestion } from "../outbox.ts"
 import { prRef, recommendationOf } from "../plain.ts"
 import { openDecisions, questionText, type Decision } from "../agentd/decisions.ts"
+import { isClassAction } from "../slack/instruction.ts"
 import { truncateChars } from "../slack/text.ts"
 import { threadFor } from "../threads.ts"
 import { extractAcceptanceCriteria, isIssueGone, type Tracker } from "../tracker.ts"
 import { MondayRefused, type MondayApi, type MondayBoard, type MondayItem } from "./client.ts"
-import type { PeopleIssue, PeopleView } from "./people.ts"
+import type { LinearRequest, PeopleIssue, PeopleView } from "./people.ts"
 import { aboutText, lookBody, lookName, needBody, needKind, needName, plainText, planBody, planName, quote, say, stableUuid, toHtml, uatBody, uatName, type MondayKind, type NeedSource } from "./render.ts"
 import { createRequests, fileRequest, type RequestsPass } from "./requests.ts"
 import { routeWords, type Words } from "./route.ts"
+import { requestGroup } from "./stage.ts"
 import { slackMessage, threadTarget } from "./threads.ts"
 import { parseVerdict, recordVerdict, verdictReply } from "../verdict.ts"
-import { dropRecord, enqueueMonday, mondayOutbox, readCursor, readRecords, saveRecord, writeCursor, type ItemRecord, type MondayReply, type MondayState } from "./store.ts"
+import { dropRecord, enqueueMonday, mondayOutbox, readCursor, readDigestDay, readRecords, saveRecord, writeCursor, writeDigestDay, type ItemRecord, type MondayReply, type MondayState } from "./store.ts"
 
 export interface MondayBridgeDeps {
   paths: AgentPaths
@@ -66,6 +69,10 @@ export interface MondayBridgeDeps {
   api: MondayApi
   tracker: Tracker
   people: PeopleView
+  /** Wave 3's test-day line for the morning digest ("Test day in progress (14 of 20 checked)."), in place of its count. */
+  testDayLine?: () => string | null
+  /** The answer recorder's Linear transport, read when a person lowers a class on the Requests board (D1): null without its key. */
+  recorder?: () => LinearRequest | null
 }
 
 export interface MondayBridge {
@@ -208,7 +215,10 @@ export function createMondayBridge(deps: MondayBridgeDeps): MondayBridge {
   const save = (rec: ItemRecord) => saveRecord(paths, rec)
 
   const requestsBoard = cfg.requests
-    ? createRequests({ paths, config: deps.config, log, api, tracker, people, once, reply: (itemId, text, now) => reply(itemId, null, text, now) })
+    ? createRequests({
+        paths, config: deps.config, log, api, tracker, people, once, reply: (itemId, text, now) => reply(itemId, null, text, now),
+        ...(deps.recorder ? { recorder: deps.recorder } : {}),
+      })
     : null
 
   async function setState(rec: ItemRecord, state: MondayState): Promise<void> {
@@ -362,9 +372,12 @@ export function createMondayBridge(deps: MondayBridgeDeps): MondayBridge {
         by: personKey(deps.config, { monday: who.id }),
         // What the item recommends (its Recommendation column): a yes agrees to it where this mini asked nothing (another mini's plan).
         recommendation: cfg!.columns.recommendation ? (item.columns[cfg!.columns.recommendation]?.text?.trim() || null) : null,
+        itemUrl: item.url,
       },
     )
     mark(rec, words.id)
+    // A class change (D1) answers nothing: the item still asks what it asked, and agentd says what it did.
+    if (routed.to === "agentd" && routed.actions.every(isClassAction)) return
     if (routed.to === "same") {
       reply(item.id, words, say.sameAnswer(who.name, routed.first.who), pass.now)
       return
@@ -545,13 +558,13 @@ export function createMondayBridge(deps: MondayBridgeDeps): MondayBridge {
     return requests.find((r) => r.issue === issue.id || (issue.parent !== null && r.issue === issue.parent))?.itemId ?? null
   }
 
-  async function upsert(need: Need, found: ItemRecord | null, pass: Pass): Promise<void> {
+  async function upsert(need: Need, found: ItemRecord | null, pass: Pass): Promise<ItemRecord | null> {
     const hash = createHash("sha256").update(`${need.name}\n${need.body}`).digest("hex").slice(0, 16)
     const group = groupOf(pass, need.group)
     let rec = found
     if (rec && !pass.byId.has(rec.itemId)) {
       // A person deleted or archived the item: it is not put back while this need lasts. A later need gets a new one.
-      if (rec.state !== "Done") return
+      if (rec.state !== "Done") return null
       dropRecord(paths, rec.key)
       rec = null
     }
@@ -582,7 +595,7 @@ export function createMondayBridge(deps: MondayBridgeDeps): MondayBridge {
       rec.requestItem = need.request
       save(rec)
     }
-    if (rec.bodyHash === hash && rec.state !== "Done") return
+    if (rec.bodyHash === hash && rec.state !== "Done") return rec
     await api.postUpdate(rec.itemId, toHtml(need.body))
     // The item asks: the first answer after this counts, in either door.
     rec.askedAt = pass.now.toISOString()
@@ -591,6 +604,34 @@ export function createMondayBridge(deps: MondayBridgeDeps): MondayBridge {
     rec.state = "Needs you"
     rec.doneAt = null
     save(rec)
+    return rec
+  }
+
+  /**
+   * Spec 6: a money or legal question due today or tomorrow pings its person
+   * once per due date, in working hours, in its thread, with the item's link.
+   * A new item is pinged on the next poll, when the board gives its link.
+   */
+  function pingIfDue(need: Need, rec: ItemRecord | null, pass: Pass): void {
+    const timeZone = deps.config.queue.timeZone
+    if (need.kind !== "needs" || !need.due || !need.issue.labels.some((l) => l === "money" || l === "regulatory")) return
+    if (!dueSoon(need.due, pass.now, timeZone) || !workingHours(pass.now, timeZone)) return
+    const item = rec ? pass.byId.get(rec.itemId) : undefined
+    if (!item) return
+    const target = threadTarget(paths, need.issue.id, need.issue.slackThread)
+    ping(
+      paths,
+      deps.config,
+      {
+        key: `money-legal:${need.issue.id}:${need.due}`,
+        issue: need.issue.id,
+        reason: "money-legal-due",
+        text: say.moneyLegalDue(need.issue.id, need.due, item.url),
+        person: cfg!.people.find((p) => p.id === personFor(need.issue))?.slackId ?? null,
+        thread: target.kind === "linked" ? { channelId: target.channelId, threadTs: target.threadTs } : null,
+      },
+      pass.now,
+    )
   }
 
   /** Each need's issue's Slack thread link, as Linear keeps it: where threads() posts. */
@@ -619,10 +660,17 @@ export function createMondayBridge(deps: MondayBridgeDeps): MondayBridge {
     const recs = readRecords(paths).filter((r) => r.kind !== "request")
     const byKey = new Map(recs.map((r) => [r.key, r]))
     for (const need of wanted.values()) {
+      let rec: ItemRecord | null
       try {
-        await upsert(need, byKey.get(need.key) ?? null, pass)
+        rec = await upsert(need, byKey.get(need.key) ?? null, pass)
       } catch (error) {
         log.error("monday item not written", { key: need.key, error: message(error) })
+        continue
+      }
+      try {
+        pingIfDue(need, rec, pass)
+      } catch (error) {
+        log.warn("monday ping not sent", { key: need.key, error: message(error) })
       }
     }
     // What settled the ones going to Done, when it was the other door: read once.
@@ -752,10 +800,42 @@ export function createMondayBridge(deps: MondayBridgeDeps): MondayBridge {
     return ids
   }
 
-  /** The Requests board, read once a poll: its items, and its three groups found by title. */
+  /** The morning digest (spec 6, D5): once a working day, from 08:00 until noon, in #polads-questions. */
+  async function digest(pass: Pass, requests: RequestsPass | null): Promise<void> {
+    const d = cfg!.digest
+    if (!d.enabled) return
+    const day = digestDue(pass.now, deps.config.queue.timeZone, d, readDigestDay(paths))
+    if (!day) return
+    // Written before the post: a restart loses one digest at worst, and never posts two.
+    writeDigestDay(paths, day)
+    const open = readRecords(paths).filter((r) => r.kind !== "request" && r.state !== "Done" && pass.byId.has(r.itemId))
+    const NOUNS: Partial<Record<GroupKey, [string, string]>> = {
+      needsYou: ["decision", "decisions"],
+      approvePlan: ["plan to approve", "plans to approve"],
+      looks: ["look", "looks"],
+      testDay: ["change to try on test day", "changes to try on test day"],
+    }
+    const groups: DigestGroup[] = []
+    for (const [key, [one, many]] of Object.entries(NOUNS) as Array<[GroupKey, [string, string]]>) {
+      const id = pass.groups[key]
+      if (!id) continue
+      const title = pass.board.groups.find((g) => g.id === id)?.title ?? key
+      const items = open.map((r) => pass.byId.get(r.itemId)!).filter((i) => i.groupId === id).map((i) => ({ name: i.name, url: i.url }))
+      groups.push({ title, one, many, items, testDay: key === "testDay" })
+    }
+    const reqs = requests ? readRecords(paths).filter((r) => r.kind === "request" && requests.byId.has(r.itemId)) : null
+    const text = digestText(groups, {
+      testDay: deps.testDayLine?.() ?? null,
+      requests: reqs ? { active: reqs.filter((r) => r.stage && requestGroup(r.stage) === "active").length, readyToTest: reqs.filter((r) => r.stage === "Ready to test").length } : null,
+    })
+    enqueueSlack(paths, { kind: "post", channel: "questions", text }, pass.now)
+    appendLedger(paths, { type: "digest.posted", day }, pass.now)
+  }
+
+  /** The Requests board, read once a poll: its items, its three groups found by title, and who changed a Class (D1). */
   async function readRequests(now: Date, since: Date): Promise<RequestsPass> {
     const r = cfg!.requests!
-    const board = await api.readBoard(r.boardId, Object.values(r.columns), { columnIds: [], since })
+    const board = await api.readBoard(r.boardId, Object.values(r.columns), { columnIds: [r.columns.class], since: new Date(since.getTime() - OVERLAP_MS) })
     const byTitle = new Map(board.groups.map((g) => [g.title.trim().toLowerCase(), g.id]))
     const find = (title: string) => {
       const id = byTitle.get(title.trim().toLowerCase())
@@ -796,7 +876,10 @@ export function createMondayBridge(deps: MondayBridgeDeps): MondayBridge {
       const linked = await part("needs", () => needs(pass))
       // Not without the needs: an item whose issue has a thread on another mini would get a second one.
       if (doors && linked) await part("threads", () => threads(pass, linked))
+      // A person's Class change first, so this poll's columns show what Linear has after it.
+      if (requestsBoard && asked) await part("request class", () => requestsBoard.hearClass(asked))
       if (requestsBoard && asked) await part("request stages", () => requestsBoard.update(asked))
+      await part("digest", () => digest(pass, asked))
       await part("archive", () => archive(pass))
       if (requestsBoard && asked) await part("request archive", () => requestsBoard.archive(asked))
       await part("replies", drain)

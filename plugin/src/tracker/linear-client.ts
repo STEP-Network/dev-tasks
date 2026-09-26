@@ -110,9 +110,15 @@ function maxWrites(): number {
   return Number.parseInt(trimmed, 10)
 }
 
+/**
+ * `opts.key` sends another account's key for this one request: the answer
+ * recorder's, which the runtime's agentd alone reads (runtime/src/lower.ts).
+ * Without it, the agent's own key.
+ */
 export async function linearRequest<T>(
   query: string,
   variables: Record<string, unknown> = {},
+  opts: { key?: string } = {},
 ): Promise<T> {
   const isMutation = MUTATION_RE.test(query)
   if (isMutation) {
@@ -126,7 +132,7 @@ export async function linearRequest<T>(
     writesPerformed += 1
   }
 
-  const key = loadLinearKey()
+  const key = opts.key ?? loadLinearKey()
   const endpoint = linearEndpoint()
 
   let lastStatus: number | undefined
