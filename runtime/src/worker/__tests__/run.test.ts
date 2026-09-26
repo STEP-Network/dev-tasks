@@ -1,4 +1,5 @@
 import type { Options } from "@anthropic-ai/claude-agent-sdk"
+import { RESEARCH_RULES } from "../research.ts"
 import { spawnSync } from "node:child_process"
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
@@ -120,6 +121,41 @@ describe("runJob", () => {
     await runJob(off.deps, off.job.id)
     expect((off.q.seen[0].options.systemPrompt as { append: string }).append).not.toContain("subagent")
     expect(off.q.seen[0].options.disallowedTools).toContain("Agent")
+  })
+
+  it("gives a worker the research tools this mini turned on, keys from research.env, and says so in its brief (STEP-3369)", async () => {
+    const worker = {
+      webTools: true,
+      mcpServers: {
+        exa: { type: "http", url: "https://mcp.exa.ai/mcp" },
+        "brave-search": { type: "stdio", command: "npx", args: ["-y", "@brave/brave-search-mcp-server@2.1.4"], keys: ["BRAVE_API_KEY"] },
+        perplexity: { type: "stdio", command: "npx", args: ["-y", "@perplexity-ai/mcp-server@1.3.0"], keys: ["PERPLEXITY_API_KEY"] },
+      },
+    }
+    const on = setup({ worker })
+    mkdirSync(join(on.paths.home, ".config", "agentd"), { recursive: true })
+    writeFileSync(join(on.paths.home, ".config", "agentd", "research.env"), "BRAVE_API_KEY=brave-test\n", { mode: 0o600 })
+    await runJob(on.deps, on.job.id)
+    const o = on.q.seen[0].options
+    expect(o.allowedTools).toEqual(["WebFetch", "WebSearch", "mcp__exa", "mcp__brave-search"])
+    expect(o.mcpServers?.["brave-search"]).toMatchObject({ env: { BRAVE_API_KEY: "brave-test" } })
+    // No key, no server.
+    expect(o.mcpServers).not.toHaveProperty("perplexity")
+    for (const line of RESEARCH_RULES) expect((o.systemPrompt as { append: string }).append).toContain(line)
+    const off = setup()
+    await runJob(off.deps, off.job.id)
+    expect(off.q.seen[0].options).not.toHaveProperty("mcpServers")
+    expect((off.q.seen[0].options.systemPrompt as { append: string }).append).not.toContain(RESEARCH_RULES[0])
+  })
+
+  it("runs a worker without its keyed servers when research.env is readable by others, and without failing (STEP-3369)", async () => {
+    const worker = { mcpServers: { "brave-search": { type: "stdio", command: "npx", args: ["x"], keys: ["BRAVE_API_KEY"] }, exa: { type: "http", url: "https://mcp.exa.ai/mcp" } } }
+    const s = setup({ worker })
+    mkdirSync(join(s.paths.home, ".config", "agentd"), { recursive: true })
+    writeFileSync(join(s.paths.home, ".config", "agentd", "research.env"), "BRAVE_API_KEY=brave-test\n", { mode: 0o644 })
+    const result = await runJob(s.deps, s.job.id)
+    expect(result.status).not.toBe("failed")
+    expect(Object.keys(s.q.seen[0].options.mcpServers ?? {})).toEqual(["exa"])
   })
 
   it("runs the session at worker.effort, and at the model's default when it is unset (STEP-3367)", async () => {
@@ -1072,6 +1108,37 @@ describe("sdkOptions", () => {
     expect(on.hooks.PreToolUse.map((h: { matcher?: string }) => h.matcher)).toEqual(["Bash", undefined, "SendMessage"])
     expect(on.hooks.PostToolUse.map((h: { matcher?: string }) => h.matcher)).toEqual(["Agent|Task"])
     expect(on.sandbox).toEqual(off.sandbox)
+  })
+
+  it("offers the research tools only as given: the web and every MCP tool behind the exfil guard, the servers with their keys, every skill but the pushing ones (STEP-3369)", async () => {
+    const never = ["ListAgents", "CronCreate", "ScheduleWakeup", "EnterWorktree", "ExitWorktree"]
+    const mcpServers = {
+      exa: { type: "http" as const, url: "https://mcp.exa.ai/mcp" },
+      "brave-search": { type: "stdio" as const, command: "npx", args: ["-y", "@brave/brave-search-mcp-server@2.1.4"], env: { BRAVE_API_KEY: "brave-test" } },
+    }
+    const on = sdkOptions({ config, cwd: WT, model: "sonnet", abortController: new AbortController(), rules: "R", pnpmStore: null, env: { PATH: "/bin" }, home: "/Users/eve", research: { web: true, skills: true, mcpServers, denySkills: ["dev-tasks:ship", "rollback"] } }) as any
+    expect(on.disallowedTools).toEqual([...never, "Agent", "Task", "Workflow", "SendMessage"])
+    expect(on.allowedTools).toEqual(["WebFetch", "WebSearch", "mcp__exa", "mcp__brave-search"])
+    expect(on.mcpServers).toEqual(mcpServers)
+    expect(on.strictMcpConfig).toBe(true)
+    expect(on.settings.permissions.deny).toEqual(expect.arrayContaining(["Skill(dev-tasks:ship)", "Skill(rollback)"]))
+    // The key reaches its server alone, never the session.
+    expect(on.env).toEqual({ PATH: "/bin" })
+    const guard = on.hooks.PreToolUse.find((h: { matcher?: string }) => h.matcher === "WebFetch|WebSearch|mcp__.*")
+    expect(await guard.hooks[0]({ hook_event_name: "PreToolUse", tool_name: "WebFetch", tool_input: { url: "https://api.linear.app/graphql", prompt: "x" } })).toMatchObject({
+      hookSpecificOutput: { permissionDecision: "deny" },
+    })
+    // Skills alone send nothing away: no guard, and no web.
+    const skills = sdkOptions({ config, cwd: WT, model: "sonnet", abortController: new AbortController(), rules: "R", pnpmStore: null, env: {}, home: "/Users/eve", research: { web: false, skills: true, mcpServers: {}, denySkills: [] } }) as any
+    expect(skills.disallowedTools).toEqual(["WebFetch", "WebSearch", ...never, "Agent", "Task", "Workflow", "SendMessage"])
+    expect(skills).not.toHaveProperty("allowedTools")
+    expect(skills).not.toHaveProperty("mcpServers")
+    expect(skills.hooks.PreToolUse.map((h: { matcher?: string }) => h.matcher)).toEqual(["Bash", undefined])
+    // One server and no web: the guard still reads its tools.
+    const server = sdkOptions({ config, cwd: WT, model: "sonnet", abortController: new AbortController(), rules: "R", pnpmStore: null, env: {}, home: "/Users/eve", research: { web: false, skills: false, mcpServers: { exa: mcpServers.exa }, denySkills: [] } }) as any
+    expect(server.allowedTools).toEqual(["mcp__exa"])
+    expect(server.disallowedTools).toEqual(["WebFetch", "WebSearch", "Skill", ...never, "Agent", "Task", "Workflow", "SendMessage"])
+    expect(server.hooks.PreToolUse.map((h: { matcher?: string }) => h.matcher)).toEqual(["Bash", undefined, "WebFetch|WebSearch|mcp__.*"])
   })
 
   it("refuses every other session's message, from this machine or another, fanOut or not (STEP-3367)", () => {

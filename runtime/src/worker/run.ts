@@ -28,13 +28,14 @@ import { appendLedger, createLogger, type Logger } from "../log.ts"
 import { enqueueSlack } from "../outbox.ts"
 import { NOTHING_NEEDED } from "../plain.ts"
 import { lessonsFromFeedback, recordLessons, type Lesson } from "../retro/lessons.ts"
-import { loadClaudeOauthToken } from "../secrets.ts"
+import { loadClaudeOauthToken, loadResearchKeys } from "../secrets.ts"
 import { branchNameFor, createLinearTracker, openSubIssues, type Tracker, type TrackerIssue } from "../tracker.ts"
 import { buildBrief, WORKER_RESULT_SCHEMA, workerRules, type BriefInput } from "./brief.ts"
 import { finalize, FinalizeFailed, type MergeMode } from "./finalize.ts"
 import { changedFiles, commitMessages, commitsAhead, historyRewrite, ownChanges, prepareWorktree, startMerge, realExec, WorktreeRefused, type Exec } from "./git.ts"
 import { denyBannedBash, denyWorkerPaths, ENV_TEMPLATE, ownAgentsOnly, workerEnv, workerToolDenial } from "./guard.ts"
 import { SMALL_CHANGE_FILES, clause, toOutcome, type Outcome, type ResultMessageLike } from "./outcome.ts"
+import { denyExfil, hasResearch, serverRules, workerResearch, type Research } from "./research.ts"
 import { buildReviseBrief, finalizeRevise, gatherFeedback } from "./revise.ts"
 import { checkBilling, checkPlugins, runSession, type QueryFn, type SdkMessage } from "./session.ts"
 import { runUserTestJob, userTestStep } from "./usertest-step.ts"
@@ -76,6 +77,8 @@ export interface SdkOptionsInput {
   env: Record<string, string>
   /** The machine user's home: its ~/.config, and every .env file under it, stay unread. */
   home: string
+  /** A develop or revise worker's research tools (STEP-3369). Left out (the retro, the probes): none. */
+  research?: Research
 }
 
 /** git's files that say where a worktree's repository, config and common directory are. */
@@ -102,6 +105,11 @@ export function sdkOptions(o: SdkOptionsInput): Options {
   const scope = { worktree: o.cwd, home: o.home }
   const fanOut = o.config.worker.fanOut
   const own = fanOut ? ownAgentsOnly() : null
+  const web = o.research?.web ?? false
+  const skills = o.research?.skills ?? false
+  const servers = o.research?.mcpServers ?? {}
+  const allowed = [...(fanOut ? ["Workflow"] : []), ...(web ? ["WebFetch", "WebSearch"] : []), ...serverRules(servers)]
+  const outward = web || Object.keys(servers).length > 0
   return {
     cwd: o.cwd,
     model: o.model,
@@ -118,12 +126,13 @@ export function sdkOptions(o: SdkOptionsInput): Options {
         workerToolDenial(toolName, input, scope) ??
         `${toolName} needs a permission prompt and an unattended worker has nobody to ask. Work around it, or finish with status blocked.`,
     }),
-    // No web (token discipline, and less untrusted text), no skills: the brief
-    // is the whole procedure, and /ship would try to push. No fan-out unless
-    // worker.fanOut, and then the Workflow tool without the prompt it asks
-    // for: this mini's owner turned it on (Nate, 2026-09-26).
-    disallowedTools: ["WebFetch", "WebSearch", "Skill", ...NEVER, ...(fanOut ? [] : FAN_OUT_TOOLS)],
-    ...(fanOut ? { allowedTools: ["Workflow"] } : {}),
+    // No web and no skills unless the research tools are on (STEP-3369): then
+    // the web behind the exfil guard, and every skill but the ones that push.
+    // No fan-out unless worker.fanOut, and then the Workflow tool without the
+    // prompt it asks for: this mini's owner turned it on (Nate, 2026-09-26).
+    // An allowed tool runs without canUseTool, which would deny it.
+    disallowedTools: [...(web ? [] : ["WebFetch", "WebSearch"]), ...(skills ? [] : ["Skill"]), ...NEVER, ...(fanOut ? [] : FAN_OUT_TOOLS)],
+    ...(allowed.length ? { allowedTools: allowed } : {}),
     // PolAds's CLAUDE.md and project hooks. Not "user": that is the front door's
     // settings (Remote Control, the status line), not the worker's.
     settingSources: ["project"],
@@ -132,7 +141,9 @@ export function sdkOptions(o: SdkOptionsInput): Options {
     // worktree: a branch's own copy is a worker's, unreviewed, and hooks run
     // outside the sandbox. No MCP server but the ones passed here (none).
     projectConfigRoot: o.config.repo.path,
+    // Only the research servers this mini configured, keys in: no other MCP server.
     strictMcpConfig: true,
+    ...(Object.keys(servers).length ? { mcpServers: servers } : {}),
     plugins: [{ type: "local", path: o.config.pluginRoot, skipMcpDiscovery: true }],
     // Claude Code's own deny rules, beside the hook below: the secrets, and the
     // agent configuration in the worktree (`//` is an absolute path). A deny
@@ -152,6 +163,7 @@ export function sdkOptions(o: SdkOptionsInput): Options {
           `Edit(/${o.cwd}/.claude/hooks/**)`,
           `Edit(/${o.cwd}/.claude/settings*.json)`,
           `Edit(/${o.cwd}/.mcp.json)`,
+          ...(o.research?.denySkills ?? []).map((skill) => `Skill(${skill})`),
         ],
       },
     },
@@ -161,6 +173,8 @@ export function sdkOptions(o: SdkOptionsInput): Options {
         // Every tool: canUseTool never hears of a read, nor of an edit acceptEdits allows.
         { hooks: [denyWorkerPaths(scope)] },
         ...(own ? [{ matcher: "SendMessage", hooks: [own.limit] }] : []),
+        // What leaves for the web: never a key, encoded data, or a host where the project's secrets are used.
+        ...(outward ? [{ matcher: "WebFetch|WebSearch|mcp__.*", hooks: [denyExfil(o.config.worker.fetchDenyHosts)] }] : []),
       ],
       ...(own ? { PostToolUse: [{ matcher: "Agent|Task", hooks: [own.record] }] } : {}),
     },
@@ -515,7 +529,15 @@ export async function runJob(deps: RunDeps, jobId: string): Promise<JobResult> {
 
   // 3. the session
   const earlier = job.retryOf ? readJson<JobRecord>(jobPath(paths, "done", job.retryOf))?.result?.reason : undefined
-  const brief: BriefInput = { mini: config.mini, issue, worktree: worktree.path, branch, base: config.repo.base, resumed: worktree.resumed, limits, fanOut: config.worker.fanOut, ...(earlier ? { earlier } : {}) }
+  let keys: Record<string, string> = {}
+  try {
+    keys = loadResearchKeys(paths.home)
+  } catch (error) {
+    // A research.env others can read: no keyed server this time, and doctor says why.
+    log.warn("research keys not read", { error: error instanceof Error ? error.message : String(error) })
+  }
+  const research = workerResearch(config, keys)
+  const brief: BriefInput = { mini: config.mini, issue, worktree: worktree.path, branch, base: config.repo.base, resumed: worktree.resumed, limits, fanOut: config.worker.fanOut, research: hasResearch(research), ...(earlier ? { earlier } : {}) }
   const options = () =>
     sdkOptions({
       config,
@@ -526,6 +548,7 @@ export async function runJob(deps: RunDeps, jobId: string): Promise<JobResult> {
       pnpmStore: deps.pnpmStore,
       env: workerEnv(process.env, { DEV_TASKS_PROFILE: "agent", ...(deps.claudeToken ? { CLAUDE_CODE_OAUTH_TOKEN: deps.claudeToken } : {}) }),
       home: paths.home,
+      research,
     })
   // agentd's backstop counts the wall clock from here, not from the spawn: preparing the worktree can take 20 minutes.
   const sessionStart = deps.now()

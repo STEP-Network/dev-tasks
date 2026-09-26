@@ -10,6 +10,10 @@
  *                                (the browser test's own code, never the browser or the model)
  *   ~/.config/agentd/recorder.env  RECORDER_LINEAR_KEY, optional, the coordinator mini only
  *                                (agentd only, for a person's lowering: lower.ts)
+ *   ~/.config/agentd/research.env  the research MCP servers' keys (BRAVE_API_KEY, PERPLEXITY_API_KEY),
+ *                                optional (each only to the server that names it: STEP-3369)
+ *   ~/.config/agentd/neon-staging-ro.env  DATABASE_URL_STAGING_RO, optional: the staging database's
+ *                                read-only role, for the staging database's MCP server alone
  *
  * The Monday token is the agent's own Monday user's, with access to the one
  * board (STEP-3289). It is never the admin's: the bridge refuses one.
@@ -29,6 +33,10 @@ export const agentdSecretsPath = (home: string) => join(home, ".config", "agentd
 export const claudeTokenPath = (home: string) => join(home, ".config", "agentd", "claude.env")
 export const mondaySecretsPath = (home: string) => join(home, ".config", "agentd", "monday.env")
 export const recorderSecretsPath = (home: string) => join(home, ".config", "agentd", "recorder.env")
+export const researchSecretsPath = (home: string) => join(home, ".config", "agentd", "research.env")
+export const stagingDbSecretsPath = (home: string) => join(home, ".config", "agentd", "neon-staging-ro.env")
+/** Where the MCP servers' keys are read from (loadResearchKeys). */
+export const researchKeyPaths = (home: string) => [researchSecretsPath(home), stagingDbSecretsPath(home)]
 
 export function readSecretsFile(path: string): Record<string, string> {
   let mode: number
@@ -95,6 +103,25 @@ export function loadSentryCronUrl(home: string): string | null {
     return null
   }
   return readSecretsFile(path).SENTRY_CRON_URL || null
+}
+
+/**
+ * Optional (STEP-3369). The MCP servers' keys, from research.env and
+ * neon-staging-ro.env: each goes only to the server whose config names it,
+ * never to a session's own environment. A file that is missing gives none,
+ * so no server that needs its key starts, and doctor says which.
+ */
+export function loadResearchKeys(home: string): Record<string, string> {
+  const keys: Record<string, string> = {}
+  for (const path of researchKeyPaths(home)) {
+    try {
+      statSync(path)
+    } catch {
+      continue
+    }
+    Object.assign(keys, readSecretsFile(path))
+  }
+  return keys
 }
 
 /**

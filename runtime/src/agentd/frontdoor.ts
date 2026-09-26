@@ -24,8 +24,8 @@
  * status line records its session id and no other session's.
  */
 
-import { readFileSync, rmSync } from "node:fs"
-import { join } from "node:path"
+import { chmodSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { dirname, join } from "node:path"
 import { channelApproval, MANAGED_SETTINGS } from "../channel/managed.ts"
 import { readSandboxProbe } from "../cli/sandbox-probe.ts"
 import type { AgentConfig, AgentPaths } from "../config.ts"
@@ -33,8 +33,10 @@ import { readJson, writeJsonAtomic } from "../fsq.ts"
 import { appendLedger, type Logger } from "../log.ts"
 import { enqueueSlack } from "../outbox.ts"
 import { tickPath } from "../tick.ts"
+import { loadResearchKeys } from "../secrets.ts"
 import { limitedUntil, readUsage, type UsageSnapshot } from "../usage.ts"
 import type { Exec } from "../worker/git.ts"
+import { resolveMcpServers, serverRules } from "../worker/research.ts"
 
 export const LOOP_PROMPT = "/loop /dev-tasks:front-door"
 /** The front door's own tmux server: `tmux -L agentd attach -t =frontdoor`. */
@@ -212,11 +214,56 @@ export function shellQuote(s: string): string {
  */
 export const CHANNEL_PLUGIN = "plugin:dev-tasks@dev-tasks-marketplace"
 
-export function claudeCommand(o: { claudePath: string; resumeId: string | null; model: string; effort?: string; settingsPath: string; channel?: boolean }): string {
+/**
+ * The front door's MCP servers (STEP-3369), keys in, where neither its file
+ * tools nor its sandbox read: ~/.config/agentd. Its claude reads the file
+ * itself, at start.
+ */
+export const frontDoorMcpPath = (paths: AgentPaths) => join(paths.home, ".config", "agentd", "front-door-mcp.json")
+
+/**
+ * Writes the front door's MCP servers for --mcp-config, keys from
+ * research.env, or removes the file when there are none. A server whose key
+ * is missing is left out (doctor says which). Returns the file and the rule
+ * that allows each server's tools, or null.
+ */
+export function writeFrontDoorMcp(paths: AgentPaths, config: AgentConfig): { path: string; tools: string[] } | null {
+  let keys: Record<string, string> = {}
+  try {
+    keys = loadResearchKeys(paths.home)
+  } catch {
+    // A research.env others can read: no keyed server, and doctor says why.
+  }
+  const { servers } = resolveMcpServers(config.frontDoor.mcpServers, keys)
+  const path = frontDoorMcpPath(paths)
+  if (!Object.keys(servers).length) {
+    rmSync(path, { force: true })
+    return null
+  }
+  mkdirSync(dirname(path), { recursive: true, mode: 0o700 })
+  writeFileSync(path, `${JSON.stringify({ mcpServers: servers }, null, 2)}\n`, { mode: 0o600 })
+  chmodSync(path, 0o600)
+  return { path, tools: serverRules(servers) }
+}
+
+/** The front door's MCP flags. Both take several values: the option after them ends the list. */
+export const mcpArgs = (mcp: { path: string; tools: string[] } | null | undefined): string[] => (mcp ? ["--mcp-config", mcp.path, "--allowedTools", mcp.tools.join(",")] : [])
+
+export function claudeCommand(o: {
+  claudePath: string
+  resumeId: string | null
+  model: string
+  effort?: string
+  settingsPath: string
+  channel?: boolean
+  /** --mcp-config and the servers' allow rules (writeFrontDoorMcp). */
+  mcp?: { path: string; tools: string[] } | null
+}): string {
   return [
     o.claudePath,
     ...(o.resumeId ? ["--resume", o.resumeId] : []),
     ...(o.channel ? ["--channels", CHANNEL_PLUGIN] : []),
+    ...mcpArgs(o.mcp),
     "--settings",
     o.settingsPath,
     "--model",
@@ -338,6 +385,7 @@ export async function applyFrontDoor(deps: FrontDoorDeps, state: FrontDoorState,
     model: deps.config.frontDoor.model,
     effort: deps.config.frontDoor.effort,
     settingsPath: frontDoorSettingsPath(deps.paths),
+    mcp: writeFrontDoorMcp(deps.paths, deps.config),
     channel,
   })
   // AGENTD_CHANNEL=1 only beside --channels: the plugin runs the channel server

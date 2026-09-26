@@ -14,10 +14,11 @@ import { frontDoorSettingsPath, frontDoorSettingsProblem } from "../agentd/front
 import { channelApproval, MANAGED_CHANNEL_JSON, MANAGED_SETTINGS } from "../channel/managed.ts"
 import { readHooksProbes, workerClaudePath, type HooksProbe } from "./hooks-probe.ts"
 import { readSandboxProbe } from "./sandbox-probe.ts"
-import { agentdSecretsPath, assertLinearKeyFile, claudeTokenPath, linearKeyPath, loadRecorderKey, mondaySecretsPath, slackSecretsPath, userTestSecretsPath } from "../secrets.ts"
+import { agentdSecretsPath, assertLinearKeyFile, claudeTokenPath, linearKeyPath, loadRecorderKey, loadResearchKeys, mondaySecretsPath, researchKeyPaths, slackSecretsPath, userTestSecretsPath } from "../secrets.ts"
 import { chromeMajor } from "../usertest/chrome.ts"
 import { CHROME_DEVTOOLS_MCP_VERSION, chromeDevtoolsMcp } from "../usertest/mcp.ts"
 import type { Exec } from "../worker/git.ts"
+import { resolveMcpServers } from "../worker/research.ts"
 
 export interface Check {
   level: "ok" | "warn" | "fail"
@@ -102,6 +103,36 @@ function secretCheck(name: string, path: string, required: boolean): Check | nul
   if (mode === null) return required ? { level: "fail", name, detail: `${path} is missing (runbook, section 5)` } : null
   if (mode & 0o077) return { level: "fail", name, detail: `${path} must be chmod 600, it is ${mode.toString(8)}: chmod 600 ${path}` }
   return { level: "ok", name, detail: path }
+}
+
+/**
+ * The research MCP servers (STEP-3369), the worker's and the front door's: a
+ * server whose key research.env lacks is skipped, and this says which. Names
+ * only, never a value. null when none is configured.
+ */
+export function researchCheck(home: string, config: AgentConfig): Check | null {
+  const name = "research tools"
+  const sides = [
+    ["worker", config.worker.mcpServers],
+    ["front door", config.frontDoor.mcpServers],
+  ] as const
+  if (!sides.some(([, servers]) => Object.keys(servers).length)) return null
+  let keys: Record<string, string>
+  try {
+    keys = loadResearchKeys(home)
+  } catch (error) {
+    return { level: "fail", name, detail: message(error).replace(/^secrets: /, "") }
+  }
+  const skipped: string[] = []
+  const running: string[] = []
+  for (const [side, servers] of sides) {
+    const r = resolveMcpServers(servers, keys)
+    skipped.push(...r.skipped.map((s) => `${side} ${s.name} (${s.missing.join(", ")} not in ${researchKeyPaths(home).join(" or ")})`))
+    if (Object.keys(r.servers).length) running.push(`${side}: ${Object.keys(r.servers).join(", ")}`)
+  }
+  return skipped.length
+    ? { level: "warn", name, detail: `skipped: ${skipped.join("; ")}${running.length ? `. Running: ${running.join("; ")}` : ""}` }
+    : { level: "ok", name, detail: running.join("; ") }
 }
 
 /** The answer recorder's key (Wave 2, D1): optional either way. Its messages name the file, never the key. */
@@ -389,6 +420,8 @@ export async function doctorChecks(d: DoctorDeps): Promise<Check[]> {
   // Only the coordinator mini holds one (STEP-3289), and there agentd will not start without it.
   add(secretCheck("monday token", mondaySecretsPath(d.paths.home), Boolean(config?.bridges.monday?.enabled)))
   add(recorderCheck(d.paths.home))
+  const research = config ? researchCheck(d.paths.home, config) : null
+  if (research) add(research)
   add(await gitIdentity(d))
   if (config) add(await github(d, config.repo.slug))
   const p = await d.exec("pnpm", ["--version"])

@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { afterEach, describe, expect, it } from "vitest"
-import { agentPaths, assertProfileMini, ConfigSchema, loadConfig, MINI_RE, readProfile, readProfileMini } from "../config.ts"
+import { FETCH_DENY_HOSTS, agentPaths, assertProfileMini, ConfigSchema, loadConfig, MINI_RE, readProfile, readProfileMini } from "../config.ts"
 
 const MINIMAL = {
   mini: "eve",
@@ -87,7 +87,10 @@ describe("loadConfig", () => {
     expect(config.repo).toEqual({ path: "/Users/eve/polads", slug: "STEP-Network/v0-politiske-annoncer", base: "staging", product: "polads" })
     expect(config.slack.channels).toEqual({ agents: "polads-agents", questions: "polads-questions", intake: "polads-intake", releases: "polads-releases" })
     expect(config.slack.otherAgentBots).toEqual([])
-    expect(config.worker).toEqual({ defaultModel: "sonnet", complexModel: "opus", maxTurns: 250, maxBudgetUsd: 15, wallClockMinutes: 90, autoMerge: true, fanOut: false })
+    expect(config.worker).toEqual({
+      defaultModel: "sonnet", complexModel: "opus", maxTurns: 250, maxBudgetUsd: 15, wallClockMinutes: 90, autoMerge: true, fanOut: false,
+      webTools: false, skills: false, mcpServers: {}, fetchDenyHosts: FETCH_DENY_HOSTS,
+    })
     expect(config.queue.mode).toBe("allowlist")
     expect(config.claims).toEqual({ heartbeatMinutes: 15, ttlHours: 6 })
     expect(config.frontDoor.model).toBe("sonnet")
