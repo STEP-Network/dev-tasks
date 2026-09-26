@@ -256,6 +256,14 @@ describe("test day's config (Wave 3)", () => {
     expect(ConfigSchema.safeParse({ ...base, testDay: { ...TESTDAY, subitemBoardId: "board 77" } }).success).toBe(false)
   })
 
+  it("refuses a status column that is the Answer column: every answer would be read as a press", () => {
+    const monday = { people: [{ id: "111", name: "Ada" }], defaultPerson: "111", columns: { answer: "col_answer" } }
+    expect(ConfigSchema.safeParse({ ...base, bridges: { monday }, testDay: { ...TESTDAY, statusColumn: "col_answer" } }).success).toBe(false)
+    expect(ConfigSchema.safeParse({ ...base, bridges: { monday }, testDay: TESTDAY }).success).toBe(true)
+    // The Answer column's own default counts too.
+    expect(ConfigSchema.safeParse({ ...base, bridges: { monday: { people: monday.people, defaultPerson: "111" } }, testDay: { ...TESTDAY, statusColumn: "long_text_mm7hzj39" } }).success).toBe(false)
+  })
+
   it("takes the four journeys' roles only, at least one", () => {
     expect(ConfigSchema.safeParse({ ...base, testDay: { ...TESTDAY, roles: [] } }).success).toBe(false)
     expect(ConfigSchema.safeParse({ ...base, testDay: { ...TESTDAY, roles: [{ name: "Other", persona: null }] } }).success).toBe(false)

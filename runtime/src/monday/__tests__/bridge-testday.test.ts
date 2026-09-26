@@ -5,7 +5,7 @@
  */
 import { describe, expect, it } from "vitest"
 import { issue } from "../../__tests__/fakes.ts"
-import { pendingCommands, TESTDAY_HELP } from "../../testday/commands.ts"
+import { DECISION_HELP, ONE_AT_A_TIME, pendingCommands, TESTDAY_HELP } from "../../testday/commands.ts"
 import { readRecords } from "../store.ts"
 import { AGENT, doorsSetup, NEEDS_COLUMNS as COL } from "./fake-monday.ts"
 
@@ -22,8 +22,11 @@ describe("test day on the Monday board (Wave 3, WS7)", () => {
     const said = s.monday.says(item.id, ADA, "begin testday")
     s.later(3)
     await s.bridge.sync()
+    // When they wrote it, not when the poll read it.
     expect(commands(s)).toEqual([
-      expect.objectContaining({ verb: "start", who: "Ada", whoId: ADA, whoKey: "monday:111", via: "monday", door: { kind: "monday", itemId: item.id, updateId: said, threadId: said } }),
+      expect.objectContaining({
+        verb: "start", who: "Ada", whoId: ADA, whoKey: "monday:111", via: "monday", at: "2026-09-25T09:00:00.000Z", door: { kind: "monday", itemId: item.id, updateId: said, threadId: said },
+      }),
     ])
     expect(s.fake.called("updateIssue")).toEqual([])
     // Heard once: the next poll files nothing more.
@@ -78,9 +81,37 @@ describe("test day on the Monday board (Wave 3, WS7)", () => {
     await s.bridge.sync()
     await s.bridge.drain()
     expect(commands(s)).toEqual([expect.objectContaining({ verb: "verdict", n: 4, verdict: "pass", note: "", who: "Ben", whoKey: "monday:222" })])
-    expect(s.texts(itemId).filter((t) => t.includes("Here I read three things"))).toHaveLength(1)
+    const helps = () => s.texts(itemId).filter((t) => t.includes(TESTDAY_HELP.slice(0, 40)))
+    expect(helps()).toHaveLength(1)
+    // Heard once: the next poll says nothing again.
+    s.later(3)
+    await s.bridge.sync()
+    await s.bridge.drain()
+    expect(helps()).toHaveLength(1)
     expect(s.fake.called("readIssue")).toEqual([])
     expect(s.fake.called("updateIssue")).toEqual([])
+  })
+
+  it("records no verdict from an update with several, and asks for one per message", async () => {
+    const s = doorsSetup([], { testDay: true })
+    const itemId = await s.testDayItem()
+    s.monday.says(itemId, BEN, "5 pass\n6 fail no logo")
+    s.later(3)
+    await s.bridge.sync()
+    await s.bridge.drain()
+    expect(commands(s)).toEqual([])
+    expect(s.texts(itemId).some((t) => t.includes(ONE_AT_A_TIME.slice(0, 40)))).toBe(true)
+  })
+
+  it("orders the commands of one poll by when the person acted, not by the log's ids", async () => {
+    const s = doorsSetup([], { testDay: true })
+    const itemId = await s.testDayItem()
+    // Monday's log ids are not in time order: the Cancel has the smaller id, but came later.
+    s.monday.answers(itemId, ADA, "Cancel", "col_status", "2026-09-25T09:02:00.000Z")
+    s.monday.answers(itemId, ADA, "Start", "col_status", "2026-09-25T09:01:00.000Z")
+    s.later(3)
+    await s.bridge.sync()
+    expect(commands(s).map((c) => [c.verb, c.at])).toEqual([["start", "2026-09-25T09:01:00.000Z"], ["cancel", "2026-09-25T09:02:00.000Z"]])
   })
 
   it("fix before release or next week on a failed checkpoint's decision item is its decision, for that issue", async () => {
@@ -92,7 +123,10 @@ describe("test day on the Monday board (Wave 3, WS7)", () => {
     await s.bridge.sync()
     expect(commands(s)).toEqual([expect.objectContaining({ verb: "decide", issue: "STEP-7", answer: "next-week", who: "Ada" })])
     await s.bridge.drain()
-    expect(s.texts(itemId).some((t) => t.includes(TESTDAY_HELP.slice(0, 30)))).toBe(true)
+    // Its own help: a decision item reads no verdict.
+    expect(DECISION_HELP).toContain("for this failed checkpoint")
+    expect(s.texts(itemId).some((t) => t.includes("for this failed checkpoint"))).toBe(true)
+    expect(s.texts(itemId).some((t) => t.includes(TESTDAY_HELP.slice(0, 40)))).toBe(false)
     expect(s.fake.called("updateIssue")).toEqual([])
   })
 

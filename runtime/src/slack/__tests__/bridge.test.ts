@@ -34,7 +34,7 @@ import {
 } from "../bridge.ts"
 import type { SlackEnvelope } from "../classify.ts"
 import { SlackAccessRefused } from "../send.ts"
-import { pendingCommands, TESTDAY_HELP } from "../../testday/commands.ts"
+import { ONE_AT_A_TIME, pendingCommands, TESTDAY_HELP } from "../../testday/commands.ts"
 import { saveRun } from "../../testday/store.ts"
 import { FAILED_WAITING, run } from "../../testday/__tests__/fixtures.ts"
 
@@ -721,7 +721,10 @@ describe("test day in Slack (Wave 3, WS7)", () => {
   function testDaySetup(opts: { enabled?: boolean } = {}) {
     const s = setup()
     const enabled = opts.enabled ?? true
-    s.deps.config = ConfigSchema.parse({ ...CONFIG, slack: { allowedUsers: ["UADA"] }, ...(enabled ? { testDay: TESTDAY } : {}) })
+    s.deps.config = ConfigSchema.parse({
+      ...CONFIG, slack: { allowedUsers: ["UADA"] }, ...(enabled ? { testDay: TESTDAY } : {}),
+      bridges: { monday: { people: [{ id: "111", name: "Ada", slackId: "UADA" }], defaultPerson: "111" } },
+    })
     s.deps.classifyContext = {
       ...s.deps.classifyContext,
       allowedUsers: ["UADA"],
@@ -739,9 +742,12 @@ describe("test day in Slack (Wave 3, WS7)", () => {
     await handleEnvelope(deps, say("2000.1", "begin testday"))
     await handleEnvelope(deps, say("2000.2", "<@UBOT> begin testday", { type: "app_mention", channel: "CAG" }))
     await handleEnvelope(deps, say("2000.2", "<@UBOT> begin testday", { channel: "CAG" }))
-    expect(pendingCommands(paths).map((e) => e.payload).sort((a, b) => a.key.localeCompare(b.key)).reverse()).toEqual([
-      expect.objectContaining({ verb: "start", who: "Ada", whoId: "UADA", whoKey: "slack:UADA", via: "slack", door: { kind: "slack", channel: "CQ", threadTs: "2000.1", ts: "2000.1" } }),
-      expect.objectContaining({ verb: "start", door: { kind: "slack", channel: "CAG", threadTs: "2000.2", ts: "2000.2" } }),
+    // Oldest first, by when the person wrote it. The name is config's: nothing waits on Slack before the command is on disk.
+    expect(pendingCommands(paths).map((e) => e.payload)).toEqual([
+      expect.objectContaining({
+        verb: "start", who: "Ada", whoId: "UADA", whoKey: "monday:111", via: "slack", at: "1970-01-01T00:33:20.100Z", door: { kind: "slack", channel: "CQ", threadTs: "2000.1", ts: "2000.1" },
+      }),
+      expect.objectContaining({ verb: "start", at: "1970-01-01T00:33:20.200Z", door: { kind: "slack", channel: "CAG", threadTs: "2000.2", ts: "2000.2" } }),
     ])
     expect(forFrontDoor(paths)).toEqual([])
     expect(listNew(paths.outbox)).toEqual([])
@@ -769,6 +775,40 @@ describe("test day in Slack (Wave 3, WS7)", () => {
     await handleEnvelope(deps, say("1700.9", "next week", { thread_ts: "1700.1" }))
     expect(pendingCommands(paths)[0].payload).toMatchObject({ verb: "decide", issue: "STEP-7", answer: "next-week", door: { kind: "slack", channel: "CQ", threadTs: "1700.1", ts: "1700.9" } })
     expect(forFrontDoor(paths)).toHaveLength(1)
+  })
+
+  it("files what someone names in their verdict with secrets redacted", async () => {
+    const { deps, paths } = testDaySetup()
+    // Built at run time, so no secret scanner mistakes the fixture for a real token.
+    const token = ["xoxb", "1234567890", "abcdefghijklmnop"].join("-")
+    await handleEnvelope(deps, say("1750.7", `4 fail the page printed ${token}`, { thread_ts: "1750.1" }))
+    expect(pendingCommands(paths)[0].payload).toMatchObject({ verb: "verdict", n: 4, note: "the page printed [redacted]" })
+  })
+
+  it("records no verdict from a message with several, and asks for one per message, once", async () => {
+    const { deps, paths } = testDaySetup()
+    await handleEnvelope(deps, say("1750.8", "<@UBOT> 5 pass\n6 fail no logo", { thread_ts: "1750.1", type: "app_mention" }))
+    await handleEnvelope(deps, say("1750.8", "<@UBOT> 5 pass\n6 fail no logo", { thread_ts: "1750.1" }))
+    expect(pendingCommands(paths)).toEqual([])
+    expect(outboxTexts(paths)).toEqual([ONE_AT_A_TIME])
+  })
+
+  it("reads no decision in the test day thread: that is asked about in the change's own thread", async () => {
+    const { deps, paths } = testDaySetup()
+    saveRun(paths, run({ checkpoints: [FAILED_WAITING] }))
+    await handleEnvelope(deps, say("1750.9", "fix before release", { thread_ts: "1750.1" }))
+    expect(pendingCommands(paths)).toEqual([])
+    expect(outboxTexts(paths)).toEqual([TESTDAY_HELP])
+  })
+
+  it("pauses the whole mini from the test day thread too, and answers no help", async () => {
+    const { deps, paths } = testDaySetup()
+    await handleEnvelope(deps, say("1751.1", "pause everything", { thread_ts: "1750.1" }))
+    expect(listNew<{ type: string; actions?: string[]; issue?: string | null; threadTs?: string }>(paths.inbox).map((e) => e.payload).filter((p) => p.type === "instruction")).toEqual([
+      expect.objectContaining({ type: "instruction", key: "instr:bridge-pause:CQ:1751.1", actions: ["pause"], issue: null, threadTs: "1750.1", userName: "Ada" }),
+    ])
+    expect(outboxTexts(paths)).toEqual([])
+    expect(pendingCommands(paths)).toEqual([])
   })
 
   it("reads a verdict only in the test day thread: in an issue's thread it is the front door's", async () => {

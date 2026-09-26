@@ -29,6 +29,7 @@ import type { Tracker } from "../tracker.ts"
 import { pruneJsonl } from "../retro/jsonl.ts"
 import { lessonsFile } from "../retro/lessons.ts"
 import { retrosFile } from "../retro/retro.ts"
+import { heardDir } from "../testday/commands.ts"
 import { git, isDirty, removeWorktree, type Exec } from "../worker/git.ts"
 import { PR_FIELDS, reviseOwnPr, type OwnPrView } from "./revise.ts"
 
@@ -264,6 +265,8 @@ export async function cleanup(deps: { paths: AgentPaths; config: AgentConfig; ex
   const now = deps.now().getTime()
   let removed = 0
   for (const dir of [join(deps.paths.inbox, "done"), join(deps.paths.outbox, "done")]) removed += pruneOlderThan(dir, 14, now)
+  // The Slack messages test day heard (Wave 3): Slack sends no copy two weeks late.
+  removed += pruneOlderThan(join(heardDir(deps.paths), "new"), 14, now)
   removed += pruneOlderThan(join(deps.paths.jobs, "done"), 30, now)
   // The browser test's runs (screenshots kept on the mini among them) and its verdicts (WS5).
   removed += pruneOlderThan(deps.paths.usertest, 14, now)

@@ -426,6 +426,12 @@ export const ConfigSchema = z.object({
   bridges: z.object({ monday: MondayBridgeSchema.optional() }).prefault({}),
   /** Test day (Wave 3): absent on every mini but the coordinator. */
   testDay: TestDaySchema.optional(),
+}).superRefine((c, ctx) => {
+  // The Test day item's presses come from its status column: made the Answer column, every answer there would be lost.
+  const answer = c.bridges.monday?.columns.answer
+  if (c.testDay && answer && c.testDay.statusColumn === answer) {
+    ctx.addIssue({ code: "custom", path: ["testDay", "statusColumn"], message: "must not be the Needs-you board's Answer column (bridges.monday.columns.answer)" })
+  }
 })
 
 export type AgentConfig = z.infer<typeof ConfigSchema>

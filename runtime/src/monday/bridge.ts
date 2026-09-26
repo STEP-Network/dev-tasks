@@ -45,7 +45,7 @@ import type { AgentConfig, AgentPaths } from "../config.ts"
 import { ack, fail, listNew } from "../fsq.ts"
 import { appendLedger, redact, type Logger } from "../log.ts"
 import { answeredSince, answerSaid, personKey, recordedAnswers, secondAnswerText, testDayVerb } from "../answer.ts"
-import { fileTestDayCommand, TESTDAY_HELP } from "../testday/commands.ts"
+import { actedAt, DECISION_HELP, fileTestDayCommand, ONE_AT_A_TIME, TESTDAY_HELP } from "../testday/commands.ts"
 import { PERSON_PRESSES } from "../testday/types.ts"
 import { digestDue, digestText, dueSoon, ping, workingHours, type DigestGroup } from "../notify.ts"
 import { enqueueSlack, lastQuestion } from "../outbox.ts"
@@ -361,7 +361,11 @@ export function createMondayBridge(deps: MondayBridgeDeps): MondayBridge {
     const verb = PERSON_PRESSES[change.text.trim()]
     if (verb) {
       const door = { kind: "monday" as const, itemId: rec.itemId, updateId: null, threadId: null }
-      fileTestDayCommand(paths, { key: `testday:${id}`, verb, who: who.name, whoId: who.id, whoKey: personKey(deps.config, { monday: who.id }), via: "monday", door }, pass.now)
+      fileTestDayCommand(
+        paths,
+        { key: `testday:${id}`, verb, who: who.name, whoId: who.id, whoKey: personKey(deps.config, { monday: who.id }), via: "monday", door, at: actedAt(change.at, pass.now) },
+        pass.now,
+      )
     }
     mark(rec, id)
   }
@@ -414,11 +418,14 @@ export function createMondayBridge(deps: MondayBridgeDeps): MondayBridge {
   function heardForTestDay(rec: ItemRecord, item: MondayItem, who: Person, words: Words, pass: Pass): boolean {
     const said = testDay ? testDayVerb(words.text) : null
     const door = { kind: "monday" as const, itemId: item.id, updateId: words.updateId, threadId: words.threadId }
-    const base = { key: `testday:monday:${words.id}`, who: who.name, whoId: who.id, whoKey: personKey(deps.config, { monday: who.id }), via: "monday" as const, door }
+    const base = {
+      key: `testday:monday:${words.id}`, who: who.name, whoId: who.id, whoKey: personKey(deps.config, { monday: who.id }), via: "monday" as const, door, at: actedAt(words.at, pass.now),
+    }
     if (said?.verb === "start") fileTestDayCommand(paths, { ...base, verb: "start" }, pass.now)
     else if (rec.kind === "testday" && said?.verb === "verdict") fileTestDayCommand(paths, { ...base, verb: "verdict", n: said.n, verdict: said.verdict, note: said.note }, pass.now)
     else if (rec.kind === "testday-decision" && said?.verb === "decide") fileTestDayCommand(paths, { ...base, verb: "decide", issue: rec.issue, answer: said.answer }, pass.now)
-    else if (rec.kind === "testday" || rec.kind === "testday-decision") reply(item.id, words, TESTDAY_HELP, pass.now, false)
+    else if (rec.kind === "testday") reply(item.id, words, said?.verb === "several" ? ONE_AT_A_TIME : TESTDAY_HELP, pass.now, false)
+    else if (rec.kind === "testday-decision") reply(item.id, words, DECISION_HELP, pass.now, false)
     else return false
     mark(rec, words.id)
     return true

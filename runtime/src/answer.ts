@@ -316,10 +316,14 @@ export type TestDayVerb =
   | { verb: "start" }
   | { verb: "verdict"; n: number; verdict: "pass" | "fail"; note: string }
   | { verb: "decide"; answer: "fix" | "next-week" }
+  /** More than one checkpoint's verdict in one message: none is read, so a FAIL never becomes a PASS's note. */
+  | { verb: "several" }
 
 const SLACK_MENTIONS = /<@[A-Z0-9]+(\|[^>]*)?>/g
 const START = /^(please[\s,]+)?(begin|start)\s+test\s?day[\s.!]*$/i
 const VERDICT = /^#?(\d{1,3})\s*[:.)-]?\s*(pass|fail)\b[\s:,.-]*([\s\S]*)$/i
+/** Another verdict in a verdict's note: at its start, or after a new line, a comma or a semicolon ("5 pass, 6 fail no logo"). */
+const ANOTHER_VERDICT = /(^|[\n,;]\s*)#?\d{1,3}\s*[:.)-]?\s*(pass|fail)\b/i
 const FIX = /^(fix (it )?before (the )?release|fix now)[\s.!]*$/i
 const NEXT_WEEK = /^(next week|hold (it )?back( to next week)?)[\s.!]*$/i
 
@@ -327,11 +331,14 @@ const NEXT_WEEK = /^(next week|hold (it )?back( to next week)?)[\s.!]*$/i
  * The whole message must be the phrase: "begin testday" starts test day,
  * "when do we begin testday?" does not. Mentions and a "please" are allowed
  * around the start phrase; a verdict carries what the person saw after it.
+ * One checkpoint a message: "5 pass\n6 fail no logo" is `several`, and the
+ * person is asked to send each on its own.
  */
 export function testDayVerb(text: string): TestDayVerb | null {
   const plain = text.replace(SLACK_MENTIONS, " ").trim()
   if (START.test(plain)) return { verb: "start" }
   const v = VERDICT.exec(plain)
+  if (v && ANOTHER_VERDICT.test(v[3])) return { verb: "several" }
   if (v) return { verb: "verdict", n: Number(v[1]), verdict: v[2].toLowerCase() as "pass" | "fail", note: v[3].replace(/\s+/g, " ").trim() }
   if (FIX.test(plain)) return { verb: "decide", answer: "fix" }
   if (NEXT_WEEK.test(plain)) return { verb: "decide", answer: "next-week" }

@@ -27,6 +27,8 @@ interface CommandBase {
   whoKey: string
   via: "slack" | "monday"
   door: Door
+  /** When the person acted (ISO): the order commands are acted on, whichever door. */
+  at: string
   receivedAt: string
 }
 

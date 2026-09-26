@@ -32,11 +32,11 @@ import { createLinearTracker, type Tracker } from "../tracker.ts"
 import { classify, type Classified, type ClassifyContext, type SlackEnvelope } from "./classify.ts"
 import { classVerb, parseInstruction, type Action, type InstructionEntry } from "./instruction.ts"
 import { isSlackTrouble, slackErrorCode, startOutbox, type SendContext, type SlackWeb } from "./send.ts"
-import { fromSlack, intakeIssue, mentionedUsers, withoutMentions } from "./text.ts"
+import { fromSlack, intakeIssue, mentionedUsers, truncateChars, withoutMentions } from "./text.ts"
 import { frontDoorUp, lastTickAt } from "../agentd/frontdoor.ts"
 import { NOTHING_NEEDED } from "../plain.ts"
 import { noteCorrection, personKey, testDayVerb, type TestDayVerb } from "../answer.ts"
-import { fileTestDayCommand, heardOnce, TESTDAY_HELP } from "../testday/commands.ts"
+import { fileTestDayCommand, heardOnce, ONE_AT_A_TIME, slackName, slackTime, TESTDAY_HELP } from "../testday/commands.ts"
 import { isTestDayKey, openDecisionFor } from "../testday/store.ts"
 
 export interface BridgeWeb extends SlackWeb {
@@ -81,7 +81,7 @@ export async function handleEnvelope(deps: BridgeDeps, envelope: SlackEnvelope):
   if (c.type === "ignore") return c.type
   // Test day's fixed verbs (Wave 3) go to agentd, never the front door.
   if (c.type === "command") {
-    await testDayCommand(deps, { key: c.key, channel: c.channel, ts: c.ts, threadTs: c.threadTs, user: c.user, said: { verb: "start" } })
+    testDayCommand(deps, { key: c.key, channel: c.channel, ts: c.ts, threadTs: c.threadTs, user: c.user, said: { verb: "start" } })
     return c.type
   }
   if (c.type === "reply") {
@@ -89,12 +89,20 @@ export async function handleEnvelope(deps: BridgeDeps, envelope: SlackEnvelope):
     const inTestDayThread = isTestDayKey(c.issue)
     const deciding = said?.verb === "decide" && openDecisionFor(deps.paths, c.issue) !== null
     if (said && (said.verb === "start" || (said.verb === "verdict" && inTestDayThread) || deciding)) {
-      await testDayCommand(deps, { key: c.key, channel: c.channel, ts: c.ts, threadTs: c.threadTs, user: c.user, said, issue: c.issue })
+      testDayCommand(deps, { key: c.key, channel: c.channel, ts: c.ts, threadTs: c.threadTs, user: c.user, said, issue: c.issue })
       return c.type
     }
     // The test day thread reads its verbs and nothing else: the change's own thread is where words go.
     if (inTestDayThread) {
-      if (heardOnce(deps.paths, c.key)) enqueueSlack(deps.paths, { kind: "reply", channelId: c.channel, threadTs: c.threadTs, text: TESTDAY_HELP }, deps.now())
+      // "pause" stops the whole mini from any thread, this one too (STEP-3293), as actForFrontDoor files it.
+      if (shortPause(c.text)) {
+        fileInstruction(deps, `instr:bridge-pause:${c.channel}:${c.ts}`, {
+          issue: null, channel: c.channel, ts: c.ts, threadTs: c.threadTs, user: c.user, userName: slackName(deps.config, c.user), text: c.text,
+          actions: ["pause"], target: parseInstruction(c.text).target,
+        })
+      } else if (heardOnce(deps.paths, c.key)) {
+        enqueueSlack(deps.paths, { kind: "reply", channelId: c.channel, threadTs: c.threadTs, text: said?.verb === "several" ? ONE_AT_A_TIME : TESTDAY_HELP }, deps.now())
+      }
       return c.type
     }
   }
@@ -137,27 +145,33 @@ export async function handleEnvelope(deps: BridgeDeps, envelope: SlackEnvelope):
   return c.type
 }
 
+/** How much of what a person saw a verdict keeps, as the Monday board keeps words. */
+const NOTE_MAX = 4000
+
 /**
  * A test-day verb (Wave 3): filed once for agentd, which answers in the
- * thread (Task 13). On a mini without test day, said once, in words. Either
- * copy of a mention Slack sends is heard once.
+ * thread (Task 13). Nothing waits on the network before it is on disk: the
+ * name comes from config, and the filing's own key dedupes Slack's two
+ * copies. On a mini without test day, said once, in words.
  */
-async function testDayCommand(
+function testDayCommand(
   deps: BridgeDeps,
   m: { key: string; channel: string; ts: string; threadTs: string; user: string; said: TestDayVerb; issue?: string },
-): Promise<void> {
-  if (!heardOnce(deps.paths, m.key)) return
+): void {
   if (!deps.config.testDay?.enabled) {
-    enqueueSlack(deps.paths, { kind: "reply", channelId: m.channel, threadTs: m.threadTs, text: `Test day is not set up on ${deps.config.mini} yet. ${NOTHING_NEEDED}` }, deps.now())
+    if (heardOnce(deps.paths, m.key)) {
+      enqueueSlack(deps.paths, { kind: "reply", channelId: m.channel, threadTs: m.threadTs, text: `Test day is not set up on ${deps.config.mini} yet. ${NOTHING_NEEDED}` }, deps.now())
+    }
     return
   }
-  const who = await deps.web.userName(m.user).catch(() => m.user)
   const door = { kind: "slack" as const, channel: m.channel, threadTs: m.threadTs, ts: m.ts }
-  const base = { key: `testday:${m.key}`, who, whoId: m.user, whoKey: personKey(deps.config, { slack: m.user }), via: "slack" as const, door }
+  const base = {
+    key: `testday:${m.key}`, who: slackName(deps.config, m.user), whoId: m.user, whoKey: personKey(deps.config, { slack: m.user }), via: "slack" as const, door, at: slackTime(m.ts),
+  }
   const s = m.said
   if (s.verb === "start") fileTestDayCommand(deps.paths, { ...base, verb: "start" }, deps.now())
-  else if (s.verb === "verdict") fileTestDayCommand(deps.paths, { ...base, verb: "verdict", n: s.n, verdict: s.verdict, note: s.note }, deps.now())
-  else if (m.issue) fileTestDayCommand(deps.paths, { ...base, verb: "decide", issue: m.issue, answer: s.answer }, deps.now())
+  else if (s.verb === "verdict") fileTestDayCommand(deps.paths, { ...base, verb: "verdict", n: s.n, verdict: s.verdict, note: truncateChars(redact(s.note), NOTE_MAX) }, deps.now())
+  else if (s.verb === "decide" && m.issue) fileTestDayCommand(deps.paths, { ...base, verb: "decide", issue: m.issue, answer: s.answer }, deps.now())
 }
 
 /**
